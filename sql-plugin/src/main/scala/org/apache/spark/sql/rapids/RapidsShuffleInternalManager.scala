@@ -20,9 +20,8 @@ import ai.rapids.cudf.{NvtxColor, NvtxRange}
 import com.nvidia.spark.rapids._
 import com.nvidia.spark.rapids.format.TableMeta
 import com.nvidia.spark.rapids.shuffle.{RapidsShuffleRequestHandler, RapidsShuffleServer, RapidsShuffleTransport}
-
 import org.apache.spark.{ShuffleDependency, SparkConf, SparkEnv, TaskContext}
-import org.apache.spark.internal.{config, Logging}
+import org.apache.spark.internal.{Logging, config}
 import org.apache.spark.io.CompressionCodec
 import org.apache.spark.network.buffer.ManagedBuffer
 import org.apache.spark.scheduler.MapStatus
@@ -30,6 +29,8 @@ import org.apache.spark.shuffle._
 import org.apache.spark.shuffle.sort.SortShuffleManager
 import org.apache.spark.sql.vectorized.ColumnarBatch
 import org.apache.spark.storage._
+
+import scala.collection.mutable.ArrayBuffer
 
 class GpuShuffleHandle[K, V](
     val wrapped: ShuffleHandle,
@@ -86,6 +87,7 @@ class RapidsCachingWriter[K, V](
 
   private val numParts = handle.dependency.partitioner.numPartitions
   private val sizes = new Array[Long](numParts)
+  private val writtenBufferIds = new ArrayBuffer[ShuffleBufferId](numParts)
 
   override def write(records: Iterator[Product2[K, V]]): Unit = {
     val nvtxRange = new NvtxRange("RapidsCachingWriter.write", NvtxColor.CYAN)
@@ -129,6 +131,7 @@ class RapidsCachingWriter[K, V](
             sizes(partId) += 100
           }
         }
+        writtenBufferIds.append(bufferId)
       }
       metrics.incBytesWritten(bytesWritten)
       metrics.incRecordsWritten(recordsWritten)
@@ -137,11 +140,18 @@ class RapidsCachingWriter[K, V](
     }
   }
 
+  /**
+    * Used to remove shuffle buffers when the writing task detects an error, calling `stop(false)`
+    */
+  private def cleanStorage(): Unit = {
+    writtenBufferIds.foreach(catalog.removeBuffer)
+  }
+
   override def stop(success: Boolean): Option[MapStatus] = {
     val nvtxRange = new NvtxRange("RapidsCachingWriter.close", NvtxColor.CYAN)
     try {
       if (!success) {
-        shuffleStorage.close()
+        cleanStorage()
         None
       } else {
         // upon seeing this port, the other side will try to connect to the port
@@ -295,7 +305,7 @@ class RapidsShuffleInternalManager(conf: SparkConf, isDriver: Boolean)
       metrics: ShuffleReadMetricsReporter): ShuffleReader[K, C] = {
     // NOTE: This type of reader is not possible for gpu shuffle, as we'd need
     // to use the optimization within our manager, and we don't.
-    wrapped.getReaderForRange(unwrapHandle(handle), startMapIndex, endMapIndex,
+   wrapped.getReaderForRange(unwrapHandle(handle), startMapIndex, endMapIndex,
       startPartition, endPartition, context, metrics)
   }
 

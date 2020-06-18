@@ -25,6 +25,8 @@ import org.apache.spark.internal.Logging
 import org.apache.spark.util.Utils
 
 object GpuShuffleEnv extends Logging {
+  var theCount = 0
+  var theBufferCount = 0
   private val RAPIDS_SHUFFLE_CLASS = classOf[RapidsShuffleManager].getCanonicalName
   private var isRapidsShuffleManagerInitialized: Boolean  = false
 
