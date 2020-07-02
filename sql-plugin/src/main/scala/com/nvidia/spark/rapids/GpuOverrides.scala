@@ -19,9 +19,10 @@ package com.nvidia.spark.rapids
 import java.time.ZoneId
 
 import scala.reflect.ClassTag
-
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.SparkSession
+import org.apache.spark.sql.catalyst.analysis.FunctionRegistry
+import org.apache.spark.sql.catalyst.analysis.FunctionRegistry.FunctionBuilder
 import org.apache.spark.sql.catalyst.expressions._
 import org.apache.spark.sql.catalyst.expressions.aggregate._
 import org.apache.spark.sql.catalyst.optimizer.NormalizeNaNAndZero
@@ -705,9 +706,9 @@ object GpuOverrides {
           GpuDateSub(lhs, rhs)
       }
     ),
-    expr[TimeSub](
-      "Subtracts interval from timestamp",
-      (a, conf, p, r) => new BinaryExprMeta[TimeSub](a, conf, p, r) {
+    expr[TimeAdd](
+      "Adds interval to timestamp",
+      (a, conf, p, r) => new BinaryExprMeta[TimeAdd](a, conf, p, r) {
         override def tagExprForGpu(): Unit = {
           a.interval match {
             case Literal(intvl: CalendarInterval, DataTypes.CalendarIntervalType) =>
@@ -1548,8 +1549,9 @@ object GpuOverrides {
         override val childExprs: Seq[BaseExprMeta[_]] =
           hp.expressions.map(GpuOverrides.wrapExpr(_, conf, Some(this)))
 
-        override def convertToGpu(): GpuPartitioning =
+        override def convertToGpu(): GpuPartitioning = {
           GpuHashPartitioning(childExprs.map(_.convertToGpu()), hp.numPartitions)
+        }
       }),
     part[RangePartitioning]( "Range Partitioning",
       (rp, conf, p, r) => new PartMeta[RangePartitioning](rp, conf, p, r) {

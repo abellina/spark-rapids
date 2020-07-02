@@ -20,11 +20,13 @@ import java.util
 
 import scala.collection.JavaConverters._
 import scala.collection.mutable.ListBuffer
-
 import org.apache.spark.SparkConf
 import org.apache.spark.internal.Logging
 import org.apache.spark.network.util.{ByteUnit, JavaUtils}
+import org.apache.spark.sql.catalyst.expressions.Expression
 import org.apache.spark.sql.internal.SQLConf
+
+import scala.reflect.ClassTag
 
 object ConfHelper {
   def toBoolean(s: String, key: String): Boolean = {
@@ -218,7 +220,7 @@ object RapidsConf {
 
   // Resource Configuration
 
-  val PINNED_POOL_SIZE = conf("spark.rapids.memory.pinnedPool.size")
+  val PINNED_POOL_SIZE: ConfEntry[Long] = conf("spark.rapids.memory.pinnedPool.size")
     .doc("The size of the pinned memory pool in bytes unless otherwise specified. " +
       "Use 0 to disable the pool.")
     .bytesConf(ByteUnit.BYTE)

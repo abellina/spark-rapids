@@ -17,8 +17,9 @@
 package com.nvidia.spark.rapids
 
 import org.apache.spark.internal.Logging
+import org.apache.spark.sql.catalyst.optimizer.BuildRight
 import org.apache.spark.sql.execution.SortExec
-import org.apache.spark.sql.execution.joins.{BuildRight, SortMergeJoinExec}
+import org.apache.spark.sql.execution.joins.SortMergeJoinExec
 
 class GpuSortMergeJoinMeta(
     join: SortMergeJoinExec,
