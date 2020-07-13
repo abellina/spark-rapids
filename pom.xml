@@ -287,6 +287,11 @@
               <version>2.28.2</version>
               <scope>test</scope>
             </dependency>
+            <dependency>
+              <groupId>org.jeasy</groupId>
+              <artifactId>easy-rules-core</artifactId>
+              <version>4.0.0</version>
+            </dependency>
         </dependencies>
     </dependencyManagement>
 

@@ -16,35 +16,108 @@
 package com.nvidia.spark.rapids
 
 import ai.rapids.cudf.{NvtxColor, Table}
+import org.jeasy.rules.annotation.{Action, Condition, Fact, Rule}
+import org.jeasy.rules.api.{Facts, Rules}
+import org.jeasy.rules.core.DefaultRulesEngine
 
 import org.apache.spark.TaskContext
 import org.apache.spark.sql.catalyst.expressions.{Attribute, Expression}
 import org.apache.spark.sql.catalyst.plans.{ExistenceJoin, FullOuter, InnerLike, JoinType, LeftAnti, LeftExistence, LeftOuter, LeftSemi, RightOuter}
 import org.apache.spark.sql.execution.joins.{BuildLeft, BuildRight, HashJoin}
 import org.apache.spark.sql.execution.metric.SQLMetric
+import org.apache.spark.sql.rapids.execution.{GpuBroadcastExchangeExec, GpuBroadcastHashJoinExec}
 import org.apache.spark.sql.vectorized.{ColumnarBatch, ColumnVector}
 
+@Rule(
+  name="GpuHashJoin JoinType support",
+  description = "Supports inner, (full, left, right)-outer, left-semi, left-anti",
+  priority = 1)
+class JoinTypeRule {
+  @Condition
+  def isJoinTypeSupported(@Fact("joinType") joinType: JoinType): Boolean = {
+    joinType match {
+      case _ : InnerLike => true
+      case RightOuter | LeftOuter | LeftSemi | LeftAnti => true
+      case _ => false
+    }
+  }
+
+  @Action
+  def failGpuConversion(@Fact("joinType") joinType: JoinType): Unit = {
+    throw new IllegalStateException(s"${joinType} currently is not supported")
+  }
+}
+
+@Rule(
+  name="GpuHashJoin keys should not be nullable",
+  description = "full-outer is supported if keys are not nullable",
+  priority = 2)
+class FullOuterRule {
+  @Condition
+  def failDueToNullable(@Fact("joinType") joinType: JoinType,
+                        @Fact("leftKeys") leftKeys: Seq[Expression],
+                        @Fact("rightKeys") rightKeys: Seq[Expression]): Boolean = {
+    joinType match {
+      case _: InnerLike =>
+        leftKeys.exists(_.nullable) || rightKeys.exists(_.nullable)
+      case _ => false
+    }
+  }
+
+  @Action
+  def failGpuConversion(@Fact("joinType") joinType: JoinType): Unit = {
+    throw new IllegalStateException(s"${joinType} joins currently do not support conditions")
+  }
+}
+
+@Rule(
+  name="GpuHashJoin Conditional support",
+  description = "Conditions not supported for (full, left, right)-outer, " +
+    "left-semi and left-anti joins",
+  priority = 2)
+class ConditionsRule {
+  @Condition
+  def hasConditionsDefined(
+      @Fact("joinType") joinType: JoinType,
+      @Fact("condition") condition: Option[Expression]): Boolean = {
+    joinType match {
+      case FullOuter | RightOuter | LeftOuter | LeftSemi | LeftAnti =>
+        condition.isDefined
+      case _ => false
+    }
+  }
+
+  @Action
+  def failGpuConversion(@Fact("joinType") joinType: JoinType): Unit = {
+    throw new IllegalStateException(s"${joinType} joins currently do not support conditions")
+  }
+}
+
 object GpuHashJoin {
+  val joinTypeRule = new JoinTypeRule()
+  val fullOuterRule = new FullOuterRule()
+  val conditionsRule = new ConditionsRule()
+
+  val rules = new Rules()
+  rules.register(joinTypeRule)
+  rules.register(fullOuterRule)
+  rules.register(conditionsRule)
+
+  def getRules: Rules = rules
+
   def tagJoin(
       meta: RapidsMeta[_, _, _],
       joinType: JoinType,
       leftKeys: Seq[Expression],
       rightKeys: Seq[Expression],
-      condition: Option[Expression]): Unit = joinType match {
-    case _: InnerLike =>
-    case FullOuter =>
-      if (leftKeys.exists(_.nullable) || rightKeys.exists(_.nullable)) {
-        // https://github.com/rapidsai/cudf/issues/5563
-        meta.willNotWorkOnGpu("Full outer join does not work on nullable keys")
-      }
-      if (condition.isDefined) {
-        meta.willNotWorkOnGpu(s"$joinType joins currently do not support conditions")
-      }
-    case RightOuter | LeftOuter | LeftSemi | LeftAnti =>
-      if (condition.isDefined) {
-        meta.willNotWorkOnGpu(s"$joinType joins currently do not support conditions")
-      }
-    case _ => meta.willNotWorkOnGpu(s"$joinType currently is not supported")
+      condition: Option[Expression]): Unit = {
+    val facts = new Facts()
+    facts.put("joinType", joinType)
+    facts.put("fullOuterRule", fullOuterRule)
+    facts.put("condition", condition)
+
+    val engine = new DefaultRulesEngine()
+    engine.fire(GpuHashJoin.getRules, facts)
   }
 }
 

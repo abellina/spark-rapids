@@ -379,7 +379,7 @@ object RapidsConf {
     .booleanConf
     .createWithDefault(false)
 
-  val ENABLE_REPLACE_SORTMERGEJOIN = conf("spark.rapids.sql.replaceSortMergeJoin.enabled")
+  final val ENABLE_REPLACE_SORTMERGEJOIN = conf("spark.rapids.sql.replaceSortMergeJoin.enabled")
     .doc("Allow replacing sortMergeJoin with HashJoin")
     .booleanConf
     .createWithDefault(true)

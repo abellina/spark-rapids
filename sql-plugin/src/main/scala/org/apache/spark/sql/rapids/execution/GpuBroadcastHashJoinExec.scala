@@ -18,6 +18,9 @@ package org.apache.spark.sql.rapids.execution
 
 import com.nvidia.spark.rapids._
 import com.nvidia.spark.rapids.GpuMetricNames._
+import org.jeasy.rules.annotation.{Action, Condition, Fact, Rule}
+import org.jeasy.rules.api.{Facts, Rules, RulesEngine}
+import org.jeasy.rules.core.DefaultRulesEngine
 
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.catalyst.InternalRow
@@ -29,6 +32,31 @@ import org.apache.spark.sql.execution.exchange.ReusedExchangeExec
 import org.apache.spark.sql.execution.joins._
 import org.apache.spark.sql.execution.metric.{SQLMetric, SQLMetrics}
 import org.apache.spark.sql.vectorized.ColumnarBatch
+
+@Rule(
+  name="buildSide broadcast",
+  description = "build side must be a GPU broadcast",
+  priority = 3)
+class BroadcastRule {
+  @Condition
+  def isNotBroadcast(@Fact("isBroadcast") isBroadcast: Boolean): Boolean = {
+    !isBroadcast
+  }
+
+  @Action
+  def failGpuConversion(@Fact("meta") meta: SparkPlanMeta[_]): Unit = {
+    meta.willNotWorkOnGpu("The broadcast for this join must be on the GPU too")
+  }
+}
+
+object GpuBroadcastHashJoinMeta {
+  import collection.JavaConverters._
+  val rules = new Rules(GpuHashJoin.getRules.iterator().asScala.toArray: _*)
+  val broadcastRule = new BroadcastRule()
+  rules.register(broadcastRule)
+
+  def getRules(): Option[Rules] = Some(rules)
+}
 
 class GpuBroadcastHashJoinMeta(
     join: BroadcastHashJoinExec,
@@ -54,6 +82,13 @@ class GpuBroadcastHashJoinMeta(
       case BuildRight => childPlans(1)
     }
 
+    val facts = new Facts()
+    facts.put("isBroadcast", buildSide.isInstanceOf[GpuBroadcastExchangeExec])
+    facts.put("meta", this)
+
+    val engine = new DefaultRulesEngine()
+    engine.fire(GpuHashJoin.getRules, facts)
+
     if (!buildSide.canThisBeReplaced) {
       willNotWorkOnGpu("the broadcast for this join must be on the GPU too")
     }
@@ -66,14 +101,19 @@ class GpuBroadcastHashJoinMeta(
   override def convertToGpu(): GpuExec = {
     val left = childPlans(0).convertIfNeeded()
     val right = childPlans(1).convertIfNeeded()
-    // The broadcast part of this must be a BroadcastExchangeExec
-    val buildSide = join.buildSide match {
-      case BuildLeft => left
-      case BuildRight => right
-    }
-    if (!buildSide.isInstanceOf[GpuBroadcastExchangeExec]) {
-      throw new IllegalStateException("the broadcast must be on the GPU too")
-    }
+
+    val buildSide =
+      join.buildSide match {
+        case BuildLeft => left
+        case BuildRight => right
+      }
+
+    val facts = new Facts()
+    facts.put("isBroadcast", buildSide.isInstanceOf[GpuBroadcastExchangeExec])
+
+    val engine = new DefaultRulesEngine()
+    engine.fire(GpuBroadcastHashJoinMeta.getRules.get, facts)
+
     GpuBroadcastHashJoinExec(
       leftKeys.map(_.convertToGpu()),
       rightKeys.map(_.convertToGpu()),

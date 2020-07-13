@@ -20,6 +20,8 @@ import java.time.ZoneId
 
 import scala.reflect.ClassTag
 
+import org.jeasy.rules.api.Rules
+
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.catalyst.expressions._
@@ -46,7 +48,7 @@ import org.apache.spark.sql.execution.joins.{BroadcastHashJoinExec, BroadcastNes
 import org.apache.spark.sql.execution.window.WindowExec
 import org.apache.spark.sql.rapids._
 import org.apache.spark.sql.rapids.catalyst.expressions.GpuRand
-import org.apache.spark.sql.rapids.execution.{GpuBroadcastHashJoinMeta, GpuBroadcastMeta, GpuBroadcastNestedLoopJoinMeta}
+import org.apache.spark.sql.rapids.execution.{GpuBroadcastHashJoinExec, GpuBroadcastHashJoinMeta, GpuBroadcastMeta, GpuBroadcastNestedLoopJoinMeta}
 import org.apache.spark.sql.types._
 import org.apache.spark.unsafe.types.{CalendarInterval, UTF8String}
 
@@ -66,7 +68,8 @@ abstract class ReplacementRule[INPUT <: BASE, BASE, WRAP_TYPE <: RapidsMeta[INPU
         Option[RapidsMeta[_, _, _]],
         ConfKeysAndIncompat) => WRAP_TYPE,
     protected var desc: String,
-    final val tag: ClassTag[INPUT]) extends ConfKeysAndIncompat {
+    final val tag: ClassTag[INPUT],
+    rules: Option[Rules] = None) extends ConfKeysAndIncompat {
 
   private var _incompatDoc: Option[String] = None
   private var _disabledDoc: Option[String] = None
@@ -138,6 +141,24 @@ abstract class ReplacementRule[INPUT <: BASE, BASE, WRAP_TYPE <: RapidsMeta[INPU
   }
 
   def confHelp(asTable: Boolean = false, sparkSQLFunctions: Option[String] = None): Unit = {
+    val ruleText = if (rules.isDefined) {
+      val sb = new StringBuilder()
+      sb.append("<br>_Rules_:")
+      rules.foreach(r => {
+        var ruleSeq = Seq[org.jeasy.rules.api.Rule]()
+        r.iterator().forEachRemaining(rule => {
+          ruleSeq = ruleSeq :+ rule
+        })
+
+        ruleSeq.sortBy(_.getPriority).foreach(rule => {
+          sb.append(s"<sub><br>* ${rule.getDescription} </sub>")
+        })
+
+      })
+      sb.toString()
+    } else {
+      ""
+    }
     val notesMsg = notes()
     if (asTable) {
       import ConfHelper.makeConfAnchor
@@ -145,7 +166,7 @@ abstract class ReplacementRule[INPUT <: BASE, BASE, WRAP_TYPE <: RapidsMeta[INPU
       if (sparkSQLFunctions.isDefined) {
         print(s"|${sparkSQLFunctions.get}")
       }
-      print(s"|$desc|${notesMsg.isEmpty}|")
+      print(s"|$desc$ruleText|${notesMsg.isEmpty}|")
       if (notesMsg.isDefined) {
         print(s"${notesMsg.get}")
       } else {
@@ -239,8 +260,9 @@ class ExecRule[INPUT <: SparkPlan](
         Option[RapidsMeta[_, _, _]],
         ConfKeysAndIncompat) => SparkPlanMeta[INPUT],
     desc: String,
-    tag: ClassTag[INPUT])
-  extends ReplacementRule[INPUT, SparkPlan, SparkPlanMeta[INPUT]](doWrap, desc, tag) {
+    tag: ClassTag[INPUT],
+    rules: Option[Rules] = None)
+  extends ReplacementRule[INPUT, SparkPlan, SparkPlanMeta[INPUT]](doWrap, desc, tag, rules) {
 
   override val confKeyPart: String = "exec"
   override val operationName: String = "Exec"
@@ -433,11 +455,12 @@ object GpuOverrides {
   def exec[INPUT <: SparkPlan](
       desc: String,
       doWrap: (INPUT, RapidsConf, Option[RapidsMeta[_, _, _]], ConfKeysAndIncompat)
-          => SparkPlanMeta[INPUT])
+          => SparkPlanMeta[INPUT],
+      rules: Option[Rules] = None)
     (implicit tag: ClassTag[INPUT]): ExecRule[INPUT] = {
     assert(desc != null)
     assert(doWrap != null)
-    new ExecRule[INPUT](doWrap, desc, tag)
+    new ExecRule[INPUT](doWrap, desc, tag, rules)
   }
 
   def dataWriteCmd[INPUT <: DataWritingCommand](
@@ -1719,10 +1742,12 @@ object GpuOverrides {
       (exchange, conf, p, r) => new GpuBroadcastMeta(exchange, conf, p, r)),
     exec[BroadcastHashJoinExec](
       "Implementation of join using broadcast data",
-      (join, conf, p, r) => new GpuBroadcastHashJoinMeta(join, conf, p, r)),
+      (join, conf, p, r) => new GpuBroadcastHashJoinMeta(join, conf, p, r),
+      GpuBroadcastHashJoinMeta.getRules()),
     exec[ShuffledHashJoinExec](
       "Implementation of join using hashed shuffled data",
-      (join, conf, p, r) => new GpuShuffledHashJoinMeta(join, conf, p, r)),
+      (join, conf, p, r) => new GpuShuffledHashJoinMeta(join, conf, p, r),
+      GpuShuffledHashJoinMeta.getRules()),
     exec[BroadcastNestedLoopJoinExec](
       "Implementation of join using brute force",
       (join, conf, p, r) => new GpuBroadcastNestedLoopJoinMeta(join, conf, p, r))
@@ -1745,7 +1770,8 @@ object GpuOverrides {
         .disabledByDefault("large joins can cause out of memory errors"),
     exec[SortMergeJoinExec](
       "Sort merge join, replacing with shuffled hash join",
-      (join, conf, p, r) => new GpuSortMergeJoinMeta(join, conf, p, r)),
+      (join, conf, p, r) => new GpuSortMergeJoinMeta(join, conf, p, r),
+      GpuSortMergeJoinMeta.getRules()),
     exec[HashAggregateExec](
       "The backend for hash based aggregations",
       (agg, conf, p, r) => new GpuHashAggregateMeta(agg, conf, p, r)),

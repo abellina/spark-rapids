@@ -17,6 +17,7 @@
 package com.nvidia.spark.rapids
 
 import com.nvidia.spark.rapids.GpuMetricNames._
+import org.jeasy.rules.api.Rules
 
 import org.apache.spark.TaskContext
 import org.apache.spark.rdd.RDD
@@ -28,6 +29,12 @@ import org.apache.spark.sql.execution.{BinaryExecNode, SparkPlan}
 import org.apache.spark.sql.execution.joins.{BuildLeft, BuildRight, BuildSide, ShuffledHashJoinExec}
 import org.apache.spark.sql.execution.metric.{SQLMetric, SQLMetrics}
 import org.apache.spark.sql.vectorized.ColumnarBatch
+
+object GpuShuffledHashJoinMeta {
+  import collection.JavaConverters._
+  val rules = new Rules(GpuHashJoin.getRules.iterator().asScala.toArray: _*)
+  def getRules(): Option[Rules] = Some(rules)
+}
 
 class GpuShuffledHashJoinMeta(
     join: ShuffledHashJoinExec,

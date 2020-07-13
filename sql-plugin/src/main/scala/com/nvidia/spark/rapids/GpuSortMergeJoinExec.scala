@@ -16,9 +16,39 @@
 
 package com.nvidia.spark.rapids
 
+import org.jeasy.rules.annotation.{Action, Condition, Fact, Rule}
+import org.jeasy.rules.api.{Facts, Rules}
+import org.jeasy.rules.core.DefaultRulesEngine
+
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.execution.SortExec
 import org.apache.spark.sql.execution.joins.{BuildRight, SortMergeJoinExec}
+
+@Rule(
+  name="Sort to hash join when configured",
+  description = "SortMergeJoin replaced with HashJoin if configured",
+  priority = 3)
+class SortMergeReplacementRule {
+  @Condition
+  def isNotConfigured(@Fact("isConfigured") isConfigured: Boolean): Boolean = {
+    !isConfigured
+  }
+
+  @Action
+  def failGpuConversion(@Fact("meta") meta: SparkPlanMeta[_]): Unit = {
+    meta.willNotWorkOnGpu(s"Not replacing sort merge join with hash join, " +
+      s"see ${RapidsConf.ENABLE_REPLACE_SORTMERGEJOIN.key}")
+  }
+}
+
+object GpuSortMergeJoinMeta {
+  import collection.JavaConverters._
+  val rules = new Rules(GpuHashJoin.getRules.iterator().asScala.toArray: _*)
+  val sortMergeReplacementRule = new SortMergeReplacementRule()
+  rules.register(sortMergeReplacementRule)
+
+  def getRules(): Option[Rules] = Some(rules)
+}
 
 class GpuSortMergeJoinMeta(
     join: SortMergeJoinExec,
@@ -40,10 +70,12 @@ class GpuSortMergeJoinMeta(
     // Use conditions from Hash Join
     GpuHashJoin.tagJoin(this, join.joinType, join.leftKeys, join.rightKeys, join.condition)
 
-    if (!conf.enableReplaceSortMergeJoin) {
-      willNotWorkOnGpu(s"Not replacing sort merge join with hash join, " +
-        s"see ${RapidsConf.ENABLE_REPLACE_SORTMERGEJOIN.key}")
-    }
+    val facts = new Facts()
+    facts.put("isConfigured", conf.enableReplaceSortMergeJoin)
+    facts.put("meta", this)
+
+    val engine = new DefaultRulesEngine()
+    engine.fire(GpuSortMergeJoinMeta.getRules.get, facts)
 
     // make sure this is last check - if this is SortMergeJoin, the children can be Sorts and we
     // want to validate they can run on GPU and remove them before replacing this with a
