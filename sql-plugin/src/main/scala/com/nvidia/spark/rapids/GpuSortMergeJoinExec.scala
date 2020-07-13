@@ -47,7 +47,13 @@ object GpuSortMergeJoinMeta {
   val sortMergeReplacementRule = new SortMergeReplacementRule()
   rules.register(sortMergeReplacementRule)
 
-  def getRules(): Option[Rules] = Some(rules)
+  def getRules(localOnly: Boolean = false): Option[Rules] = {
+    if (localOnly) {
+      Some(new Rules(sortMergeReplacementRule))
+    } else {
+      Some(rules)
+    }
+  }
 }
 
 class GpuSortMergeJoinMeta(
@@ -75,7 +81,7 @@ class GpuSortMergeJoinMeta(
     facts.put("meta", this)
 
     val engine = new DefaultRulesEngine()
-    engine.fire(GpuSortMergeJoinMeta.getRules.get, facts)
+    engine.fire(GpuSortMergeJoinMeta.getRules(true).get, facts)
 
     // make sure this is last check - if this is SortMergeJoin, the children can be Sorts and we
     // want to validate they can run on GPU and remove them before replacing this with a

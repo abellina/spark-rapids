@@ -36,15 +36,17 @@ class JoinTypeRule {
   @Condition
   def isJoinTypeSupported(@Fact("joinType") joinType: JoinType): Boolean = {
     joinType match {
-      case _ : InnerLike => true
-      case RightOuter | LeftOuter | LeftSemi | LeftAnti => true
-      case _ => false
+      case _ : InnerLike => false
+      case RightOuter | LeftOuter | LeftSemi | LeftAnti => false
+      case _ => true
     }
   }
 
   @Action
-  def failGpuConversion(@Fact("joinType") joinType: JoinType): Unit = {
-    throw new IllegalStateException(s"${joinType} currently is not supported")
+  def failGpuConversion(
+      @Fact("joinType") joinType: JoinType,
+      @Fact("willNotWorkCb") willNotWorkCb: (String) => Unit): Unit = {
+    willNotWorkCb(s"${joinType} currently is not supported")
   }
 }
 
@@ -65,8 +67,10 @@ class FullOuterRule {
   }
 
   @Action
-  def failGpuConversion(@Fact("joinType") joinType: JoinType): Unit = {
-    throw new IllegalStateException(s"${joinType} joins currently do not support conditions")
+  def failGpuConversion(
+      @Fact("joinType") joinType: JoinType,
+      @Fact("willNotWorkCb") willNotWorkCb: (String) => Unit): Unit = {
+    willNotWorkCb(s"${joinType} joins currently do not support conditions")
   }
 }
 
@@ -88,8 +92,10 @@ class ConditionsRule {
   }
 
   @Action
-  def failGpuConversion(@Fact("joinType") joinType: JoinType): Unit = {
-    throw new IllegalStateException(s"${joinType} joins currently do not support conditions")
+  def failGpuConversion(
+      @Fact("joinType") joinType: JoinType,
+      @Fact("willNotWorkCb") willNotWorkCb: (String) => Unit): Unit = {
+    willNotWorkCb( s"${joinType} joins currently do not support conditions")
   }
 }
 
@@ -113,8 +119,10 @@ object GpuHashJoin {
       condition: Option[Expression]): Unit = {
     val facts = new Facts()
     facts.put("joinType", joinType)
-    facts.put("fullOuterRule", fullOuterRule)
+    facts.put("leftKeys", leftKeys)
+    facts.put("rightKeys", rightKeys)
     facts.put("condition", condition)
+    facts.put("willNotWorkCb", (msg) => meta.willNotWorkOnGpu(msg))
 
     val engine = new DefaultRulesEngine()
     engine.fire(GpuHashJoin.getRules, facts)
