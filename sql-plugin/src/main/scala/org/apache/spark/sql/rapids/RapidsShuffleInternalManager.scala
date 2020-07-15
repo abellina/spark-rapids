@@ -295,8 +295,37 @@ class RapidsShuffleInternalManager(conf: SparkConf, isDriver: Boolean)
       metrics: ShuffleReadMetricsReporter): ShuffleReader[K, C] = {
     // NOTE: This type of reader is not possible for gpu shuffle, as we'd need
     // to use the optimization within our manager, and we don't.
-    wrapped.getReaderForRange(unwrapHandle(handle), startMapIndex, endMapIndex,
-      startPartition, endPartition, context, metrics)
+
+    handle match {
+      case gpu: GpuShuffleHandle[_, _] =>
+        logInfo(s"Asking map output tracker for dependency ${gpu.dependency}, " +
+            s"map output sizes for: ${gpu.shuffleId}, map indices=$startMapIndex-$endMapIndex," +
+            s"parts=$startPartition-$endPartition")
+        if (gpu.dependency.keyOrdering.isDefined) {
+          // very unlikely, but just in case
+          throw new IllegalStateException("A key ordering was requested for a gpu shuffle "
+              + s"dependency ${gpu.dependency.keyOrdering.get}, this is not supported.")
+        }
+
+        val nvtxRange = new NvtxRange("getMapSizesByExecId", NvtxColor.CYAN)
+        val blocksByAddress = try {
+          env.mapOutputTracker.getMapSizesByExecutorId(gpu.shuffleId, startPartition, endPartition)
+        } finally {
+          nvtxRange.close()
+        }
+
+        new RapidsCachingReader(rapidsConf, localBlockManagerId,
+          blocksByAddress,
+          gpu,
+          context,
+          metrics,
+          transport,
+          catalog)
+      case other => {
+        wrapped.getReaderForRange(unwrapHandle(other), startMapIndex, endMapIndex,
+          startPartition, endPartition, context, metrics)
+      }
+    }
   }
 
   override def getReader[K, C](
