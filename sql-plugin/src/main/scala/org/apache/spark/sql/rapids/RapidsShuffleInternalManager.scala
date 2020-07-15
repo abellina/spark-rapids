@@ -309,7 +309,8 @@ class RapidsShuffleInternalManager(conf: SparkConf, isDriver: Boolean)
 
         val nvtxRange = new NvtxRange("getMapSizesByExecId", NvtxColor.CYAN)
         val blocksByAddress = try {
-          env.mapOutputTracker.getMapSizesByExecutorId(gpu.shuffleId, startPartition, endPartition)
+          env.mapOutputTracker.getMapSizesByRange(
+            gpu.shuffleId, startMapIndex, endMapIndex, startPartition, endPartition)
         } finally {
           nvtxRange.close()
         }
