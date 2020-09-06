@@ -86,7 +86,6 @@ class RapidsCachingReader[K, C](
                   case _ => throw new IllegalArgumentException(
                     s"${blockId.getClass} $blockId is not currently supported")
                 }
-
                 cachedBufferIds ++= shuffleBufferIds
 
                 // Update the spill priorities of these buffers to indicate they are about
@@ -110,7 +109,7 @@ class RapidsCachingReader[K, C](
         }
       })
 
-      logInfo(s"Will read $cachedBlocks cached blocks, " +
+      logDebug(s"Will read $cachedBlocks cached blocks, " +
         s"$blocksForRapidsTransport remote blocks from the RapidsShuffleTransport. ")
 
       if (transport.isEmpty && blocksForRapidsTransport.nonEmpty) {
@@ -131,19 +130,19 @@ class RapidsCachingReader[K, C](
       val itRange = new NvtxRange("Shuffle Iterator prep", NvtxColor.BLUE)
       try {
         val cachedIt = cachedBufferIds.iterator.map(bufferId => {
-          GpuSemaphore.acquireIfNecessary(context)
           val cb = withResource(catalog.acquireBuffer(bufferId)) { buffer =>
             buffer.getColumnarBatch
           }
           val cachedBytesRead = GpuColumnVector.getTotalDeviceMemoryUsed(cb)
           metrics.incLocalBytesRead(cachedBytesRead)
           metrics.incRecordsRead(cb.numRows())
-          (0, cb)
-        }).asInstanceOf[Iterator[(K, C)]]
+          cb
+        })
 
-        val cbArrayFromUcx: Iterator[(K, C)] = if (blocksForRapidsTransport.nonEmpty) {
+        val rapidsIterator: Iterator[(K, C)] =
+          if (blocksForRapidsTransport.nonEmpty || cachedIt.nonEmpty) {
           val rapidsShuffleIterator = new RapidsShuffleIterator(localId, rapidsConf, transport.get,
-            blocksForRapidsTransport.toArray, metricsUpdater)
+            blocksForRapidsTransport.toArray, metricsUpdater, cachedIt)
           rapidsShuffleIterator.map(cb => {
             (0, cb)
           }).asInstanceOf[Iterator[(K, C)]]
@@ -152,7 +151,7 @@ class RapidsCachingReader[K, C](
         }
 
         val completionIter = CompletionIterator[(K, C), Iterator[(K, C)]](
-          cachedIt ++ cbArrayFromUcx, {
+          rapidsIterator, {
             context.taskMetrics().mergeShuffleReadMetrics()
           })
 

@@ -16,7 +16,7 @@
 
 package com.nvidia.spark.rapids.shuffle
 
-import com.nvidia.spark.rapids.{RapidsBuffer, ShuffleReceivedBufferId}
+import com.nvidia.spark.rapids.{GpuColumnVector, RapidsBuffer, ShuffleReceivedBufferId}
 import org.mockito.ArgumentCaptor
 import org.mockito.ArgumentMatchers._
 import org.mockito.Mockito._
@@ -34,6 +34,7 @@ class RapidsShuffleIteratorSuite extends RapidsShuffleTestHelper {
       mockTransport,
       blocksByAddress,
       testMetricsUpdater,
+      mock[Iterator[ColumnarBatch]],
       mockCatalog,
       123)
 
@@ -61,6 +62,7 @@ class RapidsShuffleIteratorSuite extends RapidsShuffleTestHelper {
         mockTransport,
         blocksByAddress,
         testMetricsUpdater,
+        mock[Iterator[ColumnarBatch]],
         mockCatalog,
         123))
 
@@ -94,6 +96,7 @@ class RapidsShuffleIteratorSuite extends RapidsShuffleTestHelper {
       mockTransport,
       blocksByAddress,
       testMetricsUpdater,
+      mock[Iterator[ColumnarBatch]],
       mockCatalog,
       123))
 
@@ -124,6 +127,7 @@ class RapidsShuffleIteratorSuite extends RapidsShuffleTestHelper {
       mockTransport,
       blocksByAddress,
       testMetricsUpdater,
+      mock[Iterator[ColumnarBatch]],
       mockCatalog,
       123)
 
@@ -153,5 +157,35 @@ class RapidsShuffleIteratorSuite extends RapidsShuffleTestHelper {
     assertResult(10)(testMetricsUpdater.totalRowsFetched)
 
     newMocks()
+  }
+
+  test("cached iterator is drained if there are no remote blocks to fetch") {
+    RapidsShuffleTestHelper.withMockContiguousTable(1234) { table =>
+      withResource(GpuColumnVector.from(table.getTable)) { inputCachedBatch =>
+        val mockCachedIter = new Iterator[ColumnarBatch] {
+          var _hasNext = true
+          override def hasNext: Boolean = _hasNext
+          override def next(): ColumnarBatch = {
+            _hasNext = false
+            inputCachedBatch
+          }
+        }
+
+        val cl = new RapidsShuffleIterator(
+          RapidsShuffleTestHelper.makeMockBlockManager("1", "1"),
+          mockConf,
+          mockTransport,
+          Array.empty,
+          testMetricsUpdater,
+          mockCachedIter,
+          mockCatalog,
+          123)
+
+        assertResult(true)(cl.hasNext)
+        val batchFromIter = cl.next()
+        assert(batchFromIter == inputCachedBatch)
+        assertResult(false)(cl.hasNext)
+      }
+    }
   }
 }
