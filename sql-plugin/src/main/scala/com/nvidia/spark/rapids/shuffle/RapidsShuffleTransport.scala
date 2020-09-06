@@ -35,7 +35,7 @@ import org.apache.spark.storage.BlockManagerId
  * @param tag a numeric tag identifying this buffer
  * @param memoryBuffer an optional `MemoryBuffer`
  */
-class AddressLengthTag(val address: Long, var length: Long, val tag: Long,
+class AddressLengthTag(val address: Long, var length: Long, var tag: Long,
     var memoryBuffer: Option[MemoryBuffer] = None) extends AutoCloseable with Logging {
   /**
    * If this is a device memory buffer, we return true here.
@@ -67,16 +67,18 @@ class AddressLengthTag(val address: Long, var length: Long, val tag: Long,
    * @param toCopy amount to copy to dstAlt
    * @return amount of bytes copied
    */
-  def cudaCopyTo(dstAlt: AddressLengthTag, srcOffset: Long, toCopy: Long): Long = {
+  def cudaCopyTo(dstAlt: AddressLengthTag, srcOffset: Long, dstOffset: Long, toCopy: Long): Long = {
+    require(toCopy > 0)
     require(srcOffset + toCopy <= length,
       "Attempting to copy more bytes than the source buffer provides")
     require(toCopy <= length,
       "Attempting to copy more than this buffer can hold.")
+
     CudaUtil.copy(
       memoryBuffer.get,
       srcOffset,
       dstAlt.memoryBuffer.get,
-      0,
+      dstOffset,
       toCopy)
     toCopy
   }
@@ -412,12 +414,6 @@ trait RapidsShuffleTransport extends AutoCloseable {
    */
   def queuePending(reqs: Seq[PendingTransferRequest])
 
-  /**
-   * (throttle) Signals that `bytesCompleted` are done, allowing more requests through the
-   * throttle.
-   * @param bytesCompleted amount of bytes handled
-   */
-  def doneBytesInFlight(bytesCompleted: Long): Unit
 
   // Bounce Buffer Management
 

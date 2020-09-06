@@ -131,19 +131,19 @@ class RapidsCachingReader[K, C](
       val itRange = new NvtxRange("Shuffle Iterator prep", NvtxColor.BLUE)
       try {
         val cachedIt = cachedBufferIds.iterator.map(bufferId => {
-          GpuSemaphore.acquireIfNecessary(context)
           val cb = withResource(catalog.acquireBuffer(bufferId)) { buffer =>
             buffer.getColumnarBatch
           }
           val cachedBytesRead = GpuColumnVector.getTotalDeviceMemoryUsed(cb)
           metrics.incLocalBytesRead(cachedBytesRead)
           metrics.incRecordsRead(cb.numRows())
-          (0, cb)
-        }).asInstanceOf[Iterator[(K, C)]]
+          cb
+        })
 
-        val cbArrayFromUcx: Iterator[(K, C)] = if (blocksForRapidsTransport.nonEmpty) {
+        val cbArrayFromUcx: Iterator[(K, C)] =
+          if (blocksForRapidsTransport.nonEmpty || cachedIt.nonEmpty) {
           val rapidsShuffleIterator = new RapidsShuffleIterator(localId, rapidsConf, transport.get,
-            blocksForRapidsTransport.toArray, metricsUpdater)
+            blocksForRapidsTransport.toArray, metricsUpdater, cachedIt)
           rapidsShuffleIterator.map(cb => {
             (0, cb)
           }).asInstanceOf[Iterator[(K, C)]]
@@ -152,7 +152,7 @@ class RapidsCachingReader[K, C](
         }
 
         val completionIter = CompletionIterator[(K, C), Iterator[(K, C)]](
-          cachedIt ++ cbArrayFromUcx, {
+          cbArrayFromUcx, {
             context.taskMetrics().mergeShuffleReadMetrics()
           })
 

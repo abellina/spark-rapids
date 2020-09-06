@@ -69,6 +69,7 @@ class RapidsShuffleTestHelper extends FunSuite
 
   def newMocks(): Unit = {
     mockTransaction = mock[Transaction]
+    when(mockTransaction.getStats).thenReturn(mock[TransactionStats])
     mockConnection = spy(new MockConnection(mockTransaction))
     mockTransport = mock[RapidsShuffleTransport]
     mockExecutor = new ImmediateExecutor
@@ -142,6 +143,23 @@ object RapidsShuffleTestHelper extends MockitoSugar with Arm {
     tableMetas
   }
 
+  def prepareMetaTransferRequest(numTables: Int, numRows: Long): RefCountedDirectByteBuffer =
+    withMockContiguousTable(numRows) { ct =>
+      val tableMetaTags = (0 until numTables).map { t =>
+        (buildMockTableMeta(t, ct), t.toLong)
+      }
+      val trBuffer = ShuffleMetadata.buildTransferRequest(1, 123, tableMetaTags)
+      val refCountedRes = new RefCountedDirectByteBuffer(trBuffer)
+      refCountedRes
+    }
+
+  def mockTableMeta(numRows: Long): TableMeta =
+    withMockContiguousTable(numRows) { ct =>
+      val tableMeta = buildMockTableMeta(1, ct)
+      val bufferMeta = tableMeta.bufferMeta()
+      tableMeta
+    }
+
   def prepareMetaTransferResponse(
       mockTransport: RapidsShuffleTransport,
       numRows: Long): TableMeta =
@@ -208,8 +226,7 @@ class MockConnection(mockTransaction: Transaction) extends ClientConnection {
     mockTransaction
   }
 
-  override def getPeerExecutorId: Long =
-    throw new UnsupportedOperationException
+  override def getPeerExecutorId: Long = 0
 
   override def assignResponseTag: Long = 1L
   override def assignBufferTag(msgId: Int): Long = 2L

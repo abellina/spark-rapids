@@ -16,23 +16,39 @@
 
 package com.nvidia.spark.rapids.shuffle
 
-import ai.rapids.cudf.{DeviceMemoryBuffer, MemoryBuffer}
+import ai.rapids.cudf.{BufferType, ColumnVector, CudaUtil, DeviceMemoryBuffer, HostMemoryBuffer, MemoryBuffer}
 import com.nvidia.spark.rapids.format.{BufferMeta, TableMeta}
 import org.mockito.{ArgumentCaptor, ArgumentMatchers}
 import org.mockito.ArgumentMatchers._
 import org.mockito.Mockito._
 
 class RapidsShuffleClientSuite extends RapidsShuffleTestHelper {
+
   def prepareBufferReceiveState(
       tableMeta: TableMeta,
       bounceBuffers: Seq[MemoryBuffer]): BufferReceiveState = {
-    val brs = spy(new BufferReceiveState(mockTransport, bounceBuffers))
-    val tag = 123
-    val ptr = PendingTransferRequest(client, tableMeta, tag, mockHandler)
-    val targetAlt = mock[AddressLengthTag]
-    when(targetAlt.cudaCopyFrom(any(), any())).thenReturn(bounceBuffers.head.getLength)
-    brs.addRequest(ptr)
-    brs
+    val ptr = PendingTransferRequest(client, tableMeta, 123L, mockHandler)
+    spy(new BufferReceiveState(
+      mockTransport,
+      bounceBuffers.head.asInstanceOf[DeviceMemoryBuffer], Seq(ptr)))
+  }
+
+  def prepareBufferReceiveState(
+      tableMetas: Seq[TableMeta],
+      bounceBuffers: Seq[MemoryBuffer]): BufferReceiveState = {
+
+    var tag = 123
+    val ptrs = tableMetas.map { tm =>
+      val ptr = PendingTransferRequest(client, tm, tag, mockHandler)
+      val targetAlt = mock[AddressLengthTag]
+      tag = tag + 1
+      ptr
+    }
+
+    spy(new BufferReceiveState(
+      mockTransport,
+      bounceBuffers.head.asInstanceOf[DeviceMemoryBuffer],
+      ptrs))
   }
 
   def verifyTableMeta(expected: TableMeta, actual: TableMeta): Unit = {
@@ -111,7 +127,7 @@ class RapidsShuffleClientSuite extends RapidsShuffleTestHelper {
     verify(mockTransport, times(0)).queuePending(any())
 
     // ensure our handler (iterator) received 3 batches
-    verify(mockHandler, times(numBatches)).batchReceived(any())
+    verify(mockHandler, times(numBatches)).batchReceived(any(), any())
   }
 
   test("errored/cancelled metadata fetch") {
@@ -148,27 +164,40 @@ class RapidsShuffleClientSuite extends RapidsShuffleTestHelper {
     val tableMeta =
       RapidsShuffleTestHelper.prepareMetaTransferResponse(mockTransport, numRows)
 
-    // assume we obtained 2 bounce buffers for reuse
-    val numBuffers = 2
     // 10000 in bytes ~ 2500 rows (minus validity/offset buffers) worth of contiguous
     // single column int table, so we need 10 buffer-lengths to receive all of 25000 rows,
     // the extra one adds 1 receive. Note that each receive is 2 buffers (except for the last one),
     // so that is 6 receives expected.
     val sizePerBuffer = 10000
     // 5 receives (each with 2 buffers) makes for 100000 bytes + 1 receive for the remaining byte
-    val expectedReceives = 6
-    val bbs = (0 until numBuffers).map( _ => DeviceMemoryBuffer.allocate(sizePerBuffer))
+    val expectedReceives = 11
 
-    withResource(bbs) { bounceBuffers =>
+    val refHostBuffer = HostMemoryBuffer.allocate(100032)
+    var count = 0
+    (0 until refHostBuffer.getLength.toInt)
+        .foreach { off =>
+          refHostBuffer.setByte(off, count.toByte)
+          count = count + 1
+          if (count >= sizePerBuffer) {
+            count = 0
+          }
+        }
+
+    val bb = DeviceMemoryBuffer.allocate(sizePerBuffer)
+    bb.copyFromHostBuffer(refHostBuffer.slice(0, sizePerBuffer))
+
+    withResource(bb) { bounceBuffer =>
+//      bounceBuffer.copyFromHostBuffer(reference)
+      val bounceBuffers = Seq(bounceBuffer)
       val brs = prepareBufferReceiveState(tableMeta, bounceBuffers)
 
-      assert(!brs.isDone)
+      assert(brs.hasNext)
 
       // Kick off receives
       client.doIssueBufferReceives(brs)
 
       // If transactions are successful, we should have completed the receive
-      assert(brs.isDone)
+      assert(!brs.hasNext)
 
       // we would issue as many requests as required in order to get the full contiguous
       // buffer
@@ -193,14 +222,160 @@ class RapidsShuffleClientSuite extends RapidsShuffleTestHelper {
       verify(mockStorage, times(1))
           .addBuffer(any(), dmbCaptor.capture(), any(), any())
 
-      assertResult(tableMeta.bufferMeta().size())(
-        dmbCaptor.getValue.asInstanceOf[DeviceMemoryBuffer].getLength)
+      val receivedBuff = dmbCaptor.getValue.asInstanceOf[DeviceMemoryBuffer]
+      assertResult(tableMeta.bufferMeta().size())(receivedBuff.getLength)
+
+      var hostBuff = HostMemoryBuffer.allocate(receivedBuff.getLength)
+      CudaUtil.copy(receivedBuff, 0, hostBuff, 0, receivedBuff.getLength)
+      (0 until numRows).foreach { r =>
+        assertResult(refHostBuffer.getByte(r))(hostBuff.getByte(r))
+        println(s"passes for ${r}")
+      }
 
       // after closing, we should have freed our bounce buffers.
       val capturedBuffers: ArgumentCaptor[Seq[MemoryBuffer]] =
         ArgumentCaptor.forClass(classOf[Seq[MemoryBuffer]])
       verify(mockTransport, times(1))
         .freeReceiveBounceBuffers(capturedBuffers.capture())
+
+      val freedBuffers = capturedBuffers.getValue
+      assertResult(bounceBuffers)(freedBuffers)
+    }
+  }
+
+  test("successful buffer fetch multi-buffer") {
+    when(mockTransaction.getStatus).thenReturn(TransactionStatus.Success)
+
+    val numRows = 500
+    val tableMetas =
+      (0 until 5).map {
+        _ => RapidsShuffleTestHelper.prepareMetaTransferResponse(mockTransport, numRows)
+      }
+
+    val numBuffers = 1
+    // 20000 in bytes ~ 5000 rows (minus validity/offset buffers) worth of contiguous
+    // single column int table, so we can pack 5 device receives into a single bounce buffer
+    val sizePerBuffer = 20000
+    // 5 receives (each with 2 buffers) makes for 100000 bytes + 1 receive for the remaining byte
+    val expectedReceives = 1
+    val bbs = (0 until numBuffers).map( _ => DeviceMemoryBuffer.allocate(sizePerBuffer))
+
+    withResource(bbs) { bounceBuffers =>
+      val brs = prepareBufferReceiveState(tableMetas, bounceBuffers)
+
+      assert(brs.hasNext)
+
+      // Kick off receives
+      client.doIssueBufferReceives(brs)
+
+      // If transactions are successful, we should have completed the receive
+      assert(!brs.hasNext)
+
+      // we would issue as many requests as required in order to get the full contiguous
+      // buffer
+      verify(mockConnection, times(expectedReceives))
+          .receive(any[Seq[AddressLengthTag]](), any[TransactionCallback]())
+
+      // the mock connection keeps track of every receive length
+      val totalReceived = mockConnection.receiveLengths.sum
+      val numBuffersUsed = mockConnection.receiveLengths.size
+
+      val totalExpectedSize = tableMetas.map(tm => tm.bufferMeta().size()).sum
+      assertResult(totalExpectedSize)(totalReceived)
+      assertResult(1)(numBuffersUsed)
+
+      // we would perform 1 request to issue a `TransferRequest`, so the server can start.
+      verify(mockConnection, times(1)).request(any(), any(), any[TransactionCallback]())
+
+      // we will hand off a `DeviceMemoryBuffer` to the catalog
+      val dmbCaptor = ArgumentCaptor.forClass(classOf[DeviceMemoryBuffer])
+      val tmCaptor = ArgumentCaptor.forClass(classOf[TableMeta])
+      verify(client, times(5)).track(any[DeviceMemoryBuffer](), tmCaptor.capture())
+      tableMetas.zipWithIndex.foreach { case (tm, ix) =>
+        verifyTableMeta(tm, tmCaptor.getAllValues().get(ix).asInstanceOf[TableMeta])
+      }
+
+      verify(mockStorage, times(5))
+          .addBuffer(any(), dmbCaptor.capture(), any(), any())
+
+      assertResult(totalExpectedSize)(
+        dmbCaptor.getAllValues().toArray().map(_.asInstanceOf[DeviceMemoryBuffer].getLength).sum)
+
+      // after closing, we should have freed our bounce buffers.
+      val capturedBuffers: ArgumentCaptor[Seq[MemoryBuffer]] =
+        ArgumentCaptor.forClass(classOf[Seq[MemoryBuffer]])
+      verify(mockTransport, times(1))
+          .freeReceiveBounceBuffers(capturedBuffers.capture())
+
+      val freedBuffers = capturedBuffers.getValue
+      assertResult(bounceBuffers)(freedBuffers)
+    }
+  }
+
+  test("successful buffer fetch multi-buffer, larger than a single bounce buffer") {
+    when(mockTransaction.getStatus).thenReturn(TransactionStatus.Success)
+
+    val numRows = 500
+    val tableMetas =
+      (0 until 20).map {
+        _ => RapidsShuffleTestHelper.prepareMetaTransferResponse(mockTransport, numRows)
+      }
+
+    val numBuffers = 1
+    // 20000 in bytes ~ 5000 rows (minus validity/offset buffers) worth of contiguous
+    // single column int table, so we can pack 5 device receives into a single bounce buffer
+    // we have 20 bounce buffers, so we expect in this case 3 receives.
+    val sizePerBuffer = 20000
+    // 5 receives (each with 2 buffers) makes for 100000 bytes + 1 receive for the remaining byte
+    val expectedReceives = 3
+    val bbs = (0 until numBuffers).map( _ => DeviceMemoryBuffer.allocate(sizePerBuffer))
+
+    withResource(bbs) { bounceBuffers =>
+      val brs = prepareBufferReceiveState(tableMetas, bounceBuffers)
+
+      assert(brs.hasNext)
+
+      // Kick off receives
+      client.doIssueBufferReceives(brs)
+
+      // If transactions are successful, we should have completed the receive
+      assert(!brs.hasNext)
+
+      // we would issue as many requests as required in order to get the full contiguous
+      // buffer
+      verify(mockConnection, times(expectedReceives))
+          .receive(any[Seq[AddressLengthTag]](), any[TransactionCallback]())
+
+      // the mock connection keeps track of every receive length
+      val totalReceived = mockConnection.receiveLengths.sum
+      val numBuffersUsed = mockConnection.receiveLengths.size
+
+      val totalExpectedSize = tableMetas.map(tm => tm.bufferMeta().size()).sum
+      assertResult(totalExpectedSize)(totalReceived)
+      assertResult(3)(numBuffersUsed)
+
+      // we would perform 1 request to issue a `TransferRequest`, so the server can start.
+      verify(mockConnection, times(1)).request(any(), any(), any[TransactionCallback]())
+
+      // we will hand off a `DeviceMemoryBuffer` to the catalog
+      val dmbCaptor = ArgumentCaptor.forClass(classOf[DeviceMemoryBuffer])
+      val tmCaptor = ArgumentCaptor.forClass(classOf[TableMeta])
+      verify(client, times(20)).track(any[DeviceMemoryBuffer](), tmCaptor.capture())
+      tableMetas.zipWithIndex.foreach { case (tm, ix) =>
+        verifyTableMeta(tm, tmCaptor.getAllValues().get(ix).asInstanceOf[TableMeta])
+      }
+
+      verify(mockStorage, times(20))
+          .addBuffer(any(), dmbCaptor.capture(), any(), any())
+
+      assertResult(totalExpectedSize)(
+        dmbCaptor.getAllValues().toArray().map(_.asInstanceOf[DeviceMemoryBuffer].getLength).sum)
+
+      // after closing, we should have freed our bounce buffers.
+      val capturedBuffers: ArgumentCaptor[Seq[MemoryBuffer]] =
+        ArgumentCaptor.forClass(classOf[Seq[MemoryBuffer]])
+      verify(mockTransport, times(1))
+          .freeReceiveBounceBuffers(capturedBuffers.capture())
 
       val freedBuffers = capturedBuffers.getValue
       assertResult(bounceBuffers)(freedBuffers)
@@ -217,7 +392,7 @@ class RapidsShuffleClientSuite extends RapidsShuffleTestHelper {
         RapidsShuffleTestHelper.prepareMetaTransferResponse(mockTransport, numRows)
 
       // assume we obtained 2 bounce buffers, for reuse
-      val numBuffers = 2
+      val numBuffers =1
 
       // error condition, so it doesn't matter much what we set here, only the first
       // receive will happen
@@ -226,13 +401,13 @@ class RapidsShuffleClientSuite extends RapidsShuffleTestHelper {
       withResource(bbs) { bounceBuffers =>
         val brs = prepareBufferReceiveState(tableMeta, bounceBuffers)
 
-        assert(!brs.isDone)
+        assert(brs.hasNext)
 
         // Kick off receives
         client.doIssueBufferReceives(brs)
 
         // Errored transaction. Therefore we should not be done
-        assert(!brs.isDone)
+        assert(brs.hasNext)
 
         // We should have called `transferError` in the `RapidsShuffleFetchHandler`
         verify(mockHandler, times(1)).transferError(any())
@@ -254,6 +429,196 @@ class RapidsShuffleClientSuite extends RapidsShuffleTestHelper {
       }
 
       newMocks()
+    }
+  }
+
+  test ("adding requests -- get a bounce buffer length") {
+
+    withResource(DeviceMemoryBuffer.allocate(1000)) { buff =>
+
+      val tableMeta =
+        RapidsShuffleTestHelper.prepareMetaTransferResponse(mockTransport, 1024)
+
+      val ptr = mock[PendingTransferRequest]
+      when(ptr.tableMeta).thenReturn(tableMeta)
+      when(ptr.getLength).thenReturn(tableMeta.bufferMeta().size())
+
+      val br = new BufferReceiveState(mockTransport, buff, Seq(ptr))
+      println(br.next())
+      assert(br.hasNext)
+      println(br.next())
+      println(br.next())
+      println(br.next())
+      println(br.next())
+
+      assert(!br.hasNext)
+    }
+  }
+
+  test ("adding requests -- get a bounce buffer length -- requests span two bounce buffer") {
+
+    withResource(DeviceMemoryBuffer.allocate(1000)) { buff =>
+
+      val ptr = mock[PendingTransferRequest]
+      val ptr2 = mock[PendingTransferRequest]
+
+      val mockTable = RapidsShuffleTestHelper.mockTableMeta(40)
+      val mockTable2 = RapidsShuffleTestHelper.mockTableMeta(200)
+
+      when(ptr.getLength).thenReturn(mockTable.bufferMeta().size())
+      when(ptr.tableMeta).thenReturn(mockTable)
+
+      when(ptr2.getLength).thenReturn(mockTable2.bufferMeta().size())
+      when(ptr2.tableMeta).thenReturn(mockTable2)
+
+      val br = new BufferReceiveState(mockTransport, buff, ptr :: ptr2 :: Nil)
+
+      val state = br.next()
+
+      println(state)
+
+      assert(br.hasNext)
+
+      val state2 = br.next()
+
+      println(state2)
+
+      assert(!br.hasNext)
+    }
+  }
+
+  test ("adding requests -- get a bounce buffer length -- requests span three bounce buffer " +
+      "consume") {
+    withResource(DeviceMemoryBuffer.allocate(1000)) { buff =>
+      val ptr = mock[PendingTransferRequest]
+      val ptr2 = mock[PendingTransferRequest]
+      val ptr3 = mock[PendingTransferRequest]
+
+      val mockTable = RapidsShuffleTestHelper.mockTableMeta(40)
+      val mockTable2 = RapidsShuffleTestHelper.mockTableMeta(180)
+      val mockTable3 = RapidsShuffleTestHelper.mockTableMeta(100)
+
+      when(ptr.getLength).thenReturn(mockTable.bufferMeta().size())
+      when(ptr.tableMeta).thenReturn(mockTable)
+
+      when(ptr2.getLength).thenReturn(mockTable2.bufferMeta().size())
+      when(ptr2.tableMeta).thenReturn(mockTable2)
+
+      when(ptr3.getLength).thenReturn(mockTable3.bufferMeta().size())
+      when(ptr3.tableMeta).thenReturn(mockTable3)
+
+      val br = new BufferReceiveState(mockTransport, buff, ptr :: ptr2 :: ptr3 :: Nil)
+
+      val state = br.next()
+      br.consumeWindow()
+
+      println(state)
+      assert(br.hasNext)
+
+      val state2 = br.next()
+      br.consumeWindow()
+      println(state2)
+
+      assert(!br.hasNext)
+
+
+    }
+  }
+
+  test ("adding requests -- get a bounce buffer length -- request larger than bb" +
+      "consume") {
+
+    withResource(DeviceMemoryBuffer.allocate(1000)) { buff =>
+      val ptr = mock[PendingTransferRequest]
+      val ptr2 = mock[PendingTransferRequest]
+
+      val mockTable = RapidsShuffleTestHelper.mockTableMeta(300)
+      val mockTable2 = RapidsShuffleTestHelper.mockTableMeta(300)
+
+      when(ptr.getLength).thenReturn(mockTable.bufferMeta().size())
+      when(ptr.tableMeta).thenReturn(mockTable)
+
+      when(ptr2.getLength).thenReturn(mockTable2.bufferMeta().size())
+      when(ptr2.tableMeta).thenReturn(mockTable2)
+
+      val br = new BufferReceiveState(mockTransport, buff, ptr :: ptr2 :: Nil)
+
+      val state = br.next()
+      br.consumeWindow()
+
+      println(state)
+      assert(br.hasNext)
+
+      val state2 = br.next()
+      br.consumeWindow()
+
+      println(state2)
+
+      assert(br.hasNext)
+
+      val state3 = br.next()
+      br.consumeWindow()
+
+      println(state3)
+      // this should have beenc onsumed by nlow!!
+
+      assert(!br.hasNext)
+    }
+  }
+
+  test ("adding requests -- get a bounce buffer length -- request larger than bb " +
+      "-- second one spans twice consume") {
+
+    withResource(DeviceMemoryBuffer.allocate(1000)) { buff =>
+      val ptr = mock[PendingTransferRequest]
+      val ptr2 = mock[PendingTransferRequest]
+
+      val mockTable = RapidsShuffleTestHelper.mockTableMeta(300)
+      val mockTable2 = RapidsShuffleTestHelper.mockTableMeta(800)
+
+      when(ptr.tag).thenReturn(1)
+      when(ptr.getLength).thenReturn(mockTable.bufferMeta().size())
+      when(ptr.tableMeta).thenReturn(mockTable)
+
+      when(ptr2.tag).thenReturn(2)
+      when(ptr2.getLength).thenReturn(mockTable2.bufferMeta().size())
+      when(ptr2.tableMeta).thenReturn(mockTable2)
+
+      val br = new BufferReceiveState(mockTransport, buff, ptr :: ptr2 :: Nil)
+
+      val state = br.next()
+      br.consumeWindow()
+
+      println(state)
+      assert(br.hasNext)
+
+      val state2 = br.next()
+      br.consumeWindow()
+
+      println(state2)
+
+      assert(br.hasNext)
+
+      val state3 = br.next()
+      br.consumeWindow()
+
+      println(state3)
+
+      assert(br.hasNext)
+
+      val state4 = br.next()
+      br.consumeWindow()
+
+      println(state4)
+
+      assert(br.hasNext)
+
+      val state5 = br.next()
+      br.consumeWindow()
+
+      println(state5)
+
+      assert(!br.hasNext)
     }
   }
 }

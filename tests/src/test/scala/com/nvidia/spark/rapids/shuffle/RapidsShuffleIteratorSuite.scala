@@ -34,6 +34,7 @@ class RapidsShuffleIteratorSuite extends RapidsShuffleTestHelper {
       mockTransport,
       blocksByAddress,
       testMetricsUpdater,
+      mock[Iterator[ColumnarBatch]],
       mockCatalog,
       123)
 
@@ -61,6 +62,7 @@ class RapidsShuffleIteratorSuite extends RapidsShuffleTestHelper {
         mockTransport,
         blocksByAddress,
         testMetricsUpdater,
+        mock[Iterator[ColumnarBatch]],
         mockCatalog,
         123))
 
@@ -94,6 +96,7 @@ class RapidsShuffleIteratorSuite extends RapidsShuffleTestHelper {
       mockTransport,
       blocksByAddress,
       testMetricsUpdater,
+      mock[Iterator[ColumnarBatch]],
       mockCatalog,
       123))
 
@@ -124,6 +127,7 @@ class RapidsShuffleIteratorSuite extends RapidsShuffleTestHelper {
       mockTransport,
       blocksByAddress,
       testMetricsUpdater,
+      mock[Iterator[ColumnarBatch]],
       mockCatalog,
       123)
 
