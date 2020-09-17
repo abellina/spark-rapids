@@ -154,7 +154,9 @@ object BenchUtils {
       // cause Spark to call unregisterShuffle
       if (gcBetweenRuns) {
         System.gc()
+        Thread.sleep(1000)
         System.gc()
+        Thread.sleep(1000)
       }
     }
 
