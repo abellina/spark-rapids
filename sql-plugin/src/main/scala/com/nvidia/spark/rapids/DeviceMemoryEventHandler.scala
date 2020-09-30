@@ -16,16 +16,22 @@
 
 package com.nvidia.spark.rapids
 
+import java.io.File
+import java.lang.management.ManagementFactory
+
 import ai.rapids.cudf.{NvtxColor, NvtxRange, RmmEventHandler}
+import com.sun.management.HotSpotDiagnosticMXBean
 
 import org.apache.spark.internal.Logging
 
 /**
  * RMM event handler to trigger spilling from the device memory store.
  * @param store device memory store that will be triggered to spill
+ * @param oomDumpDir local directory to create heap dumps on GPU OOM
  */
-class DeviceMemoryEventHandler(store: RapidsDeviceMemoryStore)
-    extends RmmEventHandler with Logging {
+class DeviceMemoryEventHandler(
+    store: RapidsDeviceMemoryStore,
+    oomDumpDir: Option[String]) extends RmmEventHandler with Logging {
 
   /**
    * Handles RMM allocation failures by spilling buffers from device memory.
@@ -42,6 +48,7 @@ class DeviceMemoryEventHandler(store: RapidsDeviceMemoryStore)
         if (storeSize == 0) {
           logWarning("Device store exhausted, unable to satisfy "
               + s"allocation of $allocSize bytes")
+          oomDumpDir.foreach(heapDump)
           return false
         }
         val targetSize = Math.max(storeSize - allocSize, 0)
@@ -66,5 +73,20 @@ class DeviceMemoryEventHandler(store: RapidsDeviceMemoryStore)
   }
 
   override def onDeallocThreshold(totalAllocated: Long): Unit = {
+  }
+
+  private def heapDump(dumpDir: String): Unit = {
+    val dumpPath = getDumpPath(dumpDir)
+    logWarning(s"Dumping heap to $dumpPath")
+    val server = ManagementFactory.getPlatformMBeanServer
+    val mxBean = ManagementFactory.newPlatformMXBeanProxy(server,
+      "com.sun.management:type=HotSpotDiagnostic", classOf[HotSpotDiagnosticMXBean])
+    mxBean.dumpHeap(dumpPath, false)
+  }
+
+  private def getDumpPath(dumpDir: String): String = {
+    // pid is typically before the '@' character in the name
+    val pid = ManagementFactory.getRuntimeMXBean.getName.split('@').head
+    new File(dumpDir, s"gpu-oom-$pid.hprof").toString
   }
 }
