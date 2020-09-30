@@ -383,7 +383,6 @@ abstract class RapidsShuffleInternalManagerBase(conf: SparkConf, isDriver: Boole
 
         new RapidsCachingReader(rapidsConf, localBlockManagerId,
           blocksByAddress,
-          gpu,
           context,
           metrics,
           transport,
