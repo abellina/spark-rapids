@@ -44,7 +44,7 @@ class BufferReceiveState(
   val windowedBlockIterator = new WindowedBlockIterator[ReceiveBlock](
     requests.map(r => new ReceiveBlock(r)), bounceBuffer.getLength)
 
-  def getRequests(): Seq[PendingTransferRequest] = requests
+  def getRequests: Seq[PendingTransferRequest] = requests
 
   override def close(): Unit = synchronized {
     if (bounceBuffer != null) {
@@ -79,14 +79,10 @@ class BufferReceiveState(
     alt
   }
 
-  def getFirstTag(blocks: Seq[BlockRange[ReceiveBlock]]): Long = {
-    blocks.head.block.tag
-  }
+  def getFirstTag(blocks: Seq[BlockRange[ReceiveBlock]]): Long = blocks.head.block.tag
 
-  def getCurrentHandlers(): Seq[RapidsShuffleFetchHandler] = {
-    currentBlocks.map { case b =>
-      b.block.request.handler
-    }
+  def getCurrentHandlers: Seq[RapidsShuffleFetchHandler] = {
+    currentBlocks.map(_.block.request.handler)
   }
 
   private[this] var workingOn: DeviceMemoryBuffer = null
@@ -101,56 +97,34 @@ class BufferReceiveState(
 
         val fullSize = pendingTransferRequest.tableMeta.bufferMeta().size()
 
-        val consumed = if (fullSize == b.rangeSize()) {
+        var contigBuffer: DeviceMemoryBuffer = null
+
+        if (fullSize == b.rangeSize()) {
           logTrace(s"have full buffer ${b}")
           // we have the full buffer!
-          val buff = Rmm.alloc(b.rangeSize(), stream)
-
-          buff.copyFromDeviceBufferAsync(
-            0,
-            bounceBuffer,
-            bounceBufferByteOffset,
-            b.rangeSize(),
-            stream)
-
-          Some((buff,
-              pendingTransferRequest.tableMeta,
-              pendingTransferRequest.handler))
+          contigBuffer = Rmm.alloc(b.rangeSize(), stream)
+          contigBuffer.copyFromDeviceBufferAsync(0, bounceBuffer,
+            bounceBufferByteOffset, b.rangeSize(), stream)
         } else {
           logTrace(s"do not have full buffer ${b}")
           if (workingOn != null) {
-            workingOn.copyFromDeviceBufferAsync(
-              workingOnSoFar,
-              bounceBuffer,
-              bounceBufferByteOffset,
-              b.rangeSize(),
-              stream)
+            workingOn.copyFromDeviceBufferAsync(workingOnSoFar, bounceBuffer,
+              bounceBufferByteOffset, b.rangeSize(), stream)
 
             workingOnSoFar += b.rangeSize()
             if (workingOnSoFar == fullSize) {
-              val res = Some((workingOn,
-                  pendingTransferRequest.tableMeta,
-                  pendingTransferRequest.handler))
-
+              contigBuffer = workingOn
               workingOn = null
               workingOnSoFar = 0
-              res
-            } else {
-              None
             }
           } else {
             // need to keep it around
             workingOn = Rmm.alloc(fullSize, stream)
 
-            workingOn.copyFromDeviceBufferAsync(
-              0,
-              bounceBuffer,
-              bounceBufferByteOffset,
-              b.rangeSize(),
-              stream)
+            workingOn.copyFromDeviceBufferAsync( 0, bounceBuffer,
+              bounceBufferByteOffset, b.rangeSize(), stream)
 
             workingOnSoFar += b.rangeSize()
-            None
           }
         }
         bounceBufferByteOffset += b.rangeSize()
@@ -158,7 +132,12 @@ class BufferReceiveState(
           logInfo(s"And we are starting over => at end of ${bounceBuffer}")
           bounceBufferByteOffset = 0
         }
-        consumed
+
+        if (contigBuffer != null) {
+          Some((contigBuffer, pendingTransferRequest.tableMeta, pendingTransferRequest.handler))
+        } else {
+          None
+        }
       }
 
       // sync once, rather for each copy
