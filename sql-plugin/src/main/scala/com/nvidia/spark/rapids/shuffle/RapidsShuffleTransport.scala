@@ -35,7 +35,7 @@ import org.apache.spark.storage.BlockManagerId
  * @param tag a numeric tag identifying this buffer
  * @param memoryBuffer an optional `MemoryBuffer`
  */
-class AddressLengthTag(val address: Long, var length: Long, var tag: Long,
+class AddressLengthTag(val address: Long, var length: Long, val tag: Long,
     var memoryBuffer: Option[MemoryBuffer] = None) extends AutoCloseable with Logging {
   /**
    * If this is a device memory buffer, we return true here.
@@ -58,49 +58,6 @@ class AddressLengthTag(val address: Long, var length: Long, var tag: Long,
     val result = memoryBuffer.get
     memoryBuffer = None
     result.asInstanceOf[DeviceMemoryBuffer]
-  }
-
-  /**
-   * Copy to a destination [[AddressLengthTag]]
-   * @param dstAlt the destination [[AddressLengthTag]]
-   * @param srcOffset the offset to start copying from
-   * @param toCopy amount to copy to dstAlt
-   * @return amount of bytes copied
-   */
-  def cudaCopyTo(dstAlt: AddressLengthTag, srcOffset: Long, dstOffset: Long, toCopy: Long): Long = {
-    require(toCopy > 0)
-    require(srcOffset + toCopy <= length,
-      "Attempting to copy more bytes than the source buffer provides")
-    require(toCopy <= length,
-      "Attempting to copy more than this buffer can hold.")
-
-    CudaUtil.copy(
-      memoryBuffer.get,
-      srcOffset,
-      dstAlt.memoryBuffer.get,
-      dstOffset,
-      toCopy)
-    toCopy
-  }
-
-  /**
-   * Copy from a source [[AddressLengthTag]]
-   * @param srcAlt the source [[AddressLengthTag]]
-   * @param dstOffset the offset in which to start copying from
-   * @return amount of bytes copied
-   */
-  def cudaCopyFrom(srcAlt: AddressLengthTag, dstOffset: Long): Long = {
-    require(dstOffset + srcAlt.length <= length,
-      s"Attempting to copy to a buffer that isn't big enough! $dstOffset + ${srcAlt.length} " +
-        s"(${dstOffset+srcAlt.length}) <= ${length}")
-    // TODO: replace this with an async copy on target stream
-    CudaUtil.copy(
-      srcAlt.memoryBuffer.get,
-      0,
-      memoryBuffer.get,
-      dstOffset,
-      srcAlt.length)
-    srcAlt.length
   }
 
   /**
