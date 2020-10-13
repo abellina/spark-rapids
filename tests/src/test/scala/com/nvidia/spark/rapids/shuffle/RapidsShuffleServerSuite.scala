@@ -63,7 +63,7 @@ class RapidsShuffleServerSuite extends RapidsShuffleTestHelper {
         }
 
         val bss = new BufferSendState(
-          null, mockTransferRequest, mockTransport, null, handler, bounceBuffer.getLength)
+          mockTransferRequest, mockTransport, null, handler, bounceBuffer.getLength)
         val worked = bss.acquireBounceBuffersNonBlocking
         assert(worked)
         assert(bss.hasNext)
@@ -105,7 +105,7 @@ class RapidsShuffleServerSuite extends RapidsShuffleTestHelper {
         }
 
         val bss = new BufferSendState(
-          null, mockTransferRequest, mockTransport, null, handler, bounceBuffer.getLength)
+          mockTransferRequest, mockTransport, null, handler, bounceBuffer.getLength)
         val worked = bss.acquireBounceBuffersNonBlocking
         assert(worked)
 
@@ -157,7 +157,7 @@ class RapidsShuffleServerSuite extends RapidsShuffleTestHelper {
         }
 
         val bss = new BufferSendState(
-          null, mockTransferRequest, mockTransport, null, handler, bounceBuffers.head.getLength)
+          mockTransferRequest, mockTransport, null, handler, bounceBuffers.head.getLength)
         val worked = bss.acquireBounceBuffersNonBlocking
         assert(worked)
         (0 until 246).foreach(i => {
@@ -222,7 +222,7 @@ class RapidsShuffleServerSuite extends RapidsShuffleTestHelper {
         }
 
         val bss = new BufferSendState(
-          null, mockTransferRequest, mockTransport, null, handler, bounceBuffers.head.getLength)
+          mockTransferRequest, mockTransport, null, handler, bounceBuffers.head.getLength)
         val worked = bss.acquireBounceBuffersNonBlocking
         assert(worked)
         (0 until 32).foreach(i => {

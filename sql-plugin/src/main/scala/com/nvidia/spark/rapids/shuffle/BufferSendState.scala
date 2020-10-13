@@ -19,7 +19,7 @@ package com.nvidia.spark.rapids.shuffle
 import java.util.concurrent.Executor
 
 import ai.rapids.cudf.{Cuda, CudaUtil, DeviceMemoryBuffer, HostMemoryBuffer, MemoryBuffer}
-import com.nvidia.spark.rapids.{RapidsBuffer, ShuffleMetadata}
+import com.nvidia.spark.rapids.{Arm, RapidsBuffer, ShuffleMetadata}
 import com.nvidia.spark.rapids.format.{BufferMeta, BufferTransferRequest, TransferRequest}
 
 import org.apache.spark.internal.Logging
@@ -28,46 +28,30 @@ import org.apache.spark.internal.Logging
  * A helper case class to maintain the state associated with a transfer request initiated by
  * a `TransferRequest` metadata message.
  *
- * This class is *not thread safe*. The way the code is currently designed, bounce buffers
- * being used to send, or copied to, are acted on a sequential basis, in time and in space.
+ * The class implements the Iterator interface.
  *
- * Callers use this class, like so:
+ * On next(), a set of RapidsBuffer are copied onto a bounce buffer, and the
+ * `AddressLengthTag` of the bounce buffer is returned. By convention, the tag used
+ * is that of the first buffer contained in the payload. Buffers are copied to the bounce
+ * buffer in TransferRequest order. The receiver has the same conventions.
  *
- * 1) [[getBuffersToSend]]: is used to get bounce buffers that the server should .send on.
- *    -- first time:
- *          a) the corresponding catalog table is acquired,
- *          b) bounce buffers are acquired,
- *          c) data is copied from the original catalog table into the bounce buffers available
- *          d) the length of the last bounce buffer is adjusted if it would satisfy the full
- *             length of the catalog-backed buffer.
- *          e) bounce buffers are returned
- *
- *    -- subsequent times:
- *      if we are not done sending the acquired table:
- *          a) data is copied from the original catalog table into the bounce buffers available
- *             at sequentially incrementing offsets.
- *          b) the length of the last bounce buffer is adjusted if it would satisfy the full
- *             length of the catalog-backed buffer.
- *          c) bounce buffers are returned
- *
- * 2) [[close]]: used to free state as the [[BufferSendState]] object is no longer needed
+ * It also is AutoCloseable. close() should be called to free bounce buffers.
  *
  * In terms of the lifecycle of this object, it begins with the client asking for transfers to
  * start, it lasts through all buffers being transmitted, and ultimately finishes when a
- * `TransferResponse` is sent back to the client.
+ * TransferResponse is sent back to the client.
  *
- * @param tx the original `Transaction` from the `TransferRequest`.
  * @param request a transfer request
+ * @note this class is not thread safe
  */
 class BufferSendState(
-    tx: Transaction,
     request: RefCountedDirectByteBuffer,
     transport: RapidsShuffleTransport,
     bssExec: Executor,
     requestHandler: RapidsShuffleRequestHandler,
     bounceBufferSize: Long,
     serverStream: Cuda.Stream = Cuda.DEFAULT_STREAM)
-    extends Iterator[AddressLengthTag] with AutoCloseable with Logging {
+    extends Iterator[AddressLengthTag] with AutoCloseable with Logging with Arm {
 
   class SendBlock(val bufferTransferRequest: BufferTransferRequest,
       tableSize: Long) extends BlockWithSize {
@@ -75,36 +59,31 @@ class BufferSendState(
     def tag: Long = bufferTransferRequest.tag()
   }
 
-  private[this] var acquiredAlts: Seq[AddressLengthTag] = Seq.empty
   private[this] val transferRequest = ShuffleMetadata.getTransferRequest(request.getBuffer())
   private[this] var bufferMetas = Seq[BufferMeta]()
   private[this] var isClosed = false
 
-  def getTransferRequest(): TransferRequest = synchronized {
-    transferRequest
-  }
-
   val blocksToSend: Seq[SendBlock] = (0 until transferRequest.requestsLength()).map { btr =>
     val bufferTransferRequest = transferRequest.requests(btr)
-    val table = requestHandler.acquireShuffleBuffer(bufferTransferRequest.bufferId())
-    val transferBlock = new SendBlock(
-      bufferTransferRequest, table.size)
-    table.close()
-    transferBlock
+    withResource(requestHandler.acquireShuffleBuffer(bufferTransferRequest.bufferId())) { table =>
+      bufferMetas = bufferMetas :+ table.meta.bufferMeta()
+      new SendBlock(bufferTransferRequest, table.size)
+    }
   }
 
-  val windowedBlockIterator = new WindowedBlockIterator[SendBlock](blocksToSend, bounceBufferSize)
+  private[this] val windowedBlockIterator =
+    new WindowedBlockIterator[SendBlock](blocksToSend, bounceBufferSize)
 
   var markedDone = false
 
-  def hasNext: Boolean = !markedDone
-
-  // hold acquired tables and buffers, while a transfer occurs
-  private[this] var acquiredTables: Seq[RapidsBuffer] = Seq.empty
-
-  // the set of buffers we will acquire and use to work the entirety of this transfer.
   private[this] var bounceBuffer: MemoryBuffer = null
   private[this] var hostBounceBuffer: MemoryBuffer = null
+
+  def getTransferRequest: TransferRequest = synchronized {
+    transferRequest
+  }
+
+  def hasNext: Boolean = !markedDone
 
   /**
    * Used to pop a [[BufferSendState]] from its queue if and only if there are bounce
@@ -133,11 +112,6 @@ class BufferSendState(
         hostBounceBuffer = hostBounceBuffers.head
       }
     }
-    // else, we may want to make acquisition of the table and state separate so
-    // the act of acquiring the table from the catalog and getting the bounce buffer
-    // doesn't affect the state in [[BufferSendState]], this is in the case where we are at
-    // the limit, and we want to spill everything in a tier (including the one buffer
-    // we are trying to pop from the [[BufferSendState]] queue)
     bounceBuffer != null
   }
 
@@ -169,10 +143,8 @@ class BufferSendState(
     }
     isClosed = true
     freeBounceBuffers()
-    tx.close()
     request.close()
   }
-
 
   /**
    * This function returns bounce buffers that are ready to be sent. To get there,
@@ -226,49 +198,36 @@ class BufferSendState(
           hostBounceBuffer
         }
 
-        acquiredBuffs.zipWithIndex.foreach { case ((blockRange, rapidsBuffer, memBuff), ix) =>
-          logDebug(s"copying from ${memBuff}, srcOffset ${blockRange.rangeStart} @ ${buffOffset} " +
-              s"in dest ${bounceBuffToUse}, size = ${blockRange.rangeSize()}")
-          val isLastOne = ix == acquiredBuffs.size - 1
-
+        acquiredBuffs.foreach { case (blockRange, rapidsBuffer, memBuff) =>
           require(blockRange.rangeSize() <= bounceBuffToUse.getLength - buffOffset)
 
-          if (true || !isLastOne) {
-            bounceBuffToUse match {
-              case _: HostMemoryBuffer =>
-                CudaUtil.copy(
-                  memBuff,
-                  blockRange.rangeStart,
-                  bounceBuffToUse,
-                  buffOffset,
-                  blockRange.rangeSize())
-              case d: DeviceMemoryBuffer =>
-                memBuff match {
-                  case mh: HostMemoryBuffer =>
-                    d.copyFromHostBufferAsync(
-                      buffOffset,
-                      mh,
-                      blockRange.rangeStart,
-                      blockRange.rangeSize(),
-                      serverStream)
-                  case md: DeviceMemoryBuffer =>
-                    d.copyFromDeviceBufferAsync(
-                      buffOffset,
-                      md,
-                      blockRange.rangeStart,
-                      blockRange.rangeSize(),
-                      serverStream)
-                  case _ => throw new IllegalStateException("What buffer is this")
-                }
-              case _ => throw new IllegalStateException("What buffer is this")
-            }
-          } else {
-            CudaUtil.copy(
-              memBuff,
-              blockRange.rangeStart,
-              bounceBuffToUse,
-              buffOffset,
-              blockRange.rangeSize())
+          bounceBuffToUse match {
+            case _: HostMemoryBuffer =>
+              CudaUtil.copy(
+                memBuff,
+                blockRange.rangeStart,
+                bounceBuffToUse,
+                buffOffset,
+                blockRange.rangeSize())
+            case d: DeviceMemoryBuffer =>
+              memBuff match {
+                case mh: HostMemoryBuffer =>
+                  d.copyFromHostBufferAsync(
+                    buffOffset,
+                    mh,
+                    blockRange.rangeStart,
+                    blockRange.rangeSize(),
+                    serverStream)
+                case md: DeviceMemoryBuffer =>
+                  d.copyFromDeviceBufferAsync(
+                    buffOffset,
+                    md,
+                    blockRange.rangeStart,
+                    blockRange.rangeSize(),
+                    serverStream)
+                case _ => throw new IllegalStateException("What buffer is this")
+              }
+            case _ => throw new IllegalStateException("What buffer is this")
           }
 
           memBuff.close()
@@ -300,9 +259,7 @@ class BufferSendState(
     }
 
     logDebug(s"Sending ${buffsToSend} for transfer request, " +
-        s" [peer_executor_id=${transferRequest.executorId()}, " +
-        s"table_id=${acquiredTables.map(_.id).mkString(",")}, " +
-        s"tag=${acquiredAlts.map(t => TransportUtils.formatTag(t.tag))}]")
+        s" [peer_executor_id=${transferRequest.executorId()}]")
 
     buffsToSend
   }

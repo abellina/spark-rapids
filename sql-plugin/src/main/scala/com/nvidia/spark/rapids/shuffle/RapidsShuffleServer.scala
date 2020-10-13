@@ -287,7 +287,7 @@ class RapidsShuffleServer(transport: RapidsShuffleTransport,
             doHandleMeta(tx, metaRequest)
           } else {
             val bss = new BufferSendState(
-              tx, metaRequest, transport, bssExec, requestHandler,
+              metaRequest, transport, bssExec, requestHandler,
               rapidsConf.shuffleUcxBounceBuffersSize, serverStream)
             bssQueue.add(bss)
 
@@ -301,6 +301,7 @@ class RapidsShuffleServer(transport: RapidsShuffleTransport,
           }
         } finally {
           handleMetaRange.close()
+          tx.close()
         }
       })
   }
@@ -421,7 +422,7 @@ class RapidsShuffleServer(transport: RapidsShuffleTransport,
         // is work to be done.
         val buffersToSend = bufferSendState.next()
 
-        val transferRequest = bufferSendState.getTransferRequest()
+        val transferRequest = bufferSendState.getTransferRequest
 
         logDebug(s"Handling transfer request for ${transferRequest.executorId()} " +
             s"with ${buffersToSend}")

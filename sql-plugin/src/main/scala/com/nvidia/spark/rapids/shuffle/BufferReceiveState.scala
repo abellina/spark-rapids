@@ -38,7 +38,7 @@ class BufferReceiveState(
   //   get off the default stream for allocations and copies.
 
   private[this] var bounceBufferByteOffset = 0L
-  private[this] var firstTime = true
+  var firstTime = true
   private[this] var markedAsDone = false
 
   val windowedBlockIterator = new WindowedBlockIterator[ReceiveBlock](
