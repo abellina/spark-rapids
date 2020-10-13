@@ -95,7 +95,7 @@ class RapidsBufferCatalog extends Logging {
   }
 
   /** Remove a buffer ID from the catalog and release the resources of the registered buffer. */
-  def removeBuffer(id: RapidsBufferId): Unit = synchronized {
+  def removeBuffer(id: RapidsBufferId): Unit = {
     val buffer = bufferMap.remove(id)
     if (buffer != null) {
       buffer.free()
@@ -169,8 +169,6 @@ object RapidsBufferCatalog extends Logging with Arm {
   }
 
   def getDeviceStorage: RapidsDeviceMemoryStore = deviceStorage
-  def getHostStorage: RapidsHostMemoryStore = hostStorage
-  def getDiskStorage: RapidsDiskStore = diskStorage
 
   /**
    * Adds a contiguous table to the device storage, taking ownership of the table.
