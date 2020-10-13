@@ -167,7 +167,6 @@
         <pytest.TEST_TAGS>not qarun</pytest.TEST_TAGS>
         <rat.consoleOutput>false</rat.consoleOutput>
         <slf4j.version>1.7.30</slf4j.version>
-        <codahale.metrics.version>4.1.1</codahale.metrics.version>
         <spark300.version>3.0.0</spark300.version>
         <spark300emr.version>3.0.0-amzn</spark300emr.version>
         <!--
@@ -326,11 +325,6 @@
               <artifactId>mockito-core</artifactId>
               <version>2.28.2</version>
               <scope>test</scope>
-            </dependency>
-            <dependency>
-                <groupId>io.dropwizard.metrics</groupId>
-                <artifactId>metrics-core</artifactId>
-                <version>${codahale.metrics.version}</version>
             </dependency>
         </dependencies>
     </dependencyManagement>
