@@ -379,19 +379,6 @@ trait RapidsShuffleTransport extends AutoCloseable {
    * to be received, and a hard limit on the number of buffers set by the caller
    * using `totalRequired`.
    *
-   * This function blocks if it can't satisfy the bounce buffer request.
-   *
-   * @param remaining amount of bytes remaining in the receive
-   * @param totalRequired maximum no. of buffers that should be returned
-   * @return a sequence of bounce buffers
-   */
-  def getReceiveBounceBuffers(remaining: Long, totalRequired: Int): Seq[MemoryBuffer]
-
-  /**
-   * Get receive bounce buffers needed for a receive, limited by the amount of bytes
-   * to be received, and a hard limit on the number of buffers set by the caller
-   * using `totalRequired`.
-   *
    * This function is non blocking. If it can't satisfy the bounce buffer request, an empty
    * sequence is returned.
    *
@@ -406,21 +393,6 @@ trait RapidsShuffleTransport extends AutoCloseable {
    * @param bounceBuffers the bounce buffers to free
    */
   def freeReceiveBounceBuffers(bounceBuffers: Seq[MemoryBuffer]): Unit
-
-  /**
-   * Get send bounce buffers needed for a receive, limited by the amount of bytes
-   * to be sent, and a hard limit on the number of buffers set by the caller
-   * using `totalRequired`.
-   *
-   * This function blocks if it can't satisfy the bounce buffer request.
-   *
-   * @param deviceMemory true: returns a device buffer, false: returns a host buffer
-   * @param remaining amount of bytes remaining in the receive
-   * @param totalRequired maximum no. of buffers that should be returned
-   * @return a sequence of bounce buffers
-   */
-  def getSendBounceBuffers(deviceMemory: Boolean, remaining: Long,
-      totalRequired: Int): Seq[MemoryBuffer]
 
   /**
    * Get send bounce buffers needed for a receive, limited by the amount of bytes

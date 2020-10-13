@@ -182,19 +182,6 @@ class UCXShuffleTransport(shuffleServerId: BlockManagerId, rapidsConf: RapidsCon
     Math.min(numBuffers, totalRequired).toInt
   }
 
-  override def getSendBounceBuffers(
-      deviceMemory: Boolean,
-      remaining: Long,
-      totalRequired: Int): Seq[MemoryBuffer] = {
-
-    val numBuffs = getNumBounceBuffers(remaining, totalRequired)
-    if (!deviceMemory) {
-      acquireBounceBuffers(hostSendBuffMgr, numBuffs)
-    } else {
-      acquireBounceBuffers(deviceSendBuffMgr, numBuffs)
-    }
-  }
-
   override def tryGetSendBounceBuffers(
       deviceMemory: Boolean,
       remaining: Long,
@@ -208,26 +195,9 @@ class UCXShuffleTransport(shuffleServerId: BlockManagerId, rapidsConf: RapidsCon
     }
   }
 
-  override def getReceiveBounceBuffers(remaining: Long, totalRequired: Int): Seq[MemoryBuffer] = {
-    val numBuffs = getNumBounceBuffers(remaining, totalRequired)
-    acquireBounceBuffers(deviceReceiveBuffMgr, numBuffs)
-  }
-
   def tryGetReceiveBounceBuffers(remaining: Long, totalRequired: Int): Seq[MemoryBuffer] = {
     val numBuffs = getNumBounceBuffers(remaining, totalRequired)
     tryAcquireBounceBuffers(deviceReceiveBuffMgr, numBuffs)
-  }
-
-  private def acquireBounceBuffers[T <: MemoryBuffer](
-      bounceBuffMgr: BounceBufferManager[T],
-      numBuffs: Integer) : Seq[MemoryBuffer] = {
-    // if the # of buffers requested is more than what the pool has, we would deadlock
-    // this ensures we only get as many buffers as the pool could possibly give us.
-    val possibleNumBuffers = Math.min(bounceBuffMgr.numBuffers, numBuffs)
-    val bounceBuffers: Seq[MemoryBuffer] = bounceBuffMgr.acquireBuffersBlocking(possibleNumBuffers)
-    logTrace(s"Got ${bounceBuffers.size} bounce buffers from pool " +
-      s"out of ${numBuffs} requested.")
-    bounceBuffers
   }
 
   private def tryAcquireBounceBuffers[T <: MemoryBuffer](

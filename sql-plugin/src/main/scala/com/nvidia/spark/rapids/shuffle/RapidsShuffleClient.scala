@@ -336,7 +336,7 @@ class RapidsShuffleClient(
               val errMsg = s"Unsuccessful buffer receive ${tx}"
               logError(errMsg)
               //TODO:
-              bufferReceiveState.getCurrentHandlers().foreach(_.transferError(errMsg))
+              bufferReceiveState.getCurrentHandlers.foreach(_.transferError(errMsg))
             } finally {
               tx.close()
               bufferReceiveState.close()
@@ -357,7 +357,7 @@ class RapidsShuffleClient(
   private[this] def sendTransferRequest(toIssue: BufferReceiveState): Unit = {
     val sendTransferRequest = new NvtxRange("SendTR", NvtxColor.RED)
     try {
-      val requestsToIssue = toIssue.getRequests()
+      val requestsToIssue = toIssue.getRequests
       logDebug(s"Sending a transfer request for " +
           s"${requestsToIssue.map(r => TransportUtils.formatTag(r.tag)).mkString(",")}")
 
