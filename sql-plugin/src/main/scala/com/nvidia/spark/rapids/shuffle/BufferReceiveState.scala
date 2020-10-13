@@ -21,11 +21,6 @@ import com.nvidia.spark.rapids.format.TableMeta
 
 import org.apache.spark.internal.Logging
 
-class ReceiveBlock(val request: PendingTransferRequest) extends BlockWithSize {
-  override def size: Long = request.getLength
-  def tag: Long = request.tag
-}
-
 class BufferReceiveState(
     transport: RapidsShuffleTransport,
     bounceBuffer: DeviceMemoryBuffer,
@@ -34,12 +29,17 @@ class BufferReceiveState(
     extends Iterator[AddressLengthTag]
         with AutoCloseable with Logging {
 
+  class ReceiveBlock(val request: PendingTransferRequest) extends BlockWithSize {
+    override def size: Long = request.getLength
+    def tag: Long = request.tag
+  }
+
   // TODO: Until cudf has a DeviceMemoryBuffer.allocate(size, stream), we can't really
   //   get off the default stream for allocations and copies.
 
-  var bounceBufferByteOffset = 0L
-  var firstTime = true
-  var markedAsDone = false
+  private[this] var bounceBufferByteOffset = 0L
+  private[this] var firstTime = true
+  private[this] var markedAsDone = false
 
   val windowedBlockIterator = new WindowedBlockIterator[ReceiveBlock](
     requests.map(r => new ReceiveBlock(r)), bounceBuffer.getLength)
@@ -55,16 +55,14 @@ class BufferReceiveState(
 
   override def hasNext: Boolean = synchronized { !markedAsDone }
 
-  var nextBlocks: Seq[BlockRange[ReceiveBlock]] = Seq.empty
-  var currentBlocks: Seq[BlockRange[ReceiveBlock]] = Seq.empty
+  private[this] var nextBlocks: Seq[BlockRange[ReceiveBlock]] = Seq.empty
+  private[this] var currentBlocks: Seq[BlockRange[ReceiveBlock]] = Seq.empty
 
   override def next(): AddressLengthTag = synchronized {
     if (firstTime) {
       nextBlocks = windowedBlockIterator.next()
-
       firstTime = false
     }
-
     currentBlocks = nextBlocks
 
     val firstTag = getFirstTag(currentBlocks)
@@ -91,36 +89,12 @@ class BufferReceiveState(
     }
   }
 
-  var workingOn: DeviceMemoryBuffer = null
-  var workingOnSoFar: Long = 0L
+  private[this] var workingOn: DeviceMemoryBuffer = null
+  private[this] var workingOnSoFar: Long = 0L
 
   def consumeWindow(): Seq[(MemoryBuffer, TableMeta, RapidsShuffleFetchHandler)] = synchronized {
     val windowRange = new NvtxRange("consumeWindow", NvtxColor.PURPLE)
     try {
-      var sizeForSlicing = 0L
-
-      // If all there are full blocks in the bounce buffer window, lets copy wholesale
-      // and slice that copy.
-      currentBlocks.foreach { b =>
-        val pendingTransferRequest =
-          b.block.request
-        val fullSize = pendingTransferRequest.tableMeta.bufferMeta().size()
-        if (b.rangeSize() == fullSize) {
-          sizeForSlicing += fullSize
-        }
-      }
-
-      val sliceBuffer = if (false && sizeForSlicing > 0) {
-        // we have buffers that fit entirely, optimization to
-        // allocate 1 big buffer and slice from it
-        DeviceMemoryBuffer.allocate(sizeForSlicing)
-      } else {
-        null
-      }
-
-      var bbCopied = false
-      var sliceBufferOffset = 0L
-
       val results = currentBlocks.flatMap { case b =>
         val pendingTransferRequest =
           b.block.request
@@ -128,40 +102,20 @@ class BufferReceiveState(
         val fullSize = pendingTransferRequest.tableMeta.bufferMeta().size()
 
         val consumed = if (fullSize == b.rangeSize()) {
-          if (sliceBuffer == null) {
-            logTrace(s"have full buffer ${b}")
-            // we have the full buffer!
-            val buff = Rmm.alloc(b.rangeSize(), stream)
+          logTrace(s"have full buffer ${b}")
+          // we have the full buffer!
+          val buff = Rmm.alloc(b.rangeSize(), stream)
 
-            buff.copyFromDeviceBufferAsync(
-              0,
-              bounceBuffer,
-              bounceBufferByteOffset,
-              b.rangeSize(),
-              stream)
+          buff.copyFromDeviceBufferAsync(
+            0,
+            bounceBuffer,
+            bounceBufferByteOffset,
+            b.rangeSize(),
+            stream)
 
-            Some((buff,
-                pendingTransferRequest.tableMeta,
-                pendingTransferRequest.handler))
-          } else {
-            logTrace(s"have full buffer ${b}")
-            // we have the full buffer!
-            if (!bbCopied) {
-              sliceBuffer.copyFromDeviceBufferAsync(
-                0,
-                bounceBuffer,
-                bounceBufferByteOffset,
-                sizeForSlicing,
-                stream)
-              bbCopied = true
-            }
-            val data = sliceBuffer.slice(sliceBufferOffset, fullSize)
-            sliceBufferOffset += fullSize
-
-            Some((data,
-                pendingTransferRequest.tableMeta,
-                pendingTransferRequest.handler))
-          }
+          Some((buff,
+              pendingTransferRequest.tableMeta,
+              pendingTransferRequest.handler))
         } else {
           logTrace(s"do not have full buffer ${b}")
           if (workingOn != null) {
@@ -211,10 +165,6 @@ class BufferReceiveState(
       // I need to synchronize, because we can't ask ucx to overwrite our bounce buffer
       // unless all that data has truly moved to our final buffer in our stream
       stream.sync()
-
-      if (sliceBuffer != null) {
-        sliceBuffer.close()
-      }
 
       results
     } finally {
