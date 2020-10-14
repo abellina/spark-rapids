@@ -23,9 +23,9 @@ import ai.rapids.cudf.MemoryBuffer
 import org.apache.spark.internal.Logging
 
 class BounceBuffer(val buffer: MemoryBuffer,
-    buffMgr: BounceBufferManager) extends AutoCloseable {
+    freeFn: BounceBuffer => Unit) extends AutoCloseable {
   override def close(): Unit = {
-    buffMgr.freeBuffer(this)
+    freeFn(this)
   }
 }
 
@@ -52,11 +52,11 @@ case class SendBounceBuffers(
  * @param numBuffers the number of buffers to allocate on instantiation
  * @param allocator function that takes a size, and returns a `MemoryBuffer` instance.
  */
-class BounceBufferManager (
+class BounceBufferManager[T <: MemoryBuffer](
     poolName: String,
     val bufferSize: Long,
     val numBuffers: Int,
-    allocator: Long => MemoryBuffer)
+    allocator: Long => T)
   extends AutoCloseable
   with Logging {
 
@@ -85,7 +85,7 @@ class BounceBufferManager (
     freeBufferMap.clear(bufferIndex)
     val res = rootBuffer.slice(bufferIndex * bufferSize, bufferSize)
     logDebug(s"It took ${System.currentTimeMillis() - start} ms to allocBuffer in $poolName")
-    new BounceBuffer(res, this)
+    new BounceBuffer(res, this.freeBuffer)
   }
 
   private def numFree(): Int = synchronized {

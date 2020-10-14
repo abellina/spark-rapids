@@ -58,9 +58,9 @@ class UCXShuffleTransport(shuffleServerId: BlockManagerId, rapidsConf: RapidsCon
   private[this] val deviceNumBuffers = rapidsConf.shuffleUcxDeviceBounceBuffersCount
   private[this] val hostNumBuffers = rapidsConf.shuffleUcxHostBounceBuffersCount
 
-  private[this] var deviceSendBuffMgr: BounceBufferManager = null
-  private[this] var hostSendBuffMgr: BounceBufferManager = null
-  private[this] var deviceReceiveBuffMgr: BounceBufferManager = null
+  private[this] var deviceSendBuffMgr: BounceBufferManager[DeviceMemoryBuffer] = null
+  private[this] var hostSendBuffMgr: BounceBufferManager[HostMemoryBuffer] = null
+  private[this] var deviceReceiveBuffMgr: BounceBufferManager[DeviceMemoryBuffer] = null
 
   private[this] val executorId = shuffleServerId.executorId.toInt
 
@@ -134,21 +134,21 @@ class UCXShuffleTransport(shuffleServerId: BlockManagerId, rapidsConf: RapidsCon
       hostNumBuffers: Int): Unit = {
 
     deviceSendBuffMgr =
-      new BounceBufferManager(
+      new BounceBufferManager[DeviceMemoryBuffer](
         "device-send",
         bounceBufferSize,
         deviceNumBuffers,
         (size: Long) => DeviceMemoryBuffer.allocate(size))
 
     deviceReceiveBuffMgr =
-      new BounceBufferManager(
+      new BounceBufferManager[DeviceMemoryBuffer](
         "device-receive",
         bounceBufferSize,
         deviceNumBuffers,
         (size: Long) => DeviceMemoryBuffer.allocate(size))
 
     hostSendBuffMgr =
-      new BounceBufferManager(
+      new BounceBufferManager[HostMemoryBuffer](
         "host-send",
         bounceBufferSize,
         hostNumBuffers,
@@ -189,8 +189,8 @@ class UCXShuffleTransport(shuffleServerId: BlockManagerId, rapidsConf: RapidsCon
     tryAcquireBounceBuffers(deviceReceiveBuffMgr, numBuffs)
   }
 
-  private def tryAcquireBounceBuffers(
-      bounceBuffMgr: BounceBufferManager,
+  private def tryAcquireBounceBuffers[T <: MemoryBuffer](
+      bounceBuffMgr: BounceBufferManager[T],
       numBuffs: Integer): Seq[BounceBuffer] = {
     // if the # of buffers requested is more than what the pool has, we would deadlock
     // this ensures we only get as many buffers as the pool could possibly give us.

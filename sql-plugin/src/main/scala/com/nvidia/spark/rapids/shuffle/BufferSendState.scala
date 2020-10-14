@@ -165,7 +165,8 @@ class BufferSendState(
           require(blockRange.rangeSize() <= bounceBuffToUse.getLength - buffOffset)
 
           bounceBuffToUse match {
-            case _: HostMemoryBuffer =>
+            case _ : HostMemoryBuffer =>
+              // lets replace this with a MemoryBuffer.copyAsync
               CudaUtil.copy(
                 memBuff,
                 blockRange.rangeStart,
