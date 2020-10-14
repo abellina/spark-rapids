@@ -46,10 +46,8 @@ import org.apache.spark.internal.Logging
  */
 class BufferSendState(
     request: RefCountedDirectByteBuffer,
-    transport: RapidsShuffleTransport,
-    bssExec: Executor,
+    sendBounceBuffers: SendBounceBuffers,
     requestHandler: RapidsShuffleRequestHandler,
-    bounceBufferSize: Long,
     serverStream: Cuda.Stream = Cuda.DEFAULT_STREAM)
     extends Iterator[AddressLengthTag] with AutoCloseable with Logging with Arm {
 
@@ -72,12 +70,12 @@ class BufferSendState(
   }
 
   private[this] val windowedBlockIterator =
-    new WindowedBlockIterator[SendBlock](blocksToSend, bounceBufferSize)
+    new WindowedBlockIterator[SendBlock](blocksToSend, sendBounceBuffers.bounceBufferSize)
 
   var markedDone = false
 
-  private[this] var bounceBuffer: MemoryBuffer = null
-  private[this] var hostBounceBuffer: MemoryBuffer = null
+  private[this] var bounceBuffer: BounceBuffer = null
+  private[this] var hostBounceBuffer: BounceBuffer = null
 
   def getTransferRequest: TransferRequest = synchronized {
     transferRequest
@@ -93,9 +91,8 @@ class BufferSendState(
   def acquireBounceBuffersNonBlocking: Boolean = synchronized {
     if (bounceBuffer == null) {
       // TODO: maybe take % of buffers in device vs those in the host
-      val useDevBuffer = true
       val bounceBuffers = transport.tryGetSendBounceBuffers(
-        useDevBuffer,
+        true,
         bounceBufferSize,
         1)
       if (bounceBuffers.nonEmpty) {
@@ -117,18 +114,13 @@ class BufferSendState(
 
   private[this] def freeBounceBuffers(): Unit = {
     if (bounceBuffer != null) {
-      transport.freeSendBounceBuffers(Seq(bounceBuffer))
+      bounceBuffer.close()
       bounceBuffer = null
     }
 
     if (hostBounceBuffer != null) {
-      transport.freeSendBounceBuffers(Seq(hostBounceBuffer))
+      hostBounceBuffer.close()
       hostBounceBuffer = null
-    }
-
-    // wake up the bssExec since bounce buffers became available
-    bssExec.synchronized {
-      bssExec.notifyAll()
     }
   }
 
@@ -193,9 +185,9 @@ class BufferSendState(
         logDebug(s"DEVICE occupancy for bounce buffer is d=${deviceBuffs} vs h=${hostBuffs}")
 
         bounceBuffToUse = if (deviceBuffs >= hostBuffs || hostBounceBuffer == null) {
-          bounceBuffer
+          bounceBuffer.buffer
         } else {
-          hostBounceBuffer
+          hostBounceBuffer.buffer
         }
 
         acquiredBuffs.foreach { case (blockRange, rapidsBuffer, memBuff) =>
@@ -254,7 +246,6 @@ class BufferSendState(
     } catch {
       case t: Throwable =>
         logError("Error while copying to bounce buffers on send.", t)
-        close()
         throw t
     }
 

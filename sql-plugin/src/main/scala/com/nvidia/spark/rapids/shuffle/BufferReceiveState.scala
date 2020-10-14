@@ -22,8 +22,7 @@ import com.nvidia.spark.rapids.format.TableMeta
 import org.apache.spark.internal.Logging
 
 class BufferReceiveState(
-    transport: RapidsShuffleTransport,
-    bounceBuffer: DeviceMemoryBuffer,
+    bounceBuffer: BounceBuffer,
     requests: Seq[PendingTransferRequest],
     stream: Cuda.Stream = Cuda.DEFAULT_STREAM)
     extends Iterator[AddressLengthTag]
@@ -42,13 +41,13 @@ class BufferReceiveState(
   private[this] var markedAsDone = false
 
   val windowedBlockIterator = new WindowedBlockIterator[ReceiveBlock](
-    requests.map(r => new ReceiveBlock(r)), bounceBuffer.getLength)
+    requests.map(r => new ReceiveBlock(r)), bounceBuffer.buffer.getLength)
 
   def getRequests: Seq[PendingTransferRequest] = requests
 
   override def close(): Unit = synchronized {
     if (bounceBuffer != null) {
-      transport.freeReceiveBounceBuffers(Seq(bounceBuffer))
+      bounceBuffer.close()
     }
     //TODO: check that all other buffers are gone
   }
@@ -67,7 +66,7 @@ class BufferReceiveState(
 
     val firstTag = getFirstTag(currentBlocks)
 
-    val alt = AddressLengthTag.from(bounceBuffer, firstTag)
+    val alt = AddressLengthTag.from(bounceBuffer.buffer, firstTag)
     alt.resetLength(currentBlocks.map(_.rangeSize()).sum)
 
     if (windowedBlockIterator.hasNext) {
@@ -98,17 +97,18 @@ class BufferReceiveState(
         val fullSize = pendingTransferRequest.tableMeta.bufferMeta().size()
 
         var contigBuffer: DeviceMemoryBuffer = null
+        val deviceBounceBuffer = bounceBuffer.buffer.asInstanceOf[DeviceMemoryBuffer]
 
         if (fullSize == b.rangeSize()) {
           logTrace(s"have full buffer ${b}")
           // we have the full buffer!
           contigBuffer = Rmm.alloc(b.rangeSize(), stream)
-          contigBuffer.copyFromDeviceBufferAsync(0, bounceBuffer,
+          contigBuffer.copyFromDeviceBufferAsync(0, deviceBounceBuffer,
             bounceBufferByteOffset, b.rangeSize(), stream)
         } else {
           logTrace(s"do not have full buffer ${b}")
           if (workingOn != null) {
-            workingOn.copyFromDeviceBufferAsync(workingOnSoFar, bounceBuffer,
+            workingOn.copyFromDeviceBufferAsync(workingOnSoFar, deviceBounceBuffer,
               bounceBufferByteOffset, b.rangeSize(), stream)
 
             workingOnSoFar += b.rangeSize()
@@ -121,14 +121,14 @@ class BufferReceiveState(
             // need to keep it around
             workingOn = Rmm.alloc(fullSize, stream)
 
-            workingOn.copyFromDeviceBufferAsync( 0, bounceBuffer,
+            workingOn.copyFromDeviceBufferAsync( 0, deviceBounceBuffer,
               bounceBufferByteOffset, b.rangeSize(), stream)
 
             workingOnSoFar += b.rangeSize()
           }
         }
         bounceBufferByteOffset += b.rangeSize()
-        if (bounceBufferByteOffset >= bounceBuffer.getLength) {
+        if (bounceBufferByteOffset >= deviceBounceBuffer.getLength) {
           logInfo(s"And we are starting over => at end of ${bounceBuffer}")
           bounceBufferByteOffset = 0
         }

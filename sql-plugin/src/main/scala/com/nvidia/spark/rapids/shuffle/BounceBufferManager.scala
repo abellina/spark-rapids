@@ -22,6 +22,28 @@ import ai.rapids.cudf.MemoryBuffer
 
 import org.apache.spark.internal.Logging
 
+class BounceBuffer(val buffer: MemoryBuffer,
+    buffMgr: BounceBufferManager) extends AutoCloseable {
+  override def close(): Unit = {
+    buffMgr.freeBuffer(this)
+  }
+}
+
+case class SendBounceBuffers(
+    deviceBounceBuffer: Option[BounceBuffer],
+    hostBounceBuffer: Option[BounceBuffer]) extends AutoCloseable {
+  require(deviceBounceBuffer.nonEmpty || hostBounceBuffer.nonEmpty)
+
+  def bounceBufferSize: Long = {
+    deviceBounceBuffer.getOrElse(hostBounceBuffer.get).buffer.getLength
+  }
+
+  override def close(): Unit = {
+    deviceBounceBuffer.foreach(_.close())
+    hostBounceBuffer.foreach(_.close())
+  }
+}
+
 /**
  * This classes manages a set of bounce buffers, that are instances of `MemoryBuffer`.
  * The size/quantity of buffers is configurable, and so is the allocator.
@@ -29,14 +51,12 @@ import org.apache.spark.internal.Logging
  * @param bufferSize the size of buffer to use
  * @param numBuffers the number of buffers to allocate on instantiation
  * @param allocator function that takes a size, and returns a `MemoryBuffer` instance.
- * @tparam T the specific type of MemoryBuffer i.e. `DeviceMemoryBuffer`,
- *           `HostMemoryBuffer`, etc.
  */
-class BounceBufferManager[T <: MemoryBuffer](
+class BounceBufferManager (
     poolName: String,
     val bufferSize: Long,
     val numBuffers: Int,
-    allocator: Long => T)
+    allocator: Long => MemoryBuffer)
   extends AutoCloseable
   with Logging {
 
@@ -52,7 +72,7 @@ class BounceBufferManager[T <: MemoryBuffer](
    * @note calls to this function should have a lock on this [[BounceBufferManager]]
    * @return the acquired `MemoryBuffer`
    */
-  private def acquireBuffer(): MemoryBuffer = {
+  private def acquireBuffer(): BounceBuffer = {
     val start = System.currentTimeMillis()
     var bufferIndex = freeBufferMap.nextSetBit(0)
     while (bufferIndex < 0) {
@@ -65,7 +85,7 @@ class BounceBufferManager[T <: MemoryBuffer](
     freeBufferMap.clear(bufferIndex)
     val res = rootBuffer.slice(bufferIndex * bufferSize, bufferSize)
     logDebug(s"It took ${System.currentTimeMillis() - start} ms to allocBuffer in $poolName")
-    res
+    new BounceBuffer(res, this)
   }
 
   private def numFree(): Int = synchronized {
@@ -77,7 +97,7 @@ class BounceBufferManager[T <: MemoryBuffer](
    * @param possibleNumBuffers number of buffers to acquire
    * @return a sequence of `MemoryBuffer`s, or empty if the request can't be satisfied
    */
-  def acquireBuffersNonBlocking(possibleNumBuffers: Int): Seq[MemoryBuffer] = synchronized {
+  def acquireBuffersNonBlocking(possibleNumBuffers: Int): Seq[BounceBuffer] = synchronized {
     if (numFree < possibleNumBuffers) {
       // would block
       logTrace(s"$poolName at capacity. numFree: ${numFree}, " +
@@ -94,7 +114,7 @@ class BounceBufferManager[T <: MemoryBuffer](
    * @param possibleNumBuffers number of buffers to acquire
    * @return a sequence of `MemoryBuffer`s
    */
-  def acquireBuffersBlocking(possibleNumBuffers: Int): Seq[MemoryBuffer] = synchronized {
+  def acquireBuffersBlocking(possibleNumBuffers: Int): Seq[BounceBuffer] = synchronized {
     val res = (0 until possibleNumBuffers).map(_ => acquireBuffer())
     logDebug(s"$poolName at acquire. Has numFree ${numFree}")
     res
@@ -102,9 +122,10 @@ class BounceBufferManager[T <: MemoryBuffer](
 
   /**
    * Free a `MemoryBuffer`, putting it back into the pool.
-   * @param buffer the memory buffer to free
+   * @param bounceBuffer the memory buffer to free
    */
-  def freeBuffer(buffer: MemoryBuffer): Unit = synchronized {
+  def freeBuffer(bounceBuffer: BounceBuffer): Unit = synchronized {
+    val buffer = bounceBuffer.buffer
     require(buffer.getAddress >= rootBuffer.getAddress
       && (buffer.getAddress - rootBuffer.getAddress) % bufferSize == 0,
       s"$poolName: foreign buffer being freed")

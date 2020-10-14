@@ -287,7 +287,7 @@ class RapidsShuffleServer(transport: RapidsShuffleTransport,
             doHandleMeta(tx, metaRequest)
           } else {
             val bss = new BufferSendState(
-              metaRequest, transport, bssExec, requestHandler,
+              metaRequest, transport, requestHandler,
               rapidsConf.shuffleUcxBounceBuffersSize, serverStream)
             bssQueue.add(bss)
 
@@ -429,6 +429,11 @@ class RapidsShuffleServer(transport: RapidsShuffleTransport,
 
         logDebug(s"[before]${bufferSendState}")
         (transferRequest, bufferSendState, buffersToSend)
+      } catch {
+        case t: Throwable =>
+          logError("Error handling shuffle send", t)
+          bufferSendState.close()
+          throw t
       } finally {
         logDebug(s"Transfer request handled in ${TransportUtils.timeDiffMs(start)} ms")
         doHandleTransferRequest.close()
@@ -471,6 +476,11 @@ class RapidsShuffleServer(transport: RapidsShuffleTransport,
               logInfo(s"Buffer send state ${buffersToSend.tag} is done. Closing. " +
                   s"I now have ${bssQueue.size} BSSs.")
               bufferSendState.close()
+
+              // wake up the bssExec since bounce buffers became available
+              bssExec.synchronized {
+                bssExec.notifyAll()
+              }
             }
           } finally {
             bufferTx.close()
