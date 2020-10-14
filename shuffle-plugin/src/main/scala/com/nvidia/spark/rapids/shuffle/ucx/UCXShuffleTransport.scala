@@ -165,14 +165,21 @@ class UCXShuffleTransport(shuffleServerId: BlockManagerId, rapidsConf: RapidsCon
   }
 
   override def tryGetSendBounceBuffers(
-      deviceMemory: Boolean,
       remaining: Long,
-      totalRequired: Int): Seq[BounceBuffer] = {
+      totalRequired: Int): Seq[SendBounceBuffers] = {
     val numBuffs = getNumBounceBuffers(remaining, totalRequired)
-    if (!deviceMemory) {
-      tryAcquireBounceBuffers(hostSendBuffMgr, numBuffs)
+    val deviceBuffer = tryAcquireBounceBuffers(deviceSendBuffMgr, numBuffs)
+    if (deviceBuffer.nonEmpty) {
+      val hostBuffer = tryAcquireBounceBuffers(hostSendBuffMgr, numBuffs)
+      if (hostBuffer.nonEmpty) {
+        deviceBuffer.zip(hostBuffer).map { case (d, h) =>
+          SendBounceBuffers(Some(d), Some(h))
+        }
+      } else {
+        deviceBuffer.map(d => SendBounceBuffers(Some(d), None))
+      }
     } else {
-      tryAcquireBounceBuffers(deviceSendBuffMgr, numBuffs)
+      Seq.empty
     }
   }
 

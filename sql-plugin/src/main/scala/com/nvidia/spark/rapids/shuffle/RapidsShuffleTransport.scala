@@ -401,8 +401,7 @@ trait RapidsShuffleTransport extends AutoCloseable {
    * @param totalRequired maximum no. of buffers that should be returned
    * @return a sequence of bounce buffers, or empty if the request can't be satisfied
    */
-  def tryGetSendBounceBuffers(deviceMemory: Boolean, remaining: Long,
-      totalRequired: Int): Seq[BounceBuffer]
+  def tryGetSendBounceBuffers(remaining: Long, totalRequired: Int): Seq[SendBounceBuffers]
 }
 
 /**

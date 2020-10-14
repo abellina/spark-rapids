@@ -181,7 +181,7 @@ class RapidsShuffleServer(transport: RapidsShuffleTransport,
   /**
    * Keep a list of BufferSendState that are waiting for bounce buffers.
    */
-  private[this] val bssQueue = new ConcurrentLinkedQueue[BufferSendState]()
+  private[this] val bssQueue = new ConcurrentLinkedQueue[PendingTransferResponse]()
   private[this] val bssContinueQueue = new ConcurrentLinkedQueue[BufferSendState]()
 
   /**
@@ -215,47 +215,53 @@ class RapidsShuffleServer(transport: RapidsShuffleTransport,
         }
       }
 
-      var bss: BufferSendState = null
-      try {
-        bss = bssQueue.peek()
-        var continue = true
-        while (bss != null && continue) {
-          bssExec.synchronized {
-            if (bss.acquireBounceBuffersNonBlocking) {
+      var bss: PendingTransferResponse = null
+      bss = bssQueue.peek()
+      var continue = true
+      while (bss != null && continue) {
+        bssExec.synchronized {
+          val sendBounceBuffers =
+            transport.tryGetSendBounceBuffers(1, 1)
+          try {
+            if (sendBounceBuffers.nonEmpty) {
               bssQueue.remove(bss)
-              bssToIssue = bssToIssue :+ bss
+              bssToIssue = bssToIssue :+ new BufferSendState(
+                bss.metaRequest,
+                sendBounceBuffers.head, // there's only one bounce buffer here for now
+                bss.requestHandler,
+                serverStream)
               bss = bssQueue.peek()
             } else {
               logInfo(s"Cant acquire server bounce buffers for ${bss}")
               continue = false
             }
-          }
-        }
-
-        if (!continue) {
-          rangeMsg = "BSSQWait"
-        } else {
-          rangeMsg = "BSSQEmpty"
-        }
-
-        if (bssToIssue.nonEmpty) {
-          asyncOnCopyThread(HandleTransferRequest(bssToIssue))
-        }
-
-        bssExec.synchronized {
-          bssExec.wait(100)
-        }
-
-        bssExecRange.close()
-      } catch {
-        case t: Throwable => {
-          logError("Error while handling BufferSendState", t)
-          if (bss != null) {
-            bss.close()
-            bss = null
+          } catch {
+            case t: Throwable => {
+              logError("Error while handling BufferSendState", t)
+              if (bss != null) {
+                sendBounceBuffers.foreach(_.close())
+                bss = null
+              }
+            }
           }
         }
       }
+
+      if (!continue) {
+        rangeMsg = "BSSQWait"
+      } else {
+        rangeMsg = "BSSQEmpty"
+      }
+
+      if (bssToIssue.nonEmpty) {
+        asyncOnCopyThread(HandleTransferRequest(bssToIssue))
+      }
+
+      bssExec.synchronized {
+        bssExec.wait(100)
+      }
+
+      bssExecRange.close()
     }
   })
 
@@ -286,9 +292,7 @@ class RapidsShuffleServer(transport: RapidsShuffleTransport,
             doIssueReceive(RequestType.MetadataRequest)
             doHandleMeta(tx, metaRequest)
           } else {
-            val bss = new BufferSendState(
-              metaRequest, transport, requestHandler,
-              rapidsConf.shuffleUcxBounceBuffersSize, serverStream)
+            val bss = PendingTransferResponse(metaRequest, requestHandler)
             bssQueue.add(bss)
 
             // tell the bssExec to wake up to try to handle the new BufferSendState
@@ -305,6 +309,10 @@ class RapidsShuffleServer(transport: RapidsShuffleTransport,
         }
       })
   }
+
+  case class PendingTransferResponse(
+      metaRequest: RefCountedDirectByteBuffer,
+      requestHandler: RapidsShuffleRequestHandler)
 
   /**
    * Function to handle `MetadataRequest`s. It will populate and issue a

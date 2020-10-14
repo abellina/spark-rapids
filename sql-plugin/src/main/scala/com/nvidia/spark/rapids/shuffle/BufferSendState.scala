@@ -83,35 +83,6 @@ class BufferSendState(
 
   def hasNext: Boolean = !markedDone
 
-  /**
-   * Used to pop a [[BufferSendState]] from its queue if and only if there are bounce
-   * buffers available
-   * @return true if bounce buffers are available to proceed
-   */
-  def acquireBounceBuffersNonBlocking: Boolean = synchronized {
-    if (bounceBuffer == null) {
-      // TODO: maybe take % of buffers in device vs those in the host
-      val bounceBuffers = transport.tryGetSendBounceBuffers(
-        true,
-        bounceBufferSize,
-        1)
-      if (bounceBuffers.nonEmpty) {
-        bounceBuffer = bounceBuffers.head
-      }
-    }
-
-    if (bounceBuffer != null && hostBounceBuffer == null) {
-      val hostBounceBuffers = transport.tryGetSendBounceBuffers(
-        false,
-        bounceBufferSize,
-        1)
-      if (hostBounceBuffers.nonEmpty) {
-        hostBounceBuffer = hostBounceBuffers.head
-      }
-    }
-    bounceBuffer != null
-  }
-
   private[this] def freeBounceBuffers(): Unit = {
     if (bounceBuffer != null) {
       bounceBuffer.close()
