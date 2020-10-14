@@ -22,9 +22,9 @@ import scala.collection.mutable.ArrayBuffer
 // as long as they can provide a size
 trait BlockWithSize {
   /**
-    * Abstract method to return the size in bytes of this block
-    * @return Long - size in bytes
-    */
+   * Abstract method to return the size in bytes of this block
+   * @return Long - size in bytes
+   */
   def size: Long
 }
 

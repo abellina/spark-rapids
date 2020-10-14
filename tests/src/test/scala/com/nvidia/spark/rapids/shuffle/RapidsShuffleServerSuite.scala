@@ -16,11 +16,9 @@
 
 package com.nvidia.spark.rapids.shuffle
 
-import ai.rapids.cudf.{DeviceMemoryBuffer, MemoryBuffer}
-import com.nvidia.spark.rapids.format.{BufferMeta, TableMeta}
+import ai.rapids.cudf.DeviceMemoryBuffer
 import com.nvidia.spark.rapids.RapidsBuffer
-import org.mockito.{ArgumentCaptor, ArgumentMatchers}
-import org.mockito.ArgumentMatchers._
+import com.nvidia.spark.rapids.format.TableMeta
 import org.mockito.Mockito._
 import org.mockito.invocation.InvocationOnMock
 import org.mockito.stubbing.Answer
