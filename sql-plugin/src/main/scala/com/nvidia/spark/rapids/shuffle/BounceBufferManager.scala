@@ -22,6 +22,15 @@ import ai.rapids.cudf.MemoryBuffer
 
 import org.apache.spark.internal.Logging
 
+/**
+ * Class to hold a bounce buffer reference in `buffer`.
+ *
+ * It is `AutoCloseable`, where a call to `close` puts the bounce buffer
+ * back into the corresponding source `BounceBufferManager`
+ *
+ * @param buffer - cudf MemoryBuffer to be used as a bounce buffer
+ * @param freeFn - a function that can return the buffer to the manager
+ */
 class BounceBuffer(val buffer: MemoryBuffer,
     freeFn: BounceBuffer => Unit) extends AutoCloseable {
   override def close(): Unit = {
@@ -29,17 +38,25 @@ class BounceBuffer(val buffer: MemoryBuffer,
   }
 }
 
+/**
+ * This class can hold 1 or 2 `BounceBuffer`s and is only used in the send case.
+ *
+ * Ideally, the device buffer is used if most of the buffers to be sent are on
+ * the device. The host buffer is used in the opposite case.
+ *
+ * @param deviceBounceBuffer - device buffer to use for sends
+ * @param hostBounceBuffer - optional host buffer to use for sends
+ */
 case class SendBounceBuffers(
-    deviceBounceBuffer: Option[BounceBuffer],
+    deviceBounceBuffer: BounceBuffer,
     hostBounceBuffer: Option[BounceBuffer]) extends AutoCloseable {
-  require(deviceBounceBuffer.nonEmpty || hostBounceBuffer.nonEmpty)
 
   def bounceBufferSize: Long = {
-    deviceBounceBuffer.getOrElse(hostBounceBuffer.get).buffer.getLength
+    deviceBounceBuffer.buffer.getLength
   }
 
   override def close(): Unit = {
-    deviceBounceBuffer.foreach(_.close())
+    deviceBounceBuffer.close()
     hostBounceBuffer.foreach(_.close())
   }
 }

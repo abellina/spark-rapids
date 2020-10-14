@@ -74,8 +74,10 @@ class BufferSendState(
 
   var markedDone = false
 
-  private[this] var bounceBuffer: BounceBuffer = null
-  private[this] var hostBounceBuffer: BounceBuffer = null
+  private[this] val bounceBuffer: BounceBuffer =
+    sendBounceBuffers.deviceBounceBuffer
+  private[this] val hostBounceBuffer: BounceBuffer =
+    sendBounceBuffers.hostBounceBuffer.orNull
 
   def getTransferRequest: TransferRequest = synchronized {
     transferRequest
@@ -84,15 +86,7 @@ class BufferSendState(
   def hasNext: Boolean = !markedDone
 
   private[this] def freeBounceBuffers(): Unit = {
-    if (bounceBuffer != null) {
-      bounceBuffer.close()
-      bounceBuffer = null
-    }
-
-    if (hostBounceBuffer != null) {
-      hostBounceBuffer.close()
-      hostBounceBuffer = null
-    }
+    sendBounceBuffers.close()
   }
 
   def getTransferResponse(): RefCountedDirectByteBuffer = synchronized {
