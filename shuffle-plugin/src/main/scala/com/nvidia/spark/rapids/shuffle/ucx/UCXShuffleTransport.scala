@@ -359,17 +359,14 @@ class UCXShuffleTransport(shuffleServerId: BlockManagerId, rapidsConf: RapidsCon
               waitRange.close()
             }
           } else {
-            var keepAttempting = true
             var toRemove = Seq[PendingTransferRequest]()
             altList.iterator().forEachRemaining( req => {
               val existingReq =
                 perClientReq.get(req.client)
-              if (existingReq.isEmpty && keepAttempting) {
+              if (existingReq.isEmpty) {
                 // need to get bounce buffers
                 val bbs = tryGetReceiveBounceBuffers(1, 1)
-                if (bbs.isEmpty) {
-                  keepAttempting = false // bounce buffers exhausted, stop trying
-                } else {
+                if (bbs.nonEmpty) {
                   perClientReq += req.client -> PerClientReadyRequests(bbs.head, Seq(req))
                   toRemove = toRemove :+ req
                 }
