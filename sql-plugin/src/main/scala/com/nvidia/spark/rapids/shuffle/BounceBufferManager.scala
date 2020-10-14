@@ -64,10 +64,13 @@ case class SendBounceBuffers(
 /**
  * This classes manages a set of bounce buffers, that are instances of `MemoryBuffer`.
  * The size/quantity of buffers is configurable, and so is the allocator.
+ *
  * @param poolName a human-friendly name to use for debug logs
  * @param bufferSize the size of buffer to use
  * @param numBuffers the number of buffers to allocate on instantiation
  * @param allocator function that takes a size, and returns a `MemoryBuffer` instance.
+ * @tparam T the specific type of MemoryBuffer i.e. `DeviceMemoryBuffer`,
+ *           `HostMemoryBuffer`, etc.
  */
 class BounceBufferManager[T <: MemoryBuffer](
     poolName: String,
