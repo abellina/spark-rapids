@@ -396,10 +396,11 @@ trait RapidsShuffleTransport extends AutoCloseable {
    * This function is non blocking. If it can't satisfy the bounce buffer request, an empty
    * sequence is returned.
    *
-   * @param deviceMemory true: returns a device buffer, false: returns a host buffer
    * @param remaining amount of bytes remaining in the receive
    * @param totalRequired maximum no. of buffers that should be returned
-   * @return a sequence of bounce buffers, or empty if the request can't be satisfied
+   * @return a sequence of send bounce buffers, or empty if the request can't be satisfied
+   * @note the send bounce buffer object most likely includes both a device buffer and a host
+   *       memory buffer, since sends can come from the device or the host.
    */
   def tryGetSendBounceBuffers(remaining: Long, totalRequired: Int): Seq[SendBounceBuffers]
 }

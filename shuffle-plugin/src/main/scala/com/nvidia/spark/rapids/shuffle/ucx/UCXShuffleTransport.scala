@@ -147,6 +147,9 @@ class UCXShuffleTransport(shuffleServerId: BlockManagerId, rapidsConf: RapidsCon
         deviceNumBuffers,
         (size: Long) => DeviceMemoryBuffer.allocate(size))
 
+    // we need to hook onto the bounce buffer manager, since now frees are
+    // encapsulated in a `BounceBuffer`, but we need visibility to notify
+    // a monitor
     deviceReceiveBuffMgr.onFree(receiveBounceBufferMonitor.notify)
 
     hostSendBuffMgr =
