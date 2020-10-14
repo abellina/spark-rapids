@@ -32,13 +32,8 @@ class RapidsShuffleServerSuite extends RapidsShuffleTestHelper {
   test("all tables fit") {
     val mockTransferRequest = RapidsShuffleTestHelper.prepareMetaTransferRequest(10, 1000)
 
-    withResource(DeviceMemoryBuffer.allocate(10000)) { bounceBuffer =>
-      when(mockTransport.tryGetSendBounceBuffers(any(), any(), any()))
-          .thenReturn(Seq(bounceBuffer))
-
-      var tableId = 0
+    withResource(getSendBounceBuffer(10000)) { bounceBuffer =>
       withResource((0 until 10).map(_ => DeviceMemoryBuffer.allocate(1000))) { deviceBuffers =>
-
         val mockBuffers = deviceBuffers.map { deviceBuffer =>
           deviceBuffer.incRefCount()
           val mockBuffer = mock[RapidsBuffer]
@@ -62,10 +57,7 @@ class RapidsShuffleServerSuite extends RapidsShuffleTestHelper {
           }
         }
 
-        val bss = new BufferSendState(
-          mockTransferRequest, mockTransport, handler, bounceBuffer.getLength)
-        val worked = bss.acquireBounceBuffersNonBlocking
-        assert(worked)
+        val bss = new BufferSendState(mockTransferRequest, bounceBuffer, handler)
         assert(bss.hasNext)
         val buff = bss.next()
         print (buff)
@@ -78,9 +70,7 @@ class RapidsShuffleServerSuite extends RapidsShuffleTestHelper {
   test("doesn't fit in one buffer length, need 2") {
     val mockTransferRequest = RapidsShuffleTestHelper.prepareMetaTransferRequest(20, 1000)
 
-    withResource(DeviceMemoryBuffer.allocate(10000)) { bounceBuffer =>
-      when(mockTransport.tryGetSendBounceBuffers(any(), any(), any()))
-          .thenReturn(Seq(bounceBuffer))
+    withResource(getSendBounceBuffer(10000)) { bounceBuffer =>
       withResource((0 until 20).map(_ => DeviceMemoryBuffer.allocate(1000))) { deviceBuffers =>
         val mockBuffers = deviceBuffers.map { deviceBuffer =>
           deviceBuffer.incRefCount()
@@ -104,10 +94,7 @@ class RapidsShuffleServerSuite extends RapidsShuffleTestHelper {
           }
         }
 
-        val bss = new BufferSendState(
-          mockTransferRequest, mockTransport, handler, bounceBuffer.getLength)
-        val worked = bss.acquireBounceBuffersNonBlocking
-        assert(worked)
+        val bss = new BufferSendState(mockTransferRequest, bounceBuffer, handler)
 
         var buffs = bss.next()
         assert(bss.hasNext)
@@ -128,9 +115,7 @@ class RapidsShuffleServerSuite extends RapidsShuffleTestHelper {
   test("make a buffer send state - doesn't fit - large buffers") {
     val mockTransferRequest = RapidsShuffleTestHelper.prepareMetaTransferRequest(20, 10000)
 
-    withResource((0 until 1).map(_ => DeviceMemoryBuffer.allocate(10000))) { bounceBuffers =>
-      when(mockTransport.tryGetSendBounceBuffers(any(), any(), any()))
-          .thenReturn(bounceBuffers)
+    withResource(getSendBounceBuffer(10000)) { bounceBuffer =>
       withResource((0 until 20).map(_ => DeviceMemoryBuffer.allocate(123000))) { deviceBuffers =>
         deviceBuffers.foreach(_.incRefCount())
 
@@ -156,10 +141,7 @@ class RapidsShuffleServerSuite extends RapidsShuffleTestHelper {
           }
         }
 
-        val bss = new BufferSendState(
-          mockTransferRequest, mockTransport, handler, bounceBuffers.head.getLength)
-        val worked = bss.acquireBounceBuffersNonBlocking
-        assert(worked)
+        val bss = new BufferSendState(mockTransferRequest, bounceBuffer, handler)
         (0 until 246).foreach(i => {
           println(s"at ${i} ${bss.hasNext}")
           if (!bss.hasNext) {
@@ -182,10 +164,7 @@ class RapidsShuffleServerSuite extends RapidsShuffleTestHelper {
     val mockTransferRequest =
       RapidsShuffleTestHelper.prepareMetaTransferRequest(2, 10000)
 
-    withResource((0 until 1).map(_ =>
-      DeviceMemoryBuffer.allocate(4 * 1024 * 1024))) { bounceBuffers =>
-      when(mockTransport.tryGetSendBounceBuffers(any(), any(), any()))
-          .thenReturn(bounceBuffers)
+    withResource(getSendBounceBuffer(4 * 1024 * 1024)) { bounceBuffer =>
       withResource(
           Seq(66264512, 65859584)
               .map(sz => DeviceMemoryBuffer.allocate(sz))) { deviceBuffers =>
@@ -221,10 +200,7 @@ class RapidsShuffleServerSuite extends RapidsShuffleTestHelper {
           }
         }
 
-        val bss = new BufferSendState(
-          mockTransferRequest, mockTransport, handler, bounceBuffers.head.getLength)
-        val worked = bss.acquireBounceBuffersNonBlocking
-        assert(worked)
+        val bss = new BufferSendState(mockTransferRequest, bounceBuffer, handler)
         (0 until 32).foreach(i => {
           println(s"at ${i} ${bss.hasNext}")
           if (!bss.hasNext) {
@@ -239,7 +215,6 @@ class RapidsShuffleServerSuite extends RapidsShuffleTestHelper {
         })
 
         assert(!bss.hasNext)
-
       }
     }
   }

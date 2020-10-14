@@ -18,7 +18,7 @@ package com.nvidia.spark.rapids.shuffle
 
 import java.util.concurrent.Executor
 
-import ai.rapids.cudf.{ColumnVector, ContiguousTable}
+import ai.rapids.cudf.{ColumnVector, ContiguousTable, DeviceMemoryBuffer}
 import com.nvidia.spark.rapids.{Arm, GpuColumnVector, MetaUtils, RapidsConf, RapidsDeviceMemoryStore, ShuffleMetadata, ShuffleReceivedBufferCatalog}
 import com.nvidia.spark.rapids.format.TableMeta
 import org.mockito.ArgumentMatchers.any
@@ -28,6 +28,7 @@ import org.scalatest.mockito.MockitoSugar
 import scala.collection.mutable.ArrayBuffer
 
 import org.apache.spark.{SparkConf, SparkEnv}
+
 import org.apache.spark.sql.rapids.ShuffleMetricsUpdater
 import org.apache.spark.sql.vectorized.ColumnarBatch
 import org.apache.spark.storage.{BlockId, BlockManagerId, ShuffleBlockBatchId}
@@ -62,6 +63,20 @@ class RapidsShuffleTestHelper extends FunSuite
   var mockConf: RapidsConf = _
   var testMetricsUpdater: TestShuffleMetricsUpdater = _
   var client: RapidsShuffleClient = _
+
+  def getBounceBuffer(size: Long): BounceBuffer = {
+    val db = DeviceMemoryBuffer.allocate(size)
+    new BounceBuffer(db, _ => {
+      db.close()
+    })
+  }
+
+  def getSendBounceBuffer(size: Long): SendBounceBuffers = {
+    val db = DeviceMemoryBuffer.allocate(size)
+    SendBounceBuffers(new BounceBuffer(db, _ => {
+      db.close()
+    }), None)
+  }
 
   override def beforeEach(): Unit = {
     newMocks()

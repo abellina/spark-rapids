@@ -33,8 +33,15 @@ import org.apache.spark.internal.Logging
  */
 class BounceBuffer(val buffer: MemoryBuffer,
     freeFn: BounceBuffer => Unit) extends AutoCloseable {
+
+  var isClosed = false
+
   override def close(): Unit = {
+    if (isClosed) {
+      throw new IllegalStateException("Bounce buffer closed too many times")
+    }
     freeFn(this)
+    isClosed = true
   }
 }
 
@@ -64,7 +71,6 @@ case class SendBounceBuffers(
 /**
  * This classes manages a set of bounce buffers, that are instances of `MemoryBuffer`.
  * The size/quantity of buffers is configurable, and so is the allocator.
- *
  * @param poolName a human-friendly name to use for debug logs
  * @param bufferSize the size of buffer to use
  * @param numBuffers the number of buffers to allocate on instantiation
