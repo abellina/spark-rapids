@@ -69,7 +69,6 @@ class UCXShuffleTransport(shuffleServerId: BlockManagerId, rapidsConf: RapidsCon
   private[this] lazy val ucx = {
     logWarning("UCX Shuffle Transport Enabled")
     val ucxImpl = new UCX(executorId, rapidsConf.shuffleUcxUseWakeup)
-
     ucxImpl.init()
     initBounceBufferPools(bounceBufferSize,
       deviceNumBuffers, hostNumBuffers)
@@ -340,8 +339,6 @@ class UCXShuffleTransport(shuffleServerId: BlockManagerId, rapidsConf: RapidsCon
         .setDaemon(true)
         .build))
 
-  val clientStream = Cuda.DEFAULT_STREAM //new Cuda.Stream(true)
-
   // helper class to hold transfer requests that have a bounce buffer
   // and should be ready to be handled by a `BufferReceiveState`
   case class PerClientReadyRequests(
@@ -367,12 +364,11 @@ class UCXShuffleTransport(shuffleServerId: BlockManagerId, rapidsConf: RapidsCon
             altList.iterator().forEachRemaining( req => {
               val existingReq =
                 perClientReq.get(req.client)
-              if (existingReq.isEmpty) {
+              if (existingReq.isEmpty && keepAttempting) {
                 // need to get bounce buffers
                 val bbs = tryGetReceiveBounceBuffers(1, 1)
                 if (bbs.isEmpty) {
-                  logInfo("Cant acquire client bounce buffers")
-                  keepAttempting = false
+                  keepAttempting = false // bounce buffers exhausted, stop trying
                 } else {
                   perClientReq += req.client -> PerClientReadyRequests(bbs.head, Seq(req))
                   toRemove = toRemove :+ req
@@ -386,18 +382,13 @@ class UCXShuffleTransport(shuffleServerId: BlockManagerId, rapidsConf: RapidsCon
                 toRemove = toRemove :+ req
               }
             })
-            logInfo(s"REMOVING ${toRemove.size} requests")
             altList.removeAll(toRemove.asJava)
           }
           if (perClientReq.nonEmpty) {
-            logDebug(s"Issuing client req ${perClientReq.size}")
-            perClientReq.foreach { case (client, PerClientReadyRequests(bounceBuffer, reqs)) => {
-              val brs = new BufferReceiveState(
-                bounceBuffer,
-                reqs,
-                clientStream)
+            perClientReq.foreach { case (client, PerClientReadyRequests(bounceBuffer, reqs)) =>
+              val brs = new BufferReceiveState(bounceBuffer, reqs)
               client.issueBufferReceives(brs)
-            }}
+            }
           } else {
             receiveBounceBufferMonitor.wait(100)
           }
