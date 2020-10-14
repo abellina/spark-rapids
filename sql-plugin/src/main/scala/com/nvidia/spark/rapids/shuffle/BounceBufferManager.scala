@@ -81,6 +81,8 @@ class BounceBufferManager[T <: MemoryBuffer](
 
   private[this] val rootBuffer = allocator(bufferSize * numBuffers)
 
+  private[this] var onFreeCallback: Option[() => Unit] = None
+
   freeBufferMap.set(0, numBuffers)
 
   /**
@@ -90,18 +92,14 @@ class BounceBufferManager[T <: MemoryBuffer](
    * @return the acquired `MemoryBuffer`
    */
   private def acquireBuffer(): BounceBuffer = {
-    val start = System.currentTimeMillis()
-    var bufferIndex = freeBufferMap.nextSetBit(0)
+    val bufferIndex = freeBufferMap.nextSetBit(0)
     while (bufferIndex < 0) {
-      logDebug(s"Buffer pool $poolName exhausted. Waiting...")
-      wait()
-      bufferIndex = freeBufferMap.nextSetBit(0)
+      throw new IllegalStateException(s"Buffer pool $poolName has exhausted!")
     }
 
     logDebug(s"$poolName: Buffer index: ${bufferIndex}")
     freeBufferMap.clear(bufferIndex)
     val res = rootBuffer.slice(bufferIndex * bufferSize, bufferSize)
-    logDebug(s"It took ${System.currentTimeMillis() - start} ms to allocBuffer in $poolName")
     new BounceBuffer(res, this.freeBuffer)
   }
 
@@ -121,17 +119,6 @@ class BounceBufferManager[T <: MemoryBuffer](
         s"buffers required ${possibleNumBuffers}")
       return Seq.empty
     }
-    // we won't block, and we are still holding the lock, so get the promised buffers
-    acquireBuffersBlocking(possibleNumBuffers)
-  }
-
-  /**
-   * Acquire `possibleNumBuffers` buffers from the pool. This method will block until
-   * it can get the buffers requested.
-   * @param possibleNumBuffers number of buffers to acquire
-   * @return a sequence of `MemoryBuffer`s
-   */
-  def acquireBuffersBlocking(possibleNumBuffers: Int): Seq[BounceBuffer] = synchronized {
     val res = (0 until possibleNumBuffers).map(_ => acquireBuffer())
     logDebug(s"$poolName at acquire. Has numFree ${numFree}")
     res
@@ -153,7 +140,7 @@ class BounceBufferManager[T <: MemoryBuffer](
     logDebug(s"$poolName: Free buffer index ${bufferIndex}")
     buffer.close()
     freeBufferMap.set(bufferIndex.toInt)
-    notifyAll()
+    onFreeCallback.foreach(fn => fn())
   }
 
   /**
@@ -164,4 +151,9 @@ class BounceBufferManager[T <: MemoryBuffer](
   def getRootBuffer(): MemoryBuffer = rootBuffer
 
   override def close(): Unit = rootBuffer.close()
+
+  def onFree(fn: () => Unit): Unit = {
+    require(onFreeCallback == null, "Already registered a free callback")
+    onFreeCallback = Some(fn)
+  }
 }

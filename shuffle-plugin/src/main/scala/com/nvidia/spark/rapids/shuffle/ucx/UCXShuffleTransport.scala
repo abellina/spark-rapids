@@ -147,6 +147,8 @@ class UCXShuffleTransport(shuffleServerId: BlockManagerId, rapidsConf: RapidsCon
         deviceNumBuffers,
         (size: Long) => DeviceMemoryBuffer.allocate(size))
 
+    deviceReceiveBuffMgr.onFree(receiveBounceBufferMonitor.notify)
+
     hostSendBuffMgr =
       new BounceBufferManager[HostMemoryBuffer](
         "host-send",
