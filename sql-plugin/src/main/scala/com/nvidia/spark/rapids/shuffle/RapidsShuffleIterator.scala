@@ -53,7 +53,7 @@ class RapidsShuffleIterator(
     metricsUpdater: ShuffleMetricsUpdater,
     catalog: ShuffleReceivedBufferCatalog = GpuShuffleEnv.getReceivedCatalog,
     timeoutSeconds: Long = GpuShuffleEnv.shuffleFetchTimeoutSeconds)
-extends Iterator[ColumnarBatch]
+  extends Iterator[ColumnarBatch]
     with Logging {
 
   /**
@@ -116,8 +116,7 @@ extends Iterator[ColumnarBatch]
 
   override def hasNext: Boolean = resolvedBatches.synchronized {
     val hasMoreBatches =
-      cachedIt.hasNext ||
-          pendingFetchesByAddress.nonEmpty || batchesInFlight > 0 || !resolvedBatches.isEmpty
+      pendingFetchesByAddress.nonEmpty || batchesInFlight > 0 || !resolvedBatches.isEmpty
     logDebug(s"$taskContext hasNext: batches expected = $totalBatchesExpected, batches " +
       s"resolved = $totalBatchesResolved, pending = ${pendingFetchesByAddress.size}, " +
       s"batches in flight = $batchesInFlight, resolved ${resolvedBatches.size}, " +
@@ -129,7 +128,6 @@ extends Iterator[ColumnarBatch]
       throw new IllegalStateException(
         s"This iterator had $totalBatchesResolved but $totalBatchesExpected were expected.")
     }
-
     hasMoreBatches
   }
 
@@ -155,7 +153,7 @@ extends Iterator[ColumnarBatch]
 
     var clients = Seq[RapidsShuffleClient]()
 
-    (local ++ remote.toSeq).foreach {
+    (local ++ remote).foreach {
       case (blockManagerId: BlockManagerId, blockIds: Seq[(BlockId, Long, Int)]) => {
         val shuffleRequestsMapIndex: Seq[BlockIdMapIndex] =
           blockIds.map { case (blockId, _, mapIndex) =>
@@ -320,7 +318,6 @@ extends Iterator[ColumnarBatch]
     var result: Option[ShuffleClientResult] = None
 
     result = pollForResult(timeoutSeconds)
-
     val blockedTime = System.currentTimeMillis() - blockedStart
     result match {
       case Some(BufferReceived(bufferId)) =>
@@ -351,7 +348,6 @@ extends Iterator[ColumnarBatch]
           mapIndex,
           shuffleBlockBatchId.startReduceId,
           errorMsg)
-
       case None =>
         // NOTE: this isn't perfect, since what we really want is the transport to
         // bubble this error, but for now we'll make this a fatal exception.
