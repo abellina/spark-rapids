@@ -51,7 +51,6 @@ class RapidsShuffleIterator(
     transport: RapidsShuffleTransport,
     blocksByAddress: Array[(BlockManagerId, Seq[(BlockId, Long, Int)])],
     metricsUpdater: ShuffleMetricsUpdater,
-    cachedIt: Iterator[ColumnarBatch] = Iterator.empty,
     catalog: ShuffleReceivedBufferCatalog = GpuShuffleEnv.getReceivedCatalog,
     timeoutSeconds: Long = GpuShuffleEnv.shuffleFetchTimeoutSeconds)
 extends Iterator[ColumnarBatch]
@@ -69,8 +68,6 @@ extends Iterator[ColumnarBatch]
    */
   case class BufferReceived(
       bufferId: ShuffleReceivedBufferId) extends ShuffleClientResult
-
-  case class CachedBatchResult(batch: ColumnarBatch) extends ShuffleClientResult
 
   /**
    * A result for a failed attempt at receiving block metadata, or corresponding batches.
@@ -158,7 +155,7 @@ extends Iterator[ColumnarBatch]
 
     var clients = Seq[RapidsShuffleClient]()
 
-    (util.Random.shuffle(local.toSeq) ++ scala.util.Random.shuffle(remote.toSeq)).foreach {
+    (local ++ remote.toSeq).foreach {
       case (blockManagerId: BlockManagerId, blockIds: Seq[(BlockId, Long, Int)]) => {
         val shuffleRequestsMapIndex: Seq[BlockIdMapIndex] =
           blockIds.map { case (blockId, _, mapIndex) =>
@@ -201,9 +198,7 @@ extends Iterator[ColumnarBatch]
         val handler = new RapidsShuffleFetchHandler {
           private[this] var clientExpectedBatches = 0L
           private[this] var clientResolvedBatches = 0L
-          var handlerStartTime = System.nanoTime()
           def start(expectedBatches: Int): Unit = resolvedBatches.synchronized {
-            val timeToMetaMs = (System.nanoTime() - handlerStartTime)/1.0e6
             if (expectedBatches == 0) {
               throw new IllegalStateException(
                 s"Received an invalid response from shuffle server: " +
@@ -217,35 +212,20 @@ extends Iterator[ColumnarBatch]
               s"Expecting $expectedBatches batches, $batchesInFlight batches currently in " +
               s"flight, total expected by this client: $clientExpectedBatches, total resolved by " +
               s"this client: $clientResolvedBatches")
-            logInfo(s"Client ${blockManagerId} responded with meta in ${timeToMetaMs} ms")
           }
 
-          def batchReceived(bufferId: ShuffleReceivedBufferId, stats: TransactionStats): Unit =
+          def batchReceived(bufferId: ShuffleReceivedBufferId): Unit =
             resolvedBatches.synchronized {
-              val ucxTime = if (stats == null) 0 else stats.txTimeMs
-              val running = (System.nanoTime() - handlerStartTime)/1.0e6
-              logDebug(s"Batch available ${blockManagerId} @ " +
-                  s"running time: ${running} ms, " +
-                  s"ucx time: ${ucxTime}")
               batchesInFlight = batchesInFlight - 1
               val nvtxRange = new NvtxRange(s"BATCH RECEIVED", NvtxColor.DARK_GREEN)
               try {
                 if (markedAsDone) {
                   throw new IllegalStateException(
-                    s"This ${this} iterator was marked done, but a batched showed up after!!")
+                    "This iterator was marked done, but a batched showed up after!!")
                 }
                 totalBatchesResolved = totalBatchesResolved + 1
                 clientResolvedBatches = clientResolvedBatches + 1
                 resolvedBatches.offer(BufferReceived(bufferId))
-                logTrace(s"Iter ${this} -- client ${client} -- ${bufferId} " +
-                    s"-- bId -- ${clientExpectedBatches} / " +
-                    s"${clientResolvedBatches}")
-                if (clientExpectedBatches < clientResolvedBatches) {
-                  throw new IllegalStateException(
-                    s"Iter ${this} with client ${client} went off the rails " +
-                        s"${clientResolvedBatches}/${clientExpectedBatches}. " +
-                        s"Last was ${bufferId}")
-                }
 
                 if (clientExpectedBatches == clientResolvedBatches) {
                   logDebug(s"Task: $taskAttemptId Client $blockManagerId is " +
@@ -270,7 +250,6 @@ extends Iterator[ColumnarBatch]
               blockManagerId, id, mapIndex, errorMessage))
             }
           }
-
         }
 
         logInfo(s"Client $blockManagerId triggered, for ${shuffleRequestsMapIndex.size} blocks")
@@ -306,7 +285,6 @@ extends Iterator[ColumnarBatch]
   taskContext.foreach(_.addTaskCompletionListener[Unit](_ => receiveBufferCleaner()))
 
   def pollForResult(timeoutSeconds: Long): Option[ShuffleClientResult] = {
-    taskContext.foreach(GpuSemaphore.releaseIfNecessary)
     Option(resolvedBatches.poll(timeoutSeconds, TimeUnit.SECONDS))
   }
 
@@ -330,7 +308,7 @@ extends Iterator[ColumnarBatch]
     // fetches and so it could produce device memory. Note this is not allowing for some external
     // thread to schedule the fetches for us, it may be something we consider in the future, given
     // memory pressure.
-
+    taskContext.foreach(GpuSemaphore.acquireIfNecessary)
 
     if (!started) {
       // kick off if we haven't already
@@ -341,23 +319,14 @@ extends Iterator[ColumnarBatch]
     val blockedStart = System.currentTimeMillis()
     var result: Option[ShuffleClientResult] = None
 
-    result = if (resolvedBatches.isEmpty) {
-      // if nothing to do, relinquish
-      if (!cachedIt.hasNext) {
-        pollForResult(timeoutSeconds)
-      } else {
-        Some(CachedBatchResult(cachedIt.next()))
-      }
-    } else {
-      pollForResult(timeoutSeconds)
-    }
+    result = pollForResult(timeoutSeconds)
 
     val blockedTime = System.currentTimeMillis() - blockedStart
     result match {
       case Some(BufferReceived(bufferId)) =>
         val nvtxRangeAfterGettingBatch = new NvtxRange("RapidsShuffleIterator.gotBatch",
           NvtxColor.PURPLE)
-        taskContext.foreach(GpuSemaphore.acquireIfNecessary)
+
         try {
           sb = catalog.acquireBuffer(bufferId)
           cb = sb.getColumnarBatch
@@ -383,11 +352,6 @@ extends Iterator[ColumnarBatch]
           shuffleBlockBatchId.startReduceId,
           errorMsg)
 
-      case Some(CachedBatchResult(batch)) =>
-        val nvtxRangeCached = new NvtxRange("CachedBatch", NvtxColor.DARK_GREEN)
-        cb = batch
-        nvtxRangeCached.close()
-        range.close()
       case None =>
         // NOTE: this isn't perfect, since what we really want is the transport to
         // bubble this error, but for now we'll make this a fatal exception.

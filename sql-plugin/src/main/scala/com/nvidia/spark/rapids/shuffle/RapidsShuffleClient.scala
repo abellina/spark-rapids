@@ -44,7 +44,7 @@ trait RapidsShuffleFetchHandler {
    * Called when a buffer is received and has been handed off to the catalog.
    * @param bufferId - a tracked shuffle buffer id
    */
-  def batchReceived(bufferId: ShuffleReceivedBufferId, stats: TransactionStats = null): Unit
+  def batchReceived(bufferId: ShuffleReceivedBufferId): Unit
 
   /**
    * Called when the transport layer is not able to handle a fetch error for metadata
@@ -470,7 +470,7 @@ class RapidsShuffleClient(
         buffMetas.foreach { case (sliced, t, handler) =>
           val bId = track(sliced, t)
           try {
-            handler.batchReceived(bId.asInstanceOf[ShuffleReceivedBufferId], stats)
+            handler.batchReceived(bId.asInstanceOf[ShuffleReceivedBufferId])
           } catch {
             case e: Throwable => {
               logError(s"Error in iterator ${handler}", e)
