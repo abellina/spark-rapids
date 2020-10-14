@@ -323,7 +323,6 @@ class RapidsShuffleIterator(
       case Some(BufferReceived(bufferId)) =>
         val nvtxRangeAfterGettingBatch = new NvtxRange("RapidsShuffleIterator.gotBatch",
           NvtxColor.PURPLE)
-
         try {
           sb = catalog.acquireBuffer(bufferId)
           cb = sb.getColumnarBatch
