@@ -38,8 +38,8 @@ import org.apache.spark.storage.BlockManagerId
  *
  * Additionally, this class maintains pools of memory used to limit the cost of memory
  * pinning and registration (bounce buffers), a metadata message pool for small flatbuffers used
- * to describe shuffled data, and implements a simple throttle mechanism to keep GPU memory
- * usage at bay by way of configuration settings.
+ * to describe shuffled data, and a thread that handles a queue of pending requests on
+ * a per-client basis.
  *
  * @param shuffleServerId `BlockManagerId` for this executor
  * @param rapidsConf      plugin configuration
@@ -150,7 +150,11 @@ class UCXShuffleTransport(shuffleServerId: BlockManagerId, rapidsConf: RapidsCon
     // we need to hook onto the bounce buffer manager, since now frees are
     // encapsulated in a `BounceBuffer`, but we need visibility to notify
     // a monitor
-    deviceReceiveBuffMgr.onFree(receiveBounceBufferMonitor.notify)
+    deviceReceiveBuffMgr.onFree(() => {
+      receiveBounceBufferMonitor.synchronized {
+        receiveBounceBufferMonitor.notify()
+      }
+    })
 
     hostSendBuffMgr =
       new BounceBufferManager[HostMemoryBuffer](
@@ -243,7 +247,7 @@ class UCXShuffleTransport(shuffleServerId: BlockManagerId, rapidsConf: RapidsCon
     rapidsConf.shuffleMaxClientThreads,
     rapidsConf.shuffleClientThreadKeepAliveTime,
     TimeUnit.SECONDS,
-    new ArrayBlockingQueue[Runnable](100),
+    new ArrayBlockingQueue[Runnable](1),
     GpuDeviceManager.wrapThreadFactory(
       new ThreadFactoryBuilder()
         .setNameFormat("shuffle-transport-client-exec-%d")
@@ -338,12 +342,17 @@ class UCXShuffleTransport(shuffleServerId: BlockManagerId, rapidsConf: RapidsCon
 
   val clientStream = Cuda.DEFAULT_STREAM //new Cuda.Stream(true)
 
+  // helper class to hold transfer requests that have a bounce buffer
+  // and should be ready to be handled by a `BufferReceiveState`
+  case class PerClientReadyRequests(
+      bounceBuffer: BounceBuffer,
+      transferRequests: Seq[PendingTransferRequest])
+
   exec.execute(() => {
     import collection.JavaConverters._
     while (started) {
       try {
-        var perClientReq = mutable.Map[RapidsShuffleClient,
-          (BounceBuffer, Seq[PendingTransferRequest])]()
+        var perClientReq = mutable.Map[RapidsShuffleClient, PerClientReadyRequests]()
         receiveBounceBufferMonitor.synchronized {
           if (altList.isEmpty) {
             val waitRange = new NvtxRange("Transport throttling", NvtxColor.RED)
@@ -365,13 +374,15 @@ class UCXShuffleTransport(shuffleServerId: BlockManagerId, rapidsConf: RapidsCon
                   logInfo("Cant acquire client bounce buffers")
                   keepAttempting = false
                 } else {
-                  perClientReq += req.client -> ((bbs.head, Seq(req)))
+                  perClientReq += req.client -> PerClientReadyRequests(bbs.head, Seq(req))
                   toRemove = toRemove :+ req
                 }
               } else {
                 // bounce buffers already acquired
                 perClientReq.put(req.client,
-                  (existingReq.get._1, existingReq.get._2 :+ req))
+                  PerClientReadyRequests(
+                    existingReq.get.bounceBuffer,
+                    existingReq.get.transferRequests :+ req))
                 toRemove = toRemove :+ req
               }
             })
@@ -380,9 +391,9 @@ class UCXShuffleTransport(shuffleServerId: BlockManagerId, rapidsConf: RapidsCon
           }
           if (perClientReq.nonEmpty) {
             logDebug(s"Issuing client req ${perClientReq.size}")
-            perClientReq.foreach { case (client, (bb, reqs)) => {
+            perClientReq.foreach { case (client, PerClientReadyRequests(bounceBuffer, reqs)) => {
               val brs = new BufferReceiveState(
-                bb,
+                bounceBuffer,
                 reqs,
                 clientStream)
               client.issueBufferReceives(brs)
