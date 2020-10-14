@@ -87,7 +87,8 @@ class BufferReceiveState(
   private[this] var workingOn: DeviceMemoryBuffer = null
   private[this] var workingOnSoFar: Long = 0L
 
-  def consumeWindow(): Seq[(MemoryBuffer, TableMeta, RapidsShuffleFetchHandler)] = synchronized {
+  def consumeWindow(): Seq[(DeviceMemoryBuffer,
+      TableMeta, RapidsShuffleFetchHandler)] = synchronized {
     val windowRange = new NvtxRange("consumeWindow", NvtxColor.PURPLE)
     try {
       val results = currentBlocks.flatMap { case b =>

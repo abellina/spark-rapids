@@ -461,26 +461,19 @@ class RapidsShuffleClient(
     try {
       // consume buffers, which will return true if done for the current request
       // buff may contain a number of sub batches
-      val buffMetas: Seq[(MemoryBuffer, TableMeta, RapidsShuffleFetchHandler)] =
-        bufferReceiveState.consumeWindow()
+      val buffMetas = bufferReceiveState.consumeWindow()
 
       val stats = tx.getStats
 
       if (buffMetas.nonEmpty) {
         // hand buffer off to the catalog
-        var subBatchOffset = 0L
         buffMetas.foreach { case (sliced, t, handler) =>
-          subBatchOffset = subBatchOffset + t.bufferMeta().size()
-          val beforeTrack = System.nanoTime()
-          val bId = track(sliced.asInstanceOf[DeviceMemoryBuffer], t)
-          val timeTrackingMs = (System.nanoTime() - beforeTrack) / 1.0e6
-          logDebug(s"TRACKING ${this} bufferId = ${bId}, ${bufferReceiveState} - $sliced " +
-              s"${timeTrackingMs} ms while tracking")
+          val bId = track(sliced, t)
           try {
             handler.batchReceived(bId.asInstanceOf[ShuffleReceivedBufferId], stats)
           } catch {
             case e: Throwable => {
-              logError(s"Error in iterator ${handler} -- ${bufferReceiveState}")
+              logError(s"Error in iterator ${handler}", e)
               throw e
             }
           }
