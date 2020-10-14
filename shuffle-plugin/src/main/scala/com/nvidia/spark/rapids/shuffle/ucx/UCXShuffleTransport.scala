@@ -21,6 +21,7 @@ import java.util.PriorityQueue
 import java.util.concurrent._
 
 import scala.collection.mutable
+import scala.collection.mutable.ArrayBuffer
 
 import ai.rapids.cudf.{Cuda, DeviceMemoryBuffer, HostMemoryBuffer, MemoryBuffer, NvtxColor, NvtxRange}
 import com.google.common.util.concurrent.ThreadFactoryBuilder
@@ -341,9 +342,12 @@ class UCXShuffleTransport(shuffleServerId: BlockManagerId, rapidsConf: RapidsCon
 
   // helper class to hold transfer requests that have a bounce buffer
   // and should be ready to be handled by a `BufferReceiveState`
-  case class PerClientReadyRequests(
-      bounceBuffer: BounceBuffer,
-      transferRequests: Seq[PendingTransferRequest])
+  class PerClientReadyRequests(val bounceBuffer: BounceBuffer) {
+    val transferRequests = new ArrayBuffer[PendingTransferRequest]()
+    def addRequest(req: PendingTransferRequest): Unit = {
+      transferRequests.append(req)
+    }
+  }
 
   exec.execute(() => {
     import collection.JavaConverters._
@@ -367,23 +371,23 @@ class UCXShuffleTransport(shuffleServerId: BlockManagerId, rapidsConf: RapidsCon
                 // need to get bounce buffers
                 val bbs = tryGetReceiveBounceBuffers(1, 1)
                 if (bbs.nonEmpty) {
-                  perClientReq += req.client -> PerClientReadyRequests(bbs.head, Seq(req))
+                  val perClientReadyRequests = new PerClientReadyRequests(bbs.head)
+                  perClientReadyRequests.addRequest(req)
+                  perClientReq += req.client -> perClientReadyRequests
                   toRemove = toRemove :+ req
                 }
               } else {
                 // bounce buffers already acquired
-                perClientReq.put(req.client,
-                  PerClientReadyRequests(
-                    existingReq.get.bounceBuffer,
-                    existingReq.get.transferRequests :+ req))
+                existingReq.foreach(_.addRequest(req))
                 toRemove = toRemove :+ req
               }
             })
             altList.removeAll(toRemove.asJava)
           }
           if (perClientReq.nonEmpty) {
-            perClientReq.foreach { case (client, PerClientReadyRequests(bounceBuffer, reqs)) =>
-              val brs = new BufferReceiveState(bounceBuffer, reqs)
+            perClientReq.foreach { case (client, perClientRequests) =>
+              val brs = new BufferReceiveState(perClientRequests.bounceBuffer,
+                perClientRequests.transferRequests)
               client.issueBufferReceives(brs)
             }
           } else {
