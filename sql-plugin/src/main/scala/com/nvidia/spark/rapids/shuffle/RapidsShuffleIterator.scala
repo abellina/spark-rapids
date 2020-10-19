@@ -51,9 +51,10 @@ class RapidsShuffleIterator(
     transport: RapidsShuffleTransport,
     blocksByAddress: Array[(BlockManagerId, Seq[(BlockId, Long, Int)])],
     metricsUpdater: ShuffleMetricsUpdater,
+    cachedIt: Iterator[ColumnarBatch] = Iterator.empty,
     catalog: ShuffleReceivedBufferCatalog = GpuShuffleEnv.getReceivedCatalog,
     timeoutSeconds: Long = GpuShuffleEnv.shuffleFetchTimeoutSeconds)
-  extends Iterator[ColumnarBatch]
+extends Iterator[ColumnarBatch]
     with Logging {
 
   /**
@@ -68,6 +69,8 @@ class RapidsShuffleIterator(
    */
   case class BufferReceived(
       bufferId: ShuffleReceivedBufferId) extends ShuffleClientResult
+
+  case class CachedBatchResult(batch: ColumnarBatch) extends ShuffleClientResult
 
   /**
    * A result for a failed attempt at receiving block metadata, or corresponding batches.
@@ -116,7 +119,8 @@ class RapidsShuffleIterator(
 
   override def hasNext: Boolean = resolvedBatches.synchronized {
     val hasMoreBatches =
-      pendingFetchesByAddress.nonEmpty || batchesInFlight > 0 || !resolvedBatches.isEmpty
+      cachedIt.hasNext ||
+          pendingFetchesByAddress.nonEmpty || batchesInFlight > 0 || !resolvedBatches.isEmpty
     logDebug(s"$taskContext hasNext: batches expected = $totalBatchesExpected, batches " +
       s"resolved = $totalBatchesResolved, pending = ${pendingFetchesByAddress.size}, " +
       s"batches in flight = $batchesInFlight, resolved ${resolvedBatches.size}, " +
@@ -283,6 +287,7 @@ class RapidsShuffleIterator(
   taskContext.foreach(_.addTaskCompletionListener[Unit](_ => receiveBufferCleaner()))
 
   def pollForResult(timeoutSeconds: Long): Option[ShuffleClientResult] = {
+    taskContext.foreach(GpuSemaphore.releaseIfNecessary)
     Option(resolvedBatches.poll(timeoutSeconds, TimeUnit.SECONDS))
   }
 
@@ -291,22 +296,10 @@ class RapidsShuffleIterator(
     var sb: RapidsBuffer = null
     val range = new NvtxRange(s"RapidshuffleIterator.next", NvtxColor.RED)
 
-    // If N tasks downstream are accumulating memory we run the risk OOM
-    // On the other hand, if wait here we may not start processing batches that are ready.
-    // Not entirely clear what the right answer is, at this time.
-    //
-    // It is worth noting that we can get in the situation where spilled buffers are acquired
-    // (since the scheduling does not take into account the state of the buffer in the catalog),
-    // which in turn could spill other device buffers that could have been handed off downstream
-    // without a copy. In other words, more investigation is needed to find if some heuristics
-    // could be applied to pipeline the copies back to device at acquire time.
-    //
-    // For now: picking to acquire the semaphore now. The batch fetches for *this* task are about to
-    // get started, a few lines below. Assuming that any task that is in the semaphore, has active
-    // fetches and so it could produce device memory. Note this is not allowing for some external
-    // thread to schedule the fetches for us, it may be something we consider in the future, given
-    // memory pressure.
-    taskContext.foreach(GpuSemaphore.acquireIfNecessary)
+    // NOTE: we are not holding on to the semaphore at this point, the semaphore is
+    // acquired after a batch is received, and released before we wait for one,
+    // this allows several iterators to be working receives, as permitted by the
+    // inflight throttle in the transport.
 
     if (!started) {
       // kick off if we haven't already
@@ -317,12 +310,23 @@ class RapidsShuffleIterator(
     val blockedStart = System.currentTimeMillis()
     var result: Option[ShuffleClientResult] = None
 
-    result = pollForResult(timeoutSeconds)
+    result = if (resolvedBatches.isEmpty) {
+      // if nothing to do, relinquish
+      if (!cachedIt.hasNext) {
+        pollForResult(timeoutSeconds)
+      } else {
+        Some(CachedBatchResult(cachedIt.next()))
+      }
+    } else {
+      pollForResult(timeoutSeconds)
+    }
+
     val blockedTime = System.currentTimeMillis() - blockedStart
     result match {
       case Some(BufferReceived(bufferId)) =>
         val nvtxRangeAfterGettingBatch = new NvtxRange("RapidsShuffleIterator.gotBatch",
           NvtxColor.PURPLE)
+        taskContext.foreach(GpuSemaphore.acquireIfNecessary)
         try {
           sb = catalog.acquireBuffer(bufferId)
           cb = sb.getColumnarBatch
@@ -347,6 +351,13 @@ class RapidsShuffleIterator(
           mapIndex,
           shuffleBlockBatchId.startReduceId,
           errorMsg)
+
+      case Some(CachedBatchResult(batch)) =>
+        val nvtxRangeCached = new NvtxRange("CachedBatch", NvtxColor.DARK_GREEN)
+        taskContext.foreach(GpuSemaphore.acquireIfNecessary)
+        cb = batch
+        nvtxRangeCached.close()
+        range.close()
       case None =>
         // NOTE: this isn't perfect, since what we really want is the transport to
         // bubble this error, but for now we'll make this a fatal exception.
