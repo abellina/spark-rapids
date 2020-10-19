@@ -144,7 +144,7 @@ class WindowedBlockIterator[T <: BlockWithSize](blocks: Seq[T], windowSize: Long
         if (window.end >= b.endOffset) {
           rangeEnd = b.endOffset - b.startOffset
         }
-        blockRangesInWindow.append(BlockRange[T](b.block, rangeStart, rangeEnd))
+        blockRangesInWindow.append(BlockRange[T](b.block, rangeStart, rangeEnd + 1))
         lastBlockIndex = Some(thisBlock)
       } else {
         // skip this block, unless it's before our window starts
