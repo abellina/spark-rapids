@@ -120,6 +120,7 @@ class RapidsDiskStore(
     }
 
     override protected def releaseResources(): Unit = {
+      close()
       require(hostBuffer.isEmpty,
         "Releasing a disk buffer with non-empty host buffer")
       // Buffers that share paths must be cleaned up elsewhere

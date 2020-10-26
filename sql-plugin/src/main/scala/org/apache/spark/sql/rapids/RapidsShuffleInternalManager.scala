@@ -16,25 +16,29 @@
 
 package org.apache.spark.sql.rapids
 
-import ai.rapids.cudf.{NvtxColor, NvtxRange}
-import com.nvidia.spark.rapids._
-import com.nvidia.spark.rapids.format.TableMeta
-import com.nvidia.spark.rapids.shuffle.{RapidsShuffleRequestHandler, RapidsShuffleServer, RapidsShuffleTransport}
-import scala.collection.mutable.{ArrayBuffer, ListBuffer}
 import scala.collection.mutable
+import scala.collection.mutable.{ArrayBuffer, ListBuffer}
+import scala.concurrent.ExecutionContext.Implicits.global
+import scala.util.Success
 
-import org.apache.spark.{ShuffleDependency, SparkConf, SparkEnv, TaskContext}
-
+import ai.rapids.cudf.{Cuda, NvtxColor, NvtxRange}
+import com.nvidia.spark.rapids._
+import com.nvidia.spark.rapids.shuffle.RapidsShuffleTransport
 import org.apache.spark.internal.Logging
 import org.apache.spark.network.buffer.ManagedBuffer
+import org.apache.spark.rpc.RpcEnv
 import org.apache.spark.scheduler.MapStatus
 import org.apache.spark.shuffle._
 import org.apache.spark.shuffle.sort.SortShuffleManager
+import org.apache.spark.shuffle.ucx.rpc.UcxRpcMessages.{ExecutorAdded, IntroduceAllExecutors}
+import org.apache.spark.shuffle.ucx.rpc.{UcxDriverRpcEndpoint, UcxExecutorRpcEndpoint}
+import org.apache.spark.shuffle.ucx.utils.SerializableDirectBuffer
 import org.apache.spark.shuffle.ucx.{ShuffleTransport, UcxShuffleTransport}
 import org.apache.spark.sql.execution.metric.SQLMetric
-import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.vectorized.ColumnarBatch
 import org.apache.spark.storage._
+import org.apache.spark.util.RpcUtils
+import org.apache.spark.{SecurityManager, ShuffleDependency, SparkConf, SparkEnv, TaskContext}
 
 class GpuShuffleHandle[K, V](
     val wrapped: ShuffleHandle,
@@ -170,6 +174,11 @@ class RapidsCachingWriter[K, V](
     val nvtxRange = new NvtxRange("RapidsCachingWriter.close", NvtxColor.CYAN)
     try {
       if (!success) {
+        cleanStorage()
+        None
+      } else {
+        // upon seeing this port, the other side will try to connect to the port
+        // in order to establish an UCX endpoint (on demand), if the topology has "rapids" in it.
         blocksWritten.foreach { bId =>
           val bufferIds: Array[ShuffleBufferId] = catalog.blockIdToBuffersIds(bId)
           bufferIds.foreach { bId =>
@@ -191,11 +200,6 @@ class RapidsCachingWriter[K, V](
           val rapidsMeta = new RapidsShuffleMetaBlock(sbId, metas)
           transport.register(rapidsMeta.getBlockId, rapidsMeta)
         }
-        cleanStorage()
-        None
-      } else {
-        // upon seeing this port, the other side will try to connect to the port
-        // in order to establish an UCX endpoint (on demand), if the topology has "rapids" in it.
         val shuffleServerId = if (transport != null) {
           val originalShuffleServerId = blockManager.blockManagerId
           BlockManagerId(
@@ -268,17 +272,57 @@ abstract class RapidsShuffleInternalManagerBase(conf: SparkConf, isDriver: Boole
     if (rapidsConf.shuffleTransportEnabled && !isDriver) {
       val transport =
         RapidsShuffleTransport.makeTransport(blockManager.shuffleServerId, rapidsConf)
-      transport.init()
+      initUcxTransport(transport.asInstanceOf[UcxShuffleTransport])
+      RapidsBufferCatalog.setTransport(transport)
       Some(transport)
     } else {
       None
     }
   }
 
-  override def registerShuffle[K, V, C](
-      shuffleId: Int,
-      dependency: ShuffleDependency[K, V, C]): ShuffleHandle = {
+  @volatile private var initialized: Boolean = false
+  private val driverEndpointName = "ucx-shuffle-driver"
+
+  // TODO: initialize through IO plugin at the process start
+  private def initDriverRpc(): Unit = {
+    if (!initialized) {
+      val rpcEnv = SparkEnv.get.rpcEnv
+      val driverEndpoint = new UcxDriverRpcEndpoint(rpcEnv)
+      rpcEnv.setupEndpoint(driverEndpointName, driverEndpoint)
+      initialized = true
+    }
+  }
+
+  private def initUcxTransport(ucxTransport: UcxShuffleTransport): Unit = this.synchronized {
+    if (!initialized) {
+      val blockManager = SparkEnv.get.blockManager.blockManagerId
+      val rpcEnv = RpcEnv.create("ucx-rpc-env", blockManager.host, blockManager.host,
+        blockManager.port, conf, new SecurityManager(conf), 1, clientMode = false)
+      logDebug("Initializing ucx transport")
+      val address = ucxTransport.init()
+      val executorEndpoint = new UcxExecutorRpcEndpoint(rpcEnv, ucxTransport)
+      val endpoint = rpcEnv.setupEndpoint(
+        s"ucx-shuffle-executor-${blockManager.executorId}",
+        executorEndpoint)
+
+      val driverEndpoint = RpcUtils.makeDriverRef(driverEndpointName, conf, rpcEnv)
+      driverEndpoint.ask[IntroduceAllExecutors](ExecutorAdded(blockManager.executorId,
+        endpoint, new SerializableDirectBuffer(address)))
+        .andThen {
+          case Success(msg) =>
+            logInfo(s"Receive reply $msg")
+            executorEndpoint.receive(msg)
+        }
+      initialized = true
+    }
+  }
+
+
+  override def registerShuffle[K, V, C](shuffleId: Int,
+                                        dependency: ShuffleDependency[K, V, C]): ShuffleHandle = {
+
     // Always register with the wrapped handler so we can write to it ourselves if needed
+    initDriverRpc()
     val orig = wrapped.registerShuffle(shuffleId, dependency)
     if (!shouldFallThroughOnEverything && dependency.isInstanceOf[GpuShuffleDependency[K, V, C]]) {
       val handle = new GpuShuffleHandle(orig,

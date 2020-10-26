@@ -366,7 +366,7 @@ object ShuffleMetadata extends Logging{
   }
 
   def buildBlockMeta(tables: Seq[TableMeta], maximumResponseSize: Long): ByteBuffer = {
-    val fbb = new FlatBufferBuilder(1024, bbFactory)
+    val fbb = getBuilder
     val tableOffsets = copyTables(fbb, tables)
     val tableMetasOffset = BlockMeta.createTableMetasVector(fbb, tableOffsets)
     val finIndex = BlockMeta.createBlockMeta(fbb, tableMetasOffset)

@@ -23,8 +23,9 @@ import java.util.concurrent.atomic.AtomicInteger
 import ai.rapids.cudf.{CudaUtil, DeviceMemoryBuffer, MemoryBuffer, NvtxColor, NvtxRange}
 import com.nvidia.spark.rapids.RapidsConf
 
+import org.apache.spark.SparkConf
 import org.apache.spark.internal.Logging
-import org.apache.spark.shuffle.ucx.ShuffleTransport
+import org.apache.spark.shuffle.ucx.{ShuffleTransport, UcxShuffleConf}
 import org.apache.spark.sql.rapids.storage.RapidsStorageUtils
 import org.apache.spark.storage.BlockManagerId
 
@@ -636,8 +637,7 @@ object RapidsShuffleTransport extends Logging {
    * @param rapidsConf instance of `RapidsConf`
    * @return a transport instance to be used to create a server and clients.
    */
-  def makeTransport(shuffleServerId: BlockManagerId,
-                    rapidsConf: RapidsConf): ShuffleTransport = {
+  def makeTransport(shuffleServerId: BlockManagerId, rapidsConf: RapidsConf): ShuffleTransport = {
     val transportClass = try {
       Class.forName(rapidsConf.shuffleTransportClassName)
     } catch {
@@ -649,7 +649,7 @@ object RapidsShuffleTransport extends Logging {
     }
     try {
       val ctr = transportClass.getConstructors()(0)
-      ctr.newInstance(shuffleServerId, rapidsConf).asInstanceOf[ShuffleTransport]
+      ctr.newInstance(null, shuffleServerId.executorId).asInstanceOf[ShuffleTransport]
     } catch {
       case t: Throwable =>
         logError(s"Found class for ${rapidsConf.shuffleTransportClassName}, but failed " +

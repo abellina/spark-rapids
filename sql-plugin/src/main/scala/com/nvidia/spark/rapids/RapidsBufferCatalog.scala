@@ -20,14 +20,13 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.function.BiFunction
 
 import ai.rapids.cudf.{DeviceMemoryBuffer, Rmm, Table}
-import com.nvidia.spark.rapids.RapidsPluginImplicits.AutoCloseableArray
 import com.nvidia.spark.rapids.StorageTier.StorageTier
 import com.nvidia.spark.rapids.format.TableMeta
-
-import org.apache.spark.{SparkConf, SparkEnv}
 import org.apache.spark.internal.Logging
+import org.apache.spark.shuffle.{RapidsBlockId, RapidsShuffleBlock}
+import org.apache.spark.shuffle.ucx.ShuffleTransport
 import org.apache.spark.sql.rapids.RapidsDiskBlockManager
-import org.apache.spark.sql.vectorized.ColumnarBatch
+import org.apache.spark.{SparkConf, SparkEnv}
 
 /**
  * Catalog for lookup of buffers by ID. The constructor is only visible for testing, generally
@@ -36,6 +35,12 @@ import org.apache.spark.sql.vectorized.ColumnarBatch
 class RapidsBufferCatalog extends Logging {
   /** Map of buffer IDs to buffers */
   private[this] val bufferMap = new ConcurrentHashMap[RapidsBufferId, RapidsBuffer]
+
+  private var transport: ShuffleTransport = _
+
+  def setTransport(transport: ShuffleTransport) = {
+    this.transport = transport
+  }
 
   /**
    * Lookup the buffer that corresponds to the specified buffer ID and acquire it.
@@ -94,10 +99,22 @@ class RapidsBufferCatalog extends Logging {
       }
     }
     bufferMap.compute(buffer.id, updater)
+    buffer.id match {
+      case id: ShuffleBufferId =>
+        val transportBlock = new RapidsShuffleBlock(id,
+          buffer.getMemoryBuffer, buffer.meta)
+        logInfo(s"Mutating block ${transportBlock.rapidsBlockId}")
+        transport.mutate(transportBlock.rapidsBlockId, transportBlock, null)
+      case _ =>
+    }
   }
 
   /** Remove a buffer ID from the catalog and release the resources of the registered buffer. */
   def removeBuffer(id: RapidsBufferId): Unit = {
+    if (id.isInstanceOf[ShuffleBufferId]) {
+      val transportBlockId = RapidsBlockId(id)
+      transport.unregister(transportBlockId)
+    }
     val buffer = bufferMap.remove(id)
     if (buffer != null) {
       buffer.free()
@@ -138,6 +155,10 @@ object RapidsBufferCatalog extends Logging with Arm {
     logInfo("Installing GPU memory handler for spill")
     memoryEventHandler = new DeviceMemoryEventHandler(deviceStorage)
     Rmm.setEventHandler(memoryEventHandler)
+  }
+
+  def setTransport(transport: ShuffleTransport): Unit = {
+    singleton.setTransport(transport)
   }
 
   def close(): Unit = {
