@@ -36,7 +36,7 @@ class RapidsBufferCatalog extends Logging {
   /** Map of buffer IDs to buffers */
   private[this] val bufferMap = new ConcurrentHashMap[RapidsBufferId, RapidsBuffer]
 
-  private var transport: ShuffleTransport = _
+  var transport: ShuffleTransport = _
 
   def setTransport(transport: ShuffleTransport) = {
     this.transport = transport
@@ -99,14 +99,7 @@ class RapidsBufferCatalog extends Logging {
       }
     }
     bufferMap.compute(buffer.id, updater)
-    buffer.id match {
-      case id: ShuffleBufferId =>
-        val transportBlock = new RapidsShuffleBlock(id,
-          buffer.getMemoryBuffer, buffer.meta)
-        logInfo(s"Mutating block ${transportBlock.rapidsBlockId}")
-        transport.mutate(transportBlock.rapidsBlockId, transportBlock, null)
-      case _ =>
-    }
+
   }
 
   /** Remove a buffer ID from the catalog and release the resources of the registered buffer. */

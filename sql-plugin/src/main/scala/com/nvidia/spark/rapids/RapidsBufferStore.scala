@@ -24,6 +24,7 @@ import ai.rapids.cudf.{Cuda, DeviceMemoryBuffer, HostMemoryBuffer, NvtxColor, Nv
 import com.nvidia.spark.rapids.format.TableMeta
 
 import org.apache.spark.internal.Logging
+import org.apache.spark.shuffle.RapidsShuffleBlock
 import org.apache.spark.sql.vectorized.ColumnarBatch
 
 object RapidsBufferStore {
@@ -226,7 +227,20 @@ abstract class RapidsBufferStore(
       }
       if (newBuffer != null) {
         catalog.updateBufferMap(buffer.storageTier, newBuffer)
+        buffer.addReference() // this allows `buffer.free()` to execute, marking the buffer
+                              // as invalid, while we unregister from transport
+        newBuffer.id match {
+          case id: ShuffleBufferId =>
+            val transportBlock = new RapidsShuffleBlock(id,
+              newBuffer.getMemoryBuffer, newBuffer.meta)
+            logInfo(s"Mutating block ${transportBlock.rapidsBlockId}")
+            catalog.transport.mutate(transportBlock.rapidsBlockId, transportBlock, _ => {
+              // when the transport is done with this before, we remove it.
+              buffer.close()
+            })
+        }
       }
+
       buffer.free()
     }
   }
