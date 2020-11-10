@@ -231,13 +231,17 @@ abstract class RapidsBufferStore(
                               // as invalid, while we unregister from transport
         newBuffer.id match {
           case id: ShuffleBufferId =>
+            val actualBuffer = newBuffer.getMemoryBuffer
             val transportBlock = new RapidsShuffleBlock(id,
-              newBuffer.getMemoryBuffer, newBuffer.meta)
+              actualBuffer.getAddress, actualBuffer.getLength, newBuffer.meta)
+            actualBuffer.close()
             logInfo(s"Mutating block ${transportBlock.rapidsBlockId}")
             catalog.transport.mutate(transportBlock.rapidsBlockId, transportBlock, _ => {
               // when the transport is done with this before, we remove it.
+              logInfo(s"MUTATED block ${transportBlock.rapidsBlockId}")
               buffer.close()
             })
+          case _ =>
         }
       }
 
@@ -308,6 +312,7 @@ abstract class RapidsBufferStore(
       }
       refcount -= 1
       if (refcount == 0 && !isValid) {
+        logInfo(s"freeing ${id}")
         pendingFreeBuffers.remove(id)
         pendingFreeBytes.addAndGet(-size)
         freeBuffer()

@@ -353,7 +353,10 @@ class RapidsShuffleIterator(
       val tableId = tableMetas(i).bufferMeta().id()
       val resultBuffer = DeviceMemoryBuffer.allocate(tableMetas(i).bufferMeta().size())
       val rapidsBlock = new RapidsShuffleBlock(
-        ShuffleBufferId(sbIds(i), tableId), resultBuffer, tableMetas(i))
+        ShuffleBufferId(sbIds(i), tableId),
+        resultBuffer.getAddress,
+        resultBuffer.getLength,
+        tableMetas(i))
       blockIds(i) = rapidsBlock.getBlockId
       blocksMemory(i) = rapidsBlock.getMemoryBlock
       callbacks(i) = (result: OperationResult) => {
@@ -369,6 +372,7 @@ class RapidsShuffleIterator(
             }
             devStorage.addBuffer(
               id, resultBuffer, tableMetas(i), SpillPriorities.INPUT_FROM_SHUFFLE_PRIORITY)
+            resultBuffer.close()
             handlers(i).batchReceived(id)
             //} else {
             //  // no device data, just tracking metadata
@@ -382,6 +386,7 @@ class RapidsShuffleIterator(
             } else {
               s"Error while fetching batch ${sbIds(i)}.${tableId} from UCX"
             }
+            resultBuffer.close()
 
             throw new RapidsShuffleFetchFailedException(
               handlers(i).getBlockManagerId,

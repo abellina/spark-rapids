@@ -32,9 +32,9 @@ class RapidsShuffleMetaBlock(
 }
 
 class RapidsShuffleBlock(bufferId: ShuffleBufferId,
-    buffer: MemoryBuffer, meta: TableMeta) extends Block {
+    address: Long, length: Long, meta: TableMeta) extends Block {
   override def getMemoryBlock: MemoryBlock = {
-    MemoryBlock(buffer.getAddress, buffer.getLength, false)
+    MemoryBlock(address, length, false)
   }
 
   val rapidsBlockId = RapidsBlockId(bufferId)

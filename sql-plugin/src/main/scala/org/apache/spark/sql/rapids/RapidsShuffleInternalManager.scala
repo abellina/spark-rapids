@@ -183,8 +183,13 @@ class RapidsCachingWriter[K, V](
           val bufferIds: Array[ShuffleBufferId] = catalog.blockIdToBuffersIds(bId)
           bufferIds.foreach { bId =>
             val buffer = catalog.acquireBuffer(bId)
-            val transportBlock = new RapidsShuffleBlock(bId, buffer.getMemoryBuffer, buffer.meta)
+            val actualBuffer = buffer.getMemoryBuffer
+            val transportBlock =
+              new RapidsShuffleBlock(bId, actualBuffer.getAddress,
+                actualBuffer.getLength, buffer.meta)
+            actualBuffer.close()
             transport.register(transportBlock.rapidsBlockId, transportBlock)
+            buffer.close()
           }
 
           val metas = catalog.blockIdToMetas(bId)
