@@ -538,7 +538,7 @@ object GpuOverrides {
       case DateType => true
       case TimestampType => ZoneId.systemDefault().normalized() == GpuOverrides.UTC_TIMEZONE_ID
       case StringType => true
-      case dt: DecimalType if allowDecimal => dt.precision <= DType.DECIMAL64_MAX_PRECISION
+      case dt: DecimalType => false
       case NullType => allowNull
       case BinaryType => allowBinary
       case CalendarIntervalType => allowCalendarInterval
