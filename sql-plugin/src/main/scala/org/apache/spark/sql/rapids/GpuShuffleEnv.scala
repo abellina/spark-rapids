@@ -20,8 +20,9 @@ import java.util.Locale
 
 import com.nvidia.spark.rapids._
 
-import org.apache.spark.SparkEnv
+import org.apache.spark.{SparkConf, SparkContext, SparkEnv}
 import org.apache.spark.internal.Logging
+import org.apache.spark.sql.rapids.execution.TrampolineUtil
 
 class GpuShuffleEnv(rapidsConf: RapidsConf) extends Logging {
   private var shuffleCatalog: ShuffleBufferCatalog = _
@@ -63,6 +64,19 @@ class GpuShuffleEnv(rapidsConf: RapidsConf) extends Logging {
 }
 
 object GpuShuffleEnv extends Logging {
+  def setupExecutorEnvDefaults(sc: SparkContext, sparkConf: SparkConf, conf: RapidsConf): Unit = {
+    val shuffleMgr = sparkConf.get("spark.shuffle.manager")
+    if (shuffleMgr == ShimLoader.getSparkShims.getRapidsShuffleManagerClass) {
+      val ucxDefaultsPrefix = "spark.rapids.shuffle.ucx.defaultEnv."
+      val shuffleEnvConfs = RapidsConf.registredEntriesMatching(ucxDefaultsPrefix)
+      shuffleEnvConfs.foreach { entry =>
+        val envKey = entry.key.replace(ucxDefaultsPrefix, "")
+        val confValue = conf.get(entry)
+        TrampolineUtil.setExecutorEnv(sc, envKey, confValue.toString)
+      }
+    }
+  }
+
   val RAPIDS_SHUFFLE_CLASS: String = ShimLoader.getSparkShims.getRapidsShuffleManagerClass
 
   var mgr: Option[RapidsShuffleInternalManagerBase] = None

@@ -296,6 +296,10 @@ object RapidsConf {
     new ConfBuilder(key, register)
   }
 
+  def registredEntriesMatching(pattern: String): Seq[ConfEntry[_]]= {
+    registeredConfs.filter(_.key.startsWith(pattern))
+  }
+
   // Resource Configuration
 
   val PINNED_POOL_SIZE = conf("spark.rapids.memory.pinnedPool.size")
@@ -741,6 +745,15 @@ object RapidsConf {
     .booleanConf
     .createWithDefault(true)
 
+  /**
+   * Section of default UCX environment variables.
+   */
+  conf("spark.rapids.shuffle.ucx.defaultEnv.UCX_ERROR_SIGNALS")
+    .doc("Disable signal trapping by UCX as it conflicts with the JVM's internal signals")
+    .internal()
+    .stringConf
+    .createWithDefault("")
+
   val SHUFFLE_TRANSPORT_ENABLE = conf("spark.rapids.shuffle.transport.enabled")
     .doc("Enable the RAPIDS Shuffle Transport for accelerated shuffle. By default, this " +
         "requires UCX to be installed in the system. Consider setting to false if running with " +
@@ -1090,8 +1103,11 @@ class RapidsConf(conf: Map[String, String]) extends Logging {
     entry.get(conf)
   }
 
-  lazy val rapidsConfMap: util.Map[String, String] = conf.filterKeys(
-    _.startsWith("spark.rapids.")).asJava
+  def keyPairsMatching(pattern: String): Map[String, String] = conf.filterKeys(
+    _.startsWith(pattern))
+
+  lazy val rapidsConfMap: util.Map[String, String] = 
+    keyPairsMatching("spark.rapids.").asJava
 
   lazy val metricsLevel: String = get(METRICS_LEVEL)
 

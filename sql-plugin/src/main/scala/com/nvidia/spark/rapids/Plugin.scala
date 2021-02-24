@@ -132,6 +132,7 @@ class RapidsDriverPlugin extends DriverPlugin with Logging {
     if (conf.shimsProviderOverride.isDefined) {
       ShimLoader.setSparkShimProviderClass(conf.shimsProviderOverride.get)
     }
+    GpuShuffleEnv.setupExecutorEnvDefaults(sc, sparkConf, conf)
     if (GpuShuffleEnv.isRapidsShuffleEnabled &&
         conf.shuffleTransportEarlyStart) {
       rapidsShuffleHeartbeatManager = new RapidsShuffleHeartbeatManager()

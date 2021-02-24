@@ -268,7 +268,6 @@ In this section, we are using a docker container built using the sample dockerfi
 --conf spark.shuffle.manager=com.nvidia.spark.rapids.spark300.RapidsShuffleManager \
 --conf spark.shuffle.service.enabled=false \
 --conf spark.executorEnv.UCX_TLS=cuda_copy,cuda_ipc,rc,tcp \
---conf spark.executorEnv.UCX_ERROR_SIGNALS= \
 --conf spark.executorEnv.UCX_RNDV_SCHEME=put_zcopy \
 --conf spark.executorEnv.UCX_MAX_RNDV_RAILS=1 \
 --conf spark.executorEnv.UCX_MEMTYPE_CACHE=n \
@@ -285,7 +284,7 @@ non-standard location.
     and peer-to-peer communication between GPUs (NVLink/PCIe).
   - `rc`: enables Infiniband and RoCE based transport in UCX.
   - `tcp`: allows for TCP communication in cases where UCX deems necessary.
-- `UCX_ERROR_SIGNALS=`: Disables UCX signal catching, as it can cause issues with the JVM.
+- `UCX_ERROR_SIGNALS=`: (set by default) Disables UCX signal catching, as it can cause issues with the JVM.
 - `UCX_MAX_RNDV_RAILS=1`: Set this to `1` to disable multi-rail transfers in UCX, where UCX splits
   data to utilize various channels (e.g. two NICs). A value greater than `1` can cause a performance drop 
   for high-bandwidth transports between GPUs.
