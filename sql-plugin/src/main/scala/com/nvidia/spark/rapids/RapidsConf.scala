@@ -296,6 +296,10 @@ object RapidsConf {
     new ConfBuilder(key, register)
   }
 
+  def registredEntriesMatching(pattern: String): Seq[ConfEntry[_]]= {
+    registeredConfs.filter(_.key.startsWith(pattern))
+  }
+
   // Resource Configuration
 
   val PINNED_POOL_SIZE = conf("spark.rapids.memory.pinnedPool.size")
@@ -741,6 +745,36 @@ object RapidsConf {
     .booleanConf
     .createWithDefault(true)
 
+  conf("spark.rapids.shuffle.defaultEnv.UCX_LOG_LEVEL")
+    .internal()
+    .stringConf
+    .createWithDefault("data")
+
+  conf("spark.rapids.shuffle.defaultEnv.UCX_FOO_BAR")
+    .internal()
+    .stringConf
+    .createWithDefault("")
+
+  conf("spark.rapids.shuffle.defaultEnv.UCX_ERROR_SIGNALS")
+    .internal()
+    .stringConf
+    .createWithDefault("")
+
+  conf("spark.rapids.shuffle.defaultEnv.UCX_RC_RX_QUEUE_LEN")
+    .internal()
+    .stringConf
+    .createWithDefault("1024")
+
+  conf("spark.rapids.shuffle.defaultEnv.UCX_UD_RX_QUEUE_LEN")
+    .internal()
+    .stringConf
+    .createWithDefault("1024")
+
+  conf("spark.rapids.shuffle.defaultEnv.UCX_RNDV_SCHEME")
+    .internal()
+    .stringConf
+    .createWithDefault("put_zcopy")
+
   val SHUFFLE_TRANSPORT_ENABLE = conf("spark.rapids.shuffle.transport.enabled")
     .doc("Enable the Rapids Shuffle Transport for accelerated shuffle. By default, this " +
         "requires UCX to be installed in the system. Consider setting to false if running with " +
@@ -1079,8 +1113,11 @@ class RapidsConf(conf: Map[String, String]) extends Logging {
     entry.get(conf)
   }
 
-  lazy val rapidsConfMap: util.Map[String, String] = conf.filterKeys(
-    _.startsWith("spark.rapids.")).asJava
+  def keyPairsMatching(pattern: String): Map[String, String] = conf.filterKeys(
+    _.startsWith(pattern))
+
+  lazy val rapidsConfMap: util.Map[String, String] = 
+    keyPairsMatching("spark.rapids.").asJava
 
   lazy val metricsLevel: String = get(METRICS_LEVEL)
 

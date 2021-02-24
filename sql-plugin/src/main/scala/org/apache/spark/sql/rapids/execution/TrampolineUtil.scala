@@ -31,6 +31,11 @@ import org.apache.spark.sql.types.{DataType, StructType}
 import org.apache.spark.util.Utils
 
 object TrampolineUtil {
+  def setExecutorEnv(sc: SparkContext, key: String, value: String) = {
+    sc.conf.set(key, value)
+    sc.executorEnvs.put(key, value)
+  }
+
   def doExecuteBroadcast[T](child: SparkPlan): Broadcast[T] = child.doExecuteBroadcast()
 
   def isSupportedRelation(mode: BroadcastMode): Boolean = mode match {
