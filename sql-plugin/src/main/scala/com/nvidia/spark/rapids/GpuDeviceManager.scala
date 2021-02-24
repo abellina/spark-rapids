@@ -205,9 +205,10 @@ object GpuDeviceManager extends Logging {
         init = conf.rmmPool match {
           case c if "default".equalsIgnoreCase(c) =>
             if (Cuda.isPtdsEnabled) {
-              logWarning("Configuring the DEFAULT allocator with a CUDF built for " +
-                  "Per-Thread Default Stream (PTDS). This is known to be unstable! " +
-                  "We recommend you use the ARENA allocator when PTDS is enabled.")
+              throw new IllegalArgumentException(
+                "The RMM pooled allocator, in combination with a CUDF built for " +
+                "Per-Thread Default Stream (PTDS), can be unstable! " +
+                s"Please set `${RapidsConf.RMM_POOL.key}=ARENA` instead.")
             }
             features += "POOLED"
             init | RmmAllocationMode.POOL
