@@ -21,8 +21,10 @@ import java.util.Properties
 import java.util.concurrent.atomic.{AtomicBoolean, AtomicReference}
 
 import scala.collection.JavaConverters._
+
 import com.nvidia.spark.rapids.python.PythonWorkerSemaphore
 import org.apache.spark.{SparkConf, SparkContext}
+
 import org.apache.spark.api.plugin.{DriverPlugin, ExecutorPlugin, PluginContext}
 import org.apache.spark.internal.Logging
 import org.apache.spark.serializer.{JavaSerializer, KryoSerializer}
@@ -33,6 +35,7 @@ import org.apache.spark.sql.execution._
 import org.apache.spark.sql.execution.adaptive.AdaptiveSparkPlanExec
 import org.apache.spark.sql.internal.StaticSQLConf
 import org.apache.spark.sql.rapids.execution.TrampolineUtil
+import org.apache.spark.sql.rapids.GpuShuffleEnv
 import org.apache.spark.sql.util.QueryExecutionListener
 
 
@@ -115,24 +118,7 @@ class RapidsDriverPlugin extends DriverPlugin with Logging {
     if (conf.shimsProviderOverride.isDefined) {
       ShimLoader.setSparkShimProviderClass(conf.shimsProviderOverride.get)
     }
-    val shuffleMgr = sparkConf.get("spark.shuffle.manager")
-    if (shuffleMgr == ShimLoader.getSparkShims.getRapidsShuffleManagerClass) {
-      val shuffleEnvConfs = RapidsConf.registredEntriesMatching("spark.rapids.shuffle.defaultEnv.")
-      shuffleEnvConfs.foreach { entry =>
-        val envKey = entry.key.replace("spark.rapids.shuffle.defaultEnv.", "")
-        val confValue = conf.get(entry)
-        if (!sparkConf.contains(s"spark.executorEnv.$envKey")) {
-          logWarning(s" ===> SETTING ${envKey} = ${confValue}")
-          TrampolineUtil.setExecutorEnv(sc, envKey, confValue.toString)
-        } else {
-          logWarning(s" !!!> NOT SETTING ${envKey} = ${sparkConf.get(s"spark.executorEnv.$envKey")}")
-        }
-      }
-      //TrampolineUtil.setExecutorEnv(sc, "UCX_ERROR_SIGNALS", "")
-      //TrampolineUtil.setExecutorEnv(sc, "UCX_RC_RX_QUEUE_LEN", "1024")
-      //TrampolineUtil.setExecutorEnv(sc, "UCX_UD_RX_QUEUE_LEN", "1024")
-      //TrampolineUtil.setExecutorEnv(sc, "UCX_RNDV_SCHEME", "put_zcopy")
-    }
+    GpuShuffleEnv.setupExecutorEnvDefaults(sc, sparkConf, conf)
     conf.rapidsConfMap
   }
 }

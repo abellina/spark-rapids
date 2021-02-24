@@ -17,23 +17,31 @@
 package org.apache.spark.sql.rapids.execution
 
 import org.json4s.JsonAST
-
 import org.apache.spark.{SparkContext, SparkEnv, SparkUpgradeException, TaskContext}
+
 import org.apache.spark.broadcast.Broadcast
 import org.apache.spark.deploy.SparkHadoopUtil
 import org.apache.spark.executor.InputMetrics
+import org.apache.spark.internal.Logging
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.catalyst.expressions.Attribute
 import org.apache.spark.sql.catalyst.plans.physical.{BroadcastMode, IdentityBroadcastMode}
 import org.apache.spark.sql.execution.SparkPlan
 import org.apache.spark.sql.execution.joins.HashedRelationBroadcastMode
+import org.apache.spark.sql.rapids.GpuShuffleEnv.logWarning
 import org.apache.spark.sql.types.{DataType, StructType}
 import org.apache.spark.util.Utils
 
-object TrampolineUtil {
-  def setExecutorEnv(sc: SparkContext, key: String, value: String) = {
-    sc.conf.set(key, value)
-    sc.executorEnvs.put(key, value)
+object TrampolineUtil extends Logging {
+  def setExecutorEnv(sc: SparkContext, key: String, value: String): Unit = {
+    val sparkExecutorEnv = "spark.executorEnv"
+    if (!sc.conf.contains(s"$sparkExecutorEnv.$key")) {
+      logWarning(s" ===> SETTING ${key} = ${value}")
+      sc.conf.set(s"$sparkExecutorEnv.$key", value)
+      sc.executorEnvs.put(key, value)
+    } else {
+      logWarning(s" !!!> NOT SETTING ${key} = ${sc.conf.get(s"$sparkExecutorEnv.$key")}")
+    }
   }
 
   def doExecuteBroadcast[T](child: SparkPlan): Broadcast[T] = child.doExecuteBroadcast()

@@ -745,32 +745,32 @@ object RapidsConf {
     .booleanConf
     .createWithDefault(true)
 
-  conf("spark.rapids.shuffle.defaultEnv.UCX_LOG_LEVEL")
+  conf("spark.rapids.shuffle.ucx.defaultEnv.UCX_LOG_LEVEL")
     .internal()
     .stringConf
     .createWithDefault("data")
 
-  conf("spark.rapids.shuffle.defaultEnv.UCX_FOO_BAR")
+  conf("spark.rapids.shuffle.ucx.defaultEnv.UCX_FOO_BAR")
     .internal()
     .stringConf
     .createWithDefault("")
 
-  conf("spark.rapids.shuffle.defaultEnv.UCX_ERROR_SIGNALS")
+  conf("spark.rapids.shuffle.ucx.defaultEnv.UCX_ERROR_SIGNALS")
     .internal()
     .stringConf
     .createWithDefault("")
 
-  conf("spark.rapids.shuffle.defaultEnv.UCX_RC_RX_QUEUE_LEN")
+  conf("spark.rapids.shuffle.ucx.defaultEnv.UCX_RC_RX_QUEUE_LEN")
     .internal()
     .stringConf
     .createWithDefault("1024")
 
-  conf("spark.rapids.shuffle.defaultEnv.UCX_UD_RX_QUEUE_LEN")
+  conf("spark.rapids.shuffle.ucx.defaultEnv.UCX_UD_RX_QUEUE_LEN")
     .internal()
     .stringConf
     .createWithDefault("1024")
 
-  conf("spark.rapids.shuffle.defaultEnv.UCX_RNDV_SCHEME")
+  conf("spark.rapids.shuffle.ucx.defaultEnv.UCX_RNDV_SCHEME")
     .internal()
     .stringConf
     .createWithDefault("put_zcopy")
