@@ -750,6 +750,11 @@ object RapidsConf {
     .stringConf
     .createWithDefault("data")
 
+  conf("spark.rapids.shuffle.ucx.defaultEnv.UCX_TLS")
+      .internal()
+      .stringConf
+      .createWithDefault("cuda_copy,cuda_ipc,rc,tcp")
+
   conf("spark.rapids.shuffle.ucx.defaultEnv.UCX_FOO_BAR")
     .internal()
     .stringConf
@@ -760,12 +765,7 @@ object RapidsConf {
     .stringConf
     .createWithDefault("")
 
-  conf("spark.rapids.shuffle.ucx.defaultEnv.UCX_RC_RX_QUEUE_LEN")
-    .internal()
-    .stringConf
-    .createWithDefault("1024")
-
-  conf("spark.rapids.shuffle.ucx.defaultEnv.UCX_UD_RX_QUEUE_LEN")
+  conf("spark.rapids.shuffle.ucx.defaultEnv.UCX_IB_RX_QUEUE_LEN")
     .internal()
     .stringConf
     .createWithDefault("1024")
