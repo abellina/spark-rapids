@@ -29,7 +29,6 @@ import org.mockito.Mockito.{spy, when}
 import org.scalatest.{BeforeAndAfterEach, FunSuite}
 import org.scalatest.mockito.MockitoSugar
 
-import org.apache.spark.{SparkConf, SparkEnv}
 
 import org.apache.spark.shuffle.ucx.ShuffleTransport
 import org.apache.spark.sql.rapids.ShuffleMetricsUpdater

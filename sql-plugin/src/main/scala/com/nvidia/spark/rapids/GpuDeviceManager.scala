@@ -143,7 +143,7 @@ object GpuDeviceManager extends Logging {
    * We expect the plugin to be run with 1 task and 1 GPU per executor.
    */
   def initializeFromTask(): Unit = {
-    if (threadGpuInitialized.get() == false) {
+    if (!threadGpuInitialized.get()) {
       val resources = getResourcesFromTaskContext
       if (rmmTaskInitEnabled) {
         initializeGpuAndMemory(resources)

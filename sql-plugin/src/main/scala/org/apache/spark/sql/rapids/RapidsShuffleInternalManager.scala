@@ -21,7 +21,7 @@ import scala.collection.mutable.{ArrayBuffer, ListBuffer}
 import scala.concurrent.ExecutionContext.Implicits.global
 import scala.util.Success
 
-import ai.rapids.cudf.{Cuda, NvtxColor, NvtxRange}
+import ai.rapids.cudf.{DeviceMemoryBuffer, NvtxColor, NvtxRange}
 import com.nvidia.spark.rapids._
 import com.nvidia.spark.rapids.shuffle.RapidsShuffleTransport
 import org.apache.spark.internal.Logging
@@ -33,7 +33,7 @@ import org.apache.spark.shuffle.sort.SortShuffleManager
 import org.apache.spark.shuffle.ucx.rpc.UcxRpcMessages.{ExecutorAdded, IntroduceAllExecutors}
 import org.apache.spark.shuffle.ucx.rpc.{UcxDriverRpcEndpoint, UcxExecutorRpcEndpoint}
 import org.apache.spark.shuffle.ucx.utils.SerializableDirectBuffer
-import org.apache.spark.shuffle.ucx.{ShuffleTransport, UcxShuffleTransport}
+import org.apache.spark.shuffle.ucx.{Block, MemoryBlock, ShuffleTransport, UcxShuffleBlockId, UcxShuffleTransport}
 import org.apache.spark.sql.execution.metric.SQLMetric
 import org.apache.spark.sql.vectorized.ColumnarBatch
 import org.apache.spark.storage._
@@ -64,7 +64,7 @@ class GpuShuffleBlockResolver(
     if (hasActiveShuffle) {
       throw new IllegalStateException(s"The block $blockId is being managed by the catalog")
     }
-    wrapped.getBlockData(blockId)
+    wrapped.getBlockData(blockId, dirs)
   }
 
   override def stop(): Unit = wrapped.stop()
@@ -79,6 +79,7 @@ object RapidsShuffleInternalManagerBase extends Logging {
 }
 
 class RapidsCachingWriter[K, V](
+    rapidsConf: RapidsConf,
     blockManager: BlockManager,
     // Never keep a reference to the ShuffleHandle in the cache as it being GCed triggers
     // the data being released
@@ -197,14 +198,15 @@ class RapidsCachingWriter[K, V](
           val metas = catalog.blockIdToMetas(bId)
 
           val sbId = bId match {
-            case sbbid: ShuffleBlockBatchId => sbbid
             case sbid: ShuffleBlockId =>
                 ShuffleBlockBatchId(sbid.shuffleId, sbid.mapId, sbid.reduceId, sbid.reduceId)
+            case sbbid: ShuffleBlockBatchId => sbbid
             case _ =>
               throw new IllegalArgumentException(
                 s"${bId.getClass} $bId is not currently supported")
           }
-          val rapidsMeta = new RapidsShuffleMetaBlock(sbId, metas)
+          val rapidsMeta = new RapidsShuffleMetaBlock(sbId, metas,
+            rapidsConf.shuffleMaxMetadataSize)
           transport.register(rapidsMeta.getBlockId, rapidsMeta)
         }
         val shuffleServerId = if (transport != null) {
@@ -288,7 +290,7 @@ abstract class RapidsShuffleInternalManagerBase(conf: SparkConf, isDriver: Boole
     new GpuShuffleBlockResolver(wrapped.shuffleBlockResolver, getCatalogOrThrow)
   }
 
-  private[this] lazy val transport: Option[ShuffleTransport] = {
+  lazy val transport: Option[ShuffleTransport] = {
     if (rapidsConf.shuffleTransportEnabled && !isDriver) {
       val transport =
         RapidsShuffleTransport.makeTransport(blockManager.shuffleServerId, rapidsConf)
@@ -304,7 +306,7 @@ abstract class RapidsShuffleInternalManagerBase(conf: SparkConf, isDriver: Boole
   private val driverEndpointName = "ucx-shuffle-driver"
 
   // TODO: initialize through IO plugin at the process start
-  private def initDriverRpc(): Unit = {
+  def initDriverRpc(): Unit = {
     if (!initialized) {
       val rpcEnv = SparkEnv.get.rpcEnv
       val driverEndpoint = new UcxDriverRpcEndpoint(rpcEnv)
@@ -333,6 +335,7 @@ abstract class RapidsShuffleInternalManagerBase(conf: SparkConf, isDriver: Boole
             logInfo(s"Receive reply $msg")
             executorEndpoint.receive(msg)
         }
+
       initialized = true
     }
   }
@@ -362,6 +365,7 @@ abstract class RapidsShuffleInternalManagerBase(conf: SparkConf, isDriver: Boole
       case gpu: GpuShuffleHandle[_, _] =>
         registerGpuShuffle(handle.shuffleId)
         new RapidsCachingWriter(
+          rapidsConf,
           env.blockManager,
           gpu.asInstanceOf[GpuShuffleHandle[K, V]],
           mapId,

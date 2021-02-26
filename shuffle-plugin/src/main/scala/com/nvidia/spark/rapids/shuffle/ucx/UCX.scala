@@ -317,7 +317,6 @@ class UCX(executorId: Int, usingWakeupFeature: Boolean = true) extends AutoClose
     onWorkerThreadAsync(() => {
       try {
         worker.cancelRequest(request)
-        request.close()
       } catch {
         case e: Throwable =>
           logError("Error while cancelling UCX request: ", e)

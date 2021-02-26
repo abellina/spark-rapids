@@ -16,6 +16,8 @@
 
 package ai.rapids.cudf
 
+import org.apache.spark.shuffle.ucx.MemoryBlock
+
 object CudaUtil {
   /**
    * Copy from `src` buffer, starting at `srcOffset`,
@@ -32,6 +34,15 @@ object CudaUtil {
     Cuda.memcpy(
       dst.getAddress + dstOffset,
       src.getAddress + srcOffset,
+      length,
+      CudaMemcpyKind.DEFAULT)
+  }
+
+  def copy(src: MemoryBlock, srcOffset: Long, dst: MemoryBuffer,
+           dstOffset: Long, length: Long): Unit = {
+    Cuda.memcpy(
+      dst.getAddress + dstOffset,
+      src.address + srcOffset,
       length,
       CudaMemcpyKind.DEFAULT)
   }

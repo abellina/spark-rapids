@@ -23,8 +23,7 @@ import java.util.concurrent.atomic.{AtomicBoolean, AtomicReference}
 import scala.collection.JavaConverters._
 
 import com.nvidia.spark.rapids.python.PythonWorkerSemaphore
-
-import org.apache.spark.{SparkConf, SparkContext}
+import org.apache.spark.{SparkConf, SparkContext, SparkEnv}
 import org.apache.spark.api.plugin.{DriverPlugin, ExecutorPlugin, PluginContext}
 import org.apache.spark.internal.Logging
 import org.apache.spark.serializer.{JavaSerializer, KryoSerializer}
@@ -34,6 +33,7 @@ import org.apache.spark.sql.catalyst.rules.Rule
 import org.apache.spark.sql.execution._
 import org.apache.spark.sql.execution.adaptive.AdaptiveSparkPlanExec
 import org.apache.spark.sql.internal.StaticSQLConf
+import org.apache.spark.sql.rapids.RapidsShuffleInternalManagerBase
 import org.apache.spark.sql.util.QueryExecutionListener
 
 
@@ -116,6 +116,7 @@ class RapidsDriverPlugin extends DriverPlugin with Logging {
     if (conf.shimsProviderOverride.isDefined) {
       ShimLoader.setSparkShimProviderClass(conf.shimsProviderOverride.get)
     }
+    SparkEnv.get.shuffleManager.asInstanceOf[RapidsShuffleInternalManagerBase].initDriverRpc()
     conf.rapidsConfMap
   }
 }
@@ -148,6 +149,8 @@ class RapidsExecutorPlugin extends ExecutorPlugin with Logging {
       val concurrentGpuTasks = conf.concurrentGpuTasks
       logInfo(s"The number of concurrent GPU tasks allowed is $concurrentGpuTasks")
       GpuSemaphore.initialize(concurrentGpuTasks)
+
+      SparkEnv.get.shuffleManager.asInstanceOf[RapidsShuffleInternalManagerBase].transport
     } catch {
       case e: Throwable =>
         // Exceptions in executor plugin can cause a single thread to die but the executor process

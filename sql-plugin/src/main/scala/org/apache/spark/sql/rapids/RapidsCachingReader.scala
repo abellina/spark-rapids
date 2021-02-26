@@ -18,13 +18,12 @@ package org.apache.spark.sql.rapids
 
 import scala.collection.mutable.ArrayBuffer
 
-import ai.rapids.cudf.{NvtxColor, NvtxRange}
+import ai.rapids.cudf.{DeviceMemoryBuffer, NvtxColor, NvtxRange}
 import com.nvidia.spark.rapids._
-import com.nvidia.spark.rapids.shuffle.{RapidsShuffleIterator, RapidsShuffleTransport}
+import com.nvidia.spark.rapids.shuffle.{BounceBufferManager, RapidsShuffleIterator, RapidsShuffleTransport}
 import org.apache.spark.{InterruptibleIterator, TaskContext}
-
 import org.apache.spark.internal.Logging
-import org.apache.spark.shuffle.{ShuffleReader, ShuffleReadMetricsReporter}
+import org.apache.spark.shuffle.{ShuffleReadMetricsReporter, ShuffleReader}
 import org.apache.spark.sql.types.DataType
 import org.apache.spark.shuffle.ucx.ShuffleTransport
 import org.apache.spark.sql.vectorized.ColumnarBatch
@@ -116,7 +115,7 @@ class RapidsCachingReader[K, C](
               } else {
                 "This is unexpected behavior!"
               }
-              s"Attempting to handle non-rapids enabled blocks from $blockManagerId. ${enabledHint}"
+              s"Attempting to handle non-rapids enabled blocks from $blockManagerId. $enabledHint"
             })
           blocksForRapidsTransport.append((blockManagerId, blockInfos))
         }
