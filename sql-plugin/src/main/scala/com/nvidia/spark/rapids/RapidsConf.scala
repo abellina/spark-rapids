@@ -745,15 +745,17 @@ object RapidsConf {
     .booleanConf
     .createWithDefault(true)
 
+  // sensible UCX defaults
+
   conf("spark.rapids.shuffle.ucx.defaultEnv.UCX_LOG_LEVEL")
     .internal()
     .stringConf
     .createWithDefault("data")
 
   conf("spark.rapids.shuffle.ucx.defaultEnv.UCX_TLS")
-      .internal()
-      .stringConf
-      .createWithDefault("cuda_copy,cuda_ipc,rc,tcp")
+    .internal()
+    .stringConf
+    .createWithDefault("cuda_copy,cuda_ipc,rc,tcp")
 
   conf("spark.rapids.shuffle.ucx.defaultEnv.UCX_FOO_BAR")
     .internal()
@@ -796,6 +798,12 @@ object RapidsConf {
         "during shuffle")
       .bytesConf(ByteUnit.BYTE)
       .createWithDefault(1024 * 1024 * 1024)
+
+  val SHUFFLE_UCX_SET_DEFAULT_EXECUTOR_ENV = conf("spark.rapids.shuffle.ucx.setDefaultExecutorEnv")
+    .doc("When set to true, use UCX's event-based progress (epoll) in order to wake up " +
+      "the progress thread when needed, instead of a hot loop.")
+    .booleanConf
+    .createWithDefault(true)
 
   val SHUFFLE_UCX_USE_WAKEUP = conf("spark.rapids.shuffle.ucx.useWakeup")
     .doc("When set to true, use UCX's event-based progress (epoll) in order to wake up " +
@@ -1245,6 +1253,8 @@ class RapidsConf(conf: Map[String, String]) extends Logging {
 
   lazy val shuffleTransportMaxReceiveInflightBytes: Long = get(
     SHUFFLE_TRANSPORT_MAX_RECEIVE_INFLIGHT_BYTES)
+
+  lazy val shuffleUcxSetDefaultExecutorEnv: Boolean = get(SHUFFLE_UCX_SET_DEFAULT_EXECUTOR_ENV)
 
   lazy val shuffleUcxUseWakeup: Boolean = get(SHUFFLE_UCX_USE_WAKEUP)
 

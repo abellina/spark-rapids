@@ -34,7 +34,6 @@ import org.apache.spark.sql.catalyst.rules.Rule
 import org.apache.spark.sql.execution._
 import org.apache.spark.sql.execution.adaptive.AdaptiveSparkPlanExec
 import org.apache.spark.sql.internal.StaticSQLConf
-import org.apache.spark.sql.rapids.execution.TrampolineUtil
 import org.apache.spark.sql.rapids.GpuShuffleEnv
 import org.apache.spark.sql.util.QueryExecutionListener
 
@@ -118,7 +117,7 @@ class RapidsDriverPlugin extends DriverPlugin with Logging {
     if (conf.shimsProviderOverride.isDefined) {
       ShimLoader.setSparkShimProviderClass(conf.shimsProviderOverride.get)
     }
-    GpuShuffleEnv.setupExecutorEnvDefaults(sc, sparkConf, conf)
+    GpuShuffleEnv.setupDefaultExecutorEnv(sc, sparkConf, conf)
     conf.rapidsConfMap
   }
 }

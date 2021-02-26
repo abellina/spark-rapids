@@ -20,15 +20,16 @@ import ai.rapids.cudf.{NvtxColor, NvtxRange}
 import com.nvidia.spark.rapids._
 import com.nvidia.spark.rapids.format.TableMeta
 import com.nvidia.spark.rapids.shuffle.{RapidsShuffleRequestHandler, RapidsShuffleServer, RapidsShuffleTransport}
-import scala.collection.mutable.{ArrayBuffer, ListBuffer}
 
-import org.apache.spark.{ShuffleDependency, SparkConf, SparkEnv, TaskContext}
+import scala.collection.mutable.{ArrayBuffer, ListBuffer}
+import org.apache.spark.{ShuffleDependency, SparkConf, SparkContext, SparkEnv, TaskContext}
 import org.apache.spark.internal.Logging
 import org.apache.spark.network.buffer.ManagedBuffer
 import org.apache.spark.scheduler.MapStatus
 import org.apache.spark.shuffle._
 import org.apache.spark.shuffle.sort.SortShuffleManager
 import org.apache.spark.sql.execution.metric.SQLMetric
+import org.apache.spark.sql.rapids.execution.TrampolineUtil
 import org.apache.spark.sql.vectorized.ColumnarBatch
 import org.apache.spark.storage._
 
@@ -64,6 +65,18 @@ class GpuShuffleBlockResolver(
 
 
 object RapidsShuffleInternalManagerBase extends Logging {
+  def setupDefaultExecutorEnv(sc: SparkContext, sparkConf: SparkConf, conf: RapidsConf): Unit = {
+    if (conf.shuffleUcxSetDefaultExecutorEnv) {
+      val ucxDefaultsPrefix = "spark.rapids.shuffle.ucx.defaultEnv."
+      val shuffleEnvConfs = RapidsConf.registredEntriesMatching(ucxDefaultsPrefix)
+      shuffleEnvConfs.foreach { entry =>
+        val envKey = entry.key.replace(ucxDefaultsPrefix, "")
+        val confValue = conf.get(entry)
+        TrampolineUtil.setExecutorEnv(sc, envKey, confValue.toString)
+      }
+    }
+  }
+
   def unwrapHandle(handle: ShuffleHandle): ShuffleHandle = handle match {
     case gh: GpuShuffleHandle[_, _] => gh.wrapped
     case other => other

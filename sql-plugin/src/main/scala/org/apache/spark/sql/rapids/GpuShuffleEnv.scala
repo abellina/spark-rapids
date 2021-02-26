@@ -64,16 +64,10 @@ class GpuShuffleEnv(rapidsConf: RapidsConf) extends Logging {
 }
 
 object GpuShuffleEnv extends Logging {
-  def setupExecutorEnvDefaults(sc: SparkContext, sparkConf: SparkConf, conf: RapidsConf): Unit = {
+  def setupDefaultExecutorEnv(sc: SparkContext, sparkConf: SparkConf, conf: RapidsConf): Unit = {
     val shuffleMgr = sparkConf.get("spark.shuffle.manager")
-    if (shuffleMgr == ShimLoader.getSparkShims.getRapidsShuffleManagerClass) {
-      val ucxDefaultsPrefix = "spark.rapids.shuffle.ucx.defaultEnv."
-      val shuffleEnvConfs = RapidsConf.registredEntriesMatching(ucxDefaultsPrefix)
-      shuffleEnvConfs.foreach { entry =>
-        val envKey = entry.key.replace(ucxDefaultsPrefix, "")
-        val confValue = conf.get(entry)
-        TrampolineUtil.setExecutorEnv(sc, envKey, confValue.toString)
-      }
+    if (shuffleMgr == RAPIDS_SHUFFLE_CLASS) {
+      RapidsShuffleInternalManagerBase.setupDefaultExecutorEnv(sc, sparkConf, conf)
     }
   }
 
