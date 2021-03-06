@@ -280,13 +280,6 @@ class UCXShuffleTransport(shuffleServerId: BlockManagerId, rapidsConf: RapidsCon
       .setDaemon(true)
       .build))
 
-  // This executor handles any task that would block (e.g. wait for spill synchronously due to OOM)
-  private[this] val serverCopyExecutor = Executors.newSingleThreadExecutor(
-    GpuDeviceManager.wrapThreadFactory(new ThreadFactoryBuilder()
-      .setNameFormat(s"shuffle-server-copy-thread-%d")
-      .setDaemon(true)
-      .build))
-
   // This is used to queue up on the server all the [[BufferSendState]] as the server waits for
   // bounce buffers to become available (it is the equivalent of the transport's throttle, minus
   // the inflight limit)
@@ -309,7 +302,6 @@ class UCXShuffleTransport(shuffleServerId: BlockManagerId, rapidsConf: RapidsCon
       shuffleServerId,
       requestHandler,
       serverExecutor,
-      serverCopyExecutor,
       bssExecutor,
       rapidsConf)
   }
