@@ -63,7 +63,6 @@ trait RapidsShuffleRequestHandler {
  * @param requestHandler instance of [[RapidsShuffleRequestHandler]]
  * @param exec Executor used to handle tasks that take time, and should not be in the
  *             transport's thread
- * @param copyExec Executor used to handle synchronous mem copies
  * @param bssExec Executor used to handle [[BufferSendState]]s that are waiting
  *                for bounce buffers to become available
  * @param rapidsConf plugin configuration instance
@@ -73,7 +72,6 @@ class RapidsShuffleServer(transport: RapidsShuffleTransport,
                           val originalShuffleServerId: BlockManagerId,
                           requestHandler: RapidsShuffleRequestHandler,
                           exec: Executor,
-                          copyExec: Executor,
                           bssExec: Executor,
                           rapidsConf: RapidsConf) extends AutoCloseable with Logging with Arm {
   /**
@@ -155,17 +153,6 @@ class RapidsShuffleServer(transport: RapidsShuffleTransport,
   }
 
   /**
-   * Pushes a task onto the queue to be handled by the server's copy executor.
-   *
-   * @note - at this stage, tasks in this pool can block (it will grow as needed)
-   *
-   * @param op One of the case classes in [[ShuffleServerOps]]
-   */
-  private[this] def asyncOnCopyThread(op: Any): Unit = {
-    copyExec.execute(() => handleOp(op))
-  }
-
-  /**
    * Keep a list of BufferSendState that are waiting for bounce buffers.
    */
   private[this] val pendingTransfersQueue = new ConcurrentLinkedQueue[PendingTransferResponse]()
@@ -203,7 +190,7 @@ class RapidsShuffleServer(transport: RapidsShuffleTransport,
           }
         }
         if (bssToIssue.nonEmpty) {
-          asyncOnCopyThread(HandleTransferRequest(bssToIssue))
+          doHandleTransferRequest(bssToIssue)
         }
       }
 
