@@ -16,15 +16,13 @@
 
 package com.nvidia.spark.rapids.shuffle
 
-import java.util.concurrent.{ConcurrentLinkedQueue, Executor}
+import java.util.concurrent.{ConcurrentLinkedQueue, Executor, Executors}
 
 import scala.collection.mutable.ArrayBuffer
-
 import ai.rapids.cudf.{Cuda, NvtxColor, NvtxRange}
 import com.nvidia.spark.rapids.{Arm, RapidsBuffer, RapidsConf, ShuffleMetadata}
 import com.nvidia.spark.rapids.RapidsPluginImplicits._
 import com.nvidia.spark.rapids.format.TableMeta
-
 import org.apache.spark.internal.Logging
 import org.apache.spark.storage.{BlockManagerId, ShuffleBlockBatchId}
 
@@ -158,11 +156,8 @@ class RapidsShuffleServer(transport: RapidsShuffleTransport,
   private[this] val pendingTransfersQueue = new ConcurrentLinkedQueue[PendingTransferResponse]()
   private[this] val bssContinueQueue = new ConcurrentLinkedQueue[BufferSendState]()
 
-  /**
-   * Executor that loops until it finds bounce buffers for [[BufferSendState]],
-   * and when it does it hands them off to a thread pool for handling.
-   */
-  bssExec.execute(() => {
+  val continueExec = Executors.newSingleThreadExecutor()
+  continueExec.execute(() => {
     while (started) {
       closeOnExcept(new ArrayBuffer[BufferSendState]()) { bssToIssue =>
         var bssContinue = bssContinueQueue.poll()
@@ -170,7 +165,26 @@ class RapidsShuffleServer(transport: RapidsShuffleTransport,
           bssToIssue.append(bssContinue)
           bssContinue = bssContinueQueue.poll()
         }
+        if (bssToIssue.nonEmpty) {
+          doHandleTransferRequest(bssToIssue)
+        }
+      }
 
+      bssContinueQueue.synchronized {
+        if (bssContinueQueue.isEmpty) {
+          bssContinueQueue.wait(100)
+        }
+      }
+    }
+  })
+
+  /**
+   * Executor that loops until it finds bounce buffers for [[BufferSendState]],
+   * and when it does it hands them off to a thread pool for handling.
+   */
+  bssExec.execute(() => {
+    while (started) {
+      closeOnExcept(new ArrayBuffer[BufferSendState]()) { bssToIssue =>
         var continue = true
         while (!pendingTransfersQueue.isEmpty && continue) {
           // TODO: throttle on too big a send total so we don't acquire the world (in flight limit)
@@ -195,7 +209,7 @@ class RapidsShuffleServer(transport: RapidsShuffleTransport,
       }
 
       bssExec.synchronized {
-        if (bssContinueQueue.isEmpty && pendingTransfersQueue.isEmpty) {
+        if (pendingTransfersQueue.isEmpty) {
           bssExec.wait(100)
         }
       }
