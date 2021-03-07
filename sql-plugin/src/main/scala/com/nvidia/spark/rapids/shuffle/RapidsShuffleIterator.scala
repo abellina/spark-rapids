@@ -294,6 +294,9 @@ class RapidsShuffleIterator(
   taskContext.foreach(_.addTaskCompletionListener[Unit](_ => receiveBufferCleaner()))
 
   def pollForResult(timeoutSeconds: Long): Option[ShuffleClientResult] = {
+    if (resolvedBatches.isEmpty) {
+      taskContext.foreach(GpuSemaphore.releaseIfNecessary)
+    }
     Option(resolvedBatches.poll(timeoutSeconds, TimeUnit.SECONDS))
   }
 
@@ -317,7 +320,7 @@ class RapidsShuffleIterator(
     // fetches and so it could produce device memory. Note this is not allowing for some external
     // thread to schedule the fetches for us, it may be something we consider in the future, given
     // memory pressure.
-    taskContext.foreach(GpuSemaphore.acquireIfNecessary)
+
 
     if (!started) {
       // kick off if we haven't already
@@ -334,6 +337,7 @@ class RapidsShuffleIterator(
       case Some(BufferReceived(bufferId)) =>
         val nvtxRangeAfterGettingBatch = new NvtxRange("RapidsShuffleIterator.gotBatch",
           NvtxColor.PURPLE)
+        taskContext.foreach(GpuSemaphore.acquireIfNecessary)
         try {
           sb = catalog.acquireBuffer(bufferId)
           cb = sb.getColumnarBatch(sparkTypes)
