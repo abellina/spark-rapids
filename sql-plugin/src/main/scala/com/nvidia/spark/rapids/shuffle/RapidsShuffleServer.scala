@@ -208,9 +208,9 @@ class RapidsShuffleServer(transport: RapidsShuffleTransport,
         }
       }
 
-      bssExec.synchronized {
+      pendingTransfersQueue.synchronized {
         if (pendingTransfersQueue.isEmpty) {
-          bssExec.wait(100)
+          pendingTransfersQueue.wait(100)
         }
       }
     }
@@ -246,9 +246,9 @@ class RapidsShuffleServer(transport: RapidsShuffleTransport,
           } else {
             val pendingTransfer = PendingTransferResponse(metaRequest, requestHandler)
             // tell the bssExec to wake up to try to handle the new BufferSendState
-            bssExec.synchronized {
+            pendingTransfersQueue.synchronized {
               pendingTransfersQueue.add(pendingTransfer)
-              bssExec.notifyAll()
+              pendingTransfersQueue.notifyAll()
             }
             logDebug(s"Got a transfer request ${pendingTransfer} from ${tx}. " +
               s"Pending requests [new=${pendingTransfersQueue.size}, " +
@@ -387,9 +387,9 @@ class RapidsShuffleServer(transport: RapidsShuffleTransport,
                 // continue issuing sends.
                 logDebug(s"Buffer send state ${bufferSendState} is NOT done. " +
                     s"Still pending: ${pendingTransfersQueue.size}.")
-                bssExec.synchronized {
+                bssContinueQueue.synchronized {
                   bssContinueQueue.add(bufferSendState)
-                  bssExec.notifyAll()
+                  bssContinueQueue.notifyAll()
                 }
               } else {
                 val transferResponse = bufferSendState.getTransferResponse()
