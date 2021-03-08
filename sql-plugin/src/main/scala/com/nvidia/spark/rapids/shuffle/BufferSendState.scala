@@ -16,7 +16,7 @@
 
 package com.nvidia.spark.rapids.shuffle
 
-import ai.rapids.cudf.{Cuda, CudaUtil, DeviceMemoryBuffer, HostMemoryBuffer, MemoryBuffer}
+import ai.rapids.cudf.{Cuda, DeviceMemoryBuffer, HostMemoryBuffer, MemoryBuffer}
 import com.nvidia.spark.rapids.{Arm, RapidsBuffer, ShuffleMetadata, StorageTier}
 import com.nvidia.spark.rapids.RapidsPluginImplicits._
 import com.nvidia.spark.rapids.format.{BufferMeta, BufferTransferRequest, TransferRequest}
@@ -173,15 +173,15 @@ class BufferSendState(
           require(blockRange.rangeSize() <= bounceBuffToUse.getLength - buffOffset)
           withResource(rapidsBuffer.getMemoryBuffer) { memBuff =>
             bounceBuffToUse match {
-              case _: HostMemoryBuffer =>
-                //TODO: HostMemoryBuffer needs the same functionality that
-                // DeviceMemoryBuffer has to copy from/to device/host buffers
-                CudaUtil.copy(
-                  memBuff,
-                  blockRange.rangeStart,
-                  bounceBuffToUse,
-                  buffOffset,
-                  blockRange.rangeSize())
+              case h: HostMemoryBuffer =>
+                memBuff match {
+                  case mh: HostMemoryBuffer =>
+                    h.copyFromHostBuffer(buffOffset, mh, blockRange.rangeStart,
+                      blockRange.rangeSize())
+                  case md: DeviceMemoryBuffer =>
+                    h.copyFromDeviceBufferAsync(buffOffset, md, blockRange.rangeStart,
+                      blockRange.rangeSize(), serverStream)
+                }
               case d: DeviceMemoryBuffer =>
                 memBuff match {
                   case mh: HostMemoryBuffer =>
