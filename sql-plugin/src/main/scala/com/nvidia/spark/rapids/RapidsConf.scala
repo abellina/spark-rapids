@@ -754,6 +754,13 @@ object RapidsConf {
     .stringConf
     .createWithDefault("")
 
+  conf("spark.rapids.shuffle.ucx.defaultEnv.UCX_MEMTYPE_CACHE")
+      .doc("Disable a UCX cache to detect memory type as it relies on CUDA api interception and " +
+      "it has proven to be problematic since we allocate bounce buffers before UCX starts. ")
+      .internal()
+      .stringConf
+      .createWithDefault("n")
+
   val SHUFFLE_TRANSPORT_ENABLE = conf("spark.rapids.shuffle.transport.enabled")
     .doc("Enable the RAPIDS Shuffle Transport for accelerated shuffle. By default, this " +
         "requires UCX to be installed in the system. Consider setting to false if running with " +
