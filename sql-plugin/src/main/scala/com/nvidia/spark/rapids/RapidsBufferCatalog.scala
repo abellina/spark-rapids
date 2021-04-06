@@ -38,7 +38,7 @@ class RapidsBufferCatalog extends Logging {
 
   var transport: ShuffleTransport = _
 
-  def setTransport(transport: ShuffleTransport) = {
+  def setTransport(transport: ShuffleTransport): Unit = {
     this.transport = transport
   }
 

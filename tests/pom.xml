@@ -118,6 +118,10 @@
           <artifactId>junit-jupiter-api</artifactId>
           <scope>test</scope>
         </dependency>
+        <dependency>
+            <groupId>org.openucx</groupId>
+            <artifactId>ucx-spark</artifactId>
+        </dependency>
     </dependencies>
 
     <build>

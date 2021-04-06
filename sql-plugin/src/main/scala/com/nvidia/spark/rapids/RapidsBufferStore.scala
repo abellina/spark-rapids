@@ -229,7 +229,7 @@ abstract class RapidsBufferStore(
     // to return back to the outer loop to see if enough has been freed.
     if (buffer.addReference()) {
       val newBuffer = try {
-        logDebug(s"Spilling $buffer ${buffer.id} to ${spillStore.name} " +
+        logInfo(s"Spilling $buffer ${buffer.id} to ${spillStore.name} " +
           s"total mem=${buffers.getTotalBytes}")
         spillStore.copyBuffer(buffer, stream)
       } finally {

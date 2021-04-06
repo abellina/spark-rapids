@@ -20,11 +20,11 @@ import com.nvidia.spark.rapids.{RapidsBuffer, ShuffleReceivedBufferId}
 import org.mockito.ArgumentCaptor
 import org.mockito.ArgumentMatchers._
 import org.mockito.Mockito._
-
 import org.apache.spark.shuffle.{RapidsShuffleFetchFailedException, RapidsShuffleTimeoutException}
-import org.apache.spark.sql.vectorized.{ColumnarBatch, ColumnVector}
+import org.apache.spark.sql.vectorized.ColumnarBatch
 
 class RapidsShuffleIteratorSuite extends RapidsShuffleTestHelper {
+
   test("inability to get a client raises a fetch failure") {
     val blocksByAddress = RapidsShuffleTestHelper.getBlocksByAddress
 
@@ -39,9 +39,6 @@ class RapidsShuffleIteratorSuite extends RapidsShuffleTestHelper {
       123)
 
     when(mockTransaction.getStatus).thenReturn(TransactionStatus.Error)
-
-    when(mockCommonTransport.fetchBlocksByBlockIds(any(), any(), any(), any()))
-        .thenThrow(new IllegalStateException("Test"))
 
     assert(cl.hasNext)
     assertThrows[RapidsShuffleFetchFailedException](cl.next())
