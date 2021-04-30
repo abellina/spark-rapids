@@ -22,7 +22,6 @@ import java.util.concurrent.atomic.AtomicInteger
 
 import ai.rapids.cudf.{DeviceMemoryBuffer, MemoryBuffer, NvtxColor, NvtxRange}
 import com.nvidia.spark.rapids.RapidsConf
-
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.rapids.storage.RapidsStorageUtils
 import org.apache.spark.storage.BlockManagerId
@@ -167,12 +166,16 @@ trait ServerConnection extends Connection {
   def send(peerExecutorId: Long,
            header: AddressLengthTag,
            cb: TransactionCallback): Transaction
+
+
+  def registerRequestHandler(requestType: RequestType.Value, cb: TransactionCallback): Unit
 }
 
 /**
  * Currently supported request types in the transport
  */
 object RequestType extends Enumeration {
+  val Reserved = Value // start ids at 1
   /**
    * A client will issue: `MetadataRequest`
    * A server will respond with: `MetadataResponse`
@@ -205,9 +208,8 @@ trait ClientConnection extends Connection {
    *           are not defined.
    * @return a transaction representing the request
    */
-  def request(request: AddressLengthTag,
-              response: AddressLengthTag,
-              cb: TransactionCallback): Transaction
+  def request(requestType: RequestType.Value, request: ByteBuffer,
+    cb: TransactionCallback): Transaction
 
   /**
    * This function assigns tags that are valid for responses in this connection.
@@ -227,6 +229,8 @@ trait ClientConnection extends Connection {
    * @return the executorId as a long
    */
   def getPeerExecutorId: Long
+
+  def setupCallback(reqType: RequestType.Value): Unit
 }
 
 /**
@@ -256,6 +260,7 @@ trait Connection {
    */
   def receive(alt: AddressLengthTag,
               cb: TransactionCallback): Transaction
+
 }
 
 object TransactionStatus extends Enumeration {
@@ -290,6 +295,8 @@ case class TransactionStats(txTimeMs: Double,
  * outside of [[waitForCompletion]] produces undefined behavior.
  */
 trait Transaction extends AutoCloseable {
+  def getHeader: Long
+
   /**
    * Get the status this transaction is in. Callbacks use this to handle various transaction states
    * (e.g. success, error, etc.)
@@ -316,6 +323,12 @@ trait Transaction extends AutoCloseable {
    * deadlock.
    */
   def waitForCompletion(): Unit
+
+  def respond(requestType: RequestType.Value,
+              peerExecutorId: Long,
+              response: AddressLengthTag, cb: TransactionCallback): Transaction
+
+  def releaseMessage(): RefCountedDirectByteBuffer
 }
 
 /**
@@ -364,7 +377,7 @@ trait RapidsShuffleTransport extends AutoCloseable {
    * @param size size of buffer required
    * @return the ref counted buffer
    */
-  def getMetaBuffer(size: Long): RefCountedDirectByteBuffer
+  def getDirectByteBuffer(size: Long): RefCountedDirectByteBuffer
 
   /**
    * (throttle) Adds a set of requests to be throttled as limits allowed.
@@ -514,6 +527,10 @@ class RefCountedDirectByteBuffer(
  */
 object TransportUtils {
   def formatTag(tag: Long): String = {
+    f"0x$tag%016X"
+  }
+
+  def formatTag(tag: Int): String = {
     f"0x$tag%016X"
   }
 

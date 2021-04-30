@@ -21,12 +21,11 @@ import java.nio.ByteBuffer
 import java.util.concurrent.ConcurrentHashMap
 
 import scala.collection.mutable.ArrayBuffer
-
 import ai.rapids.cudf.{NvtxColor, NvtxRange}
-import com.nvidia.spark.rapids.shuffle._
-import org.openucx.jucx.ucp.UcpRequest
-
+import com.nvidia.spark.rapids.shuffle.{RequestType, _}
+import org.openucx.jucx.ucp.{UcpAmData, UcpEndpoint, UcpRequest}
 import org.apache.spark.internal.Logging
+import org.openucx.jucx.UcxCallback
 
 /**
  * This is a private api used within the ucx package.
@@ -52,6 +51,21 @@ class UCXServerConnection(ucx: UCX) extends UCXConnection(ucx) with ServerConnec
   override def send(sendPeerExecutorId: Long, header: AddressLengthTag,
     cb: TransactionCallback): Transaction =
     send(sendPeerExecutorId, header, Seq.empty, cb)
+
+  def registerRequestHandler(requestType: RequestType.Value, cb: TransactionCallback): Unit = {
+    ucx.setActiveMessageCallback(
+      composeRequestAmId(requestType),
+      (hdr, resp, responseEp) =>  {
+        logInfo(s"At requestHandler for ${requestType} and header " +
+          s"${TransportUtils.formatTag(hdr.get)}")
+        val tx = createTransaction
+        tx.start(UCXTransactionType.Request, 1, cb)
+        tx.setHeader(hdr)
+        tx.setMessage(resp)
+        tx.setResponseEndpoint(responseEp)
+        tx.txCallback(TransactionStatus.Success)
+      })
+  }
 }
 
 class UCXClientConnection(peerExecutorId: Int, peerClientId: Long, ucx: UCX)
@@ -73,16 +87,70 @@ class UCXClientConnection(peerExecutorId: Int, peerClientId: Long, ucx: UCX)
 
   override def getPeerExecutorId: Long = peerExecutorId
 
+  var callbacks = new ConcurrentHashMap[Long, TransactionCallback]()
+
+  var responseHandlers = new ConcurrentHashMap[RequestType.Value, TransactionCallback]()
+
+  def responseHandler(requestType: RequestType.Value, cb: TransactionCallback)
+      (id: Option[Long], resp: RefCountedDirectByteBuffer, responseEp: UcpEndpoint): Unit = {
+    //logInfo(s"At responseHandler for ${requestType} " +
+    //  s"amId ${TransportUtils.formatTag(amId)} header ${TransportUtils.formatTag(id.get)} " +
+    //  s"and ${peerExecutorId} ${resp}")
+    val tx = createTransaction //new UCXTransaction(this, ucx.getNextTransactionId)
+    tx.start(UCXTransactionType.Request, 1, cb)
+    tx.setHeader(id)
+    tx.setMessage(resp)
+    tx.setResponseEndpoint(responseEp)
+    tx.txCallback(TransactionStatus.Success)
+  }
+
+  def setupCallback(requestType: RequestType.Value): Unit = {
+    responseHandlers.computeIfAbsent(requestType, _ => {
+      val cb: TransactionCallback = tx => {
+        val responseTag = tx.getHeader
+        logInfo(s"At client callback ${tx} for ${TransportUtils.formatTag(responseTag)}")
+        callbacks.forEach((k, _) => {
+          logInfo(s"cb: ${TransportUtils.formatTag(k)}")
+        })
+
+        val cb: TransactionCallback = callbacks.getOrDefault(responseTag, null)
+        callbacks.remove(responseTag) // done with this
+        if (cb != null) {
+          cb(tx) //tx.asInstanceOf[UCXTransaction].txCallback(TransactionStatus.Success)
+        } else {
+          throw new IllegalStateException(
+            s"Could not find callback for ${tx} ${TransportUtils.formatTag(responseTag)}")
+        }
+      }
+      ucx.registerResponseHandler(requestType, peerExecutorId, responseHandler(requestType, cb))
+      cb
+    })
+  }
+
   override def request(
-      request: AddressLengthTag,
-      response: AddressLengthTag,
+      requestType: RequestType.Value,
+      request: ByteBuffer,
       cb: TransactionCallback): Transaction = {
+
+    // register if we haven't already
+    setupCallback(requestType)
+
     val tx = createTransaction
+    tx.start(UCXTransactionType.Request, 1, cb)
+    logInfo(s"Performing a ${requestType} request $request for tx ${tx} " +
+      s"${TransportUtils.formatTag(tx.txId)}")
+    callbacks.put(tx.txId, cb)
 
-    tx.start(UCXTransactionType.Request, 2, cb)
+    // TODO: queue of requests per endpoint, to be popped on responses
+    ucx.sendAm(
+      peerExecutorId,
+      tx.txId,        // transaction id as header
+      requestType.id, // peer request amId
+      TransportUtils.getAddress(request),
+      request.remaining())
 
-    logDebug(s"Performing header request on tag ${TransportUtils.formatTag(request.tag)} " +
-      s"for tx $tx")
+    tx
+    /*
     send(peerExecutorId, request, Seq.empty, (sendTx: Transaction) => {
       logDebug(s"UCX request send callback $sendTx")
       if (sendTx.getStatus == TransactionStatus.Success) {
@@ -111,9 +179,13 @@ class UCXClientConnection(peerExecutorId: Int, peerClientId: Long, ucx: UCX)
     tx
   }
 
+ */
+  }
+
+
 }
 
-class UCXConnection(peerExecutorId: Int, ucx: UCX) extends Connection with Logging {
+class UCXConnection(peerExecutorId: Int, val ucx: UCX) extends Connection with Logging {
   // alternate constructor for a server connection (-1 because it is not to a peer)
   def this(ucx: UCX) = this(-1, ucx)
 
@@ -146,6 +218,24 @@ class UCXConnection(peerExecutorId: Int, ucx: UCX) extends Connection with Loggi
     composeTag(composeUpperBits(peerClientId, bufferMsgType), bufferTag)
   }
 
+  protected def composeRequestAmId(requestType: RequestType.Value): Int = {
+    val amId = requestType.id
+    if ((amId & 0x0000000F) != amId) {
+      throw new IllegalArgumentException(
+        s"Invalid request amId, it must be 4 bits: ${TransportUtils.formatTag(amId)}")
+    }
+    amId
+  }
+
+  def composeResponseAmId(requestType: RequestType.Value): Int = {
+    val amId = (0x00000010) | composeRequestAmId(requestType)
+    if ((amId & 0x0000001F) != amId) {
+      throw new IllegalArgumentException(
+        s"Invalid response amId, it must be 5 bits: ${TransportUtils.formatTag(amId)}")
+    }
+    amId
+  }
+
   private def composeTag(upperBits: Long, lowerBits: Long): Long = {
     if ((upperBits & 0xFFFFFFFF00000000L) != upperBits) {
       throw new IllegalArgumentException(
@@ -156,7 +246,7 @@ class UCXConnection(peerExecutorId: Int, ucx: UCX) extends Connection with Loggi
     upperBits | (lowerBits & 0x00000000FFFFFFFFL)
   }
 
-  private def composeUpperBits(peerClientId: Long, msgType: Long): Long = {
+  def composeUpperBits(peerClientId: Long, msgType: Long): Long = {
     if ((peerClientId & 0x000000000FFFFFFFL) != peerClientId) {
       throw new IllegalArgumentException(
         s"Invalid tag, peerClientId would alias: ${TransportUtils.formatTag(peerClientId)}")
@@ -267,6 +357,7 @@ class UCXConnection(peerExecutorId: Int, ucx: UCX) extends Connection with Loggi
     tx.incrementReceiveSize(alt.length)
     tx
   }
+
 
   private[ucx] def cancel(msg: UcpRequest): Unit =
     ucx.cancel(msg)

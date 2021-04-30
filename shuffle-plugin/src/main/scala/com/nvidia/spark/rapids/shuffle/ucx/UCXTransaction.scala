@@ -16,18 +16,18 @@
 
 package com.nvidia.spark.rapids.shuffle.ucx
 
+import java.nio.ByteBuffer
 import java.util.concurrent.{ConcurrentLinkedQueue, TimeUnit}
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.locks.ReentrantLock
 
 import scala.collection.mutable
 import scala.collection.mutable.ArrayBuffer
-
 import ai.rapids.cudf.{NvtxColor, NvtxRange}
-import com.nvidia.spark.rapids.shuffle.{AddressLengthTag, Transaction, TransactionCallback, TransactionStats, TransactionStatus, TransportUtils}
-import org.openucx.jucx.ucp.UcpRequest
-
+import com.nvidia.spark.rapids.shuffle.{AddressLengthTag, RefCountedDirectByteBuffer, RequestType, Transaction, TransactionCallback, TransactionStats, TransactionStatus, TransportUtils}
+import org.openucx.jucx.ucp.{UcpConstants, UcpEndpoint, UcpRequest}
 import org.apache.spark.internal.Logging
+import org.openucx.jucx.UcxCallback
 
 /**
  * Helper enum to describe transaction types supported in UCX
@@ -41,6 +41,9 @@ private[ucx] object UCXTransactionType extends Enumeration {
 
 private[ucx] class UCXTransaction(conn: UCXConnection, val txId: Long)
   extends Transaction with Logging {
+  var header: Option[Long] = None
+
+  def setHeader(id: Option[Long]): Unit = header = id
 
   // various threads can access the status during the course of a Transaction
   // the UCX progress thread, client/server pools, and the executor task thread
@@ -360,5 +363,59 @@ private[ucx] class UCXTransaction(conn: UCXConnection, val txId: Long)
   }
 
   var callbackCalled: Boolean = false
+
+  var responseEndpoint: UcpEndpoint = null
+  var response: Option[RefCountedDirectByteBuffer] = None
+
+  override def respond(requestType: RequestType.Value,
+                       peerExecutorId: Long,
+                       response: AddressLengthTag,
+                       cb: TransactionCallback): Transaction = {
+    val tx = conn.createTransaction
+    tx.registerCb(cb)
+    tx.registerForSend(response)
+    require(responseEndpoint != null)
+    val responseTag = ByteBuffer.allocateDirect(8)
+    responseTag.putLong(this.getHeader)
+    responseTag.rewind()
+    //responseTag.putLong(response.tag)
+    //responseTag.rewind()
+
+    val amId = conn.composeResponseAmId(requestType)
+    logInfo(s"Responding to ${peerExecutorId} at ${TransportUtils.formatTag(this.getHeader)} " +
+      s"with ${response}")
+    responseEndpoint.sendAmNonBlocking(amId,
+      TransportUtils.getAddress(responseTag), 8L, response.address, response.length,
+      0L, new UcxCallback {
+        override def onSuccess(request: UcpRequest): Unit = {
+          logInfo(s"AM success respond")
+          tx.handleTagCompleted(response.tag)
+          tx.txCallback(TransactionStatus.Success)
+        }
+
+        override def onError(ucsStatus: Int, errorMsg: String): Unit = {
+          logError(s"AM Error responding ${ucsStatus} ${errorMsg}")
+        }
+      })
+    tx
+  }
+
+  // Reference count is not updated here. The caller is responsible to close
+  def setMessage(resp: RefCountedDirectByteBuffer): Unit = {
+    response = Option(resp)
+  }
+
+  // Reference count is not updated here. The caller is responsible to close
+  override def releaseMessage(): RefCountedDirectByteBuffer = {
+    val msg = response.get
+    response = None
+    msg
+  }
+
+  def setResponseEndpoint(ucpEndpoint: UcpEndpoint): Unit = {
+    responseEndpoint = ucpEndpoint
+  }
+
+  override def getHeader: Long= header.get
 }
 
