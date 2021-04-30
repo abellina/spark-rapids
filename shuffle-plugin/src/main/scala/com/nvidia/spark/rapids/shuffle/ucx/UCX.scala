@@ -32,6 +32,7 @@ import org.openucx.jucx._
 import org.openucx.jucx.ucp._
 import org.apache.spark.internal.Logging
 import org.openucx.jucx.ucs.UcsConstants
+import org.openucx.jucx.ucs.UcsConstants.MEMORY_TYPE
 
 case class WorkerAddress(address: ByteBuffer)
 
@@ -345,35 +346,17 @@ class UCX(transport: UCXShuffleTransport,
             logInfo(s"V. Done with callback")
             UcsConstants.STATUS.UCS_OK
           } else {
-            onWorkerThreadAsync(() => {
-              logInfo(s"At recvAm")
-              amData.receive(UcxUtils.getAddress(resp.getBuffer()),new UcxCallback {
-                override def onError(ucsStatus: Int, errorMsg: String): Unit = {
-                  logInfo(s"V. AM ERROR ${ucsStatus} ${errorMsg}")
-                  amData.close()
-                }
-                override def onSuccess(request: UcpRequest): Unit = {
-                  logInfo(s"V. AM receive success for ${request}")
-                  cb(id, resp, replyEp)
-                  amData.close()
-                }
-              })
-             //
-             //worker.recvAmDataNonBlocking(
-             //  amData.getDataHandle,
-             //  TransportUtils.getAddress(resp.acquire()),
-             //  amData.getLength,
-             //  new UcxCallback {
-             //    override def onSuccess(request: UcpRequest): Unit = {
-             //      logInfo(s"AM receive success for ${amData}")
-             //      cb(hdr, resp, replyEp)
-             //      amData.close()
-             //    }
-
-             //    override def onError(ucsStatus: Int, errorMsg: String): Unit = {
-             //      logInfo(s"AM ERROR ${ucsStatus} ${errorMsg}")
-             //    }
-             //  }, UcsConstants.MEMORY_TYPE.UCS_MEMORY_TYPE_HOST)
+            logInfo(s"At recvAm")
+            amData.receive(UcxUtils.getAddress(resp.getBuffer()),new UcxCallback {
+              override def onError(ucsStatus: Int, errorMsg: String): Unit = {
+                logInfo(s"V. AM ERROR ${ucsStatus} ${errorMsg}")
+                amData.close()
+              }
+              override def onSuccess(request: UcpRequest): Unit = {
+                logInfo(s"V. AM receive success for ${request}")
+                cb(id, resp, replyEp)
+                amData.close()
+              }
             })
             logInfo(s"NV. Done with callback")
             UcsConstants.STATUS.UCS_INPROGRESS
@@ -383,7 +366,7 @@ class UCX(transport: UCXShuffleTransport,
     amId
   }
 
-  def sendAm(epId: Long, hdr: Long, amId: Int, address: Long, size: Long): Unit = {
+  def sendAm(epId: Long, hdr: Long, amId: Int, address: Long, size: Long, cb: UcxCallback): Unit = {
     onWorkerThreadAsync(() => {
       val ep = endpoints.get(epId)
       logInfo(s"sending to amId: ${TransportUtils.formatTag(amId)} msg of size ${size}")
@@ -398,15 +381,21 @@ class UCX(transport: UCXShuffleTransport,
         8L,
         address,
         size,
-        UcpConstants.UCP_AM_SEND_FLAG_REPLY,
+        UcpConstants.UCP_AM_SEND_FLAG_RNDV,
         new UcxCallback {
           override def onSuccess(request: UcpRequest): Unit = {
             logInfo("Active message success!")
+            if (cb != null) {
+              cb.onSuccess(request)
+            }
             header.close()
           }
 
           override def onError(ucsStatus: Int, errorMsg: String): Unit = {
             logInfo(s"Active message error ${errorMsg}")
+            if (cb != null) {
+              cb.onError(ucsStatus, errorMsg)
+            }
           }
         })
     })

@@ -198,14 +198,9 @@ class RapidsShuffleClient(
           throw new IllegalStateException("Sending empty blockIds in the MetadataRequest?")
         }
 
-        // TODO: REMOVE THIS
-        val responseTag = connection.assignResponseTag
-
         val metaReq = new RefCountedDirectByteBuffer(ShuffleMetadata.buildShuffleMetadataRequest(
           localExecutorId, // needed s.t. the server knows what endpoint to pick
-          responseTag,
-          shuffleRequests,
-          metadataSize)) // TODO: metadataSize not used anymore (REMOVE THIS)
+          shuffleRequests)) // TODO: metadataSize not used anymore (REMOVE THIS)
 
         logInfo(s"Requesting block_ids=[$shuffleRequests] from connection $connection, req: \n " +
             s"${ShuffleMetadata.printRequest(

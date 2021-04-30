@@ -181,11 +181,10 @@ object RapidsShuffleTestHelper extends MockitoSugar with Arm {
   def mockMetaResponse(
       mockTransport: RapidsShuffleTransport,
       numRows: Long,
-      numBatches: Int,
-      maximumResponseSize: Long = 10000): Seq[TableMeta] =
+      numBatches: Int): Seq[TableMeta] =
     withMockContiguousTable(numRows) { ct =>
       val tableMetas = (0 until numBatches).map(b => buildMockTableMeta(b, ct))
-      val res = ShuffleMetadata.buildMetaResponse(tableMetas, maximumResponseSize)
+      val res = ShuffleMetadata.buildMetaResponse(tableMetas)
       val refCountedRes = new RefCountedDirectByteBuffer(res)
       when(mockTransport.getDirectByteBuffer(any())).thenReturn(refCountedRes)
       tableMetas
@@ -194,10 +193,9 @@ object RapidsShuffleTestHelper extends MockitoSugar with Arm {
   def mockDegenerateMetaResponse(
       mockTransport: RapidsShuffleTransport,
       numRows: Long,
-      numBatches: Int,
-      maximumResponseSize: Long = 10000): Seq[TableMeta] = {
+      numBatches: Int): Seq[TableMeta] = {
     val tableMetas = (0 until numBatches).map(b => buildDegenerateMockTableMeta())
-    val res = ShuffleMetadata.buildMetaResponse(tableMetas, maximumResponseSize)
+    val res = ShuffleMetadata.buildMetaResponse(tableMetas)
     val refCountedRes = new RefCountedDirectByteBuffer(res)
     when(mockTransport.getDirectByteBuffer(any())).thenReturn(refCountedRes)
     tableMetas

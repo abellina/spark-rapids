@@ -22,6 +22,7 @@ import java.util.concurrent.ConcurrentHashMap
 
 import scala.collection.mutable.ArrayBuffer
 import ai.rapids.cudf.{NvtxColor, NvtxRange}
+import com.nvidia.spark.rapids.shuffle
 import com.nvidia.spark.rapids.shuffle.{RequestType, _}
 import org.openucx.jucx.ucp.{UcpAmData, UcpEndpoint, UcpRequest}
 import org.apache.spark.internal.Logging
@@ -62,7 +63,7 @@ class UCXServerConnection(ucx: UCX) extends UCXConnection(ucx) with ServerConnec
         tx.start(UCXTransactionType.Request, 1, cb)
         tx.setHeader(hdr)
         tx.setMessage(resp)
-        tx.setResponseEndpoint(responseEp)
+        //TODO: do we care/want the responseEp? tx.setResponseEndpoint(responseEp)
         tx.txCallback(TransactionStatus.Success)
       })
   }
@@ -92,7 +93,7 @@ class UCXClientConnection(peerExecutorId: Int, peerClientId: Long, ucx: UCX)
   var responseHandlers = new ConcurrentHashMap[RequestType.Value, TransactionCallback]()
 
   def responseHandler(requestType: RequestType.Value, cb: TransactionCallback)
-      (id: Option[Long], resp: RefCountedDirectByteBuffer, responseEp: UcpEndpoint): Unit = {
+                     (id: Option[Long], resp: RefCountedDirectByteBuffer, responseEp: UcpEndpoint): Unit = {
     //logInfo(s"At responseHandler for ${requestType} " +
     //  s"amId ${TransportUtils.formatTag(amId)} header ${TransportUtils.formatTag(id.get)} " +
     //  s"and ${peerExecutorId} ${resp}")
@@ -100,7 +101,7 @@ class UCXClientConnection(peerExecutorId: Int, peerClientId: Long, ucx: UCX)
     tx.start(UCXTransactionType.Request, 1, cb)
     tx.setHeader(id)
     tx.setMessage(resp)
-    tx.setResponseEndpoint(responseEp)
+    //TODO: do we need responseEp tx.setResponseEndpoint(responseEp)
     tx.txCallback(TransactionStatus.Success)
   }
 
@@ -127,62 +128,28 @@ class UCXClientConnection(peerExecutorId: Int, peerClientId: Long, ucx: UCX)
     })
   }
 
-  override def request(
-      requestType: RequestType.Value,
-      request: ByteBuffer,
-      cb: TransactionCallback): Transaction = {
-
+  override def request(requestType: RequestType.Value,
+                       request: ByteBuffer,
+                       cb: TransactionCallback): Transaction = {
+    val tx = createTransaction
     // register if we haven't already
     setupCallback(requestType)
-
-    val tx = createTransaction
     tx.start(UCXTransactionType.Request, 1, cb)
+
     logInfo(s"Performing a ${requestType} request $request for tx ${tx} " +
       s"${TransportUtils.formatTag(tx.txId)}")
     callbacks.put(tx.txId, cb)
 
-    // TODO: queue of requests per endpoint, to be popped on responses
     ucx.sendAm(
       peerExecutorId,
-      tx.txId,        // transaction id as header
+      tx.txId, // transaction id as header
       requestType.id, // peer request amId
       TransportUtils.getAddress(request),
-      request.remaining())
+      request.remaining(),
+      null)
 
     tx
-    /*
-    send(peerExecutorId, request, Seq.empty, (sendTx: Transaction) => {
-      logDebug(s"UCX request send callback $sendTx")
-      if (sendTx.getStatus == TransactionStatus.Success) {
-        tx.incrementSendSize(request.length)
-        if (tx.decrementPendingAndGet <= 0) {
-          logDebug(s"Header request is done on send: ${sendTx.getStatus}, " +
-            s"tag: ${TransportUtils.formatTag(request.tag)} for $tx")
-          tx.txCallback(TransactionStatus.Success)
-        }
-      }
-      sendTx.close()
-    })
-
-    receive(response, receiveTx => {
-      logDebug(s"UCX request receive callback $receiveTx")
-      if (receiveTx.getStatus == TransactionStatus.Success) {
-        tx.incrementReceiveSize(response.length)
-        if (tx.decrementPendingAndGet <= 0) {
-          logDebug(s"Header request is done on receive: $this, " +
-            s"tag: ${TransportUtils.formatTag(response.tag)}")
-          tx.txCallback(TransactionStatus.Success)
-        }
-      }
-      receiveTx.close()
-    })
-    tx
   }
-
- */
-  }
-
-
 }
 
 class UCXConnection(peerExecutorId: Int, val ucx: UCX) extends Connection with Logging {
