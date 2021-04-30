@@ -364,32 +364,26 @@ private[ucx] class UCXTransaction(conn: UCXConnection, val txId: Long)
 
   var callbackCalled: Boolean = false
 
-  var responseEndpoint: UcpEndpoint = null
   var response: Option[RefCountedDirectByteBuffer] = None
 
   override def respond(requestType: RequestType.Value,
                        peerExecutorId: Long,
-                       response: AddressLengthTag,
+                       response: ByteBuffer,
                        cb: TransactionCallback): Transaction = {
     val tx = conn.createTransaction
     tx.registerCb(cb)
-    tx.registerForSend(response)
-    require(responseEndpoint != null)
-    val responseTag = ByteBuffer.allocateDirect(8)
-    responseTag.putLong(this.getHeader)
-    responseTag.rewind()
-    //responseTag.putLong(response.tag)
-    //responseTag.rewind()
 
     val amId = conn.composeResponseAmId(requestType)
     logInfo(s"Responding to ${peerExecutorId} at ${TransportUtils.formatTag(this.getHeader)} " +
       s"with ${response}")
-    responseEndpoint.sendAmNonBlocking(amId,
-      TransportUtils.getAddress(responseTag), 8L, response.address, response.length,
-      0L, new UcxCallback {
+    conn.ucx.sendAm(peerExecutorId,
+      this.getHeader,
+      amId,
+      TransportUtils.getAddress(response),
+      response.remaining(),
+      new UcxCallback {
         override def onSuccess(request: UcpRequest): Unit = {
           logInfo(s"AM success respond")
-          tx.handleTagCompleted(response.tag)
           tx.txCallback(TransactionStatus.Success)
         }
 
@@ -410,10 +404,6 @@ private[ucx] class UCXTransaction(conn: UCXConnection, val txId: Long)
     val msg = response.get
     response = None
     msg
-  }
-
-  def setResponseEndpoint(ucpEndpoint: UcpEndpoint): Unit = {
-    responseEndpoint = ucpEndpoint
   }
 
   override def getHeader: Long= header.get

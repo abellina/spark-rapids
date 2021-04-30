@@ -253,26 +253,17 @@ object ShuffleMetadata extends Logging{
     }.toArray
   }
 
-  def buildMetaResponse(tables: Seq[TableMeta], maximumResponseSize: Long): ByteBuffer = {
+  def buildMetaResponse(tables: Seq[TableMeta]): ByteBuffer = {
     val fbb = new FlatBufferBuilder(1024, bbFactory)
     val tableOffsets = copyTables(fbb, tables)
     val tableMetasOffset = MetadataResponse.createTableMetasVector(fbb, tableOffsets)
-    val finIndex = MetadataResponse.createMetadataResponse(fbb, 0, tableMetasOffset)
+    val finIndex = MetadataResponse.createMetadataResponse(fbb, tableMetasOffset)
     fbb.finish(finIndex)
-    val bb = fbb.dataBuffer()
-    val responseSize = bb.remaining()
-    if (responseSize > maximumResponseSize) {
-      throw new IllegalStateException("response size is bigger than what receiver wants")
-    }
-    val materializedResponse = ShuffleMetadata.getMetadataResponse(bb)
-    materializedResponse.mutateFullResponseSize(responseSize)
-    bb
+    fbb.dataBuffer()
   }
 
   def buildShuffleMetadataRequest(executorId: Long,
-                                  responseTag: Long,
-                                  blockIds : Seq[ShuffleBlockBatchId],
-                                  maxResponseSize: Long) : ByteBuffer = {
+                                  blockIds : Seq[ShuffleBlockBatchId]) : ByteBuffer = {
     val fbb = new FlatBufferBuilder(1024, bbFactory)
     val blockIdOffsets = blockIds.map { blockId =>
       BlockIdMeta.createBlockIdMeta(fbb,
@@ -282,8 +273,7 @@ object ShuffleMetadata extends Logging{
         blockId.endReduceId)
     }
     val blockIdVectorOffset = MetadataRequest.createBlockIdsVector(fbb, blockIdOffsets.toArray)
-    val finIndex = MetadataRequest.createMetadataRequest(fbb, executorId, responseTag,
-      maxResponseSize, blockIdVectorOffset)
+    val finIndex = MetadataRequest.createMetadataRequest(fbb, executorId, blockIdVectorOffset)
     fbb.finish(finIndex)
     fbb.dataBuffer()
   }
@@ -352,8 +342,7 @@ object ShuffleMetadata extends Logging{
     out.append("------------------------------------------------------------------------------\n")
     for (tableIndex <- 0 until res.tableMetasLength()) {
       val tableMeta = res.tableMetas(tableIndex)
-      out.append(s"table: $tableIndex rows=${tableMeta.rowCount}, " +
-          s"full_content_size=${res.fullResponseSize()}]\n")
+      out.append(s"table: $tableIndex rows=${tableMeta.rowCount}")
     }
     out.append(s"----------------------- END METADATA RESPONSE $state ----------------------\n")
     out.toString()

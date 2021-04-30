@@ -326,7 +326,8 @@ trait Transaction extends AutoCloseable {
 
   def respond(requestType: RequestType.Value,
               peerExecutorId: Long,
-              response: AddressLengthTag, cb: TransactionCallback): Transaction
+              response: ByteBuffer,
+              cb: TransactionCallback): Transaction
 
   def releaseMessage(): RefCountedDirectByteBuffer
 }

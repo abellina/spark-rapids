@@ -97,8 +97,6 @@ class RapidsShuffleServer(transport: RapidsShuffleTransport,
      * When a transfer request is received during a callback, the handle code is offloaded via this
      * event to the server thread.
      * @param tx the live transaction that should be closed by the handler
-     * @param metaRequestBuffer contains the metadata request that should be closed by the
-     *                          handler
      */
     case class HandleMeta(tx: Transaction)
 
@@ -278,12 +276,9 @@ class RapidsShuffleServer(transport: RapidsShuffleTransport,
             // target executor to respond to
             val peerExecutorId = req.executorId()
 
-            // tag to use for the response message
-            val responseTag = req.responseTag()
-
             logInfo(s"Received request req:\n: ${ShuffleMetadata.printRequest(req)}")
             logInfo(s"HandleMetadataRequest for peerExecutorId $peerExecutorId and " +
-              s"responseTag ${TransportUtils.formatTag(req.responseTag())}")
+              s"tx ${tx}")
 
             // NOTE: MetaUtils will have a simpler/better way of handling creating a response.
             // That said, at this time, I see some issues with that approach from the flatbuffer
@@ -297,19 +292,17 @@ class RapidsShuffleServer(transport: RapidsShuffleTransport,
             }
 
             val metadataResponse =
-              ShuffleMetadata.buildMetaResponse(responseTables, req.maxResponseSize())
+              ShuffleMetadata.buildMetaResponse(responseTables)
             // Wrap the buffer so we keep a reference to it, and we destroy it later on .close
             val respBuffer = new RefCountedDirectByteBuffer(metadataResponse)
             val materializedResponse = ShuffleMetadata.getMetadataResponse(metadataResponse)
 
-            logInfo(s"Response will be at tag ${TransportUtils.formatTag(responseTag)}:\n" +
+            logInfo(s"Response will be at header ${TransportUtils.formatTag(tx.getHeader)}:\n" +
               s"${ShuffleMetadata.printResponse("responding", materializedResponse)}")
-
-            val response = AddressLengthTag.from(respBuffer.acquire(), responseTag)
 
             // Issue the send against [[peerExecutorId]] as described by the metadata message
             val responseTx = tx.respond(RequestType.MetadataRequest,
-              peerExecutorId, response, responseTx => {
+              peerExecutorId, respBuffer.getBuffer(), responseTx => {
                 withResource(responseTx) { responseTx =>
                   withResource(respBuffer) { _ =>
                     if (responseTx.getStatus == TransactionStatus.Error) {
@@ -380,7 +373,7 @@ class RapidsShuffleServer(transport: RapidsShuffleTransport,
               // send the transfer response
               requestTx.respond(RequestType.TransferRequest,
                 transferRequest.executorId,
-                AddressLengthTag.from(transferResponse.acquire(), transferRequest.responseTag()),
+                transferResponse.acquire(),
                 transferResponseTx => {
                   withResource(transferResponseTx) { _ =>
                     logInfo(s"TransferRequest response done ${transferResponseTx}")
