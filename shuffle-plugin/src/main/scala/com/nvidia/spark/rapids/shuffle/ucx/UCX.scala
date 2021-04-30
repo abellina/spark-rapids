@@ -20,18 +20,18 @@ import java.io._
 import java.net.{InetSocketAddress, ServerSocket, Socket, SocketException}
 import java.nio.ByteBuffer
 import java.util.concurrent.{ConcurrentHashMap, ConcurrentLinkedQueue, Executors, TimeUnit}
-import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.atomic.{AtomicInteger, AtomicLong}
 
 import scala.collection.mutable.ArrayBuffer
-
 import ai.rapids.cudf.{MemoryBuffer, NvtxColor, NvtxRange}
 import com.google.common.util.concurrent.ThreadFactoryBuilder
 import com.nvidia.spark.rapids.GpuDeviceManager
-import com.nvidia.spark.rapids.shuffle.{AddressLengthTag, ClientConnection, MemoryRegistrationCallback, TransportUtils}
+import com.nvidia.spark.rapids.shuffle.{AddressLengthTag, ClientConnection, MemoryRegistrationCallback, RefCountedDirectByteBuffer, RequestType, Transaction, TransportUtils}
+import org.apache.hadoop.yarn.client.api.AMRMClient
 import org.openucx.jucx._
 import org.openucx.jucx.ucp._
-
 import org.apache.spark.internal.Logging
+import org.openucx.jucx.ucs.UcsConstants
 
 case class WorkerAddress(address: ByteBuffer)
 
@@ -52,11 +52,14 @@ case class Rkeys(rkeys: Seq[ByteBuffer])
  * @param usingWakeupFeature (true by default) set to false to use a hot loop, as opposed to
  *                           UCP provided signal/wait
  */
-class UCX(executorId: Int, usingWakeupFeature: Boolean = true) extends AutoCloseable with Logging {
+class UCX(transport: UCXShuffleTransport,
+          val executorId: Int,
+          usingWakeupFeature: Boolean = true) extends AutoCloseable with Logging {
+
   private[this] val context = {
     val contextParams = new UcpParams().requestTagFeature()
     if (usingWakeupFeature) {
-      contextParams.requestWakeupFeature()
+      contextParams.requestWakeupFeature().requestAmFeature()
     }
     new UcpContext(contextParams)
   }
@@ -285,6 +288,131 @@ class UCX(executorId: Int, usingWakeupFeature: Boolean = true) extends AutoClose
     })
   }
 
+  trait AmCallback {
+    def apply(id: Option[Long], buff: RefCountedDirectByteBuffer, ucpEndpoint: UcpEndpoint): Unit
+  }
+
+  var peerAmCallbacks = new ConcurrentHashMap[(RequestType.Value, Int), AmCallback]()
+  val responseAmCallbacks = new ConcurrentHashMap[RequestType.Value, Boolean]()
+
+  // establish a response callback for a specific requestType and peerExecutorId
+  // requestType + response message type is part of amId
+  def registerResponseHandler(requestType: RequestType.Value, peerExecutorId: Int,
+                              cb: AmCallback): Unit = {
+    logInfo(s"setup responseHandler for ${TransportUtils.formatTag(requestType.id + 16)}")
+    peerAmCallbacks.put((requestType, peerExecutorId), cb)
+    responseAmCallbacks.computeIfAbsent(requestType, _ => {
+      setActiveMessageCallback(requestType.id + 16, (id, resp, responseEp) => {
+        logInfo(s"Getting peer am callback for amId " +
+          s"${TransportUtils.formatTag(requestType.id + 16)} " +
+          s"header: ${TransportUtils.formatTag(id.get)} " +
+          s"peerExec: ${peerExecutorId}")
+        peerAmCallbacks.get((requestType, peerExecutorId))(id, resp, responseEp)
+      })
+      true
+    })
+  }
+
+  def setActiveMessageCallback(amId: Int,
+      cb: (Option[Long], RefCountedDirectByteBuffer, UcpEndpoint) => Unit): Int = {
+    onWorkerThreadAsync(() => {
+      logInfo(s"Setting am recv handler for active message ${TransportUtils.formatTag(amId)}")
+      worker.setAmRecvHandler(amId,
+        (headerAddr, headerSize, amData: UcpAmData, replyEp: UcpEndpoint) => {
+          logInfo(s"AT CALLBACK ${TransportUtils.formatTag(amId)} -- " +
+            s"${headerAddr} -- ${headerSize} -- ${amData}")
+          val id = if (headerSize == 8) {
+            val hdr = Option(UcxUtils.getByteBufferView(headerAddr, headerSize).getLong)
+            logInfo(s"GOT HEADER ${TransportUtils.formatTag(hdr.get)}")
+            hdr
+          } else {
+            None
+          }
+
+          val resp = transport.getDirectByteBuffer(amData.getLength)
+
+          if (amData.isDataValid) {
+            amData.receive(UcxUtils.getAddress(resp.getBuffer()),new UcxCallback {
+              override def onError(ucsStatus: Int, errorMsg: String): Unit = {
+                logInfo(s"V. AM ERROR ${ucsStatus} ${errorMsg}")
+              }
+              override def onSuccess(request: UcpRequest): Unit = {
+                // TODO: request is null?
+                logInfo(s"V. AM receive success")
+                cb(id, resp, replyEp)
+              }
+            })
+            logInfo(s"V. Done with callback")
+            UcsConstants.STATUS.UCS_OK
+          } else {
+            onWorkerThreadAsync(() => {
+              logInfo(s"At recvAm")
+              amData.receive(UcxUtils.getAddress(resp.getBuffer()),new UcxCallback {
+                override def onError(ucsStatus: Int, errorMsg: String): Unit = {
+                  logInfo(s"V. AM ERROR ${ucsStatus} ${errorMsg}")
+                  amData.close()
+                }
+                override def onSuccess(request: UcpRequest): Unit = {
+                  logInfo(s"V. AM receive success for ${request}")
+                  cb(id, resp, replyEp)
+                  amData.close()
+                }
+              })
+             //
+             //worker.recvAmDataNonBlocking(
+             //  amData.getDataHandle,
+             //  TransportUtils.getAddress(resp.acquire()),
+             //  amData.getLength,
+             //  new UcxCallback {
+             //    override def onSuccess(request: UcpRequest): Unit = {
+             //      logInfo(s"AM receive success for ${amData}")
+             //      cb(hdr, resp, replyEp)
+             //      amData.close()
+             //    }
+
+             //    override def onError(ucsStatus: Int, errorMsg: String): Unit = {
+             //      logInfo(s"AM ERROR ${ucsStatus} ${errorMsg}")
+             //    }
+             //  }, UcsConstants.MEMORY_TYPE.UCS_MEMORY_TYPE_HOST)
+            })
+            logInfo(s"NV. Done with callback")
+            UcsConstants.STATUS.UCS_INPROGRESS
+          }
+        })
+    })
+    amId
+  }
+
+  def sendAm(epId: Long, hdr: Long, amId: Int, address: Long, size: Long): Unit = {
+    onWorkerThreadAsync(() => {
+      val ep = endpoints.get(epId)
+      logInfo(s"sending to amId: ${TransportUtils.formatTag(amId)} msg of size ${size}")
+      val header = new RefCountedDirectByteBuffer(ByteBuffer.allocateDirect(8))
+      header.acquire()
+      header.getBuffer().putLong(hdr)
+      header.getBuffer().rewind()
+
+      ep.sendAmNonBlocking(
+        amId,
+        TransportUtils.getAddress(header.getBuffer()),
+        8L,
+        address,
+        size,
+        UcpConstants.UCP_AM_SEND_FLAG_REPLY,
+        new UcxCallback {
+          override def onSuccess(request: UcpRequest): Unit = {
+            logInfo("Active message success!")
+            header.close()
+          }
+
+          override def onError(ucsStatus: Int, errorMsg: String): Unit = {
+            logInfo(s"Active message error ${errorMsg}")
+          }
+        })
+    })
+
+
+  }
 
   def getServerConnection: UCXServerConnection = serverConnection
 
@@ -324,7 +452,7 @@ class UCX(executorId: Int, usingWakeupFeature: Boolean = true) extends AutoClose
     onWorkerThreadAsync(() => {
       try {
         worker.cancelRequest(request)
-        request.close()
+        //request.close()
       } catch {
         case e: Throwable =>
           logError("Error while cancelling UCX request: ", e)

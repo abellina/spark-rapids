@@ -51,7 +51,7 @@ import org.apache.spark.internal.Logging
  * @param serverStream - CUDA stream to use for copies.
  */
 class BufferSendState(
-    request: RefCountedDirectByteBuffer,
+    transaction: Transaction,
     sendBounceBuffers: SendBounceBuffers,
     requestHandler: RapidsShuffleRequestHandler,
     serverStream: Cuda.Stream = Cuda.DEFAULT_STREAM)
@@ -62,7 +62,8 @@ class BufferSendState(
     override def size: Long = tableSize
   }
 
-  private[this] val transferRequest = ShuffleMetadata.getTransferRequest(request.getBuffer())
+  private[this] val transferRequest =
+    ShuffleMetadata.getTransferRequest(transaction.releaseMessage().getBuffer())
   private[this] val bufferMetas = new Array[BufferMeta](transferRequest.requestsLength())
   private[this] var isClosed = false
 
@@ -100,6 +101,10 @@ class BufferSendState(
     transferRequest
   }
 
+  def getRequestTransaction: Transaction = synchronized {
+    transaction
+  }
+
   def hasNext: Boolean = synchronized { hasMoreBlocks }
 
   private[this] def freeBounceBuffers(): Unit = {
@@ -120,7 +125,6 @@ class BufferSendState(
     }
     isClosed = true
     freeBounceBuffers()
-    request.close()
     releaseAcquiredToCatalog()
   }
 

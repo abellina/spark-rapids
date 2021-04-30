@@ -21,15 +21,14 @@ import java.util.concurrent._
 
 import scala.collection.mutable
 import scala.collection.mutable.ArrayBuffer
-
 import ai.rapids.cudf.{DeviceMemoryBuffer, HostMemoryBuffer, MemoryBuffer}
 import com.google.common.util.concurrent.ThreadFactoryBuilder
 import com.nvidia.spark.rapids.{GpuDeviceManager, HashedPriorityQueue, RapidsConf}
 import com.nvidia.spark.rapids.shuffle._
 import com.nvidia.spark.rapids.shuffle.{BounceBufferManager, BufferReceiveState, ClientConnection, PendingTransferRequest, RapidsShuffleClient, RapidsShuffleRequestHandler, RapidsShuffleServer, RapidsShuffleTransport, RefCountedDirectByteBuffer}
-
 import org.apache.spark.internal.Logging
 import org.apache.spark.storage.BlockManagerId
+import org.openucx.jucx.ucp.UcpEndpoint
 
 /**
  * UCXShuffleTransport is the UCX implementation for the `RapidsShuffleTransport`. It provides
@@ -70,7 +69,7 @@ class UCXShuffleTransport(shuffleServerId: BlockManagerId, rapidsConf: RapidsCon
 
   private[this] lazy val ucx = {
     logWarning("UCX Shuffle Transport Enabled")
-    val ucxImpl = new UCX(executorId, rapidsConf.shuffleUcxUseWakeup)
+    val ucxImpl = new UCX(this, executorId, rapidsConf.shuffleUcxUseWakeup)
     ucxImpl.init()
 
     initBounceBufferPools(bounceBufferSize,
@@ -90,7 +89,7 @@ class UCXShuffleTransport(shuffleServerId: BlockManagerId, rapidsConf: RapidsCon
     ucxImpl
   }
 
-  override def getMetaBuffer(size: Long): RefCountedDirectByteBuffer = {
+  override def getDirectByteBuffer(size: Long): RefCountedDirectByteBuffer = {
     if (size > rapidsConf.shuffleMaxMetadataSize) {
       logWarning(s"Large metadata message size $size B, larger " +
         s"than ${rapidsConf.shuffleMaxMetadataSize} B. " +
