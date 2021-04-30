@@ -90,8 +90,6 @@ case class PendingTransferRequest(client: RapidsShuffleClient,
  * @param exec Executor used to handle tasks that take time, and should not be in the
  *             transport's thread
  * @param clientCopyExecutor Executors used to handle synchronous mem copies
- * @param maximumMetadataSize The maximum metadata buffer size we are able to request
- *                            TODO: this should go away
  */
 class RapidsShuffleClient(
     localExecutorId: Long,
@@ -99,7 +97,6 @@ class RapidsShuffleClient(
     transport: RapidsShuffleTransport,
     exec: Executor,
     clientCopyExecutor: Executor,
-    maximumMetadataSize: Long,
     devStorage: RapidsDeviceMemoryStore = RapidsBufferCatalog.getDeviceStorage,
     catalog: ShuffleReceivedBufferCatalog = GpuShuffleEnv.getReceivedCatalog)
       extends Logging with Arm {
@@ -115,17 +112,6 @@ class RapidsShuffleClient(
     case class HandleMetadataResponse(tx: Transaction,
                                       shuffleRequests: Seq[ShuffleBlockBatchId],
                                       rapidsShuffleFetchHandler: RapidsShuffleFetchHandler)
-
-    /**
-     * Represents retry due to metadata being larger than expected.
-     *
-     * @param shuffleRequests request to retry
-     * @param rapidsShuffleFetchHandler the handler (iterator) to callback to
-     * @param fullResponseSize response size to allocate to fit the server's response in full
-     */
-    case class FetchRetry(shuffleRequests: Seq[ShuffleBlockBatchId],
-                          rapidsShuffleFetchHandler: RapidsShuffleFetchHandler,
-                          fullResponseSize: Long)
 
     /**
      * Used to have this client handle the enclosed [[BufferReceiveState]] asynchronously.
@@ -156,8 +142,6 @@ class RapidsShuffleClient(
     op match {
       case HandleMetadataResponse(tx, shuffleRequests, rapidsShuffleFetchHandler) =>
         doHandleMetadataResponse(tx, shuffleRequests, rapidsShuffleFetchHandler)
-      case FetchRetry(shuffleRequests, rapidsShuffleFetchHandler, fullResponseSize) =>
-        doFetch(shuffleRequests, rapidsShuffleFetchHandler, fullResponseSize)
       case IssueBufferReceives(bufferReceiveState) =>
         doIssueBufferReceives(bufferReceiveState)
       case HandleBounceBufferReceive(tx, bufferReceiveState) =>
@@ -190,8 +174,7 @@ class RapidsShuffleClient(
    * @param metadataSize metadata size to use for this fetch
    */
   def doFetch(shuffleRequests: Seq[ShuffleBlockBatchId],
-              handler: RapidsShuffleFetchHandler,
-              metadataSize: Long = maximumMetadataSize): Unit = {
+              handler: RapidsShuffleFetchHandler): Unit = {
     try {
       withResource(new NvtxRange("Client.fetch", NvtxColor.PURPLE)) { _ =>
         if (shuffleRequests.isEmpty) {
@@ -332,11 +315,6 @@ class RapidsShuffleClient(
     val transferReq = new RefCountedDirectByteBuffer(
       ShuffleMetadata.buildTransferRequest(localExecutorId, responseTag,
         requestsToIssue.map(i => (i.tableMeta, i.tag))))
-
-    if (transferReq.getBuffer().remaining() > maximumMetadataSize) {
-      throw new IllegalStateException("Trying to send a transfer request metadata buffer that " +
-        "is larger than the limit.")
-    }
 
     //issue the buffer transfer request
     connection.request(RequestType.TransferRequest, transferReq.acquire(), tx => {

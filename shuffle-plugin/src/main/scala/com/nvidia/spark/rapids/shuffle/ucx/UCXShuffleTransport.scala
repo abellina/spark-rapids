@@ -252,8 +252,7 @@ class UCXShuffleTransport(shuffleServerId: BlockManagerId, rapidsConf: RapidsCon
         clientConnection,
         this,
         clientExecutor,
-        clientCopyExecutor,
-        rapidsConf.shuffleMaxMetadataSize)
+        clientCopyExecutor)
     })
   }
 
