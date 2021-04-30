@@ -22,7 +22,6 @@ import java.util.concurrent.atomic.AtomicInteger
 
 import ai.rapids.cudf.{DeviceMemoryBuffer, MemoryBuffer, NvtxColor, NvtxRange}
 import com.nvidia.spark.rapids.RapidsConf
-
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.rapids.storage.RapidsStorageUtils
 import org.apache.spark.storage.BlockManagerId
@@ -79,7 +78,7 @@ class AddressLengthTag(val address: Long, var length: Long, val tag: Long,
   }
 
   override def toString: String = {
-    s"AddressLengthTag[address=$address, length=$length, tag=${TransportUtils.formatTag(tag)}]"
+    s"AddressLengthTag[address=$address, length=$length, tag=${TransportUtils.toHex(tag)}]"
   }
 
   /**
@@ -104,20 +103,6 @@ object AddressLengthTag {
       memoryBuffer.getLength,
       tag,
       Some(memoryBuffer))
-  }
-
-  /**
-   * Construct an [[AddressLengthTag]] given a `ByteBuffer`
-   * This is used for metadata messages, and the buffers are direct.
-   * @param byteBuffer the buffer the [[AddressLengthTag]] should point to
-   * @param tag the transport tag to use to send/receive this buffer
-   * @return an instance of [[AddressLengthTag]]
-   */
-  def from(byteBuffer: ByteBuffer, tag: Long): AddressLengthTag = {
-    new AddressLengthTag(
-      TransportUtils.getAddress(byteBuffer),
-      byteBuffer.remaining(),
-      tag)
   }
 }
 
@@ -149,24 +134,37 @@ trait ServerConnection extends Connection {
   /**
    * Function to send bounce buffers to a peer
    * @param peerExecutorId peer's executor id to target
-   * @param bounceBuffers bounce buffers to send
+   * @param buffer an [[AddressLengthTag]] for a buffer to send
    * @param cb callback to trigger once done
    * @return the [[Transaction]], which can be used to block wait for this send.
    */
   def send(peerExecutorId: Long,
-           bounceBuffers: Seq[AddressLengthTag],
+           buffer: AddressLengthTag,
            cb: TransactionCallback): Transaction
 
   /**
-   * Function to send bounce buffers to a peer
-   * @param peerExecutorId peer's executor id to target
-   * @param header an [[AddressLengthTag]] containing a metadata message to send
-   * @param cb callback to trigger once done
-   * @return the [[Transaction]], which can be used to block wait for this send.
+   * Registers a callback that will be called any type a `RequestType` message is
+   * received by this `ServerConnection`
+   * @param requestType see `RequestType` enum
+   * @param cb triggered for a success or error on this request
    */
-  def send(peerExecutorId: Long,
-           header: AddressLengthTag,
-           cb: TransactionCallback): Transaction
+  def registerRequestHandler(requestType: RequestType.Value, cb: TransactionCallback): Unit
+
+  /**
+   * Respond to a request.
+   * @param peerExecutorId - executor to send response to
+   * @param messageType - the type of message this is
+   * @param header - a long that should match a request header, requester use this header
+   *               to disambiguate messages
+   * @param response - a direct `ByteBuffer` to be transmitted
+   * @param cb callback to trigger once this respond completes
+   * @return a [[Transaction]] that can be used to block while this transaction is not done
+   */
+  def respond(peerExecutorId: Long,
+              messageType: RequestType.Value,
+              header: Long,
+              response: ByteBuffer,
+              cb: TransactionCallback): Transaction
 }
 
 /**
@@ -193,27 +191,19 @@ object RequestType extends Enumeration {
  */
 trait ClientConnection extends Connection {
   /**
-   * This performs a request/response, where the request is read from one
-   * `AddressLengthTag` `request`, and the response is populated at the memory
-   * described by `response`.
+   * This performs a request/response for a request of type `RequestType`. The response
+   * `Transaction` on completion will call the callback (`cb`). The caller of `request`
+   * must close, or consume the response in the transaction, otherwise we can leak.
    *
-   * @param request the populated request buffer [[AddressLengthTag]]
-   * @param response the response buffer [[AddressLengthTag]] where the response will be
-   *                 stored when the request succeeds.
+   * @param requestType value of the `RequestType` enum
+   * @param request the populated request direct buffer `ByteBuffer`
    * @param cb callback to handle transaction status. If successful the memory described
    *           using "response" will hold the response as expected, otherwise its contents
    *           are not defined.
    * @return a transaction representing the request
    */
-  def request(request: AddressLengthTag,
-              response: AddressLengthTag,
-              cb: TransactionCallback): Transaction
-
-  /**
-   * This function assigns tags that are valid for responses in this connection.
-   * @return a Long tag to use for a response
-   */
-  def assignResponseTag: Long
+  def request(requestType: RequestType.Value, request: ByteBuffer,
+    cb: TransactionCallback): Transaction
 
   /**
    * This function assigns tags for individual buffers to be received in this connection.
@@ -237,18 +227,6 @@ trait ClientConnection extends Connection {
  */
 trait Connection {
   /**
-   * Both the client and the server need to compose request tags depending on the
-   * type of request being sent or handled.
-   *
-   * Note it is up to the implemented to compose the tag in whatever way makes
-   * most sense for the underlying transport.
-   *
-   * @param requestType the type of request this tag is for
-   * @return a Long tag to be used for this request
-   */
-  def composeRequestTag(requestType: RequestType.Value): Long
-
-  /**
    * Function to receive a buffer
    * @param alt an [[AddressLengthTag]] to receive the message
    * @param cb callback to trigger once this receive completes
@@ -256,6 +234,7 @@ trait Connection {
    */
   def receive(alt: AddressLengthTag,
               cb: TransactionCallback): Transaction
+
 }
 
 object TransactionStatus extends Enumeration {
@@ -291,6 +270,17 @@ case class TransactionStats(txTimeMs: Double,
  */
 trait Transaction extends AutoCloseable {
   /**
+   * Get the peer executor id if available
+   * @note this can throw if the `Transaction` was not created due to an Active Message
+   */
+  def peerExecutorId(): Long
+
+  /**
+   * Return this transaction's header, for debug purposes
+   */
+  def getHeader: Long
+
+  /**
    * Get the status this transaction is in. Callbacks use this to handle various transaction states
    * (e.g. success, error, etc.)
    */
@@ -316,6 +306,25 @@ trait Transaction extends AutoCloseable {
    * deadlock.
    */
   def waitForCompletion(): Unit
+
+  /**
+   * Hands over a message (a host-side request or response at the moment)
+   * that is held in the Transaction
+   * @note The caller must call `close` on the returned message
+   * @return a direct ref counted byte buffer, possible from the byte buffer pool
+   */
+  def releaseMessage(): RefCountedDirectByteBuffer
+
+  /**
+   * For `Request` transactions, `respond` will be able to reply to a peer who issued
+   * the request
+   * @note this is only available for server-side transactions, and will throw
+   *       if attempted from a client
+   * @param response a direct ByteBuffer
+   * @param cb triggered when the response succeds/fails
+   * @return a `Transaction` object that can be used to wait for this response to complete
+   */
+  def respond(response: ByteBuffer, cb: TransactionCallback): Transaction
 }
 
 /**
@@ -364,7 +373,7 @@ trait RapidsShuffleTransport extends AutoCloseable {
    * @param size size of buffer required
    * @return the ref counted buffer
    */
-  def getMetaBuffer(size: Long): RefCountedDirectByteBuffer
+  def getDirectByteBuffer(size: Long): RefCountedDirectByteBuffer
 
   /**
    * (throttle) Adds a set of requests to be throttled as limits allowed.
@@ -465,6 +474,8 @@ class RefCountedDirectByteBuffer(
 
   var refCount: Int = 0
 
+  var closed: Boolean = false
+
   /**
    * Adds one to the ref count. Caller should call .close() when done
    * @return wrapped buffer
@@ -480,11 +491,16 @@ class RefCountedDirectByteBuffer(
    */
   def getBuffer(): ByteBuffer = bb
 
+  def isClosed: Boolean = synchronized { closed }
+
   /**
    * Decrements the ref count. If the ref count reaches 0, the buffer is
    * either returned to the (optional) pool or destroyed.
    */
   override def close(): Unit = synchronized {
+    if (closed) {
+      throw new IllegalStateException("Close called too many times!")
+    }
     refCount = refCount - 1
     if (refCount <= 0) {
       if (pool.isDefined) {
@@ -493,6 +509,7 @@ class RefCountedDirectByteBuffer(
         unsafeDestroy() // not pooled, should disappear
       }
     }
+    closed = true
   }
 
   /**
@@ -513,8 +530,12 @@ class RefCountedDirectByteBuffer(
  * A set of util functions used throughout
  */
 object TransportUtils {
-  def formatTag(tag: Long): String = {
+  def toHex(tag: Long): String = {
     f"0x$tag%016X"
+  }
+
+  def toHex(tag: Int): String = {
+    f"0x$tag%08X"
   }
 
   def copyBuffer(src: ByteBuffer, dst: ByteBuffer, size: Int): Unit = {
