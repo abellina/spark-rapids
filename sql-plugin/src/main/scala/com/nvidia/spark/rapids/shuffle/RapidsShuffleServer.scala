@@ -28,7 +28,6 @@ import org.apache.spark.internal.Logging
 import org.apache.spark.sql.rapids.execution.TrampolineUtil
 import org.apache.spark.storage.{BlockManagerId, ShuffleBlockBatchId}
 
-
 /**
  * Trait used for the server to get buffer metadata (for metadata requests), and
  * also to acquire a buffer (for transfer requests)
