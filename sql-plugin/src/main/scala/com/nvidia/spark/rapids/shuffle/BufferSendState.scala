@@ -44,7 +44,7 @@ import org.apache.spark.internal.Logging
  * start, it lasts through all buffers being transmitted, and ultimately finishes when a
  * TransferResponse is sent back to the client.
  *
- * @param request a transfer request
+ * @param transaction a request transaction
  * @param sendBounceBuffers - an object that contains a device and potentially a host
  *                          buffer also
  * @param requestHandler - impl of trait that interfaces to the catalog
@@ -62,20 +62,25 @@ class BufferSendState(
     override def size: Long = tableSize
   }
 
-  private[this] val transferRequest =
-    ShuffleMetadata.getTransferRequest(transaction.releaseMessage().getBuffer())
-  private[this] val bufferMetas = new Array[BufferMeta](transferRequest.requestsLength())
+  private[this] var bufferMetas: Array[BufferMeta] = null
+
   private[this] var isClosed = false
 
   private[this] val blocksToSend: Seq[SendBlock] = {
-    val btr = new BufferTransferRequest() // for reuse
-    (0 until transferRequest.requestsLength()).map { ix  =>
-      val bufferTransferRequest = transferRequest.requests(btr, ix)
-      withResource(requestHandler.acquireShuffleBuffer(
-        bufferTransferRequest.bufferId())) { table =>
-        bufferMetas(ix) = table.meta.bufferMeta()
-        new SendBlock(bufferTransferRequest.bufferId(),
-          bufferTransferRequest.tag(), table.size)
+    withResource(transaction.releaseMessage()) { msg =>
+      val transferRequest = ShuffleMetadata.getTransferRequest(msg.getBuffer())
+
+      bufferMetas = new Array[BufferMeta](transferRequest.requestsLength())
+
+      val btr = new BufferTransferRequest() // for reuse
+      (0 until transferRequest.requestsLength()).map { ix =>
+        val bufferTransferRequest = transferRequest.requests(btr, ix)
+        withResource(requestHandler.acquireShuffleBuffer(
+          bufferTransferRequest.bufferId())) { table =>
+          bufferMetas(ix) = table.meta.bufferMeta()
+          new SendBlock(bufferTransferRequest.bufferId(),
+            bufferTransferRequest.tag(), table.size)
+        }
       }
     }
   }
@@ -96,10 +101,6 @@ class BufferSendState(
   private[this] var blockRanges: Seq[BlockRange[SendBlock]] = windowedBlockIterator.next()
 
   private[this] var acquiredBuffs: Seq[RangeBuffer] = Seq.empty
-
-  def getTransferRequest: TransferRequest = synchronized {
-    transferRequest
-  }
 
   def getRequestTransaction: Transaction = synchronized {
     transaction

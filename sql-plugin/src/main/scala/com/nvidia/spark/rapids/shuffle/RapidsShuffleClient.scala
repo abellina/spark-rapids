@@ -311,20 +311,23 @@ class RapidsShuffleClient(
 
     //issue the buffer transfer request
     connection.request(RequestType.TransferRequest, transferReq.acquire(), tx => {
-      val res = tx.releaseMessage()
-      withResource(Seq(res, transferReq, tx)) { _ =>
-        // make sure all bufferTxs are still valid (e.g. resp says that they have STARTED)
-        val transferResponse = ShuffleMetadata.getTransferResponse(res.getBuffer())
-        logInfo(s"Got TransferResponse ${tx}")
-        (0 until transferResponse.responsesLength()).foreach(r => {
-          val response = transferResponse.responses(r)
-          if (response.state() != TransferState.STARTED) {
-            // we could either re-issue the request, cancelling and releasing memory
-            // or we could re-issue, and leave the old receive waiting
-            // for now, leaving the old receive waiting.
-            throw new IllegalStateException("NOT IMPLEMENTED")
+      withResource(tx.releaseMessage()) { res =>
+        withResource(transferReq) { _ =>
+          withResource(tx) { _ =>
+            // make sure all bufferTxs are still valid (e.g. resp says that they have STARTED)
+            val transferResponse = ShuffleMetadata.getTransferResponse(res.getBuffer())
+            logInfo(s"Got TransferResponse ${tx}")
+            (0 until transferResponse.responsesLength()).foreach(r => {
+              val response = transferResponse.responses(r)
+              if (response.state() != TransferState.STARTED) {
+                // we could either re-issue the request, cancelling and releasing memory
+                // or we could re-issue, and leave the old receive waiting
+                // for now, leaving the old receive waiting.
+                throw new IllegalStateException("NOT IMPLEMENTED")
+              }
+            })
           }
-        })
+        }
       }
     })
   }
