@@ -401,7 +401,7 @@ private[ucx] class UCXTransaction(conn: UCXConnection, val txId: Long)
   }
 
   // Reference count is not updated here. The caller is responsible to close
-  def setMessage(resp: RefCountedDirectByteBuffer): Unit = {
+  private[ucx] def setMessage(resp: RefCountedDirectByteBuffer): Unit = {
     response = Option(resp)
   }
 

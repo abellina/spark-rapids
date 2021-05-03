@@ -334,6 +334,7 @@ class UCX(transport: UCXShuffleTransport,
             amData.receive(UcxUtils.getAddress(resp.getBuffer()),new UcxCallback {
               override def onError(ucsStatus: Int, errorMsg: String): Unit = {
                 logError(s"V. AM ERROR ${ucsStatus} ${errorMsg}")
+                resp.close()
               }
               override def onSuccess(request: UcpRequest): Unit = {
                 // TODO: request is null?
@@ -345,6 +346,7 @@ class UCX(transport: UCXShuffleTransport,
             amData.receive(UcxUtils.getAddress(resp.getBuffer()),new UcxCallback {
               override def onError(ucsStatus: Int, errorMsg: String): Unit = {
                 logError(s"NV. AM ERROR ${ucsStatus} ${errorMsg}")
+                resp.close()
                 amData.close()
               }
               override def onSuccess(request: UcpRequest): Unit = {

@@ -228,8 +228,6 @@ trait ClientConnection extends Connection {
    * @return the executorId as a long
    */
   def getPeerExecutorId: Long
-
-  def setupCallback(reqType: RequestType.Value): Unit
 }
 
 /**
