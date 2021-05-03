@@ -171,7 +171,6 @@ class RapidsShuffleClient(
    *
    * @param shuffleRequests blocks to fetch
    * @param handler iterator to callback to
-   * @param metadataSize metadata size to use for this fetch
    */
   def doFetch(shuffleRequests: Seq[ShuffleBlockBatchId],
               handler: RapidsShuffleFetchHandler): Unit = {
@@ -181,9 +180,8 @@ class RapidsShuffleClient(
           throw new IllegalStateException("Sending empty blockIds in the MetadataRequest?")
         }
 
-        val metaReq = new RefCountedDirectByteBuffer(ShuffleMetadata.buildShuffleMetadataRequest(
-          localExecutorId, // needed s.t. the server knows what endpoint to pick
-          shuffleRequests)) // TODO: metadataSize not used anymore (REMOVE THIS)
+        val metaReq = new RefCountedDirectByteBuffer(
+          ShuffleMetadata.buildShuffleMetadataRequest(shuffleRequests))
 
         logInfo(s"Requesting block_ids=[$shuffleRequests] from connection $connection, req: \n " +
             s"${ShuffleMetadata.printRequest(
@@ -309,12 +307,8 @@ class RapidsShuffleClient(
     logDebug(s"Sending a transfer request for " +
         s"${requestsToIssue.map(r => TransportUtils.formatTag(r.tag)).mkString(",")}")
 
-    // TODO: remove get a tag that the server can use to send its reply
-    val responseTag = connection.assignResponseTag
-
     val transferReq = new RefCountedDirectByteBuffer(
-      ShuffleMetadata.buildTransferRequest(localExecutorId, responseTag,
-        requestsToIssue.map(i => (i.tableMeta, i.tag))))
+      ShuffleMetadata.buildTransferRequest(requestsToIssue.map(i => (i.tableMeta, i.tag))))
 
     //issue the buffer transfer request
     connection.request(RequestType.TransferRequest, transferReq.acquire(), tx => {

@@ -175,7 +175,6 @@ trait ServerConnection extends Connection {
  * Currently supported request types in the transport
  */
 object RequestType extends Enumeration {
-  val Reserved = Value // start ids at 1
   /**
    * A client will issue: `MetadataRequest`
    * A server will respond with: `MetadataResponse`
@@ -211,7 +210,7 @@ trait ClientConnection extends Connection {
   def request(requestType: RequestType.Value, request: ByteBuffer,
     cb: TransactionCallback): Transaction
 
-  /**
+  /*
    * This function assigns tags that are valid for responses in this connection.
    * @return a Long tag to use for a response
    */
@@ -295,6 +294,8 @@ case class TransactionStats(txTimeMs: Double,
  * outside of [[waitForCompletion]] produces undefined behavior.
  */
 trait Transaction extends AutoCloseable {
+  def peerExecutorId(): Int
+
   def getHeader: Long
 
   /**
@@ -324,9 +325,7 @@ trait Transaction extends AutoCloseable {
    */
   def waitForCompletion(): Unit
 
-  def respond(requestType: RequestType.Value,
-              peerExecutorId: Long,
-              response: ByteBuffer,
+  def respond(response: ByteBuffer,
               cb: TransactionCallback): Transaction
 
   def releaseMessage(): RefCountedDirectByteBuffer

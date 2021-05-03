@@ -199,7 +199,7 @@ class BufferSendState(
     }
 
     logDebug(s"Sending ${buffsToSend} for transfer request, " +
-        s" [peer_executor_id=${transferRequest.executorId()}]")
+        s" [peer_executor_id=${transaction.peerExecutorId()}]")
 
     buffsToSend
   }
