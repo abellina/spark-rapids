@@ -205,7 +205,6 @@ class RapidsShuffleClient(
    * Function to handle MetadataResponses, as a result of the [[HandleMetadataResponse]] event.
    *
    * @param tx live metadata response transaction to be closed in this handler
-   * @param resp response buffer, to be closed in this handler
    * @param shuffleRequests blocks to fetch
    * @param handler iterator to callback to
    */

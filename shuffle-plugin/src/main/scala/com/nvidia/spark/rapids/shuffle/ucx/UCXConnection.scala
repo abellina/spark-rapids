@@ -53,7 +53,8 @@ class UCXServerConnection(ucx: UCX) extends UCXConnection(ucx) with ServerConnec
     cb: TransactionCallback): Transaction =
     send(sendPeerExecutorId, header, Seq.empty, cb)
 
-  def registerRequestHandler(requestType: RequestType.Value, cb: TransactionCallback): Unit = {
+  override def registerRequestHandler(
+      requestType: RequestType.Value, cb: TransactionCallback): Unit = {
     ucx.setActiveMessageCallback(
       composeRequestAmId(requestType),
       (hdr, resp, _) =>  {
@@ -89,12 +90,12 @@ class UCXClientConnection(peerExecutorId: Int, peerClientId: Long, ucx: UCX)
 
   override def getPeerExecutorId: Long = peerExecutorId
 
-  var callbacks = new ConcurrentHashMap[Long, TransactionCallback]()
+  private val callbacks = new ConcurrentHashMap[Long, TransactionCallback]()
 
-  var responseHandlers = new ConcurrentHashMap[RequestType.Value, TransactionCallback]()
+  private val responseHandlers = new ConcurrentHashMap[RequestType.Value, TransactionCallback]()
 
-  def responseHandler(requestType: RequestType.Value, cb: TransactionCallback)
-                     (id: Option[Long], resp: RefCountedDirectByteBuffer, responseEp: UcpEndpoint): Unit = {
+  def registerResponseHandler(requestType: RequestType.Value, cb: TransactionCallback)
+                             (id: Option[Long], resp: RefCountedDirectByteBuffer, responseEp: UcpEndpoint): Unit = {
     //logInfo(s"At responseHandler for ${requestType} " +
     //  s"amId ${TransportUtils.formatTag(amId)} header ${TransportUtils.formatTag(id.get)} " +
     //  s"and ${peerExecutorId} ${resp}")
@@ -106,7 +107,7 @@ class UCXClientConnection(peerExecutorId: Int, peerClientId: Long, ucx: UCX)
     tx.txCallback(TransactionStatus.Success)
   }
 
-  def setupCallback(requestType: RequestType.Value): Unit = {
+  def registerResponseHandler(requestType: RequestType.Value): Unit = {
     responseHandlers.computeIfAbsent(requestType, _ => {
       val cb: TransactionCallback = tx => {
         val responseTag = tx.getHeader
@@ -127,7 +128,7 @@ class UCXClientConnection(peerExecutorId: Int, peerClientId: Long, ucx: UCX)
 
       val responseAmId = composeResponseAmId(requestType)
       ucx.registerResponseHandler(responseAmId,
-        peerExecutorId, responseHandler(requestType, cb))
+        peerExecutorId, registerResponseHandler(requestType, cb))
       cb
     })
   }
@@ -137,7 +138,7 @@ class UCXClientConnection(peerExecutorId: Int, peerClientId: Long, ucx: UCX)
                        cb: TransactionCallback): Transaction = {
     val tx = createTransaction
     // register if we haven't already
-    setupCallback(requestType)
+    registerResponseHandler(requestType)
     tx.start(UCXTransactionType.Request, 1, cb)
 
     logInfo(s"Performing a ${requestType} request $request for tx ${tx} " +
