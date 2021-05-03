@@ -18,29 +18,21 @@ public final class MetadataRequest extends Table {
   public MetadataRequest __assign(int _i, ByteBuffer _bb) { __init(_i, _bb); return this; }
 
   /**
-   * Spark executor ID
-   */
-  public long executorId() { int o = __offset(4); return o != 0 ? bb.getLong(o + bb_pos) : 0L; }
-  public boolean mutateExecutorId(long executor_id) { int o = __offset(4); if (o != 0) { bb.putLong(o + bb_pos, executor_id); return true; } else { return false; } }
-  /**
    * array of shuffle block descriptors for which metadata is needed
    */
   public BlockIdMeta blockIds(int j) { return blockIds(new BlockIdMeta(), j); }
-  public BlockIdMeta blockIds(BlockIdMeta obj, int j) { int o = __offset(6); return o != 0 ? obj.__assign(__indirect(__vector(o) + j * 4), bb) : null; }
-  public int blockIdsLength() { int o = __offset(6); return o != 0 ? __vector_len(o) : 0; }
+  public BlockIdMeta blockIds(BlockIdMeta obj, int j) { int o = __offset(4); return o != 0 ? obj.__assign(__indirect(__vector(o) + j * 4), bb) : null; }
+  public int blockIdsLength() { int o = __offset(4); return o != 0 ? __vector_len(o) : 0; }
 
   public static int createMetadataRequest(FlatBufferBuilder builder,
-      long executor_id,
       int block_idsOffset) {
-    builder.startObject(2);
-    MetadataRequest.addExecutorId(builder, executor_id);
+    builder.startObject(1);
     MetadataRequest.addBlockIds(builder, block_idsOffset);
     return MetadataRequest.endMetadataRequest(builder);
   }
 
-  public static void startMetadataRequest(FlatBufferBuilder builder) { builder.startObject(2); }
-  public static void addExecutorId(FlatBufferBuilder builder, long executorId) { builder.addLong(0, executorId, 0L); }
-  public static void addBlockIds(FlatBufferBuilder builder, int blockIdsOffset) { builder.addOffset(1, blockIdsOffset, 0); }
+  public static void startMetadataRequest(FlatBufferBuilder builder) { builder.startObject(1); }
+  public static void addBlockIds(FlatBufferBuilder builder, int blockIdsOffset) { builder.addOffset(0, blockIdsOffset, 0); }
   public static int createBlockIdsVector(FlatBufferBuilder builder, int[] data) { builder.startVector(4, data.length, 4); for (int i = data.length - 1; i >= 0; i--) builder.addOffset(data[i]); return builder.endVector(); }
   public static void startBlockIdsVector(FlatBufferBuilder builder, int numElems) { builder.startVector(4, numElems, 4); }
   public static int endMetadataRequest(FlatBufferBuilder builder) {
