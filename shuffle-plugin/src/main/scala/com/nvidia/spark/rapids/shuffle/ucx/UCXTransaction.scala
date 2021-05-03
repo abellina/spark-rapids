@@ -41,9 +41,16 @@ private[ucx] object UCXTransactionType extends Enumeration {
 
 private[ucx] class UCXTransaction(conn: UCXConnection, val txId: Long)
   extends Transaction with Logging {
-  var header: Option[Long] = None
 
-  def setHeader(id: Option[Long]): Unit = header = id
+  private[ucx] var header: Option[Long] = None
+
+  private[ucx] def setHeader(id: Option[Long]): Unit = header = id
+
+  private var messageType: Option[RequestType.Value] = None
+
+  private[ucx] def setMessageType(msgType: RequestType.Value): Unit = {
+    messageType = Option(msgType)
+  }
 
   // various threads can access the status during the course of a Transaction
   // the UCX progress thread, client/server pools, and the executor task thread
@@ -366,14 +373,12 @@ private[ucx] class UCXTransaction(conn: UCXConnection, val txId: Long)
 
   var response: Option[RefCountedDirectByteBuffer] = None
 
-  override def respond(requestType: RequestType.Value,
-                       peerExecutorId: Long,
-                       response: ByteBuffer,
+  override def respond(response: ByteBuffer,
                        cb: TransactionCallback): Transaction = {
     val tx = conn.createTransaction
     tx.registerCb(cb)
 
-    val amId = conn.composeResponseAmId(requestType)
+    val amId = conn.composeResponseAmId(messageType.get)
     logInfo(s"Responding to ${peerExecutorId} at ${TransportUtils.formatTag(this.getHeader)} " +
       s"with ${response}")
     conn.ucx.sendAm(peerExecutorId,
@@ -407,5 +412,10 @@ private[ucx] class UCXTransaction(conn: UCXConnection, val txId: Long)
   }
 
   override def getHeader: Long= header.get
+
+  override def peerExecutorId(): Int = {
+    require(header.nonEmpty)
+    ((header.get & 0xFFFFFFFF00000000L) >> 32).toInt
+  }
 }
 

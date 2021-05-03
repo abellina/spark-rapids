@@ -352,24 +352,23 @@ class UCX(transport: UCXShuffleTransport,
     def apply(id: Option[Long], buff: RefCountedDirectByteBuffer, ucpEndpoint: UcpEndpoint): Unit
   }
 
-  var peerAmCallbacks = new ConcurrentHashMap[(RequestType.Value, Int), AmCallback]()
-  val responseAmCallbacks = new ConcurrentHashMap[RequestType.Value, Boolean]()
+  var peerAmCallbacks = new ConcurrentHashMap[(Int, Int), AmCallback]()
+  val responseAmCallbacks = new ConcurrentHashMap[Int, Int]()
 
   // establish a response callback for a specific requestType and peerExecutorId
   // requestType + response message type is part of amId
-  def registerResponseHandler(requestType: RequestType.Value, peerExecutorId: Int,
+  def registerResponseHandler(amId: Int, peerExecutorId: Int,
                               cb: AmCallback): Unit = {
-    logInfo(s"setup responseHandler for ${TransportUtils.formatTag(requestType.id + 16)}")
-    peerAmCallbacks.put((requestType, peerExecutorId), cb)
-    responseAmCallbacks.computeIfAbsent(requestType, _ => {
-      setActiveMessageCallback(requestType.id + 16, (id, resp, responseEp) => {
+    logInfo(s"setup responseHandler for ${TransportUtils.formatTag(amId)}")
+    peerAmCallbacks.put((amId, peerExecutorId), cb)
+    responseAmCallbacks.computeIfAbsent(amId, _ => {
+      setActiveMessageCallback(amId, (id, resp, responseEp) => {
         logInfo(s"Getting peer am callback for amId " +
-          s"${TransportUtils.formatTag(requestType.id + 16)} " +
+          s"${TransportUtils.formatTag(amId)} " +
           s"header: ${TransportUtils.formatTag(id.get)} " +
           s"peerExec: ${peerExecutorId}")
-        peerAmCallbacks.get((requestType, peerExecutorId))(id, resp, responseEp)
+        peerAmCallbacks.get((amId, peerExecutorId))(id, resp, responseEp)
       })
-      true
     })
   }
 
@@ -379,12 +378,11 @@ class UCX(transport: UCXShuffleTransport,
       logInfo(s"Setting am recv handler for active message ${TransportUtils.formatTag(amId)}")
       worker.setAmRecvHandler(amId,
         (headerAddr, headerSize, amData: UcpAmData, replyEp: UcpEndpoint) => {
-          logInfo(s"AT CALLBACK ${TransportUtils.formatTag(amId)} -- " +
+          logDebug(s"AT CALLBACK ${TransportUtils.formatTag(amId)} -- " +
             s"${headerAddr} -- ${headerSize} -- ${amData}")
-          val id = if (headerSize == 8) {
-            val hdr = Option(UcxUtils.getByteBufferView(headerAddr, headerSize).getLong)
-            logInfo(s"GOT HEADER ${TransportUtils.formatTag(hdr.get)}")
-            hdr
+
+          val hdr = if (headerSize == 8) {
+            Option(UcxUtils.getByteBufferView(headerAddr, headerSize).getLong)
           } else {
             None
           }
@@ -394,30 +392,25 @@ class UCX(transport: UCXShuffleTransport,
           if (amData.isDataValid) {
             amData.receive(UcxUtils.getAddress(resp.getBuffer()),new UcxCallback {
               override def onError(ucsStatus: Int, errorMsg: String): Unit = {
-                logInfo(s"V. AM ERROR ${ucsStatus} ${errorMsg}")
+                logError(s"V. AM ERROR ${ucsStatus} ${errorMsg}")
               }
               override def onSuccess(request: UcpRequest): Unit = {
                 // TODO: request is null?
-                logInfo(s"V. AM receive success")
-                cb(id, resp, replyEp)
+                cb(hdr, resp, replyEp)
               }
             })
-            logInfo(s"V. Done with callback")
             UcsConstants.STATUS.UCS_OK
           } else {
-            logInfo(s"At recvAm")
             amData.receive(UcxUtils.getAddress(resp.getBuffer()),new UcxCallback {
               override def onError(ucsStatus: Int, errorMsg: String): Unit = {
-                logInfo(s"V. AM ERROR ${ucsStatus} ${errorMsg}")
+                logError(s"NV. AM ERROR ${ucsStatus} ${errorMsg}")
                 amData.close()
               }
               override def onSuccess(request: UcpRequest): Unit = {
-                logInfo(s"V. AM receive success for ${request}")
-                cb(id, resp, replyEp)
+                cb(hdr, resp, replyEp)
                 amData.close()
               }
             })
-            logInfo(s"NV. Done with callback")
             UcsConstants.STATUS.UCS_INPROGRESS
           }
         })

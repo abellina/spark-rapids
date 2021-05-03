@@ -273,7 +273,7 @@ class RapidsShuffleServer(transport: RapidsShuffleTransport,
             val req = ShuffleMetadata.getMetadataRequest(metaRequest.getBuffer())
 
             // target executor to respond to
-            val peerExecutorId = req.executorId()
+            val peerExecutorId = tx.peerExecutorId()
 
             logInfo(s"Received request req:\n: ${ShuffleMetadata.printRequest(req)}")
             logInfo(s"HandleMetadataRequest for peerExecutorId $peerExecutorId and " +
@@ -300,8 +300,7 @@ class RapidsShuffleServer(transport: RapidsShuffleTransport,
               s"${ShuffleMetadata.printResponse("responding", materializedResponse)}")
 
             // Issue the send against [[peerExecutorId]] as described by the metadata message
-            val responseTx = tx.respond(RequestType.MetadataRequest,
-              peerExecutorId, respBuffer.getBuffer(), responseTx => {
+            val responseTx = tx.respond(respBuffer.getBuffer(), responseTx => {
                 withResource(responseTx) { responseTx =>
                   withResource(respBuffer) { _ =>
                     if (responseTx.getStatus == TransactionStatus.Error) {
@@ -347,9 +346,9 @@ class RapidsShuffleServer(transport: RapidsShuffleTransport,
       bufferSendStates.foreach(_.releaseAcquiredToCatalog())
 
       bssBuffers.foreach { case (bufferSendState, buffersToSend) =>
-        val transferRequest = bufferSendState.getTransferRequest
-        serverConnection.send(transferRequest.executorId(), buffersToSend, bufferTx =>
-          try {
+        val peerExecutorId = bufferSendState.getRequestTransaction.peerExecutorId()
+        serverConnection.send(peerExecutorId, buffersToSend, bufferTx =>
+          withResource(bufferTx) { _ =>
             logInfo(s"Done with the send for ${bufferSendState} with ${buffersToSend}")
 
             if (bufferSendState.hasNext) {
@@ -366,13 +365,11 @@ class RapidsShuffleServer(transport: RapidsShuffleTransport,
               val requestTx = bufferSendState.getRequestTransaction
 
               logInfo(s"Handling transfer request ${requestTx} for " +
-                s"${transferRequest.executorId()} " +
+                s"${peerExecutorId} " +
                 s"with ${buffersToSend}")
 
               // send the transfer response
-              requestTx.respond(RequestType.TransferRequest,
-                transferRequest.executorId,
-                transferResponse.acquire(),
+              requestTx.respond(transferResponse.acquire(),
                 transferResponseTx => {
                   withResource(transferResponseTx) { _ =>
                     logInfo(s"TransferRequest response done ${transferResponseTx}")
@@ -388,8 +385,6 @@ class RapidsShuffleServer(transport: RapidsShuffleTransport,
                 bssExec.notifyAll()
               }
             }
-          } finally {
-            bufferTx.close()
           })
       }
     }

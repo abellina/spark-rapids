@@ -56,13 +56,14 @@ class UCXServerConnection(ucx: UCX) extends UCXConnection(ucx) with ServerConnec
   def registerRequestHandler(requestType: RequestType.Value, cb: TransactionCallback): Unit = {
     ucx.setActiveMessageCallback(
       composeRequestAmId(requestType),
-      (hdr, resp, responseEp) =>  {
+      (hdr, resp, _) =>  {
         logInfo(s"At requestHandler for ${requestType} and header " +
           s"${TransportUtils.formatTag(hdr.get)}")
         val tx = createTransaction
         tx.start(UCXTransactionType.Request, 1, cb)
         tx.setHeader(hdr)
         tx.setMessage(resp)
+        tx.setMessageType(requestType)
         //TODO: do we care/want the responseEp? tx.setResponseEndpoint(responseEp)
         tx.txCallback(TransactionStatus.Success)
       })
@@ -123,7 +124,10 @@ class UCXClientConnection(peerExecutorId: Int, peerClientId: Long, ucx: UCX)
             s"Could not find callback for ${tx} ${TransportUtils.formatTag(responseTag)}")
         }
       }
-      ucx.registerResponseHandler(requestType, peerExecutorId, responseHandler(requestType, cb))
+
+      val responseAmId = composeResponseAmId(requestType)
+      ucx.registerResponseHandler(responseAmId,
+        peerExecutorId, responseHandler(requestType, cb))
       cb
     })
   }
@@ -138,11 +142,13 @@ class UCXClientConnection(peerExecutorId: Int, peerClientId: Long, ucx: UCX)
 
     logInfo(s"Performing a ${requestType} request $request for tx ${tx} " +
       s"${TransportUtils.formatTag(tx.txId)}")
-    callbacks.put(tx.txId, cb)
+
+    val hdr = composeTag((ucx.executorId.toLong << 32), tx.txId)
+    callbacks.put(hdr, cb)
 
     ucx.sendAm(
       peerExecutorId,
-      tx.txId, // transaction id as header
+      hdr,
       requestType.id, // peer request amId
       TransportUtils.getAddress(request),
       request.remaining(),
@@ -203,7 +209,7 @@ class UCXConnection(peerExecutorId: Int, val ucx: UCX) extends Connection with L
     amId
   }
 
-  private def composeTag(upperBits: Long, lowerBits: Long): Long = {
+  def composeTag(upperBits: Long, lowerBits: Long): Long = {
     if ((upperBits & 0xFFFFFFFF00000000L) != upperBits) {
       throw new IllegalArgumentException(
         s"Invalid tag, upperBits would alias: ${TransportUtils.formatTag(upperBits)}")
