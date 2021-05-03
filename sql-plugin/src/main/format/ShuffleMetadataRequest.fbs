@@ -24,9 +24,6 @@ table BlockIdMeta {
 
 /// Flat buffer for Rapids UCX Shuffle Metadata Request.
 table MetadataRequest {
-  /// Spark executor ID
-  executor_id: long;
-
   /// array of shuffle block descriptors for which metadata is needed
   block_ids : [BlockIdMeta];
 }
