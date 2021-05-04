@@ -183,14 +183,14 @@ class RapidsShuffleClient(
         val metaReq = new RefCountedDirectByteBuffer(
           ShuffleMetadata.buildShuffleMetadataRequest(shuffleRequests))
 
-        logInfo(s"Requesting block_ids=[$shuffleRequests] from connection $connection, req: \n " +
+        logDebug(s"Requesting block_ids=[$shuffleRequests] from connection $connection, req: \n " +
             s"${ShuffleMetadata.printRequest(
               ShuffleMetadata.getMetadataRequest(metaReq.getBuffer()))}")
 
         // make request
         connection.request(RequestType.MetadataRequest, metaReq.acquire(), tx => {
           withResource(metaReq) { _ =>
-            logInfo(s"at callback for ${tx}")
+            logDebug(s"at callback for ${tx}")
             handleOp(HandleMetadataResponse(tx, shuffleRequests, handler))
           }
         })
@@ -222,7 +222,7 @@ class RapidsShuffleClient(
                 val metadataResponse: MetadataResponse =
                   ShuffleMetadata.getMetadataResponse(resp.getBuffer())
 
-                logInfo(s"Received from ${tx} response: \n:" +
+                logDebug(s"Received from ${tx} response: \n:" +
                   s"${ShuffleMetadata.printResponse("received response", metadataResponse)}")
 
                 // signal to the handler how many batches are expected
@@ -281,7 +281,7 @@ class RapidsShuffleClient(
       tx => {
         tx.getStatus match {
           case TransactionStatus.Success =>
-            logInfo(s"Handling response for $alt")
+            logDebug(s"Handling response for $alt")
             asyncOnCopyThread(HandleBounceBufferReceive(tx, bufferReceiveState))
           case _ => try {
             val errMsg = s"Unsuccessful buffer receive ${tx}"
@@ -316,7 +316,6 @@ class RapidsShuffleClient(
           withResource(tx) { _ =>
             // make sure all bufferTxs are still valid (e.g. resp says that they have STARTED)
             val transferResponse = ShuffleMetadata.getTransferResponse(res.getBuffer())
-            logInfo(s"Got TransferResponse ${tx}")
             (0 until transferResponse.responsesLength()).foreach(r => {
               val response = transferResponse.responses(r)
               if (response.state() != TransferState.STARTED) {

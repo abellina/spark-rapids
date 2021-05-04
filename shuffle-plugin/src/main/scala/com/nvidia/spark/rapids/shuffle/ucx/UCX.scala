@@ -26,7 +26,7 @@ import scala.collection.mutable.ArrayBuffer
 import ai.rapids.cudf.{MemoryBuffer, NvtxColor, NvtxRange}
 import com.google.common.util.concurrent.ThreadFactoryBuilder
 import com.nvidia.spark.rapids.GpuDeviceManager
-import com.nvidia.spark.rapids.shuffle.{AddressLengthTag, ClientConnection, MemoryRegistrationCallback, RefCountedDirectByteBuffer, RequestType, Transaction, TransportUtils}
+import com.nvidia.spark.rapids.shuffle.{AddressLengthTag, ClientConnection, MemoryRegistrationCallback, RefCountedDirectByteBuffer, RequestType, Transaction, TransactionCallback, TransportUtils}
 import org.apache.hadoop.yarn.client.api.AMRMClient
 import org.openucx.jucx._
 import org.openucx.jucx.ucp._
@@ -293,8 +293,9 @@ class UCX(transport: UCXShuffleTransport,
     def apply(id: Option[Long], buff: RefCountedDirectByteBuffer, ucpEndpoint: UcpEndpoint): Unit
   }
 
-  var peerAmCallbacks = new ConcurrentHashMap[(Int, Int), AmCallback]()
-  val responseAmCallbacks = new ConcurrentHashMap[Int, Int]()
+  private val responseAmCallbacks = new ConcurrentHashMap[Int, Int]()
+
+  private val callbacks = new ConcurrentHashMap[Long, AmCallback]()
 
   /**
    * Register a response handler (clients will use this)
@@ -302,16 +303,20 @@ class UCX(transport: UCXShuffleTransport,
    * @param peerExecutorId
    * @param cb
    */
-  def registerResponseHandler(amId: Int, peerExecutorId: Int, cb: AmCallback): Unit = {
-    logInfo(s"setup responseHandler for ${TransportUtils.formatTag(amId)}")
-    peerAmCallbacks.put((amId, peerExecutorId), cb)
+  def registerResponseHandler(amId: Int, peerExecutorId: Int, hdr: Long, cb: AmCallback): Unit = {
+    logDebug(s"setup responseHandler for ${peerExecutorId} and " +
+      s"amId ${TransportUtils.formatTag(amId)}")
+    callbacks.put(hdr, cb)
     responseAmCallbacks.computeIfAbsent(amId, _ => {
       setActiveMessageCallback(amId, (id, resp, responseEp) => {
-        logInfo(s"Getting peer am callback for amId " +
+        val peerExec = ((id.get & 0xFFFFFFFF00000000L) >> 32).toInt
+        logDebug(s"Getting peer am callback for amId " +
           s"${TransportUtils.formatTag(amId)} " +
           s"header: ${TransportUtils.formatTag(id.get)} " +
-          s"peerExec: ${peerExecutorId}")
-        peerAmCallbacks.get((amId, peerExecutorId))(id, resp, responseEp)
+          s"peerExec: $peerExec")
+        logInfo(s"${callbacks.size()} active messages pending")
+        callbacks.get(id.get)(id, resp, responseEp)
+        callbacks.remove(id.get)
       })
     })
   }
@@ -367,7 +372,7 @@ class UCX(transport: UCXShuffleTransport,
   def sendAm(epId: Long, hdr: Long, amId: Int, address: Long, size: Long, cb: UcxCallback): Unit = {
     onWorkerThreadAsync(() => {
       val ep = endpoints.get(epId)
-      logInfo(s"sending to amId: ${TransportUtils.formatTag(amId)} msg of size ${size}")
+      logDebug(s"sending to amId: ${TransportUtils.formatTag(amId)} msg of size ${size}")
 
       val header = new RefCountedDirectByteBuffer(ByteBuffer.allocateDirect(8))
       header.acquire()
@@ -383,7 +388,6 @@ class UCX(transport: UCXShuffleTransport,
         UcpConstants.UCP_AM_SEND_FLAG_RNDV,
         new UcxCallback {
           override def onSuccess(request: UcpRequest): Unit = {
-            logInfo("Active message success!")
             if (cb != null) {
               cb.onSuccess(request)
             }
@@ -391,7 +395,6 @@ class UCX(transport: UCXShuffleTransport,
           }
 
           override def onError(ucsStatus: Int, errorMsg: String): Unit = {
-            logInfo(s"Active message error ${errorMsg}")
             if (cb != null) {
               cb.onError(ucsStatus, errorMsg)
             }

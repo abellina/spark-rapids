@@ -380,7 +380,7 @@ private[ucx] class UCXTransaction(conn: UCXConnection, val txId: Long)
     tx.registerCb(cb)
 
     val amId = conn.composeResponseAmId(messageType.get)
-    logInfo(s"Responding to ${peerExecutorId} at ${TransportUtils.formatTag(this.getHeader)} " +
+    logDebug(s"Responding to ${peerExecutorId} at ${TransportUtils.formatTag(this.getHeader)} " +
       s"with ${response}")
     conn.ucx.sendAm(peerExecutorId,
       this.getHeader,
@@ -389,7 +389,7 @@ private[ucx] class UCXTransaction(conn: UCXConnection, val txId: Long)
       response.remaining(),
       new UcxCallback {
         override def onSuccess(request: UcpRequest): Unit = {
-          logInfo(s"AM success respond")
+          logDebug(s"AM success respond")
           tx.txCallback(TransactionStatus.Success)
         }
 
