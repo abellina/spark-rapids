@@ -339,17 +339,7 @@ class UCX(transport: UCXShuffleTransport,
           val resp = transport.getDirectByteBuffer(amData.getLength)
 
           if (amData.isDataValid) {
-            amData.receive(UcxUtils.getAddress(resp.getBuffer()),new UcxCallback {
-              override def onError(ucsStatus: Int, errorMsg: String): Unit = {
-                logError(s"V. AM ERROR ${ucsStatus} ${errorMsg}")
-                resp.close()
-              }
-              override def onSuccess(request: UcpRequest): Unit = {
-                // TODO: request is null?
-                cb(hdr, resp, replyEp)
-              }
-            })
-            UcsConstants.STATUS.UCS_OK
+            throw new NotImplementedError("Should be RNDV only")
           } else {
             amData.receive(UcxUtils.getAddress(resp.getBuffer()),new UcxCallback {
               override def onError(ucsStatus: Int, errorMsg: String): Unit = {

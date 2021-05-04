@@ -249,7 +249,7 @@ class RapidsShuffleServer(transport: RapidsShuffleTransport,
               pendingTransfersQueue.add(pendingTransfer)
               bssExec.notifyAll()
             }
-            logInfo(s"Got a transfer request ${pendingTransfer} from ${tx}. " +
+            logDebug(s"Got a transfer request ${pendingTransfer} from ${tx}. " +
               s"Pending requests [new=${pendingTransfersQueue.size}, " +
               s"continuing=${bssContinueQueue.size}]")
         }
@@ -372,7 +372,6 @@ class RapidsShuffleServer(transport: RapidsShuffleTransport,
               requestTx.respond(transferResponse.acquire(),
                 transferResponseTx => {
                   withResource(transferResponseTx) { _ =>
-                    logInfo(s"TransferRequest response done ${transferResponseTx}")
                     transferResponse.close()
                   }
                 })
