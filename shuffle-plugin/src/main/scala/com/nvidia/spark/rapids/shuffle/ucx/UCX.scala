@@ -399,8 +399,6 @@ class UCX(transport: UCXShuffleTransport,
           }
         })
     })
-
-
   }
 
   def getServerConnection: UCXServerConnection = serverConnection
