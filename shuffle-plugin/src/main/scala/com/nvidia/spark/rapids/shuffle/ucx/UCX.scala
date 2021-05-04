@@ -335,12 +335,15 @@ class UCX(transport: UCXShuffleTransport,
           } else {
             None
           }
-
-          val resp = transport.getDirectByteBuffer(amData.getLength)
-
           if (amData.isDataValid) {
-            throw new NotImplementedError("Should be RNDV only")
+            val resp = UcxUtils.getByteBufferView(amData.getDataAddress, amData.getLength)
+            val b = new RefCountedDirectByteBuffer(resp)
+            // leak it on purpose
+            b.acquire()
+            cb(hdr, b, replyEp)
+            UcsConstants.STATUS.UCS_INPROGRESS
           } else {
+            val resp = transport.getDirectByteBuffer(amData.getLength)
             amData.receive(UcxUtils.getAddress(resp.getBuffer()),new UcxCallback {
               override def onError(ucsStatus: Int, errorMsg: String): Unit = {
                 logError(s"NV. AM ERROR ${ucsStatus} ${errorMsg}")
@@ -375,7 +378,7 @@ class UCX(transport: UCXShuffleTransport,
         8L,
         address,
         size,
-        UcpConstants.UCP_AM_SEND_FLAG_RNDV,
+        UcpConstants.UCP_AM_SEND_FLAG_EAGER,
         new UcxCallback {
           override def onSuccess(request: UcpRequest): Unit = {
             if (cb != null) {
