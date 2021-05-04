@@ -127,7 +127,7 @@ class UCXClientConnection(peerExecutorId: Int, peerClientId: Long, ucx: UCX)
 
     tx.start(UCXTransactionType.Request, 1, cb)
 
-    logInfo(s"Performing a ${requestType} request $request for tx ${tx} " +
+    logDebug(s"Performing a ${requestType} request $request for tx ${tx} " +
       s"and header ${TransportUtils.formatTag(hdr)}")
 
     ucx.sendAm(

@@ -275,7 +275,7 @@ class RapidsShuffleClient(
   private def receiveBuffers(bufferReceiveState: BufferReceiveState): Transaction = {
     val alt = bufferReceiveState.next()
 
-    logInfo(s"Issuing receive for $alt")
+    logDebug(s"Issuing receive for $alt")
 
     connection.receive(alt,
       tx => {
@@ -378,7 +378,6 @@ class RapidsShuffleClient(
     try {
       withResource(new NvtxRange("Buffer Callback", NvtxColor.RED)) { _ =>
         withResource(tx) { tx =>
-          logInfo(s"Over at buffer cb here ${tx}")
           // consume buffers, which will non empty for batches that are ready
           // to be handed off to the catalog
           val buffMetas = bufferReceiveState.consumeWindow()
@@ -404,14 +403,14 @@ class RapidsShuffleClient(
                 s"tasks completed.")
           }
 
-          logInfo(s"Received buffer size ${stats.receiveSize} in" +
+          logDebug(s"Received buffer size ${stats.receiveSize} in" +
               s" ${stats.txTimeMs} ms @ bw: [recv: ${stats.recvThroughput}] GB/sec")
 
           if (bufferReceiveState.hasNext) {
-            logInfo(s"${bufferReceiveState} is not done.")
+            logDebug(s"${bufferReceiveState} is not done.")
             asyncOnCopyThread(IssueBufferReceives(bufferReceiveState))
           } else {
-            logInfo(s"${bufferReceiveState} is DONE, closing.")
+            logDebug(s"${bufferReceiveState} is DONE, closing.")
             bufferReceiveState.close()
           }
         }
