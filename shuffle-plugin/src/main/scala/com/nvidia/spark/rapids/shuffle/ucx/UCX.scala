@@ -355,10 +355,13 @@ class UCX(transport: UCXShuffleTransport,
   var peerAmCallbacks = new ConcurrentHashMap[(Int, Int), AmCallback]()
   val responseAmCallbacks = new ConcurrentHashMap[Int, Int]()
 
-  // establish a response callback for a specific requestType and peerExecutorId
-  // requestType + response message type is part of amId
-  def registerResponseHandler(amId: Int, peerExecutorId: Int,
-                              cb: AmCallback): Unit = {
+  /**
+   * Register a response handler (clients will use this)
+   * @param amId - only 5 bits should be set!
+   * @param peerExecutorId
+   * @param cb
+   */
+  def registerResponseHandler(amId: Int, peerExecutorId: Int, cb: AmCallback): Unit = {
     logInfo(s"setup responseHandler for ${TransportUtils.formatTag(amId)}")
     peerAmCallbacks.put((amId, peerExecutorId), cb)
     responseAmCallbacks.computeIfAbsent(amId, _ => {
@@ -424,6 +427,7 @@ class UCX(transport: UCXShuffleTransport,
     onWorkerThreadAsync(() => {
       val ep = endpoints.get(epId)
       logInfo(s"sending to amId: ${TransportUtils.formatTag(amId)} msg of size ${size}")
+
       val header = new RefCountedDirectByteBuffer(ByteBuffer.allocateDirect(8))
       header.acquire()
       header.getBuffer().putLong(hdr)
@@ -450,6 +454,7 @@ class UCX(transport: UCXShuffleTransport,
             if (cb != null) {
               cb.onError(ucsStatus, errorMsg)
             }
+            header.close()
           }
         })
     })

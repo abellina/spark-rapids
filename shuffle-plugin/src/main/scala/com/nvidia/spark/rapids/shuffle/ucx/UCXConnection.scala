@@ -141,10 +141,11 @@ class UCXClientConnection(peerExecutorId: Int, peerClientId: Long, ucx: UCX)
     registerResponseHandler(requestType)
     tx.start(UCXTransactionType.Request, 1, cb)
 
-    logInfo(s"Performing a ${requestType} request $request for tx ${tx} " +
-      s"${TransportUtils.formatTag(tx.txId)}")
-
     val hdr = composeTag((ucx.executorId.toLong << 32), tx.txId)
+
+    logInfo(s"Performing a ${requestType} request $request for tx ${tx} " +
+      s"and header $hdr")
+
     callbacks.put(hdr, cb)
 
     ucx.sendAm(
