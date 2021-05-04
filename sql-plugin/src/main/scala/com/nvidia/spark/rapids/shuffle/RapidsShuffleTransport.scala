@@ -553,6 +553,10 @@ object TransportUtils {
   def timeDiffMs(startTimeMs: Long): Long = {
     System.currentTimeMillis() - startTimeMs
   }
+
+  def composeHeader(peerExecutorId: Int, localExecutorId: Int, msgId: Long): Long = {
+    (localExecutorId.toLong << 48) | (peerExecutorId.toLong << 32) | (msgId & 0x00000000FFFFFFFFL)
+  }
 }
 
 object RapidsShuffleTransport extends Logging {

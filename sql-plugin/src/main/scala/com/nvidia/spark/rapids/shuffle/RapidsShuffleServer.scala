@@ -237,7 +237,7 @@ class RapidsShuffleServer(transport: RapidsShuffleTransport,
    * @param requestType The request type received
    */
   private def registerRequestHandler(requestType: RequestType.Value): Unit = {
-    logInfo(s"Registering ${requestType} request callback")
+    logDebug(s"Registering ${requestType} request callback")
     serverConnection.registerRequestHandler(requestType, tx => {
       withResource(new NvtxRange("Handle Meta Request", NvtxColor.PURPLE)) { _ =>
         requestType match {
@@ -275,8 +275,8 @@ class RapidsShuffleServer(transport: RapidsShuffleTransport,
             // target executor to respond to
             val peerExecutorId = tx.peerExecutorId()
 
-            logInfo(s"Received request req:\n: ${ShuffleMetadata.printRequest(req)}")
-            logInfo(s"HandleMetadataRequest for peerExecutorId $peerExecutorId and " +
+            logDebug(s"Received request req:\n: ${ShuffleMetadata.printRequest(req)}")
+            logDebug(s"HandleMetadataRequest for peerExecutorId $peerExecutorId and " +
               s"tx ${tx}")
 
             // NOTE: MetaUtils will have a simpler/better way of handling creating a response.
@@ -296,7 +296,7 @@ class RapidsShuffleServer(transport: RapidsShuffleTransport,
             val respBuffer = new RefCountedDirectByteBuffer(metadataResponse)
             val materializedResponse = ShuffleMetadata.getMetadataResponse(metadataResponse)
 
-            logInfo(s"Response will be at header ${TransportUtils.formatTag(tx.getHeader)}:\n" +
+            logDebug(s"Response will be at header ${TransportUtils.formatTag(tx.getHeader)}:\n" +
               s"${ShuffleMetadata.printResponse("responding", materializedResponse)}")
 
             // Issue the send against [[peerExecutorId]] as described by the metadata message
@@ -349,7 +349,7 @@ class RapidsShuffleServer(transport: RapidsShuffleTransport,
         val peerExecutorId = bufferSendState.getRequestTransaction.peerExecutorId()
         serverConnection.send(peerExecutorId, buffersToSend, bufferTx =>
           withResource(bufferTx) { _ =>
-            logInfo(s"Done with the send for ${bufferSendState} with ${buffersToSend}")
+            logDebug(s"Done with the send for ${bufferSendState} with ${buffersToSend}")
 
             if (bufferSendState.hasNext) {
               // continue issuing sends.
@@ -364,7 +364,7 @@ class RapidsShuffleServer(transport: RapidsShuffleTransport,
 
               val requestTx = bufferSendState.getRequestTransaction
 
-              logInfo(s"Handling transfer request ${requestTx} for " +
+              logDebug(s"Handling transfer request ${requestTx} for " +
                 s"${peerExecutorId} " +
                 s"with ${buffersToSend}")
 
