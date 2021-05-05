@@ -148,7 +148,6 @@ class RapidsShuffleTestHelper extends FunSuite
       mockTransport,
       mockExecutor,
       mockCopyExecutor,
-      1024,
       mockStorage,
       mockCatalog))
   }
@@ -206,7 +205,7 @@ object RapidsShuffleTestHelper extends MockitoSugar with Arm {
       val tableMetaTags = (0 until numTables).map { t =>
         (buildMockTableMeta(t, ct), t.toLong)
       }
-      val trBuffer = ShuffleMetadata.buildTransferRequest(1, 123, tableMetaTags)
+      val trBuffer = ShuffleMetadata.buildTransferRequest(tableMetaTags)
       val refCountedRes = new RefCountedDirectByteBuffer(trBuffer)
       refCountedRes
     }
@@ -260,14 +259,8 @@ class ImmediateExecutor extends Executor {
 class MockConnection(mockTransaction: Transaction) extends ClientConnection {
   val requests = new ArrayBuffer[AddressLengthTag]
   val receiveLengths = new ArrayBuffer[Long]
-  override def request(
-      request: AddressLengthTag,
-      response: AddressLengthTag,
-      cb: TransactionCallback): Transaction = {
-    requests.append(request)
-    cb(mockTransaction)
-    mockTransaction
-  }
+
+  override def request(requestType: com.nvidia.spark.rapids.shuffle.RequestType.Value, request: java.nio.ByteBuffer, cb: com.nvidia.spark.rapids.shuffle.TransactionCallback): com.nvidia.spark.rapids.shuffle.Transaction = {null}
 
   override def receive(alt: AddressLengthTag, cb: TransactionCallback): Transaction = {
     receiveLengths.append(alt.length)
