@@ -802,6 +802,10 @@ object RapidsConf {
       .bytesConf(ByteUnit.BYTE)
       .createWithDefault(1024 * 1024 * 1024)
 
+  val SHUFFLE_UCX_AM_MODE = conf("spark.rapids.shuffle.ucx.am.mode")
+    .stringConf
+    .createWithDefault("rndv")
+
   val SHUFFLE_UCX_USE_WAKEUP = conf("spark.rapids.shuffle.ucx.useWakeup")
     .doc("When set to true, use UCX's event-based progress (epoll) in order to wake up " +
       "the progress thread when needed, instead of a hot loop.")
@@ -1262,6 +1266,8 @@ class RapidsConf(conf: Map[String, String]) extends Logging {
 
   lazy val shuffleTransportMaxReceiveInflightBytes: Long = get(
     SHUFFLE_TRANSPORT_MAX_RECEIVE_INFLIGHT_BYTES)
+
+  lazy val shuffleUcxAmMode: String = get(SHUFFLE_UCX_AM_MODE)
 
   lazy val shuffleUcxUseWakeup: Boolean = get(SHUFFLE_UCX_USE_WAKEUP)
 
