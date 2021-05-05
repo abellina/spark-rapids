@@ -380,6 +380,15 @@ class UCX(transport: UCXShuffleTransport,
     })
   }
 
+
+  def registerRequestHandler(amId: Int, cb: AmCallback): Unit = {
+    setActiveMessageCallback(
+      amId,
+      (hdr, resp, _) =>  {
+        cb(hdr, resp, null)
+      })
+  }
+
   def setActiveMessageCallback(amId: Int,
       cb: (Option[Long], RefCountedDirectByteBuffer, UcpEndpoint) => Unit): Int = {
     onWorkerThreadAsync(() => {
@@ -396,11 +405,11 @@ class UCX(transport: UCXShuffleTransport,
           }
           if (amData.isDataValid) {
             val resp = UcxUtils.getByteBufferView(amData.getDataAddress, amData.getLength)
-            val b = new RefCountedDirectByteBuffer(resp)
-            // leak it on purpose
-            b.acquire()
-            cb(hdr, b, replyEp)
-            UcsConstants.STATUS.UCS_INPROGRESS
+            val bb = transport.getDirectByteBuffer(amData.getLength.toInt)
+            bb.getBuffer().put(resp)
+            bb.getBuffer().rewind()
+            cb(hdr, bb, replyEp)
+            UcsConstants.STATUS.UCS_OK
           } else {
             val resp = transport.getDirectByteBuffer(amData.getLength)
             amData.receive(UcxUtils.getAddress(resp.getBuffer()),new UcxCallback {
@@ -421,6 +430,17 @@ class UCX(transport: UCXShuffleTransport,
     amId
   }
 
+  def activeMessageMode: Long = {
+    rapidsConf.shuffleUcxAmMode match {
+      case "eager" =>
+        UcpConstants.UCP_AM_SEND_FLAG_EAGER
+      case "rndv" =>
+        UcpConstants.UCP_AM_SEND_FLAG_RNDV
+      case "auto" =>
+        0L
+    }
+  }
+
   def sendAm(epId: Long, hdr: Long, amId: Int, address: Long, size: Long, cb: UcxCallback): Unit = {
     onWorkerThreadAsync(() => {
       val ep = endpoints.get(epId)
@@ -437,7 +457,7 @@ class UCX(transport: UCXShuffleTransport,
         8L,
         address,
         size,
-        UcpConstants.UCP_AM_SEND_FLAG_EAGER,
+        activeMessageMode,
         new UcxCallback {
           override def onSuccess(request: UcpRequest): Unit = {
             if (cb != null) {

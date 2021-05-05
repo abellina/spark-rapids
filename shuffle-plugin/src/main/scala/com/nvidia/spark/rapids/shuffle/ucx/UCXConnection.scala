@@ -55,19 +55,17 @@ class UCXServerConnection(ucx: UCX) extends UCXConnection(ucx) with ServerConnec
 
   override def registerRequestHandler(
       requestType: RequestType.Value, cb: TransactionCallback): Unit = {
-    ucx.setActiveMessageCallback(
-      composeRequestAmId(requestType),
-      (hdr, resp, _) =>  {
-        logDebug(s"At requestHandler for ${requestType} and header " +
-          s"${TransportUtils.formatTag(hdr.get)}")
-        val tx = createTransaction
-        tx.start(UCXTransactionType.Request, 1, cb)
-        tx.setHeader(hdr)
-        tx.setMessage(resp)
-        tx.setMessageType(requestType)
-        //TODO: do we care/want the responseEp? tx.setResponseEndpoint(responseEp)
-        tx.txCallback(TransactionStatus.Success)
-      })
+    ucx.registerRequestHandler(composeRequestAmId(requestType), (hdr, resp, _) => {
+      logDebug(s"At requestHandler for ${requestType} and header " +
+        s"${TransportUtils.formatTag(hdr.get)}")
+      val tx = createTransaction
+      tx.start(UCXTransactionType.Request, 1, cb)
+      tx.setHeader(hdr)
+      tx.setMessage(resp)
+      tx.setMessageType(requestType)
+      //TODO: do we care/want the responseEp? tx.setResponseEndpoint(responseEp)
+      tx.txCallback(TransactionStatus.Success)
+    })
   }
 }
 
