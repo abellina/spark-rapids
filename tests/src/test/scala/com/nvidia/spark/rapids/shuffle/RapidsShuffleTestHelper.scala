@@ -191,7 +191,6 @@ object RapidsShuffleTestHelper extends MockitoSugar with Arm {
 
   def mockDegenerateMetaResponse(
       mockTransport: RapidsShuffleTransport,
-      numRows: Long,
       numBatches: Int): Seq[TableMeta] = {
     val tableMetas = (0 until numBatches).map(b => buildDegenerateMockTableMeta())
     val res = ShuffleMetadata.buildMetaResponse(tableMetas)

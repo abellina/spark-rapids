@@ -69,6 +69,8 @@ class UCX(transport: UCXShuffleTransport,
 
   logInfo(s"UCX context created")
 
+  def getExecutorId: Int = executor.executorId.toInt
+
   // this object implements the transport-friendly interface for UCX
   private[this] val serverConnection = new UCXServerConnection(this)
 
@@ -614,7 +616,7 @@ class UCX(transport: UCXShuffleTransport,
         val is = socket.getInputStream
 
         // this executor id will receive on tmpLocalReceiveTag for this Connection
-        UCXConnection.writeHandshakeHeader(os, getUcxAddress, executor.executorId.toInt, localRkeys)
+        UCXConnection.writeHandshakeHeader(os, getUcxAddress, getExecutorId, localRkeys)
 
         // the remote executor will receive on remoteReceiveTag, and expects this executor to
         // receive on localReceiveTag
@@ -665,7 +667,7 @@ class UCX(transport: UCXShuffleTransport,
         logInfo(s"Got peer worker address from executor $peerExecutorId")
 
         // ack what we saw as the local and remote peer tags
-        UCXConnection.writeHandshakeHeader(os, getUcxAddress, executor.executorId.toInt, localRkeys)
+        UCXConnection.writeHandshakeHeader(os, getUcxAddress, getExecutorId, localRkeys)
 
         onWorkerThreadAsync(() => {
           setupEndpoint(peerExecutorId, peerWorkerAddress, peerRkeys)

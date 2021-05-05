@@ -117,7 +117,7 @@ class UCXClientConnection(peerExecutorId: Int, peerClientId: Long, ucx: UCX)
     // register if we haven't already
 
     // my local executorId
-    val hdr = composeTag((ucx.executorId.toLong << 32), tx.txId)
+    val hdr = composeTag((ucx.getExecutorId.toLong << 32), tx.txId)
 
     val responseAmId = composeResponseAmId(requestType)
     ucx.registerResponseHandler(responseAmId, peerExecutorId, hdr,
