@@ -230,10 +230,10 @@ abstract class RapidsShuffleInternalManagerBase(conf: SparkConf, isDriver: Boole
   // NOTE: this can be null in the driver side.
   private lazy val env = SparkEnv.get
   private lazy val blockManager = env.blockManager
-  private lazy val shouldFallThroughOnEverything = {
+  private def shouldFallThroughOnEverything = {
     val fallThroughReasons = new ListBuffer[String]()
-    if (!GpuShuffleEnv.isRapidsShuffleEnabled) {
-      fallThroughReasons += "external shuffle is enabled"
+    if (!GpuShuffleEnv.isRapidsShuffleConfigured) {
+      fallThroughReasons += "External Shuffle Service is enabled"
     }
     if (fallThroughReasons.nonEmpty) {
       logWarning(s"Rapids Shuffle Plugin is falling back to SortShuffleManager " +
@@ -251,7 +251,7 @@ abstract class RapidsShuffleInternalManagerBase(conf: SparkConf, isDriver: Boole
       throw new IllegalStateException("The ShuffleBufferCatalog is not initialized but the " +
         "RapidsShuffleManager is configured"))
 
-  private lazy val resolver = if (shouldFallThroughOnEverything) {
+  private def resolver: ShuffleBlockResolver = if (shouldFallThroughOnEverything) {
     wrapped.shuffleBlockResolver
   } else {
     new GpuShuffleBlockResolver(wrapped.shuffleBlockResolver, getCatalogOrThrow)
@@ -293,7 +293,8 @@ abstract class RapidsShuffleInternalManagerBase(conf: SparkConf, isDriver: Boole
       dependency: ShuffleDependency[K, V, C]): ShuffleHandle = {
     // Always register with the wrapped handler so we can write to it ourselves if needed
     val orig = wrapped.registerShuffle(shuffleId, dependency)
-    if (!shouldFallThroughOnEverything && dependency.isInstanceOf[GpuShuffleDependency[K, V, C]]) {
+    if (GpuShuffleEnv.isShuffleManagerEnabled &&
+      !shouldFallThroughOnEverything && dependency.isInstanceOf[GpuShuffleDependency[K, V, C]]) {
       val handle = new GpuShuffleHandle(orig,
         dependency.asInstanceOf[GpuShuffleDependency[K, V, V]])
       handle

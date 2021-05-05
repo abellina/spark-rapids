@@ -2918,6 +2918,7 @@ case class GpuOverrides() extends Rule[SparkPlan] with Logging {
   // gets called once for each query stage (where a query stage is an `Exchange`).
   override def apply(plan: SparkPlan) :SparkPlan = {
     val conf = new RapidsConf(plan.conf)
+    GpuShuffleEnv.setShuffleManagerEnabled(conf.shuffleManagerEnabled)
     if (conf.isSqlEnabled) {
       val updatedPlan = if (plan.conf.adaptiveExecutionEnabled) {
         // AQE can cause Spark to inject undesired CPU shuffles into the plan because GPU and CPU

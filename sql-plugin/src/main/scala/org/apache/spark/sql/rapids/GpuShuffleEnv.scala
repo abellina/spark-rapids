@@ -19,8 +19,7 @@ package org.apache.spark.sql.rapids
 import java.util.Locale
 
 import com.nvidia.spark.rapids._
-
-import org.apache.spark.SparkEnv
+import org.apache.spark.{SparkConf, SparkEnv}
 import org.apache.spark.internal.Logging
 
 class GpuShuffleEnv(rapidsConf: RapidsConf) extends Logging {
@@ -73,10 +72,21 @@ object GpuShuffleEnv extends Logging {
   // Functions below get called from the driver or executors
   //
 
-  def isRapidsShuffleEnabled: Boolean = {
+  def isRapidsShuffleConfigured: Boolean = {
     val isRapidsManager = mgr.isDefined
     val externalShuffle = SparkEnv.get.blockManager.externalShuffleServiceEnabled
     isRapidsManager && !externalShuffle
+  }
+
+  var isShuffleManagerEnabled: Boolean = false
+
+  def setShuffleManagerEnabled(enabled: Boolean) = {
+    isShuffleManagerEnabled = enabled
+  }
+
+  def isRapidsShuffleEnabled: Boolean = {
+    isShuffleManagerEnabled &&
+      isRapidsShuffleConfigured
   }
 
   def setRapidsShuffleManager(
