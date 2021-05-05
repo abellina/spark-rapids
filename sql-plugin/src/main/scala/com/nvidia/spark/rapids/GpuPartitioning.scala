@@ -95,9 +95,11 @@ trait GpuPartitioning extends Partitioning with Arm {
     }
   }
 
+  private val rapidsShuffleEnabled = GpuShuffleEnv.isRapidsShuffleEnabled
+
   def sliceInternalGpuOrCpu(numRows: Int, partitionIndexes: Array[Int],
       partitionColumns: Array[GpuColumnVector]): Array[ColumnarBatch] = {
-    val rapidsShuffleEnabled = GpuShuffleEnv.isRapidsShuffleEnabled
+
     val nvtxRangeKey = if (rapidsShuffleEnabled) {
       "sliceInternalOnGpu"
     } else {
