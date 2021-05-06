@@ -151,6 +151,7 @@ class RapidsShuffleIterator(
   // as of Spark 3.x the default shuffle protocol overloads `mapId` to be
   // `taskAttemptId`.
   case class BlockIdMapIndex(id: ShuffleBlockBatchId, mapIndex: Int)
+  var clients = Map[RapidsShuffleClient, RapidsShuffleFetchHandler]()
 
   private var clientAndHandlers = Seq[(RapidsShuffleClient, RapidsShuffleFetchHandler)]()
 
@@ -262,6 +263,9 @@ class RapidsShuffleIterator(
             // tell the client to cancel pending requests
             client.cancelPending(this)
           }
+
+          override def toString: String = {
+            s"RapidsShuffleIterator[taskAttemptId=${taskAttemptId}]"
         }
 
         logInfo(s"Client $blockManagerId triggered, for ${shuffleRequestsMapIndex.size} blocks")
@@ -289,6 +293,10 @@ class RapidsShuffleIterator(
         case (client, handler) => client.cancelPending(handler)
       }
     }
+    clients.foreach { case (c, h) =>
+      c.unregister(h)
+    }
+    clients = Map.empty
   }
 
   // Used to print log messages, defaulting to a value for unit tests

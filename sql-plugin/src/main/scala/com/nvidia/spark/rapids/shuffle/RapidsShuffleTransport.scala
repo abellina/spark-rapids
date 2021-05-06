@@ -191,7 +191,8 @@ object RequestType extends Enumeration {
  *
  * Note that this subclasses from [[Connection]].
  */
-trait ClientConnection extends Connection {
+trait ClientConnection extends Connection with AutoCloseable {
+
   /**
    * This performs a request/response for a request of type `RequestType`. The response
    * `Transaction` on completion will call the callback (`cb`). The caller of `request`
@@ -219,6 +220,8 @@ trait ClientConnection extends Connection {
    * @return the executorId as a long
    */
   def getPeerExecutorId: Long
+
+  override def close()
 }
 
 /**
@@ -383,6 +386,8 @@ trait RapidsShuffleTransport extends AutoCloseable {
    * @param reqs requests to add to the throttle queue
    */
   def queuePending(reqs: Seq[PendingTransferRequest])
+  def closePending(client: RapidsShuffleClient)
+
 
   /**
    * Cancel requests that are waiting in the queue (not in-flight) for a specific

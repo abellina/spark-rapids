@@ -140,21 +140,18 @@ class UCX(transport: UCXShuffleTransport, executor: BlockManagerId, rapidsConf: 
   // Error handler that would be invoked on endpoint failure.
   private val epErrorHandler = new UcpEndpointErrorHandler {
     override def onError(ucpEndpoint: UcpEndpoint, errorCode: Int, errorString: String): Unit = {
-      withResource(ucpEndpoint) { _ =>
-        if (errorCode != UcsConstants.STATUS.UCS_ERR_CONNECTION_RESET) {
-          logError(s"Endpoint to $ucpEndpoint got error: $errorString")
+      endpoints.keySet().forEach((entry: Long) => {
+        if (endpoints.get(entry) == ucpEndpoint) {
+          logError(s"UcpListener detected an error ${errorCode} ${errorString} " +
+            s"${ucpEndpoint}")
+          logError(s"Error for executorId ${entry}: ${errorString}")
+          val conn = connectionCache.remove(entry)
+          logWarning(s"Removed stale client connection for ${entry}")
+          conn.close()
         }
-        logWarning(s"REMOVING ${ucpEndpoint}")
-        endpoints.values().removeIf(ep => {
-          logWarning(s"Should remove $ep? Comparing to ${ucpEndpoint}")
-          if (ep == ucpEndpoint)  {
-            ep.close()
-            true
-          } else {
-            false
-          }
-        })
-      }
+      })
+      endpoints.values().removeIf(ep => ep == ucpEndpoint)
+      ucpEndpoint.close()
     }
   }
 

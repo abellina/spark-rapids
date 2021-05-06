@@ -260,12 +260,14 @@ class UCXShuffleTransport(shuffleServerId: BlockManagerId, rapidsConf: RapidsCon
     val peerExecutorId = blockManagerId.executorId.toLong
     val clientConnection = connect(blockManagerId)
     clients.computeIfAbsent(peerExecutorId, _ => {
-      new RapidsShuffleClient(
+      val client = new RapidsShuffleClient(
         localExecutorId,
         clientConnection,
         this,
         clientExecutor,
         clientCopyExecutor)
+      clientConnection.asInstanceOf[UCXClientConnection].registeredClient = Option(client)
+      client
     })
   }
 
@@ -510,6 +512,14 @@ class UCXShuffleTransport(shuffleServerId: BlockManagerId, rapidsConf: RapidsCon
         validHandlers.remove(handler)
       }
     }
+
+/* TODO: had this before
+      toRemove.foreach(r => {
+        logWarning(s"Removing pending request ${r} and signaling handler error")
+        r.handler.transferError("Peer error from UCX")
+        altList.remove(r)
+      })
+      */
   }
 
   override def close(): Unit = {
