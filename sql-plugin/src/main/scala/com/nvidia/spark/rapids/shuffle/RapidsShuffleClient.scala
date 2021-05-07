@@ -191,7 +191,7 @@ class RapidsShuffleClient(
         connection.request(RequestType.MetadataRequest, metaReq.acquire(), tx => {
           withResource(metaReq) { _ =>
             logDebug(s"at callback for ${tx}")
-            handleOp(HandleMetadataResponse(tx, shuffleRequests, handler))
+            asyncOrBlock(HandleMetadataResponse(tx, shuffleRequests, handler))
           }
         })
       }
