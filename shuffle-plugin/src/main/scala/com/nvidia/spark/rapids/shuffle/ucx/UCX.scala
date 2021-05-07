@@ -24,18 +24,16 @@ import java.util.concurrent.atomic.{AtomicInteger, AtomicLong}
 
 import scala.collection.mutable.ArrayBuffer
 import scala.util.Random
-
 import ai.rapids.cudf.{MemoryBuffer, NvtxColor, NvtxRange}
 import com.google.common.util.concurrent.ThreadFactoryBuilder
 import com.nvidia.spark.rapids.{GpuDeviceManager, RapidsConf}
-import com.nvidia.spark.rapids.shuffle.{AddressLengthTag, ClientConnection, MemoryRegistrationCallback, RefCountedDirectByteBuffer, RequestType, Transaction, TransactionCallback, TransportUtils}
+import com.nvidia.spark.rapids.shuffle.{AddressLengthTag, ClientConnection, MemoryRegistrationCallback, RefCountedDirectByteBuffer, TransportUtils}
 import org.openucx.jucx._
 import org.openucx.jucx.ucp._
 import org.openucx.jucx.ucs.UcsConstants
-import org.openucx.jucx.ucs.UcsConstants.MEMORY_TYPE
-
 import org.apache.spark.SparkEnv
 import org.apache.spark.internal.Logging
+import org.apache.spark.sql.rapids.storage.RapidsStorageUtils
 import org.apache.spark.storage.BlockManagerId
 
 case class WorkerAddress(address: ByteBuffer)
@@ -60,7 +58,9 @@ class UCX(transport: UCXShuffleTransport,
   executor: BlockManagerId, 
   rapidsConf: RapidsConf) extends AutoCloseable with Logging {
   private[this] val context = {
-    val contextParams = new UcpParams().requestTagFeature().requestAmFeature()
+    val contextParams = new UcpParams()
+      .requestTagFeature()
+      .requestAmFeature()
     if (rapidsConf.shuffleUcxUseWakeup) {
       contextParams.requestWakeupFeature()
     }
@@ -351,7 +351,7 @@ class UCX(transport: UCXShuffleTransport,
   }
 
   trait AmCallback {
-    def apply(id: Option[Long], buff: RefCountedDirectByteBuffer, ucpEndpoint: UcpEndpoint): Unit
+    def apply(id: Option[Long], buff: RefCountedDirectByteBuffer): Unit
   }
 
   private val responseAmCallbacks = new ConcurrentHashMap[Int, Int]()
@@ -448,31 +448,26 @@ class UCX(transport: UCXShuffleTransport,
       val ep = endpoints.get(epId)
       logDebug(s"sending to amId: ${TransportUtils.formatTag(amId)} msg of size ${size}")
 
-      val header = new RefCountedDirectByteBuffer(ByteBuffer.allocateDirect(8))
-      header.acquire()
-      header.getBuffer().putLong(hdr)
-      header.getBuffer().rewind()
+      val header = ByteBuffer.allocateDirect(8)
+      header.putLong(hdr)
+      header.rewind()
 
       ep.sendAmNonBlocking(
         amId,
-        TransportUtils.getAddress(header.getBuffer()),
+        TransportUtils.getAddress(header),
         8L,
         address,
         size,
         activeMessageMode,
         new UcxCallback {
           override def onSuccess(request: UcpRequest): Unit = {
-            if (cb != null) {
-              cb.onSuccess(request)
-            }
-            header.close()
+            cb.onSuccess(request)
+            RapidsStorageUtils.dispose(header)
           }
 
           override def onError(ucsStatus: Int, errorMsg: String): Unit = {
-            if (cb != null) {
-              cb.onError(ucsStatus, errorMsg)
-            }
-            header.close()
+            cb.onError(ucsStatus, errorMsg)
+            RapidsStorageUtils.dispose(header)
           }
         })
     })

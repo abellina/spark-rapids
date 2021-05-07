@@ -375,28 +375,11 @@ private[ucx] class UCXTransaction(conn: UCXConnection, val txId: Long)
 
   override def respond(response: ByteBuffer,
                        cb: TransactionCallback): Transaction = {
-    val tx = conn.createTransaction
-    tx.registerCb(cb)
-
-    val amId = conn.composeResponseAmId(messageType.get)
     logDebug(s"Responding to ${peerExecutorId} at ${TransportUtils.formatTag(this.getHeader)} " +
       s"with ${response}")
-    conn.ucx.sendAm(peerExecutorId,
-      this.getHeader,
-      amId,
-      TransportUtils.getAddress(response),
-      response.remaining(),
-      new UcxCallback {
-        override def onSuccess(request: UcpRequest): Unit = {
-          logDebug(s"AM success respond")
-          tx.txCallback(TransactionStatus.Success)
-        }
 
-        override def onError(ucsStatus: Int, errorMsg: String): Unit = {
-          logError(s"AM Error responding ${ucsStatus} ${errorMsg}")
-        }
-      })
-    tx
+    val amId = conn.composeResponseAmId(messageType.get)
+    conn.respond(peerExecutorId(), amId, this.getHeader, response, cb)
   }
 
   // Reference count is not updated here. The caller is responsible to close

@@ -169,6 +169,7 @@ trait ServerConnection extends Connection {
 
 
   def registerRequestHandler(requestType: RequestType.Value, cb: TransactionCallback): Unit
+
 }
 
 /**
@@ -257,6 +258,10 @@ trait Connection {
    */
   def receive(alt: AddressLengthTag,
               cb: TransactionCallback): Transaction
+
+
+  def respond(peerExecutorId: Long, amId: Int, header: Long, response: ByteBuffer,
+                       cb: TransactionCallback): Transaction
 
 }
 

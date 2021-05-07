@@ -67,6 +67,7 @@ class UCXServerConnection(ucx: UCX) extends UCXConnection(ucx) with ServerConnec
       tx.txCallback(TransactionStatus.Success)
     })
   }
+
 }
 
 class UCXClientConnection(peerExecutorId: Int, peerClientId: Long, ucx: UCX)
@@ -88,26 +89,15 @@ class UCXClientConnection(peerExecutorId: Int, peerClientId: Long, ucx: UCX)
 
   override def getPeerExecutorId: Long = peerExecutorId
 
-
   private val responseHandlers = new ConcurrentHashMap[RequestType.Value, TransactionCallback]()
 
   def registerResponseHandler(requestType: RequestType.Value, cb: TransactionCallback)
-                             (id: Option[Long], resp: RefCountedDirectByteBuffer, responseEp: UcpEndpoint): Unit = {
-    //logInfo(s"At responseHandler for ${requestType} " +
-    //  s"amId ${TransportUtils.formatTag(amId)} header ${TransportUtils.formatTag(id.get)} " +
-    //  s"and ${peerExecutorId} ${resp}")
-    val tx = createTransaction //new UCXTransaction(this, ucx.getNextTransactionId)
+                             (id: Option[Long], resp: RefCountedDirectByteBuffer): Unit = {
+    val tx = createTransaction
     tx.start(UCXTransactionType.Request, 1, cb)
     tx.setHeader(id)
     tx.setMessage(resp)
-    //TODO: do we need responseEp tx.setResponseEndpoint(responseEp)
     tx.txCallback(TransactionStatus.Success)
-  }
-
-  def registerResponseHandler(requestType: RequestType.Value,
-                              hdr: Long,
-                              cb: TransactionCallback): Unit = {
-
   }
 
   override def request(requestType: RequestType.Value,
@@ -134,7 +124,15 @@ class UCXClientConnection(peerExecutorId: Int, peerClientId: Long, ucx: UCX)
       requestType.id, // peer request amId
       TransportUtils.getAddress(request),
       request.remaining(),
-      null)
+      new UcxCallback {
+        override def onError(ucsStatus: Int, errorMsg: String): Unit = {
+          //tx.handleRequestError()
+        }
+
+        override def onSuccess(request: UcpRequest): Unit = {
+          //tx.handleRequestSent()
+        }
+      })
 
     tx
   }
@@ -313,6 +311,31 @@ class UCXConnection(peerExecutorId: Int, val ucx: UCX) extends Connection with L
     tx
   }
 
+  override def respond(peerExecutorId: Long, amId: Int, header: Long, response: ByteBuffer,
+                       cb: TransactionCallback): Transaction = {
+    val tx = createTransaction
+    tx.start(UCXTransactionType.Request, 1, cb)
+
+    logDebug(s"Responding to ${peerExecutorId} at ${TransportUtils.formatTag(header)} " +
+      s"with ${response}")
+
+    ucx.sendAm(peerExecutorId,
+      header,
+      amId,
+      TransportUtils.getAddress(response),
+      response.remaining(),
+      new UcxCallback {
+        override def onSuccess(request: UcpRequest): Unit = {
+          logDebug(s"AM success respond")
+          tx.txCallback(TransactionStatus.Success)
+        }
+
+        override def onError(ucsStatus: Int, errorMsg: String): Unit = {
+          logError(s"AM Error responding ${ucsStatus} ${errorMsg}")
+        }
+      })
+    tx
+  }
 
   private[ucx] def cancel(msg: UcpRequest): Unit =
     ucx.cancel(msg)
