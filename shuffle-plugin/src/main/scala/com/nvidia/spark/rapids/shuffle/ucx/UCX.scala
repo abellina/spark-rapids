@@ -381,11 +381,6 @@ class UCX(executor: BlockManagerId,
     })
   }
 
-
-  def registerRequestHandler(amId: Int, cb: AmCallback): Unit = {
-    setActiveMessageCallback(amId, cb)
-  }
-
   def setActiveMessageCallback(amId: Int, cb: AmCallback): Int = {
     onWorkerThreadAsync(() => {
       logInfo(s"Setting am recv handler for active message ${TransportUtils.formatTag(amId)}")
