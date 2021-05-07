@@ -54,9 +54,8 @@ case class Rkeys(rkeys: Seq[ByteBuffer])
  * @param executor blockManagerId of the local executorId
  * @param rapidsConf rapids configuration
  */
-class UCX(transport: UCXShuffleTransport, 
-  executor: BlockManagerId, 
-  rapidsConf: RapidsConf) extends AutoCloseable with Logging {
+class UCX(executor: BlockManagerId,
+    rapidsConf: RapidsConf) extends AutoCloseable with Logging {
   private[this] val context = {
     val contextParams = new UcpParams()
       .requestTagFeature()
@@ -369,14 +368,14 @@ class UCX(transport: UCXShuffleTransport,
       s"amId ${TransportUtils.formatTag(amId)}")
     callbacks.put(hdr, cb)
     responseAmCallbacks.computeIfAbsent(amId, _ => {
-      setActiveMessageCallback(amId, (id, resp, responseEp) => {
+      setActiveMessageCallback(amId, (id, resp) => {
         val peerExec = ((id.get & 0xFFFFFFFF00000000L) >> 32).toInt
         logDebug(s"Getting peer am callback for amId " +
           s"${TransportUtils.formatTag(amId)} " +
           s"header: ${TransportUtils.formatTag(id.get)} " +
           s"peerExec: $peerExec")
         logInfo(s"${callbacks.size()} active messages pending")
-        callbacks.get(id.get)(id, resp, responseEp)
+        callbacks.get(id.get)(id, resp)
         callbacks.remove(id.get)
       })
     })
@@ -384,15 +383,10 @@ class UCX(transport: UCXShuffleTransport,
 
 
   def registerRequestHandler(amId: Int, cb: AmCallback): Unit = {
-    setActiveMessageCallback(
-      amId,
-      (hdr, resp, _) =>  {
-        cb(hdr, resp, null)
-      })
+    setActiveMessageCallback(amId, cb)
   }
 
-  def setActiveMessageCallback(amId: Int,
-      cb: (Option[Long], RefCountedDirectByteBuffer, UcpEndpoint) => Unit): Int = {
+  def setActiveMessageCallback(amId: Int, cb: AmCallback): Int = {
     onWorkerThreadAsync(() => {
       logInfo(s"Setting am recv handler for active message ${TransportUtils.formatTag(amId)}")
       worker.setAmRecvHandler(amId,
@@ -410,7 +404,7 @@ class UCX(transport: UCXShuffleTransport,
             val bb = transport.getDirectByteBuffer(amData.getLength.toInt)
             bb.getBuffer().put(resp)
             bb.getBuffer().rewind()
-            cb(hdr, bb, replyEp)
+            cb(hdr, bb)
             UcsConstants.STATUS.UCS_OK
           } else {
             val resp = transport.getDirectByteBuffer(amData.getLength)
@@ -421,7 +415,7 @@ class UCX(transport: UCXShuffleTransport,
                 amData.close()
               }
               override def onSuccess(request: UcpRequest): Unit = {
-                cb(hdr, resp, replyEp)
+                cb(hdr, resp)
                 amData.close()
               }
             })
