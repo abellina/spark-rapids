@@ -23,6 +23,7 @@ import java.util.concurrent.ConcurrentHashMap
 import scala.collection.mutable.ArrayBuffer
 import ai.rapids.cudf.{NvtxColor, NvtxRange}
 import com.nvidia.spark.rapids.shuffle
+import com.nvidia.spark.rapids.shuffle.ucx.UCX.AmCallback
 import com.nvidia.spark.rapids.shuffle.{RequestType, _}
 import org.openucx.jucx.ucp.{UcpAmData, UcpEndpoint, UcpRequest}
 import org.apache.spark.internal.Logging
@@ -40,6 +41,11 @@ private[ucx] abstract class UCXTagCallback {
   def onCancel(alt: AddressLengthTag): Unit
 }
 
+trait UCXAmCallback {
+  def onHostMessageReceived(size: Long): ByteBuffer
+  def onSuccess(id: Option[Long], buff: RefCountedDirectByteBuffer): Unit
+}
+
 class UCXServerConnection(ucx: UCX) extends UCXConnection(ucx) with ServerConnection {
   override def startManagementPort(host: String): Int = {
     ucx.startManagementPort(host)
@@ -55,16 +61,23 @@ class UCXServerConnection(ucx: UCX) extends UCXConnection(ucx) with ServerConnec
 
   override def registerRequestHandler(
       requestType: RequestType.Value, cb: TransactionCallback): Unit = {
-    ucx.registerRequestHandler(composeRequestAmId(requestType), (hdr, resp, _) => {
-      logDebug(s"At requestHandler for ${requestType} and header " +
-        s"${TransportUtils.formatTag(hdr.get)}")
-      val tx = createTransaction
-      tx.start(UCXTransactionType.Request, 1, cb)
-      tx.setHeader(hdr)
-      tx.setMessage(resp)
-      tx.setMessageType(requestType)
-      //TODO: do we care/want the responseEp? tx.setResponseEndpoint(responseEp)
-      tx.txCallback(TransactionStatus.Success)
+
+    ucx.registerRequestHandler(composeRequestAmId(requestType), new UCXAmCallback {
+      override def onSuccess(hdr: Option[Long], buff: RefCountedDirectByteBuffer): Unit = {
+        logDebug(s"At requestHandler for ${requestType} and header " +
+          s"${TransportUtils.formatTag(hdr.get)}")
+        val tx = createTransaction
+        tx.start(UCXTransactionType.Request, 1, cb)
+        tx.setHeader(hdr)
+        tx.setMessage(buff)
+        tx.setMessageType(requestType)
+        //TODO: do we care/want the responseEp? tx.setResponseEndpoint(responseEp)
+        tx.txCallback(TransactionStatus.Success)
+      }
+
+      override def onHostMessageReceived(size: Long): ByteBuffer = {
+        ByteBuffer.allocateDirect(size.toInt)
+      }
     })
   }
 

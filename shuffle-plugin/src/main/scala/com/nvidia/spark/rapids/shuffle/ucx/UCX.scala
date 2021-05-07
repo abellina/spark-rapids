@@ -24,7 +24,7 @@ import java.util.concurrent.atomic.{AtomicInteger, AtomicLong}
 
 import scala.collection.mutable.ArrayBuffer
 import scala.util.Random
-import ai.rapids.cudf.{MemoryBuffer, NvtxColor, NvtxRange}
+import ai.rapids.cudf.{HostMemoryBuffer, MemoryBuffer, NvtxColor, NvtxRange}
 import com.google.common.util.concurrent.ThreadFactoryBuilder
 import com.nvidia.spark.rapids.{GpuDeviceManager, RapidsConf}
 import com.nvidia.spark.rapids.shuffle.{AddressLengthTag, ClientConnection, MemoryRegistrationCallback, RefCountedDirectByteBuffer, TransportUtils}
@@ -349,13 +349,10 @@ class UCX(executor: BlockManagerId,
     })
   }
 
-  trait AmCallback {
-    def apply(id: Option[Long], buff: RefCountedDirectByteBuffer): Unit
-  }
 
-  private val responseAmCallbacks = new ConcurrentHashMap[Int, Int]()
+  private val responseUCXAmCallbacks = new ConcurrentHashMap[Int, Int]()
 
-  private val callbacks = new ConcurrentHashMap[Long, AmCallback]()
+  private val callbacks = new ConcurrentHashMap[Long, UCXAmCallback]()
 
   /**
    * Register a response handler (clients will use this)
@@ -363,25 +360,36 @@ class UCX(executor: BlockManagerId,
    * @param peerExecutorId
    * @param cb
    */
-  def registerResponseHandler(amId: Int, peerExecutorId: Int, hdr: Long, cb: AmCallback): Unit = {
+  def registerResponseHandler(
+      amId: Int, peerExecutorId: Int, hdr: Long, cb: UCXAmCallback): Unit = {
     logDebug(s"setup responseHandler for ${peerExecutorId} and " +
       s"amId ${TransportUtils.formatTag(amId)}")
     callbacks.put(hdr, cb)
-    responseAmCallbacks.computeIfAbsent(amId, _ => {
-      setActiveMessageCallback(amId, (id, resp) => {
-        val peerExec = ((id.get & 0xFFFFFFFF00000000L) >> 32).toInt
-        logDebug(s"Getting peer am callback for amId " +
-          s"${TransportUtils.formatTag(amId)} " +
-          s"header: ${TransportUtils.formatTag(id.get)} " +
-          s"peerExec: $peerExec")
-        logInfo(s"${callbacks.size()} active messages pending")
-        callbacks.get(id.get)(id, resp)
-        callbacks.remove(id.get)
+    responseUCXAmCallbacks.computeIfAbsent(amId, _ => {
+      setActiveMessageCallback(amId, new UCXAmCallback {
+        override def onSuccess(id: Option[Long], resp: RefCountedDirectByteBuffer): Unit = {
+          val peerExec = ((id.get & 0xFFFFFFFF00000000L) >> 32).toInt
+          logDebug(s"Getting peer am callback for amId " +
+            s"${TransportUtils.formatTag(amId)} " +
+            s"header: ${TransportUtils.formatTag(id.get)} " +
+            s"peerExec: $peerExec")
+          logInfo(s"${callbacks.size()} active messages pending")
+          callbacks.get(id.get).onSuccess(id, resp)
+          callbacks.remove(id.get)
+        }
       })
     })
   }
 
-  def setActiveMessageCallback(amId: Int, cb: AmCallback): Int = {
+
+  def registerRequestHandler(amId: Int, cb: UCXAmCallback): Unit = {
+    setActiveMessageCallback(amId, (hdr, resp) => {
+      logDebug(s"At requestHandler for amId ${TransportUtils.formatTag(hdr.get)}")
+      cb.onSuccess(hdr, resp)
+    })
+  }
+
+  def setActiveMessageCallback(amId: Int, cb: UCXAmCallback): Int = {
     onWorkerThreadAsync(() => {
       logInfo(s"Setting am recv handler for active message ${TransportUtils.formatTag(amId)}")
       worker.setAmRecvHandler(amId,
@@ -396,21 +404,25 @@ class UCX(executor: BlockManagerId,
           }
           if (amData.isDataValid) {
             val resp = UcxUtils.getByteBufferView(amData.getDataAddress, amData.getLength)
-            val bb = transport.getDirectByteBuffer(amData.getLength.toInt)
-            bb.getBuffer().put(resp)
-            bb.getBuffer().rewind()
-            cb(hdr, bb)
+
+            val bb = cb.onHostMessageReceived(amData.getLength)
+            bb.put(resp)
+            bb.rewind()
+
+            cb.onSuccess(hdr, bb)
             UcsConstants.STATUS.UCS_OK
           } else {
-            val resp = transport.getDirectByteBuffer(amData.getLength)
-            amData.receive(UcxUtils.getAddress(resp.getBuffer()),new UcxCallback {
+
+            val resp = cb.onHostMessageReceived(amData.getLength)
+
+            amData.receive(UcxUtils.getAddress(resp),new UcxCallback {
               override def onError(ucsStatus: Int, errorMsg: String): Unit = {
                 logError(s"NV. AM ERROR ${ucsStatus} ${errorMsg}")
                 resp.close()
                 amData.close()
               }
               override def onSuccess(request: UcpRequest): Unit = {
-                cb(hdr, resp)
+                cb.onSuccess(hdr, resp)
                 amData.close()
               }
             })
