@@ -1,4 +1,4 @@
-# Copyright (c) 2020-2021, NVIDIA CORPORATION.
+# Copyright (c) 2021, NVIDIA CORPORATION.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,15 +13,18 @@
 # limitations under the License.
 
 import pytest
+from spark_session import with_gpu_session
+from marks import allow_non_gpu, ucx
 
-allow_non_gpu_databricks = pytest.mark.allow_non_gpu_databricks
-allow_non_gpu = pytest.mark.allow_non_gpu
-validate_execs_in_gpu_plan = pytest.mark.validate_execs_in_gpu_plan
-approximate_float = pytest.mark.approximate_float
-ignore_order = pytest.mark.ignore_order
-incompat = pytest.mark.incompat
-limit = pytest.mark.limit
-qarun = pytest.mark.qarun
-cudf_udf = pytest.mark.cudf_udf
-rapids_udf_example_native = pytest.mark.rapids_udf_example_native
-ucx = pytest.mark.ucx
+_conf = {
+}
+
+@ucx
+def test_ucx_simple(enable_ucx):
+    def do_work(spark):
+      sc = spark._jsc.sc()
+      print(sc.getExecutorIds())
+
+    with_gpu_session(
+      lambda spark: do_work(spark),
+      conf = _conf)

@@ -328,3 +328,10 @@ def enable_rapids_udf_example_native(request):
     if not native_enabled:
         # udf_example_native tests are not required for any test runs
         pytest.skip("rapids_udf_example_native is not configured to run")
+
+@pytest.fixture(scope="session")
+def enable_ucx(request):
+    enable_ucx = request.config.getoption("ucx")
+    if not enable_ucx:
+        # ucx tests are not required for any test runs
+        pytest.skip("ucx not configured to run")

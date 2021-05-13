@@ -79,30 +79,33 @@ class RapidsShuffleHeartbeatManager extends Logging {
    * @return `RapidsExecutorUpdateMsg` with new executors, since the last heartbeat was received.
    */
   def executorHeartbeat(id: BlockManagerId): RapidsExecutorUpdateMsg = synchronized {
-    val lastRegistration = lastRegistrationSeen.get(id)
-    if (lastRegistration == null) {
-      throw new IllegalStateException(s"Heartbeat from unknown executor $id")
-    }
-
-    val newExecutors = new ArrayBuffer[BlockManagerId]
-    val iter = executors.zipWithIndex.reverseIterator
-    var done = false
-    while (iter.hasNext && !done) {
-      val (entry, index) = iter.next()
-
-      if (index > lastRegistration.getValue) {
-        if (entry.id != id) {
-          newExecutors += entry.id
-        }
-      } else {
-        // We are iterating backwards and have found the last index previously inspected
-        // for this peer. We can stop since all peers below this have been sent to this peer.
-        done = true
+    // disregard heartbeats from the driver, which can happen in local mode
+    if (!id.executorId.equalsIgnoreCase("driver")) {
+      val lastRegistration = lastRegistrationSeen.get(id)
+      if (lastRegistration == null) {
+        throw new IllegalStateException(s"Heartbeat from unknown executor $id")
       }
-    }
 
-    lastRegistration.setValue(executors.size - 1)
-    RapidsExecutorUpdateMsg(newExecutors.toArray)
+      val newExecutors = new ArrayBuffer[BlockManagerId]
+      val iter = executors.zipWithIndex.reverseIterator
+      var done = false
+      while (iter.hasNext && !done) {
+        val (entry, index) = iter.next()
+
+        if (index > lastRegistration.getValue) {
+          if (entry.id != id) {
+            newExecutors += entry.id
+          }
+        } else {
+          // We are iterating backwards and have found the last index previously inspected
+          // for this peer. We can stop since all peers below this have been sent to this peer.
+          done = true
+        }
+      }
+
+      lastRegistration.setValue(executors.size - 1)
+      RapidsExecutorUpdateMsg(newExecutors.toArray)
+    }
   }
 }
 
