@@ -30,6 +30,7 @@ import com.nvidia.spark.rapids.shuffle.{AddressLengthTag, ClientConnection, Memo
 import org.openucx.jucx._
 import org.openucx.jucx.ucp._
 import org.openucx.jucx.ucs.UcsConstants
+
 import org.apache.spark.SparkEnv
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.rapids.storage.RapidsStorageUtils
@@ -190,10 +191,7 @@ class UCX(transport: UCXShuffleTransport, executor: BlockManagerId, rapidsConf: 
     }
 
     progressThread.execute(() => {
-      while (initialized) {
-        doProgress()
-        Thread.sleep(5000)
-      }
+      doProgress()
     })
   }
 
