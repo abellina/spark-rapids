@@ -16,7 +16,7 @@
 
 package com.nvidia.spark.rapids.shuffle
 
-import com.nvidia.spark.rapids.{RapidsConf, RapidsExecutorUpdateMsg, RapidsShuffleHeartbeatEndpoint, RapidsShuffleHeartbeatHandler, RapidsShuffleHeartbeatManager}
+import com.nvidia.spark.rapids.{RapidsConf, RapidsExecutorDeltaUpdateMsg, RapidsShuffleHeartbeatEndpoint, RapidsShuffleHeartbeatHandler, RapidsShuffleHeartbeatManager}
 import org.mockito.Mockito._
 
 import org.apache.spark.sql.rapids.execution.TrampolineUtil
@@ -26,6 +26,7 @@ class RapidsShuffleHeartbeatManagerTest extends RapidsShuffleTestHelper {
     val hbMgr = new RapidsShuffleHeartbeatManager
     val updateMsg = hbMgr.registerExecutor(
       TrampolineUtil.newBlockManagerId("1", "peer", 123, Some("rapids=123")))
+      .asInstanceOf[RapidsExecutorDeltaUpdateMsg]
     assertResult(0)(updateMsg.ids.length)
   }
 
@@ -44,7 +45,7 @@ class RapidsShuffleHeartbeatManagerTest extends RapidsShuffleTestHelper {
     hbMgr.executorHeartbeat(exec1)
 
     match {
-      case RapidsExecutorUpdateMsg(idAndExecutorData) =>
+      case RapidsExecutorDeltaUpdateMsg(idAndExecutorData) =>
         assertResult(1)(idAndExecutorData.length)
         val peerBlockManager = idAndExecutorData.head
         assertResult(exec2)(peerBlockManager)
@@ -63,16 +64,16 @@ class RapidsShuffleHeartbeatManagerTest extends RapidsShuffleTestHelper {
     hbMgr.registerExecutor(exec2)
 
     // first executor heartbeat (finding out about executor 2)
-    val firstUpdate = hbMgr.executorHeartbeat(exec1)
+    val firstUpdate = hbMgr.executorHeartbeat(exec1).asInstanceOf[RapidsExecutorDeltaUpdateMsg]
     val peerBlockManager = firstUpdate.ids.head
     assertResult(exec2)(peerBlockManager)
 
     // second heartbeat from exec1, should be empty
-    val secondUpdate = hbMgr.executorHeartbeat(exec1)
+    val secondUpdate = hbMgr.executorHeartbeat(exec1).asInstanceOf[RapidsExecutorDeltaUpdateMsg]
     assertResult(0)(secondUpdate.ids.length)
 
     // first heartbeat from exec2 returns empty, it already knew about exec1 on registration
-    val firstUpdateExec2 = hbMgr.executorHeartbeat(exec2)
+    val firstUpdateExec2 = hbMgr.executorHeartbeat(exec2).asInstanceOf[RapidsExecutorDeltaUpdateMsg]
     assertResult(0)(firstUpdateExec2.ids.length)
   }
 

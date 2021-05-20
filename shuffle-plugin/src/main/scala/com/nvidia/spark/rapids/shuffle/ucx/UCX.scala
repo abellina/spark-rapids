@@ -70,6 +70,7 @@ case class UCXActiveMessage(activeMessageId: Int, header: Long) {
  */
 class UCX(transport: UCXShuffleTransport, executor: BlockManagerId, rapidsConf: RapidsConf)
     extends AutoCloseable with Logging with Arm {
+  UCX.setInstance(this)
 
   private[this] val context = {
     val contextParams = new UcpParams()
@@ -189,6 +190,14 @@ class UCX(transport: UCXShuffleTransport, executor: BlockManagerId, rapidsConf: 
     }
 
     progressThread.execute(() => {
+      while (initialized) {
+        doProgress()
+        Thread.sleep(5000)
+      }
+    })
+  }
+
+  def doProgress(): Unit = {
       // utility function to make all the progress possible in each iteration
       // this could change in the future to 1 progress call per loop, or be used
       // entirely differently once polling is figured out
@@ -868,6 +877,11 @@ class UCX(transport: UCXShuffleTransport, executor: BlockManagerId, rapidsConf: 
 }
 
 object UCX {
+  private var _instance: UCX = null
+
+  def setInstance(u: UCX): Unit = { _instance = u }
+
+  def doProgress(): Unit = { _instance.doProgress() }
   // This is used to distinguish a cancelled request vs. other errors
   // as the callback is the same (onError)
   // from https://github.com/openucx/ucx/blob/master/src/ucs/type/status.h

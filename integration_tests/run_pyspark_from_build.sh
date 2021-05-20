@@ -130,10 +130,14 @@ else
     export PYSP_TEST_spark_sql_session_timeZone='UTC'
     export PYSP_TEST_spark_sql_shuffle_partitions='12'
     export PYSP_TEST_spark_shuffle_service_enabled='false'
-    export PYSP_TEST_spark_shuffle_manager="com.nvidia.spark.rapids.spark311.RapidsShuffleManager"
     export PYSP_TEST_spark_cores_max='4'
     export PYSP_TEST_spark_executor_cores='1'
+    export PYSP_TEST_spark_shuffle_manager="com.nvidia.spark.rapids.spark311.RapidsShuffleManager"
     export SPARK_SUBMIT_FLAGS='--master spark://192.168.50.80:7077'
+    export PYSP_TEST_spark_scheduler_minRegisteredResourcesRatio=1.0
+    export PYSP_TEST_spark_rapids_memory_gpu_allocFraction=0.2
+    export PYSP_TEST_spark_rapids_memory_gpu_maxAllocFraction=0.2
+
 
     if ((${#TEST_PARALLEL_OPTS[@]} > 0));
     then

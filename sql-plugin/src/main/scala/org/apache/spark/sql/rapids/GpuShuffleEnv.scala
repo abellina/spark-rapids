@@ -63,6 +63,12 @@ class GpuShuffleEnv(rapidsConf: RapidsConf) extends Logging {
 }
 
 object GpuShuffleEnv extends Logging {
+  var hbManager: RapidsShuffleHeartbeatManager = null
+
+  def setHeartbeatManager(rapidsShuffleHeartbeatManager: RapidsShuffleHeartbeatManager) = {
+    hbManager = rapidsShuffleHeartbeatManager
+  }
+
   val RAPIDS_SHUFFLE_CLASS: String = ShimLoader.getSparkShims.getRapidsShuffleManagerClass
 
   var mgr: Option[RapidsShuffleInternalManagerBase] = None

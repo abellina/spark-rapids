@@ -13,17 +13,32 @@
 # limitations under the License.
 
 import pytest
+import time
+import threading
 from spark_session import with_gpu_session
 from marks import allow_non_gpu, ucx
+from conftest import _get_jvm
 
 _conf = {
 }
 
+def thread_function(spark):
+  jvm = _get_jvm(spark)
+  UCX = jvm.com.nvidia.spark.rapids.shuffle.ucx.UCX
+  while True:
+    UCX.doProgress()
+    time.sleep(1)
+    print("here")
+
 @ucx
 def test_ucx_simple(enable_ucx):
     def do_work(spark):
-      sc = spark._jsc.sc()
-      print(sc.getExecutorIds())
+      jsc = spark._jsc.sc()
+      print(jsc.getExecutorIds())
+      df = spark.read.parquet("file:///home/abellina/foo")
+      x = threading.Thread(target=thread_function, args=(spark,))
+      x.start()
+      print(df.repartition(1000).collect())
 
     with_gpu_session(
       lambda spark: do_work(spark),
