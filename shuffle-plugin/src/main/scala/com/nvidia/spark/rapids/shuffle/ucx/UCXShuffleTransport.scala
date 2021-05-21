@@ -152,7 +152,11 @@ class UCXShuffleTransport(shuffleServerId: BlockManagerId, rapidsConf: RapidsCon
   }
 
   def freeBounceBufferPools(): Unit = {
-    Seq(deviceSendBuffMgr, deviceReceiveBuffMgr, hostSendBuffMgr).foreach(_.close())
+    try {
+      Seq(deviceSendBuffMgr, deviceReceiveBuffMgr, hostSendBuffMgr).foreach(_.close())
+    } catch {
+      case ex: IllegalStateException => logWarning("Exception while closing bbs", ex)
+    }
   }
 
   private def getNumBounceBuffers(remaining: Long, totalRequired: Int): Int = {
@@ -542,6 +546,14 @@ class UCXShuffleTransport(shuffleServerId: BlockManagerId, rapidsConf: RapidsCon
         validHandlers.remove(handler)
       }
     }
+
+/* TODO: had this before
+      toRemove.foreach(r => {
+        logWarning(s"Removing pending request ${r} and signaling handler error")
+        r.handler.transferError("Peer error from UCX")
+        altList.remove(r)
+      })
+      */
   }
 
   override def close(): Unit = {
@@ -572,4 +584,5 @@ class UCXShuffleTransport(shuffleServerId: BlockManagerId, rapidsConf: RapidsCon
     ucx.close()
     freeBounceBufferPools()
   }
+
 }

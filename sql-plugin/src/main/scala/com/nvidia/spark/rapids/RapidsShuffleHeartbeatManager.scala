@@ -42,11 +42,16 @@ case class RapidsExecutorStartupMsg(id: BlockManagerId)
  */
 case class RapidsExecutorHeartbeatMsg(id: BlockManagerId)
 
+
 /**
  * Driver response to an startup or heartbeat message, with new (to the peer) executors
  * from the last heartbeat.
  */
-case class RapidsExecutorUpdateMsg(ids: Array[BlockManagerId])
+trait RapidsExecutorUpdateMsg
+
+case class RapidsExecutorDeltaUpdateMsg(ids: Array[BlockManagerId]) extends RapidsExecutorUpdateMsg
+
+case class RapidsExecutorControlMessage(numProgressCalls: Int) extends RapidsExecutorUpdateMsg
 
 class RapidsShuffleHeartbeatManager extends Logging {
   private case class ExecutorRegistration(id: BlockManagerId, lastExecutorSeen: Long)
@@ -56,6 +61,12 @@ class RapidsShuffleHeartbeatManager extends Logging {
 
   // A mapping of executor IDs to registration index (ordered by arrival)
   private[this] val lastRegistrationSeen = new util.HashMap[BlockManagerId, MutableLong]
+
+  private[this] val controlMsg = new util.HashMap[BlockManagerId, MutableLong]
+  def askProgressCalls(num: Int): Unit = {
+    import scala.collection.JavaConversions._
+    controlMsg.foreach { case (k, ml) => ml.setValue(num) }
+  }
 
   /**
    * Called by the driver plugin to handle a new registration from an executor.
@@ -70,7 +81,7 @@ class RapidsShuffleHeartbeatManager extends Logging {
     executors.append(ExecutorRegistration(id, System.nanoTime))
 
     lastRegistrationSeen.put(id, new MutableLong(allExecutors.length))
-    RapidsExecutorUpdateMsg(allExecutors)
+    RapidsExecutorDeltaUpdateMsg(allExecutors)
   }
 
   /**
@@ -79,30 +90,42 @@ class RapidsShuffleHeartbeatManager extends Logging {
    * @return `RapidsExecutorUpdateMsg` with new executors, since the last heartbeat was received.
    */
   def executorHeartbeat(id: BlockManagerId): RapidsExecutorUpdateMsg = synchronized {
-    val lastRegistration = lastRegistrationSeen.get(id)
-    if (lastRegistration == null) {
-      throw new IllegalStateException(s"Heartbeat from unknown executor $id")
-    }
-
-    val newExecutors = new ArrayBuffer[BlockManagerId]
-    val iter = executors.zipWithIndex.reverseIterator
-    var done = false
-    while (iter.hasNext && !done) {
-      val (entry, index) = iter.next()
-
-      if (index > lastRegistration.getValue) {
-        if (entry.id != id) {
-          newExecutors += entry.id
-        }
-      } else {
-        // We are iterating backwards and have found the last index previously inspected
-        // for this peer. We can stop since all peers below this have been sent to this peer.
-        done = true
+    // disregard heartbeats from the driver, which can happen in local mode
+      val lastRegistration = lastRegistrationSeen.get(id)
+      if (lastRegistration == null) {
+        throw new IllegalStateException(s"Heartbeat from unknown executor $id")
       }
-    }
 
-    lastRegistration.setValue(executors.size - 1)
-    RapidsExecutorUpdateMsg(newExecutors.toArray)
+      val newExecutors = new ArrayBuffer[BlockManagerId]
+      val iter = executors.zipWithIndex.reverseIterator
+      var done = false
+      while (iter.hasNext && !done) {
+        val (entry, index) = iter.next()
+
+        if (index > lastRegistration.getValue) {
+          if (entry.id != id) {
+            newExecutors += entry.id
+          }
+        } else {
+          // We are iterating backwards and have found the last index previously inspected
+          // for this peer. We can stop since all peers below this have been sent to this peer.
+          done = true
+        }
+      }
+
+      lastRegistration.setValue(executors.size - 1)
+      if (newExecutors.size > 0){
+        RapidsExecutorDeltaUpdateMsg(newExecutors.toArray)
+      } else {
+        val numProg = if (controlMsg.containsKey(id)) {
+          controlMsg.get(id).intValue()
+        } else {
+          controlMsg.put(id, new MutableLong(0L))
+          0
+        }
+
+        RapidsExecutorControlMessage(numProg)
+      }
   }
 }
 
@@ -113,6 +136,7 @@ trait RapidsShuffleHeartbeatHandler {
 
 class RapidsShuffleHeartbeatEndpoint(pluginContext: PluginContext, conf: RapidsConf)
   extends Logging with AutoCloseable {
+    var controlListener: (Int => Unit) = numProg =>  println(s"here! $numProg  listener")
   // Number of milliseconds between heartbeats to driver
   private[this] val heartbeatIntervalMillis =
     conf.shuffleTransportEarlyStartHeartbeatInterval
@@ -130,14 +154,17 @@ class RapidsShuffleHeartbeatEndpoint(pluginContext: PluginContext, conf: RapidsC
         val serverId = shuffleManager.getServerId
         logInfo(s"Registering executor $serverId with driver")
         ctx.ask(RapidsExecutorStartupMsg(shuffleManager.getServerId)) match {
-          case RapidsExecutorUpdateMsg(peers) => updatePeers(shuffleManager, peers)
+          case RapidsExecutorDeltaUpdateMsg(peers) => updatePeers(shuffleManager, peers)
+
         }
         val heartbeat = new Runnable {
           override def run(): Unit = {
             try {
               logTrace("Performing executor heartbeat to driver")
               ctx.ask(RapidsExecutorHeartbeatMsg(shuffleManager.getServerId)) match {
-                case RapidsExecutorUpdateMsg(peers) => updatePeers(shuffleManager, peers)
+                case RapidsExecutorDeltaUpdateMsg(peers) => updatePeers(shuffleManager, peers)
+                case RapidsExecutorControlMessage(numProgressCalls) => 
+                  controlListener(numProgressCalls)
               }
             } catch {
               case t: Throwable => logError("Error during heartbeat", t)

@@ -94,6 +94,7 @@ trait ServerConnection {
  * Currently supported message types in the transport
  */
 object MessageType extends Enumeration {
+  val Control = Value
   /**
    * A client will issue: `MetadataRequest`
    * A server will respond with: `MetadataResponse`
@@ -115,7 +116,7 @@ object MessageType extends Enumeration {
 /**
  * Trait used by the clients to interact with the transport.
  */
-trait ClientConnection {
+trait ClientConnection extends AutoCloseable {
 
   /**
    * This performs a request/response for a message of type `MessageType`. The response
@@ -139,6 +140,8 @@ trait ClientConnection {
    * @return the executorId as a long
    */
   def getPeerExecutorId: Long
+
+  override def close()
 }
 
 object TransactionStatus extends Enumeration {

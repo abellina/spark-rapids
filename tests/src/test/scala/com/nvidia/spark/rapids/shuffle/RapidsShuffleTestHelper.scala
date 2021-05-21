@@ -268,5 +268,7 @@ class MockConnection(mockTransaction: Transaction) extends ClientConnection {
   }
 
   override def registerReceiveHandler(messageType: MessageType.Value): Unit = {}
+
+  override def close(): Unit = {}
 }
 

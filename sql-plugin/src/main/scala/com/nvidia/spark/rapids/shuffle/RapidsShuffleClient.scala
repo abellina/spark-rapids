@@ -19,14 +19,14 @@ package com.nvidia.spark.rapids.shuffle
 import java.util.concurrent.Executor
 
 import scala.collection.mutable.ArrayBuffer
-
 import ai.rapids.cudf.{DeviceMemoryBuffer, NvtxColor, NvtxRange}
 import com.nvidia.spark.rapids._
 import com.nvidia.spark.rapids.format.{MetadataResponse, TableMeta, TransferState}
-
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.rapids.GpuShuffleEnv
 import org.apache.spark.storage.ShuffleBlockBatchId
+
+import scala.collection.mutable
 
 /**
  * trait used by client consumers ([[RapidsShuffleIterator]]) to gather what the
@@ -92,7 +92,8 @@ class RapidsShuffleClient(
     clientCopyExecutor: Executor,
     devStorage: RapidsDeviceMemoryStore = RapidsBufferCatalog.getDeviceStorage,
     catalog: ShuffleReceivedBufferCatalog = GpuShuffleEnv.getReceivedCatalog)
-      extends Logging with Arm {
+      extends Logging with Arm with AutoCloseable {
+
 
   object ShuffleClientOps {
     /**
@@ -154,7 +155,7 @@ class RapidsShuffleClient(
     clientCopyExecutor.execute(() => handleOp(op))
   }
 
-
+  private val handlersWithInterest = new mutable.HashSet[RapidsShuffleFetchHandler]()
   /**
    * Starts a fetch request for all the shuffleRequests, using `handler` to communicate
    * events back to the iterator.
@@ -166,6 +167,7 @@ class RapidsShuffleClient(
               handler: RapidsShuffleFetchHandler): Unit = {
     try {
       withResource(new NvtxRange("Client.fetch", NvtxColor.PURPLE)) { _ =>
+        handlersWithInterest.add(handler)
         if (shuffleRequests.isEmpty) {
           throw new IllegalStateException("Sending empty blockIds in the MetadataRequest?")
         }
@@ -435,5 +437,19 @@ class RapidsShuffleClient(
       catalog.registerNewBuffer(new DegenerateRapidsBuffer(id, meta))
     }
     id
+  }
+
+  def close(): Unit = {
+    logInfo(s"Closing pending requests for ${connection.getPeerExecutorId}")
+    handlersWithInterest.foreach { hndlr =>
+      transport.cancelPending(hndlr)
+      logWarning(s"Signaling ${hndlr} that ${connection.getPeerExecutorId} errored")
+      hndlr.transferError("Client signaled UCX error")
+    }
+    // pop all the pending buffer receives, and signal that there is an error
+  }
+
+  def unregister(iterator: RapidsShuffleFetchHandler): Unit = {
+    handlersWithInterest.remove(iterator)
   }
 }
