@@ -172,6 +172,7 @@ trait ServerConnection extends Connection {
  * Currently supported request types in the transport
  */
 object RequestType extends Enumeration {
+  val Control = Value
   /**
    * A client will issue: `MetadataRequest`
    * A server will respond with: `MetadataResponse`

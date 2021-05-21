@@ -95,6 +95,10 @@ object GpuShuffleEnv extends Logging {
     env.getCatalog
   }
 
+  def shutdown(): Unit = {
+    mgr.foreach(_.close)
+  }
+
   //
   // Functions below only get called from the executor
   //

@@ -198,7 +198,7 @@ class RapidsCachingWriter[K, V](
  *       Apache Spark to use the RAPIDS shuffle manager,
  */
 abstract class RapidsShuffleInternalManagerBase(conf: SparkConf, isDriver: Boolean)
-    extends ShuffleManager with RapidsShuffleHeartbeatHandler with Logging {
+    extends ShuffleManager with RapidsShuffleHeartbeatHandler with Logging with AutoCloseable {
 
   def getServerId: BlockManagerId = server.fold(blockManager.blockManagerId)(_.getId)
 
@@ -388,9 +388,19 @@ abstract class RapidsShuffleInternalManagerBase(conf: SparkConf, isDriver: Boole
 
   override def shuffleBlockResolver: ShuffleBlockResolver = resolver
 
+  var isClosed = false
+
   override def stop(): Unit = {
     wrapped.stop()
     server.foreach(_.close())
     transport.foreach(_.close())
+  }
+
+  override def close(): Unit = {
+    logWarning(s"Closing ${this}")
+    if (!isClosed) {
+      isClosed = true
+      stop()
+    }
   }
 }
