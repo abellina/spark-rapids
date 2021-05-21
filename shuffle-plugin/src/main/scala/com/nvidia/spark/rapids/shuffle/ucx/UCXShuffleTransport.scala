@@ -152,7 +152,11 @@ class UCXShuffleTransport(shuffleServerId: BlockManagerId, rapidsConf: RapidsCon
   }
 
   def freeBounceBufferPools(): Unit = {
-    Seq(deviceSendBuffMgr, deviceReceiveBuffMgr, hostSendBuffMgr).foreach(_.close())
+    try {
+      Seq(deviceSendBuffMgr, deviceReceiveBuffMgr, hostSendBuffMgr).foreach(_.close())
+    } catch {
+      case ex: IllegalStateException => logWarning("Exception while closing bbs", ex)
+    }
   }
 
   private def getNumBounceBuffers(remaining: Long, totalRequired: Int): Int = {

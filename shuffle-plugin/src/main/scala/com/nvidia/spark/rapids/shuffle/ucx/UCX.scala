@@ -16,7 +16,6 @@
 
 package com.nvidia.spark.rapids.shuffle.ucx
 
-import java.io._
 import java.net._
 import java.nio.ByteBuffer
 import java.util.concurrent.{ConcurrentHashMap, ConcurrentLinkedQueue, Executors, TimeUnit}
@@ -24,15 +23,13 @@ import java.util.concurrent.atomic.{AtomicInteger, AtomicLong}
 
 import scala.collection.mutable.ArrayBuffer
 import scala.util.Random
-
 import ai.rapids.cudf.{MemoryBuffer, NvtxColor, NvtxRange}
 import com.google.common.util.concurrent.ThreadFactoryBuilder
 import com.nvidia.spark.rapids.{Arm, GpuDeviceManager, RapidsConf}
-import com.nvidia.spark.rapids.shuffle.{AddressLengthTag, ClientConnection, MemoryRegistrationCallback, TransportUtils}
+import com.nvidia.spark.rapids.shuffle.{AddressLengthTag, ClientConnection, MemoryRegistrationCallback, RefCountedDirectByteBuffer, RequestType, TransportUtils}
 import org.openucx.jucx._
 import org.openucx.jucx.ucp._
 import org.openucx.jucx.ucs.UcsConstants
-
 import org.apache.spark.SparkEnv
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.rapids.storage.RapidsStorageUtils
@@ -73,6 +70,7 @@ case class UCXActiveMessage(activeMessageId: Int, header: Long) {
  */
 class UCX(transport: UCXShuffleTransport, executor: BlockManagerId, rapidsConf: RapidsConf)
     extends AutoCloseable with Logging with Arm {
+
   private[this] val context = {
     val contextParams = new UcpParams()
       .requestTagFeature()
@@ -96,6 +94,7 @@ class UCX(transport: UCXShuffleTransport, executor: BlockManagerId, rapidsConf: 
   private var worker: UcpWorker = _
   private var listener: Option[UcpListener] = None
   private val endpoints = new ConcurrentHashMap[Long, UcpEndpoint]()
+  private val backEndpoints = new ConcurrentHashMap[Long, UcpEndpoint]()
   @volatile private var initialized = false
 
   // a peer tag identifies an incoming connection uniquely
@@ -111,14 +110,6 @@ class UCX(transport: UCXShuffleTransport, executor: BlockManagerId, rapidsConf: 
         .setNameFormat("progress-thread-%d")
         .setDaemon(true)
         .build))
-
-  // management port socket
-  private var serverSocket: ServerSocket = _
-  private val acceptService = Executors.newSingleThreadExecutor(
-    new ThreadFactoryBuilder().setNameFormat("ucx-mgmt-thread-%d").build)
-
-  private val serverService = Executors.newCachedThreadPool(
-    new ThreadFactoryBuilder().setNameFormat("ucx-connection-server-%d").build)
 
   // The pending queues are used to enqueue [[PendingReceive]] or [[PendingSend]], from executor
   // task threads and [[progressThread]] will hand them to the UcpWorker thread.
@@ -153,7 +144,16 @@ class UCX(transport: UCXShuffleTransport, executor: BlockManagerId, rapidsConf: 
         if (errorCode != UcsConstants.STATUS.UCS_ERR_CONNECTION_RESET) {
           logError(s"Endpoint to $ucpEndpoint got error: $errorString")
         }
-        endpoints.values().removeIf(ep => ep == ucpEndpoint)
+        logWarning(s"REMOVING ${ucpEndpoint}")
+        endpoints.values().removeIf(ep => {
+          logWarning(s"Should remove $ep? Comparing to ${ucpEndpoint}")
+          if (ep == ucpEndpoint)  {
+            ep.close()
+            true
+          } else {
+            false
+          }
+        })
       }
     }
   }
@@ -188,44 +188,6 @@ class UCX(transport: UCXShuffleTransport, executor: BlockManagerId, rapidsConf: 
 
       worker = context.newWorker(workerParams)
       logInfo(s"UCX Worker created")
-      if (rapidsConf.shuffleUcxUseSockaddr) {
-        // For now backward endpoints are not used, but need to create
-        // an endpoint from connectionHandler in order to use ucpListener connections.
-        // With AM this endpoints would be used as replyEp.
-        val backwardEpId = new AtomicInteger(0)
-        val ucpListenerParams = new UcpListenerParams().setConnectionHandler(
-          (connectionRequest: UcpConnectionRequest) => {
-            logDebug(s"Got connection request from ${connectionRequest.getClientAddress}")
-            endpoints.computeIfAbsent(backwardEpId.decrementAndGet(),
-              _ => worker.newEndpoint(getEpParams.setConnectionRequest(connectionRequest)))
-          })
-        val maxRetries = SparkEnv.get.conf.getInt("spark.port.maxRetries", 16)
-        val startPort = if (rapidsConf.shuffleUcxListenerStartPort != 0) {
-          rapidsConf.shuffleUcxListenerStartPort
-        } else {
-          // TODO: remove this once ucx1.11 with random port selection would be released
-          1024 + Random.nextInt(65535 - 1024)
-        }
-        var attempt = 0
-        while (listener.isEmpty && attempt < maxRetries) {
-          val sockAddress = new InetSocketAddress(executor.host, startPort + attempt)
-          attempt += 1
-          try {
-            ucpListenerParams.setSockAddr(sockAddress)
-            listener = Option(worker.newListener(ucpListenerParams))
-          } catch {
-            case _: UcxException =>
-              logDebug(s"Failed to bind UcpListener on $sockAddress. " +
-                s"Attempt $attempt out of $maxRetries.")
-              listener = None
-          }
-        }
-        if (listener.isEmpty) {
-          throw new BindException(s"Couldn't start UcpListener " +
-            s"on port range $startPort-${startPort + maxRetries}")
-        }
-        logInfo(s"Started UcpListener on ${listener.get.getAddress}")
-      }
       initialized = true
     }
 
@@ -264,74 +226,166 @@ class UCX(transport: UCXShuffleTransport, executor: BlockManagerId, rapidsConf: 
             logError("Exception caught in UCX progress thread. Continuing.", t)
         }
       }
+
+      logWarning("Exiting progress thread. Closing endpoints, worker and context.")
+      endpoints.values().forEach(ep => ep.close())
+      worker.close()
+      context.close()
     })
   }
 
-  /**
-   * Starts a TCP server to listen for external clients, returning with
-   * what port it used.
-   *
-   * @param mgmtHost String the hostname to bind to
-   * @return port bound
-   */
-  def startManagementPort(mgmtHost: String): Int = {
-    var portBindAttempts = 100
-    var portBound = false
-    while (!portBound && portBindAttempts > 0) {
-      try {
-        logInfo(s"Starting ephemeral UCX management port at host $mgmtHost")
-        // TODO: use ucx listener for this
-        serverSocket = new ServerSocket()
-        // open a TCP/IP socket to connect to a client
-        // send the worker address to the client who wants to talk to us
-        // associate with [[onNewConnection]]
-        try {
-          serverSocket.bind(new InetSocketAddress(mgmtHost, 0))
-        } catch {
-          case ioe: IOException =>
-            logError(s"Unable to bind using host [$mgmtHost]", ioe)
-            throw ioe
-        }
-        logInfo(s"Successfully bound to $mgmtHost:${serverSocket.getLocalPort}")
-        portBound = true
+  def startListener(host: String): Int = {
+    if (rapidsConf.shuffleUcxUseSockaddr) {
 
-        acceptService.execute(() => {
-          while (initialized) {
-            logInfo(s"Accepting UCX management connections.")
-            try {
-              val s = serverSocket.accept()
-              // throw into a thread pool to actually handle the stream
-              serverService.execute(() => {
-                // disable Nagle's algorithm, in hopes of data not buffered by TCP
-                s.setTcpNoDelay(true)
-                handleSocket(s)
+      registerRequestHandler(
+          UCXConnection.composeRequestAmId(RequestType.Control), () => new UCXAmCallback {
+        override def onError(am: UCXActiveMessage, ucsStatus: Int, errorMsg: String): Unit = {
+          logError(s"Error with ${am}")
+        }
+        override def onMessageStarted(receiveAm: UcpRequest): Unit = {
+        }
+        override def onSuccess(
+            am: UCXActiveMessage, buff: RefCountedDirectByteBuffer, ep: UcpEndpoint): Unit = {
+          withResource(buff) { _ =>
+            val (peerExecId, host, port, peerRkeys) =
+              UCXConnection.unpackHandshake(buff.getBuffer())
+
+            val existingEp = endpoints.get(peerExecId.toLong)
+
+            logInfo(s"Success RECEIVING active message, am ${am} " +
+            s"existing? ${endpoints.get(peerExecId.toLong)} " +
+            s"peer exec $peerExecId, host $host, port $port, peer keys ${peerRkeys}")
+            onWorkerThreadAsync(() => {
+              peerRkeys.foreach(existingEp.unpackRemoteKey)
+            })
+
+            val hs = UCXConnection.packHandshake(
+              getExecutorId, executor.host, listener.get.getAddress.getPort, localRkeys)
+
+            // reply
+            sendActiveMessage(
+              existingEp,
+              UCXActiveMessage(UCXConnection.composeResponseAmId(RequestType.Control), am.header),
+              TransportUtils.getAddress(hs), hs.remaining(),
+              new UcxCallback {
+                override def onError(ucsStatus: Int, errorMsg: String): Unit = {
+                  logError(s"ERROR REPLYING TO CONTROL $am ${ucsStatus} ${errorMsg}")
+                }
+
+                override def onSuccess(request: UcpRequest): Unit = {
+                  logInfo(s"SUCCESS REPLYING TO CONTROL $am with $hs")
+                  // hs here to keep the reference
+                }
               })
-            } catch {
-              case e: Throwable if initialized =>
-                // This will cause the `SparkUncaughtExceptionHandler` to get invoked
-                // and it will shut down the executor (as it should).
-                throw e
-              case _: SocketException if !initialized =>
-                // `initialized = false` means we are shutting down,
-                // the socket will throw `SocketException` in this case
-                // to unblock the accept, when `close()` is called.
-                logWarning(s"UCX management socket closing")
-              case ue: Throwable =>
-                // a catch-all in case we get a non `SocketException` while closing (!initialized)
-                logError(s"Unexpected exception while closing UCX management socket", ue)
-            }
           }
+        }
+        override def onCancel(am: UCXActiveMessage): Unit = {
+        }
+        override def onHostMessageReceived(size: Long): RefCountedDirectByteBuffer = {
+          transport.getDirectByteBuffer(size)
+        }
+      })
+      // For now backward endpoints are not used, but need to create
+      // an endpoint from connectionHandler in order to use ucpListener connections.
+      // With AM this endpoints would be used as replyEp.
+      val ucpListenerParams = new UcpListenerParams().setConnectionHandler(
+        (connectionRequest: UcpConnectionRequest) => {
+          val ep = worker.newEndpoint(getEpParams.setConnectionRequest(connectionRequest))
+          logInfo(s"Got UcpListener request from ${connectionRequest.getClientAddress}" +
+            s" and ep ${ep}")
+
+          val hdr = UCXConnection.packHandshake(
+            getExecutorId, host, listener.get.getAddress.getPort, localRkeys)
+
+          val responseAm = UCXActiveMessage(
+            UCXConnection.composeResponseAmId(RequestType.Control), ep.getNativeId)
+
+          registerResponseHandler(
+            responseAm.activeMessageId, responseAm.header, new UCXAmCallback {
+              override def onError(am: UCXActiveMessage, ucsStatus: Int, errorMsg: String): Unit = {
+                logError(s"ERROR WITH RESPONSE CONTROL ${ucsStatus} ${errorMsg}")
+              }
+              override def onMessageStarted(receiveAm: UcpRequest): Unit = {}
+              override def onSuccess(am: UCXActiveMessage,
+                                     buff: RefCountedDirectByteBuffer,
+                                     replyEp: UcpEndpoint): Unit = {
+
+                withResource(buff) { _ =>
+                  val (peerExecId, peerHost, peerPort, peerRkeys) =
+                    UCXConnection.unpackHandshake(buff.getBuffer())
+
+                  logInfo(s"SUCCESS WITH RESPONSE CONTROL: " +
+                    s"from ${ep}: $peerExecId @ $peerHost:$peerPort")
+
+                  //TODO: this seems fishy
+                  endpoints.synchronized {
+                    backEndpoints.put(peerExecId.toLong, ep)
+                    val priorEp = endpoints.get(peerExecId.toLong)
+                    if (priorEp != null && priorEp != ep) {
+                      logError(s"ALREADY HAD AN ENDPOINT FOR ${peerExecId}, " +
+                        s"closing ${priorEp} in favor of ${ep}")
+                      onWorkerThreadAsync(() => {
+                        logError(s"CLOSING IN PROGRESS THREAD ${priorEp}")
+                        endpoints.synchronized {
+                          priorEp.closeNonBlockingFlush()
+                          endpoints.put(peerExecId.toLong, ep)
+                        }
+                      })
+                    } else {
+                      peerRkeys.foreach(ep.unpackRemoteKey)
+                    }
+                  }
+                }
+              }
+              override def onCancel(am: UCXActiveMessage): Unit = {}
+              override def onHostMessageReceived(size: Long): RefCountedDirectByteBuffer = {
+                transport.getDirectByteBuffer(size)
+              }
+            })
+
+          sendActiveMessage(ep,
+            UCXActiveMessage(UCXConnection.composeRequestAmId(RequestType.Control), ep.getNativeId),
+            TransportUtils.getAddress(hdr),
+            hdr.remaining(), new UcxCallback {
+              override def onError(ucsStatus: Int, errorMsg: String): Unit = {
+                logError(s"Error sending handshake header ${ucsStatus} ${errorMsg}")
+              }
+
+              override def onSuccess(request: UcpRequest): Unit = {
+                logInfo("Success sending handshake header!")
+              }
+            })
         })
-      } catch {
-        case ioe: IOException =>
-          logWarning(s"Retrying bind attempts $portBindAttempts", ioe)
-          portBindAttempts = portBindAttempts - 1
+      val maxRetries = SparkEnv.get.conf.getInt("spark.port.maxRetries", 16)
+      val startPort = if (rapidsConf.shuffleUcxListenerStartPort != 0) {
+        rapidsConf.shuffleUcxListenerStartPort
+      } else {
+        // TODO: remove this once ucx1.11 with random port selection would be released
+        1024 + Random.nextInt(65535 - 1024)
       }
+      var attempt = 0
+      while (listener.isEmpty && attempt < maxRetries) {
+        val sockAddress = new InetSocketAddress(executor.host, startPort + attempt)
+        attempt += 1
+        try {
+          ucpListenerParams.setSockAddr(sockAddress)
+          listener = Option(worker.newListener(ucpListenerParams))
+        } catch {
+          case _: UcxException =>
+            logDebug(s"Failed to bind UcpListener on $sockAddress. " +
+              s"Attempt ${attempt} out of $maxRetries.")
+            listener = None
+        }
+      }
+      if (listener.isEmpty) {
+        throw new BindException(s"Couldn't start UcpListener " +
+          s"on port range $startPort-${startPort + maxRetries}")
+      }
+      logInfo(s"Started UcpListener on ${listener.get.getAddress}")
+      listener.get.getAddress.getPort
+    } else {
+      throw new IllegalStateException("told to start listener, but not using ucx sockaddr")
     }
-    if (!portBound) {
-      throw new IllegalStateException(s"Cannot bind UCX, tried $portBindAttempts times")
-    }
-    serverSocket.getLocalPort
   }
 
   // LOW LEVEL API
@@ -475,7 +529,7 @@ class UCX(transport: UCXShuffleTransport, executor: BlockManagerId, rapidsConf: 
   private def registerActiveMessage(reg: ActiveMessageRegistration): Unit = {
     onWorkerThreadAsync(() => {
       worker.setAmRecvHandler(reg.activeMessageId,
-        (headerAddr, headerSize, amData: UcpAmData, _) => {
+        (headerAddr, headerSize, amData: UcpAmData, ep: UcpEndpoint) => {
           if (headerSize != 8) {
             // this is a coding error, so I am just blowing up. It should never happen.
             throw new IllegalStateException(
@@ -501,7 +555,7 @@ class UCX(transport: UCXShuffleTransport, executor: BlockManagerId, rapidsConf: 
               val bb = dbb.getBuffer()
               bb.put(resp)
               bb.rewind()
-              cb.onSuccess(am, dbb)
+              cb.onSuccess(am, dbb, ep)
 
               // we return OK telling UCX `amData` is ok to be closed, along with the eagerly
               // received data
@@ -531,7 +585,7 @@ class UCX(transport: UCXShuffleTransport, executor: BlockManagerId, rapidsConf: 
 
                   override def onSuccess(request: UcpRequest): Unit = {
                     withResource(amData) { _ =>
-                      cb.onSuccess(am, resp)
+                      cb.onSuccess(am, resp, ep)
                     }
                   }
                 })
@@ -567,42 +621,49 @@ class UCX(transport: UCXShuffleTransport, executor: BlockManagerId, rapidsConf: 
     }
   }
 
+  private def sendActiveMessage(endpoint: UcpEndpoint, am: UCXActiveMessage,
+      dataAddress: Long, dataSize: Long, cb: UcxCallback): Unit = {
+    logDebug(s"Sending $am msg of size $dataSize")
+
+    // This isn't coming from the pool right now because it would be a bit of a
+    // waste to get a larger hard-partitioned buffer just for 8 bytes.
+    // TODO: since we no longer have metadata limits, the pool can be managed using the
+    //   address-space allocator, so we should obtain this direct buffer from that pool
+    val header = ByteBuffer.allocateDirect(8)
+    header.putLong(am.header)
+    header.rewind()
+
+    endpoint.sendAmNonBlocking(
+      am.activeMessageId,
+      TransportUtils.getAddress(header),
+      header.remaining(),
+      dataAddress,
+      dataSize,
+      activeMessageMode,
+      new UcxCallback {
+        override def onSuccess(request: UcpRequest): Unit = {
+          cb.onSuccess(request)
+          RapidsStorageUtils.dispose(header)
+        }
+
+        override def onError(ucsStatus: Int, errorMsg: String): Unit = {
+          cb.onError(ucsStatus, errorMsg)
+          RapidsStorageUtils.dispose(header)
+        }
+      })
+  }
+
   def sendActiveMessage(endpointId: Long, am: UCXActiveMessage,
                         dataAddress: Long, dataSize: Long, cb: UcxCallback): Unit = {
     onWorkerThreadAsync(() => {
-      val ep = endpoints.get(endpointId)
-      if (ep == null) {
-        throw new IllegalStateException(
-          s"Trying to send a message to an endpoint that doesn't exist ${endpointId}")
+      endpoints.synchronized {
+        val ep = endpoints.get(endpointId)
+        if (ep == null) {
+          throw new IllegalStateException(
+            s"Trying to send a message to an endpoint that doesn't exist ${endpointId}")
+        }
+        sendActiveMessage(ep, am, dataAddress, dataSize, cb)
       }
-      logDebug(s"Sending $am msg of size $dataSize")
-
-      // This isn't coming from the pool right now because it would be a bit of a
-      // waste to get a larger hard-partitioned buffer just for 8 bytes.
-      // TODO: since we no longer have metadata limits, the pool can be managed using the
-      //   address-space allocator, so we should obtain this direct buffer from that pool
-      val header = ByteBuffer.allocateDirect(8)
-      header.putLong(am.header)
-      header.rewind()
-
-      ep.sendAmNonBlocking(
-        am.activeMessageId,
-        TransportUtils.getAddress(header),
-        header.remaining(),
-        dataAddress,
-        dataSize,
-        activeMessageMode,
-        new UcxCallback {
-          override def onSuccess(request: UcpRequest): Unit = {
-            cb.onSuccess(request)
-            RapidsStorageUtils.dispose(header)
-          }
-
-          override def onError(ucsStatus: Int, errorMsg: String): Unit = {
-            cb.onError(ucsStatus, errorMsg)
-            RapidsStorageUtils.dispose(header)
-          }
-        })
     })
   }
 
@@ -665,43 +726,6 @@ class UCX(transport: UCXShuffleTransport, executor: BlockManagerId, rapidsConf: 
     worker.getAddress
   }
 
-  private def getUcxAddress: ByteBuffer = ucxAddress.asReadOnlyBuffer()
-
-  /**
-   * Establish a new [[UcpEndpoint]] given a [[WorkerAddress]]. It also
-   * caches them s.t. at [[close]] time we can release resources.
-   *
-   * @param endpointId    presently an executorId, it is used to distinguish between endpoints
-   *                      when routing messages outbound
-   * @param workerAddress the worker address for the remote endpoint (ucx opaque object)
-   * @param peerRkeys list of UCX rkeys that the peer has sent us for unpacking
-   * @return returns a [[UcpEndpoint]] that can later be used to send on (from the
-   *         progress thread)
-   */
-  def setupEndpoint(
-      endpointId: Long, workerAddress: WorkerAddress, peerRkeys: Rkeys): UcpEndpoint = {
-    logDebug(s"Starting/reusing an endpoint to $workerAddress with id $endpointId")
-    // create an UCX endpoint using workerAddress or socket address
-    val epParams = getEpParams
-    endpoints.computeIfAbsent(endpointId,
-      (_: Long) => {
-        logInfo(s"No endpoint found for $endpointId. Adding it.")
-        if (rapidsConf.shuffleUcxUseSockaddr) {
-          val port = workerAddress.address.getInt
-          val hostBytes = new Array[Byte](workerAddress.address.remaining())
-          workerAddress.address.get(hostBytes)
-          val hostAddress = InetAddress.getByAddress(hostBytes)
-          val sockAddr = new InetSocketAddress(hostAddress, port)
-          epParams.setSocketAddress(sockAddr)
-        } else {
-          epParams.setUcpAddress(workerAddress.address)
-        }
-        val ep = worker.newEndpoint(epParams)
-        peerRkeys.rkeys.foreach(ep.unpackRemoteKey)
-        ep
-      })
-  }
-
   /**
    * Connect to a remote UCX management port.
    *
@@ -716,7 +740,7 @@ class UCX(transport: UCXShuffleTransport, executor: BlockManagerId, rapidsConf: 
     val result = connectionCache.computeIfAbsent(peerExecutorId, _ => {
       val connection = new UCXClientConnection(
         peerExecutorId, peerTag.incrementAndGet(), this, transport)
-      startConnection(connection, peerMgmtHost, peerMgmtPort)
+      startConnection(peerExecutorId, connection, peerMgmtHost, peerMgmtPort)
       connection
     })
     logDebug(s"Got connection for executor ${peerExecutorId} in " +
@@ -727,76 +751,36 @@ class UCX(transport: UCXShuffleTransport, executor: BlockManagerId, rapidsConf: 
   def onWorkerThreadAsync(task: () => Unit): Unit = {
     workerTasks.add(task)
     if (rapidsConf.shuffleUcxUseWakeup) {
-      worker.signal()
+      try {
+        worker.signal()
+      } catch {
+        case npe: NullPointerException => logError(s"NPE while shutting down", npe)
+      }
     }
   }
 
   // client side
-  private def startConnection(connection: UCXClientConnection,
+  private def startConnection(peerExecutorId: Int, connection: UCXClientConnection,
       peerMgmtHost: String,
-      peerMgmtPort: Int) = {
-    logInfo(s"Connecting to $peerMgmtHost:$peerMgmtPort")
-    withResource(new NvtxRange(s"UCX Connect to $peerMgmtHost:$peerMgmtPort", NvtxColor.RED)) { _ =>
-      withResource(new Socket()) { socket =>
-        socket.setTcpNoDelay(true)
-        socket.connect(new InetSocketAddress(peerMgmtHost, peerMgmtPort),
-          rapidsConf.shuffleUcxMgmtConnTimeout)
-        val os = socket.getOutputStream
-        val is = socket.getInputStream
-
-        // this executor id will receive on tmpLocalReceiveTag for this Connection
-        UCXConnection.writeHandshakeHeader(os, getUcxAddress, getExecutorId, localRkeys)
-
-        // the remote executor will receive on remoteReceiveTag, and expects this executor to
-        // receive on localReceiveTag
-        val (peerWorkerAddress, remoteExecutorId, peerRkeys) = UCXConnection.readHandshakeHeader(is)
-
-        val peerExecutorId = connection.getPeerExecutorId
-        if (remoteExecutorId != peerExecutorId) {
-          throw new IllegalStateException(s"Attempted to reach executor $peerExecutorId, but" +
-            s" instead received reply from $remoteExecutorId")
+      peerMgmtPort: Int) = endpoints.synchronized {
+    if (!endpoints.contains(peerExecutorId.toLong)) {
+      logInfo(s"Connecting to $peerMgmtHost:$peerMgmtPort")
+      onWorkerThreadAsync(() => {
+        val sockAddr = new InetSocketAddress(peerMgmtHost, peerMgmtPort)
+        val epParams = getEpParams.setSocketAddress(sockAddr).setNoLoopbackMode()
+        endpoints.synchronized {
+          if (endpoints.contains(peerExecutorId.toLong)) {
+            logWarning(s"ALREADY HAVE ENDPOINT ON START CONNECTION for ${peerExecutorId}")
+          } else {
+            logWarning(s"CREATE AN ENDPOINT ON START CONNECTION for ${peerExecutorId}")
+            val ep = worker.newEndpoint(epParams)
+            endpoints.put(peerExecutorId.toLong, ep)
+            logInfo(s"Initiated an UCPListener connection to $peerMgmtHost, $peerMgmtPort, ${ep}")
+          }
         }
-
-        onWorkerThreadAsync(() => {
-          setupEndpoint(remoteExecutorId, peerWorkerAddress, peerRkeys)
-        })
-
-        logInfo(s"NEW OUTGOING UCX CONNECTION $connection")
-      }
-      connection
-    }
-  }
-
-  /**
-   * Handle an incoming connection on the TCP management port
-   * This will fetch the [[WorkerAddress]] from the peer, and establish a UcpEndpoint
-   *
-   * @param socket an accepted socket to a remote client
-   */
-  private def handleSocket(socket: Socket): Unit = {
-    withResource(new NvtxRange(s"UCX Handle Connection from ${socket.getInetAddress}",
-        NvtxColor.RED)) { _ =>
-      logDebug(s"Reading worker address from: $socket")
-      withResource(socket) { _ =>
-        val is = socket.getInputStream
-        val os = socket.getOutputStream
-
-        // get the peer worker address, we need to store this so we can send to this tag
-        val (peerWorkerAddress: WorkerAddress, peerExecutorId: Int, peerRkeys: Rkeys) =
-          UCXConnection.readHandshakeHeader(is)
-
-        logInfo(s"Got peer worker address from executor $peerExecutorId")
-
-        // ack what we saw as the local and remote peer tags
-        UCXConnection.writeHandshakeHeader(os, getUcxAddress, getExecutorId, localRkeys)
-
-        onWorkerThreadAsync(() => {
-          setupEndpoint(peerExecutorId, peerWorkerAddress, peerRkeys)
-        })
-
-        // peer would have established an endpoint peer -> local
-        logInfo(s"Sent server UCX worker address to executor $peerExecutorId")
-      }
+      })
+    } else {
+      logInfo(s"Already have an endpoint for ${peerMgmtHost}:$peerMgmtPort")
     }
   }
 
@@ -879,32 +863,10 @@ class UCX(transport: UCXShuffleTransport, executor: BlockManagerId, rapidsConf: 
       }
     }
 
-    if (serverSocket != null) {
-      serverSocket.close()
-      serverSocket = null
-    }
-
-    if (rapidsConf.shuffleUcxUseWakeup && worker != null) {
-      worker.signal()
-    }
-
-    serverService.shutdown()
-    if (!serverService.awaitTermination(500, TimeUnit.MILLISECONDS)) {
-      logError("UCX mgmt service failed to terminate correctly")
-    }
-
     progressThread.shutdown()
     if (!progressThread.awaitTermination(500, TimeUnit.MICROSECONDS)) {
       logError("UCX progress thread failed to terminate correctly")
     }
-
-    endpoints.values().forEach(ep => ep.close())
-
-    if (worker != null) {
-      worker.close()
-    }
-
-    context.close()
   }
 }
 
