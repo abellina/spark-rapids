@@ -97,7 +97,7 @@ class RapidsCachingWriter[K, V](
       records.foreach { p =>
         val partId = p._1.asInstanceOf[Int]
         val batch = p._2.asInstanceOf[ColumnarBatch]
-        logDebug(s"Caching shuffle_id=${handle.shuffleId} map_id=$mapId, partId=$partId, "
+        logInfo(s"Caching shuffle_id=${handle.shuffleId} map_id=$mapId, partId=$partId, "
             + s"batch=[num_cols=${batch.numCols()}, num_rows=${batch.numRows()}]")
         recordsWritten = recordsWritten + batch.numRows()
         var partSize: Long = 0
@@ -274,12 +274,10 @@ abstract class RapidsShuffleInternalManagerBase(conf: SparkConf, isDriver: Boole
           catalog.acquireBuffer(shuffleBufferId)
         }
 
-        override def getShuffleBufferMetas(
-            sbbId: (Int, ShuffleBlockBatchId)): (Int, Seq[TableMeta]) = {
-          val tableMetas = (sbbId._2.startReduceId to sbbId._2.endReduceId).flatMap(rid => {
-            catalog.blockIdToMetas(ShuffleBlockId(sbbId._2.shuffleId, sbbId._2.mapId, rid))
+        override def getShuffleBufferMetas(sbbId: ShuffleBlockBatchId): Seq[TableMeta] = {
+          (sbbId.startReduceId to sbbId.endReduceId).flatMap(rid => {
+            catalog.blockIdToMetas(ShuffleBlockId(sbbId.shuffleId, sbbId.mapId, rid))
           })
-          (sbbId._1, tableMetas)
         }
       }
       val server = transport.get.makeServer(requestHandler)
