@@ -40,7 +40,8 @@ trait RapidsShuffleRequestHandler {
    *                            startReduceId, endReduceId)
    * @return a sequence of `TableMeta` describing batches corresponding to a block.
    */
-  def getShuffleBufferMetas(shuffleBlockBatchId: ShuffleBlockBatchId): Seq[TableMeta]
+  def getShuffleBufferMetas(
+    shuffleBlockBatchId: (Int, ShuffleBlockBatchId)): (Int, Seq[TableMeta])
 
   /**
    * Acquires (locks w.r.t. the memory tier) a [[RapidsBuffer]] corresponding to a table id.
@@ -283,8 +284,8 @@ class RapidsShuffleServer(transport: RapidsShuffleTransport,
               val blockId = req.blockIds(i)
               // this is getting shuffle buffer ids
               requestHandler.getShuffleBufferMetas(
-                ShuffleBlockBatchId(blockId.shuffleId(), blockId.mapId(),
-                  blockId.startReduceId(), blockId.endReduceId()))
+                (blockId.mapIndex(), ShuffleBlockBatchId(blockId.shuffleId(), blockId.mapId(),
+                  blockId.startReduceId(), blockId.endReduceId())))
             }
 
             val metadataResponse =

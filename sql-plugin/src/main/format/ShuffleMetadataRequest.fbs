@@ -20,6 +20,7 @@ table BlockIdMeta {
   map_id: long;
   start_reduce_id: int;
   end_reduce_id: int;
+  map_index: int;
 }
 
 /// Flat buffer for Rapids UCX Shuffle Metadata Request.

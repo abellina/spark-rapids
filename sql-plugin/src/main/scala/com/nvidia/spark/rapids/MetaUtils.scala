@@ -277,7 +277,8 @@ object ShuffleMetadata extends Logging{
         blockId.shuffleId,
         blockId.mapId,
         blockId.startReduceId,
-        blockId.endReduceId)
+        blockId.endReduceId,
+        blockId.mapIndex)
     }
     val blockIdVectorOffset = MetadataRequest.createBlockIdsVector(fbb, blockIdOffsets.toArray)
     val finIndex = MetadataRequest.createMetadataRequest(fbb, blockIdVectorOffset)
