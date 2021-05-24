@@ -260,14 +260,12 @@ class UCXShuffleTransport(shuffleServerId: BlockManagerId, rapidsConf: RapidsCon
     val peerExecutorId = blockManagerId.executorId.toLong
     val clientConnection = connect(blockManagerId)
     clients.computeIfAbsent(peerExecutorId, _ => {
-      val client = new RapidsShuffleClient(
+      new RapidsShuffleClient(
         localExecutorId,
         clientConnection,
         this,
         clientExecutor,
         clientCopyExecutor)
-      clientConnection.asInstanceOf[UCXClientConnection].registeredClient = Option(client)
-      client
     })
   }
 

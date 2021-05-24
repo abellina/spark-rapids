@@ -235,7 +235,6 @@ class UCX(transport: UCXShuffleTransport, executor: BlockManagerId, rapidsConf: 
       endpoints.values().forEach(ep => ep.close())
       worker.close()
       context.close()
-    })
   }
 
   def startListener(host: String): Int = {

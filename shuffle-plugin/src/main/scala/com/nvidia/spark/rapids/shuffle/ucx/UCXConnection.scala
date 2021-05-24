@@ -139,6 +139,10 @@ class UCXClientConnection(peerExecutorId: Int, peerClientId: Long,
   extends UCXConnection(peerExecutorId, ucx)
   with ClientConnection {
 
+  override def close(): Unit = {
+    logInfo(s"CLOSING UCXClientConnection ${this}")
+  }
+
   override def toString: String = {
     s"UCXClientConnection(ucx=$ucx, " +
       s"peerExecutorId=$peerExecutorId, " +
