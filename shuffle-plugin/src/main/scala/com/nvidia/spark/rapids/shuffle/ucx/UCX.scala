@@ -73,14 +73,17 @@ case class UCXActiveMessage(activeMessageId: Int, header: Long) {
  */
 class UCX(transport: UCXShuffleTransport, executor: BlockManagerId, rapidsConf: RapidsConf)
     extends AutoCloseable with Logging with Arm {
+
   private[this] val context = {
-    val contextParams = new UcpParams()
-      .requestTagFeature()
-      .requestAmFeature()
-    if (rapidsConf.shuffleUcxUseWakeup) {
-      contextParams.requestWakeupFeature()
+    withResource(new NvtxRange("initializing UCX context", NvtxColor.BLUE)) { _ =>
+      val contextParams = new UcpParams()
+        .requestTagFeature()
+        .requestAmFeature()
+      if (rapidsConf.shuffleUcxUseWakeup) {
+        contextParams.requestWakeupFeature()
+      }
+      new UcpContext(contextParams)
     }
-    new UcpContext(contextParams)
   }
 
   logInfo(s"UCX context created")

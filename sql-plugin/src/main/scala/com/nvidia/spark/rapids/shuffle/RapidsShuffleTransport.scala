@@ -326,6 +326,30 @@ trait Transaction extends AutoCloseable {
    * @return a `Transaction` object that can be used to wait for this response to complete
    */
   def respond(response: ByteBuffer, cb: TransactionCallback): Transaction
+
+  def stream(buffer: MemoryBuffer)
+
+  // client does connection.request(TransferRequest, TransactionCallback)
+  // server is listening on TransferRequest active message.
+  //  - needs to respond to it (with host metedata)
+  //  - needs to stream buffers
+
+  // 1GB
+  // 4MB bbs
+
+  // client:
+  // request()
+  //  - getGpuBuffer() (amData.receive()) streamDone()
+  //  - getGpuBuffer() (amData.receive()) streamDone()
+  //  - complete callback -> host buffer transfer request is responded
+
+  // server:
+  //  - response()
+  //  - stream() stream() stream() ...
+
+  // TransferRequest (buffers) => could specify TransferRequest(single buffer)
+  // send(b1, b2, ..., b100)
+  // receiver(bb) -> b1..b100 => loop through b1 b100 => allocate and copy.
 }
 
 /**

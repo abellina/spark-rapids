@@ -21,12 +21,10 @@ import java.nio.ByteBuffer
 import java.util.concurrent.ConcurrentHashMap
 
 import scala.collection.mutable.ArrayBuffer
-
-import ai.rapids.cudf.{NvtxColor, NvtxRange}
+import ai.rapids.cudf.{MemoryBuffer, NvtxColor, NvtxRange}
 import com.nvidia.spark.rapids.shuffle._
 import org.openucx.jucx.UcxCallback
 import org.openucx.jucx.ucp.UcpRequest
-
 import org.apache.spark.internal.Logging
 
 /**
@@ -155,9 +153,11 @@ class UCXClientConnection(peerExecutorId: Int, peerClientId: Long,
 
   override def request(
       requestType: RequestType.Value, request: ByteBuffer,
-      cb: TransactionCallback): Transaction = {
+      cb: TransactionCallback,
+      getBuffer: (Int) => MemoryBuffer, // gets invoked when amData is received, before amData.receive()
+      numPending: Int = 1): Transaction = {
     val tx = createTransaction
-    tx.start(UCXTransactionType.Request, 1, cb)
+    tx.start(UCXTransactionType.Request, numPending, cb)
 
     // this header is unique, so we can send it with the request
     // expecting it to be echoed back in the response
@@ -170,10 +170,25 @@ class UCXClientConnection(peerExecutorId: Int, peerClientId: Long,
         transport.getDirectByteBuffer(size.toInt)
       }
 
-      override def onSuccess(am: UCXActiveMessage, buff: RefCountedDirectByteBuffer): Unit = {
-        tx.completeWithSuccess(requestType, Option(am.header), Option(buff))
+      override def onGPUMemoryReceived(size: Long): MemoryBuffer = {
+        getBuffer(size)
       }
 
+      // TODO: there could be multiple onSuccess
+      override def onSuccess(am: UCXActiveMessage, buff: RefCountedDirectByteBuffer): Unit = {
+        tx.completeWithSuccess(requestType, Option(am.header), Option(buff)) // assert pending count == 1
+      }
+
+      override def onPartialSuccess(am: UCXActiveMessage, buff: MemoryBuffer): Unit = {
+        tx.partialSuccess(requestType, Option(am.header), Option(buff)) // decrement pending count
+      }
+
+      // TODO overkill?
+      override def onPartialError(am: UCXActiveMessage, ucsStatus: Int, errorMsg: String): Unit = {
+        tx.partialError(errorMsg) // decrement pending count
+      }
+
+      // TODO: there could be multiple onError
       override def onError(am: UCXActiveMessage, ucsStatus: Int, errorMsg: String): Unit = {
         tx.completeWithError(errorMsg)
       }

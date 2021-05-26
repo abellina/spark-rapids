@@ -312,21 +312,38 @@ class RapidsShuffleClient(
       ShuffleMetadata.buildTransferRequest(requestsToIssue.map(i => (i.tableMeta, i.tag))))
 
     //issue the buffer transfer request
+    //
+    // X = block
+    // request(amId == 0, hdrX) =>
+    //   - establish response handler (amId == 0x10, headers += ((hdrX, cbX), (hdrR, cbX))
+    //   -- headers must be unique => order is not guaranteed per active message id
+    //   -- worker can disambiguate responses using hdrX on 0x10
+    //   - ep.sendAm(0, hdrX, ...)
+    //   - then server: => ep.sendAm(0x10, hdrX1)
+    //                     ep.sendAm(0x10, hdrX2)
+    //                     ep.sendAm(0x10, hdrX3)
+    //
     connection.request(RequestType.TransferRequest, transferReq.acquire(), tx => {
+      //  TODO: need to move this one
       withResource(tx.releaseMessage()) { res =>
         withResource(transferReq) { _ =>
           withResource(tx) { _ =>
-            // make sure all bufferTxs are still valid (e.g. resp says that they have STARTED)
-            val transferResponse = ShuffleMetadata.getTransferResponse(res.getBuffer())
-            (0 until transferResponse.responsesLength()).foreach(r => {
-              val response = transferResponse.responses(r)
-              if (response.state() != TransferState.STARTED) {
-                // we could either re-issue the request, cancelling and releasing memory
-                // or we could re-issue, and leave the old receive waiting
-                // for now, leaving the old receive waiting.
-                throw new IllegalStateException("NOT IMPLEMENTED")
-              }
-            })
+            tx.getStatus match {
+              case TransactionStatus.PartialSuccess =>
+                // buffer
+                tx.releaseBuffer()
+              case TransactionStatus.Success =>
+                // make sure all bufferTxs are still valid (e.g. resp says that they have STARTED)
+                val transferResponse = ShuffleMetadata.getTransferResponse(res.getBuffer())
+                (0 until transferResponse.responsesLength()).foreach(r => {
+                  val response = transferResponse.responses(r)
+                  if (response.state() != TransferState.STARTED) {
+                    // we could either re-issue the request, cancelling and releasing memory
+                    // or we could re-issue, and leave the old receive waiting
+                    // for now, leaving the old receive waiting.
+                    throw new IllegalStateException("NOT IMPLEMENTED")
+                  }
+                })
           }
         }
       }
