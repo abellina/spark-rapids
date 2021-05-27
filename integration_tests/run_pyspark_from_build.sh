@@ -37,6 +37,15 @@ else
         TEST_JARS=$(echo "$SCRIPTPATH"/target/rapids-4-spark-integration-tests*.jar)
         UDF_EXAMPLE_JARS=$(echo "$SCRIPTPATH"/../udf-examples/target/rapids-4-spark-udf-examples*.jar)
     fi
+    CUDF_JARS=/home/abellina/cudf-21.06.0-SNAPSHOT-cuda11.jar
+    PLUGIN_JARS=/home/abellina/rapids-4-spark_2.12-21.06.0-20210519.024027-1.jar
+
+    CUDF_JARS=/home/abellina/cudf-21.06-20210519.143859-3-cuda11.jar
+    CUDF_JARS=/home/abellina/cudf-21.06.0-20210520.031449-1-cuda11.jar
+
+    PLUGIN_JARS=/home/abellina/rapids-4-spark_2.12-0.6.0-20210519.074740-35.jar
+    PLUGIN_JARS=/home/abellina/rapids-4-spark_2.12-0.6.0-20210520.101948-36.jar
+    #CUDF_JARS=/home/abellina/cudf-21.06-20210518.032242-1-cuda11.jar
     ALL_JARS="$CUDF_JARS $PLUGIN_JARS $TEST_JARS $UDF_EXAMPLE_JARS"
     echo "AND PLUGIN JARS: $ALL_JARS"
     if [[ "${TEST}" != "" ]];
@@ -90,6 +99,8 @@ else
         MEMORY_FRACTION=`python -c "print(1/($TEST_PARALLEL + 1))"`
         TEST_PARALLEL_OPTS=("-n" "$TEST_PARALLEL")
     fi
+
+    MEMORY_FRACTION=0.25
     RUN_DIR="$SCRIPTPATH"/target/run_dir
     mkdir -p "$RUN_DIR"
     cd "$RUN_DIR"
@@ -125,17 +136,21 @@ else
     export PYSP_TEST_spark_driver_extraClassPath="${ALL_JARS// /:}"
     export PYSP_TEST_spark_executor_extraClassPath="${ALL_JARS// /:}"
     export PYSP_TEST_spark_driver_extraJavaOptions="-ea -Duser.timezone=UTC $COVERAGE_SUBMIT_FLAGS"
-    export PYSP_TEST_spark_executor_extraJavaOptions='-ea -Duser.timezone=UTC'
+    export PYSP_TEST_spark_executor_extraJavaOptions="-Dlog4j.configuration=$SPARK_HOME/conf/log4j.properties -ea -Duser.timezone=UTC -agentlib:jdwp=transport=dt_socket,server=y,suspend=n -Duser.timezone=PST"
     export PYSP_TEST_spark_ui_showConsoleProgress='false'
     export PYSP_TEST_spark_sql_session_timeZone='UTC'
-    export PYSP_TEST_spark_sql_shuffle_partitions='12'
+    export PYSP_TEST_spark_rapids_cudfVersionOverride=true
+    export PYSP_TEST_spark_rapids_sql_batchSizeBytes=1024
+    export PYSP_TEST_spark_rapids_sql_metrics_level="DEBUG"
+
     if ((${#TEST_PARALLEL_OPTS[@]} > 0));
     then
         export PYSP_TEST_spark_rapids_memory_gpu_allocFraction=$MEMORY_FRACTION
         export PYSP_TEST_spark_rapids_memory_gpu_maxAllocFraction=$MEMORY_FRACTION
         python "${RUN_TESTS_COMMAND[@]}" "${TEST_PARALLEL_OPTS[@]}" "${TEST_COMMON_OPTS[@]}"
     else
-        "$SPARK_HOME"/bin/spark-submit --jars "${ALL_JARS// /,}" \
+        "$SPARK_HOME"/bin/spark-submit --conf spark.executorEnv.UCX_ERROR_SIGNALS= \
+            --master spark://192.168.50.80:7077 --jars "${ALL_JARS// /,}" \
             --driver-java-options "$PYSP_TEST_spark_driver_extraJavaOptions" \
             $SPARK_SUBMIT_FLAGS "${RUN_TESTS_COMMAND[@]}" "${TEST_COMMON_OPTS[@]}"
     fi

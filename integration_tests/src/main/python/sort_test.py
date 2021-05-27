@@ -20,11 +20,9 @@ from pyspark.sql.types import *
 import pyspark.sql.functions as f
 from spark_session import is_before_spark_311
 
-orderable_not_null_gen = [ByteGen(nullable=False), ShortGen(nullable=False), IntegerGen(nullable=False),
-        LongGen(nullable=False), FloatGen(nullable=False), DoubleGen(nullable=False), BooleanGen(nullable=False),
-        TimestampGen(nullable=False), DateGen(nullable=False), StringGen(nullable=False), DecimalGen(nullable=False),
-        DecimalGen(precision=7, scale=-3, nullable=False), DecimalGen(precision=7, scale=3, nullable=False),
-        DecimalGen(precision=7, scale=7, nullable=False), DecimalGen(precision=12, scale=2, nullable=False)]
+orderable_gens = [FloatGen(nullable=True)]
+orderable_not_null_gen = [FloatGen(nullable=False)]
+
 
 @pytest.mark.parametrize('data_gen', orderable_gens + orderable_not_null_gen, ids=idfn)
 @pytest.mark.parametrize('order', [f.col('a').asc(), f.col('a').asc_nulls_last(), f.col('a').desc(), f.col('a').desc_nulls_first()], ids=idfn)
@@ -103,11 +101,14 @@ def test_single_nested_orderby_with_limit(data_gen, order):
         })
 
 @pytest.mark.parametrize('data_gen', orderable_gens + orderable_not_null_gen, ids=idfn)
-@pytest.mark.parametrize('order', [f.col('a').asc(), f.col('a').asc_nulls_last(), f.col('a').desc(), f.col('a').desc_nulls_first()], ids=idfn)
-def test_single_sort_in_part(data_gen, order):
+#@pytest.mark.parametrize('order', [f.col('a').asc(), f.col('a').asc_nulls_last(), f.col('a').desc(), f.col('a').desc_nulls_first()], ids=idfn)
+@pytest.mark.parametrize('order', [f.col('a').desc_nulls_first()], ids=idfn)
+@pytest.mark.parametrize('tmp_ct', range(1000))
+def test_single_sort_in_part(data_gen, order, tmp_ct):
     assert_gpu_and_cpu_are_equal_collect(
-            lambda spark : unary_op_df(spark, data_gen).sortWithinPartitions(order),
-            conf = allow_negative_scale_of_decimal_conf)
+        lambda spark : unary_op_df(spark, data_gen, seed=tmp_ct).sortWithinPartitions(order),
+        #lambda spark : unary_op_df(spark, data_gen).sortWithinPartitions(order),
+        conf = allow_negative_scale_of_decimal_conf)
 
 
 @pytest.mark.parametrize('data_gen', [all_basic_struct_gen], ids=idfn)

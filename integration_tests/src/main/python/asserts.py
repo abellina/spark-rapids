@@ -26,6 +26,10 @@ import types as pytypes
 import data_gen
 
 def _assert_equal(cpu, gpu, float_check, path):
+    #print("$$ CPU")
+    #print(cpu)
+    #print("$$ GPU")
+    #print(gpu)
     t = type(cpu)
     if (t is Row):
         assert len(cpu) == len(gpu), "CPU and GPU row have different lengths at {} CPU: {} GPU: {}".format(path, len(cpu), len(gpu))
