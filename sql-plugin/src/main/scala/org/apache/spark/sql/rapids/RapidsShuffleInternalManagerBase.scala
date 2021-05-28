@@ -203,7 +203,7 @@ abstract class RapidsShuffleInternalManagerBase(conf: SparkConf, isDriver: Boole
   def getServerId: BlockManagerId = server.fold(blockManager.blockManagerId)(_.getId)
 
   override def addPeer(peer: BlockManagerId): Unit = {
-    transport.foreach(_.connect(peer))
+    transport.foreach(_.connect(peer, true))
   }
 
   private val rapidsConf = new RapidsConf(conf)

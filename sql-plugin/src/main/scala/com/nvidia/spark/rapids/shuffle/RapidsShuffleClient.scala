@@ -203,6 +203,12 @@ class RapidsShuffleClient(
     }
   }
 
+  def cancelPending(handler: RapidsShuffleFetchHandler): Unit = {
+    // a handler (iterator) handled a transferError, and is requresting any pending request
+    // to be cancelled
+    transport.cancelQueued(handler)
+  }
+
   /**
    * Function to handle MetadataResponses, as a result of the [[HandleMetadataResponse]] event.
    *
@@ -286,14 +292,14 @@ class RapidsShuffleClient(
           case TransactionStatus.Success =>
             logDebug(s"Handling response for $alt")
             asyncOnCopyThread(HandleBounceBufferReceive(tx, bufferReceiveState))
-          case _ => try {
-            val errMsg = s"Unsuccessful buffer receive ${tx}"
-            logError(errMsg)
-            bufferReceiveState.errorOcurred(errMsg)
-          } finally {
-            tx.close()
-            bufferReceiveState.close()
-          }
+          case _ =>
+            withResource(tx) { _ =>
+              withResource(bufferReceiveState) { _ =>
+                val errMsg = s"Unsuccessful buffer receive ${tx}"
+                logError(errMsg)
+                bufferReceiveState.errorOcurred(errMsg)
+              }
+            }
         }
       })
   }
@@ -365,7 +371,7 @@ class RapidsShuffleClient(
     }
 
     if (ptrs.nonEmpty) {
-      transport.queuePending(ptrs)
+      transport.queuePending(handler, ptrs)
     }
   }
 

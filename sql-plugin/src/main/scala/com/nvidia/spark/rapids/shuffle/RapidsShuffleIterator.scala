@@ -257,6 +257,8 @@ class RapidsShuffleIterator(
                 resolvedBatches.offer(TransferError(
                   blockManagerId, id, mapIndex, errorMessage, throwable))
               }
+              // cancel pending requests for this handler
+              client.cancelPending(this)
             }
 
             // tell the client to cancel pending requests
@@ -279,6 +281,11 @@ class RapidsShuffleIterator(
     if (hasNext) {
       logWarning(s"Iterator for task ${taskAttemptId} closing, " +
           s"but it is not done. Closing ${resolvedBatches.size()} resolved batches!!")
+
+      clients.foreach { case (client, handler) =>
+        client.cancelPending(handler)
+      }
+
       resolvedBatches.forEach {
         case BufferReceived(bufferId) =>
           GpuShuffleEnv.getReceivedCatalog.removeBuffer(bufferId)

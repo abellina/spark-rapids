@@ -51,7 +51,6 @@ class UCXShuffleTransport(shuffleServerId: BlockManagerId, rapidsConf: RapidsCon
   private[this] var inflightSize = 0L
   private[this] val inflightLimit = rapidsConf.shuffleTransportMaxReceiveInflightBytes
   private[this] val inflightMonitor = new Object
-  private[this] var inflightStarted = true
 
   private[this] val shuffleMetadataPool = new DirectByteBufferPool(
     rapidsConf.shuffleMaxMetadataSize)
@@ -65,6 +64,8 @@ class UCXShuffleTransport(shuffleServerId: BlockManagerId, rapidsConf: RapidsCon
   private[this] var deviceReceiveBuffMgr: BounceBufferManager[DeviceMemoryBuffer] = null
 
   private[this] val clients = new ConcurrentHashMap[Long, RapidsShuffleClient]()
+
+  val requestTracker = new RequestTracker()
 
   private[this] lazy val ucx = {
     logWarning("UCX Shuffle Transport Enabled")
@@ -85,6 +86,33 @@ class UCXShuffleTransport(shuffleServerId: BlockManagerId, rapidsConf: RapidsCon
         ucxImpl.close()
       }
     })
+
+    exec.execute(() => {
+      while (requestTracker.inflightStarted) {
+        try {
+          var numBuffersAvailable = deviceReceiveBuffMgr.numFree()
+          while (numBuffersAvailable == 0) {
+            deviceReceiveBuffMgr.synchronized {
+              numBuffersAvailable = deviceReceiveBuffMgr.numFree()
+              if (numBuffersAvailable == 0) {
+                deviceReceiveBuffMgr.wait(100)
+              }
+            }
+          } // have at least 1 bounce buffer
+
+          // get requests from clients that would utilize `numBuffersAvailable`
+          // this method will block until a new request is available
+          val perClientReq  = requestTracker.getRequestsPerClient
+          perClientReq.foreach { case (client, brs) =>
+            client.issueBufferReceives(brs)
+          }
+        } catch {
+          case t: Throwable =>
+            logError("Error in the UCX throttle loop", t)
+        }
+      }
+    })
+
     ucxImpl
   }
 
@@ -204,14 +232,14 @@ class UCXShuffleTransport(shuffleServerId: BlockManagerId, rapidsConf: RapidsCon
     bounceBuffers
   }
 
-  override def connect(peerBlockManagerId: BlockManagerId): ClientConnection = {
+  override def connect(peerBlockManagerId: BlockManagerId, okToFail: Boolean): ClientConnection = {
     val topo = peerBlockManagerId.topologyInfo
     val connection: ClientConnection = if (topo.isDefined) {
       val topoParts = topo.get.split("=")
       if (topoParts.size == 2 &&
           topoParts(0).equalsIgnoreCase(RapidsShuffleTransport.BLOCK_MANAGER_ID_TOPO_PREFIX)) {
         val peerExecutorId = peerBlockManagerId.executorId.toInt
-        ucx.getConnection(peerExecutorId, peerBlockManagerId.host, topoParts(1).toInt)
+        ucx.getConnection(peerExecutorId, peerBlockManagerId.host, topoParts(1).toInt, okToFail)
       } else {
         // in the future this may create connections in other transports
         throw new IllegalStateException(s"Invalid block manager id for the rapids " +
@@ -260,7 +288,7 @@ class UCXShuffleTransport(shuffleServerId: BlockManagerId, rapidsConf: RapidsCon
   override def makeClient(localExecutorId: Long,
                  blockManagerId: BlockManagerId): RapidsShuffleClient = {
     val peerExecutorId = blockManagerId.executorId.toLong
-    val clientConnection = connect(blockManagerId)
+    val clientConnection = connect(blockManagerId, false)
     clients.computeIfAbsent(peerExecutorId, _ => {
       new RapidsShuffleClient(
         localExecutorId,
@@ -349,6 +377,126 @@ class UCXShuffleTransport(shuffleServerId: BlockManagerId, rapidsConf: RapidsCon
     inflightMonitor.notifyAll()
   }
 
+  class RequestTracker extends AutoCloseable {
+    var inflightStarted = true
+    override def close(): Unit = {
+      synchronized {
+        inflightStarted = false
+        notifyAll()
+      }
+    }
+
+    class ClientRequests(val handler: RapidsShuffleFetchHandler) {
+      var lastTouched = 0L
+      def getLastTouched: Long = lastTouched
+      private val altList = new HashedPriorityQueue[PendingTransferRequest](
+        1000,
+        (t: PendingTransferRequest, t1: PendingTransferRequest) => {
+          if (t.getLength < t1.getLength) {
+            -1;
+          } else if (t.getLength > t1.getLength) {
+            1;
+          } else {
+            0
+          }
+        })
+
+      def addAll(pending: Seq[PendingTransferRequest]): Unit = {
+        import collection.JavaConverters._
+        pendingCount += pending.size
+        altList.addAll(pending.asJava)
+      }
+
+      def popRequest(): PendingTransferRequest = {
+        require(pendingCount > 0)
+        lastTouched = System.currentTimeMillis()
+        pendingCount -= 1
+        altList.poll()
+      }
+
+      var pendingCount = 0
+    }
+
+    private val perClientRequests = new HashedPriorityQueue[ClientRequests](
+      (r: ClientRequests, r1: ClientRequests) => {
+        if (r.getLastTouched < r1.getLastTouched) {
+          -1;
+        } else if (r.getLastTouched > r1.getLastTouched) {
+          1;
+        } else {
+          0
+        }
+      })
+
+    private val clientToRequests = new mutable.HashMap[RapidsShuffleFetchHandler, ClientRequests]()
+    var pendingCount = 0
+
+    def add(handler: RapidsShuffleFetchHandler, pending: Seq[PendingTransferRequest]): Unit =
+      synchronized {
+        val cr = clientToRequests.getOrElseUpdate(handler, new ClientRequests(handler))
+        perClientRequests.add(cr)
+        cr.addAll(pending)
+        pendingCount += pending.size
+        notifyAll()
+      }
+
+    def remove(handler: RapidsShuffleFetchHandler): Unit = synchronized {
+      // remove any requests that match the handler, as the handler
+      // is done
+      val cr = clientToRequests.remove(handler)
+      if (cr.isDefined) {
+        cr.foreach(c => pendingCount -= c.pendingCount)
+        perClientRequests.remove(cr.get)
+        logWarning(s"Removed ${cr.map(_.pendingCount)} requests belonging to ${handler}")
+      }
+    }
+
+    def getRequestsPerClient: Seq[(RapidsShuffleClient, BufferReceiveState)] =
+      synchronized {
+        // wait until we have pending requests (for any client)
+        while (inflightStarted && pendingCount == 0) {
+          wait(100)
+        }
+        if (inflightStarted) {
+          // NOTE: this must be more than 1, since it is checked prior
+          // to calling `getRequestsPerClient`
+          var bb = tryGetReceiveBounceBuffers(1, 1)
+
+          val brss = new ArrayBuffer[(RapidsShuffleClient, BufferReceiveState)]()
+
+          // a buffer can be used for a single client at a time
+          while (bb.nonEmpty && pendingCount > 0) {
+            var runningSize = 0L
+            val req = perClientRequests.peek()
+            val requestsToHandle = new ArrayBuffer[PendingTransferRequest]()
+            while (req.pendingCount > 0 && runningSize < bounceBufferSize) {
+              val popped = req.popRequest()
+              requestsToHandle.append(popped)
+              pendingCount -= 1
+              runningSize += popped.getLength
+            }
+            if (req.pendingCount == 0) { // no need to track it anymore
+              perClientRequests.remove(req)
+              clientToRequests.remove(req.handler)
+            }
+            brss.append((requestsToHandle.head.client,
+              new BufferReceiveState(bb.head, requestsToHandle)))
+            // continue to the next free bounce buffer
+            bb = if (pendingCount > 0) {
+              tryGetReceiveBounceBuffers(1, 1)
+            } else {
+              Seq.empty
+            }
+          }
+          logInfo(s"Created ${brss.size} BufferReceiveStates for a total of " +
+            s"${brss.map(_._2.getRequests.map(_.getLength).sum).mkString("[",", ","]")} bytes each")
+          brss
+        } else {
+          Seq.empty
+        }
+      }
+    }
+
   private[this] val exec = Executors.newSingleThreadExecutor(
     GpuDeviceManager.wrapThreadFactory(
       new ThreadFactoryBuilder()
@@ -367,149 +515,13 @@ class UCXShuffleTransport(shuffleServerId: BlockManagerId, rapidsConf: RapidsCon
     }
   }
 
-  exec.execute(() => {
-    while (inflightStarted) {
-      try {
-        var req: PendingTransferRequest = null
-        val requestsToHandle = new ArrayBuffer[PendingTransferRequest]()
-        altList.synchronized {
-          // pick up a request if ready, or wait until
-          // a request is added to `altList`
-          req = altList.poll()
-          while (inflightStarted && req == null) {
-            altList.wait(100)
-            req = altList.poll()
-          }
-          // if we had 1 request, try to drain the rest
-          while (req != null) {
-            requestsToHandle.append(req)
-            req = altList.poll()
-          }
-        }
+  override def queuePending(handler: RapidsShuffleFetchHandler,
+                            reqs: Seq[PendingTransferRequest]): Unit =
+    requestTracker.add(handler, reqs)
 
-        var requestIx = 0 
-        while (requestIx < requestsToHandle.size) {
-          var hasBounceBuffers = true
-          var fitsInFlight = true
-          var perClientReq = mutable.Map[RapidsShuffleClient, PerClientReadyRequests]()
-          var reqToHandle: PendingTransferRequest = null
-          val putBack = new ArrayBuffer[PendingTransferRequest]()
-          //NOTE: If the in-flight limit is high, we will run through every request
-          // in the queue! This is an interim solution that will be fixed in future versions
-          // to reduce the time spent here.
-          while (requestIx < requestsToHandle.size && fitsInFlight) {
-            reqToHandle = requestsToHandle(requestIx)
-            if (wouldFitInFlightLimit(reqToHandle.getLength)) {
-              val existingReq =
-                perClientReq.get(reqToHandle.client)
-              if (existingReq.isEmpty) {
-                // need to get bounce buffers
-                val bbs = tryGetReceiveBounceBuffers(1, 1)
-                if (bbs.nonEmpty) {
-                  markBytesInFlight(reqToHandle.getLength)
-                  val perClientReadyRequests = new PerClientReadyRequests(bbs.head)
-                  perClientReadyRequests.addRequest(reqToHandle)
-                  perClientReq += reqToHandle.client -> perClientReadyRequests
-                  requestIx += 1
-                } else {
-                  // TODO: make this a metric => "blocked while waiting on bounce buffers"
-                  logTrace("Can't acquire bounce buffers for receive.")
-                  hasBounceBuffers = false
-                  putBack.append(reqToHandle)
-                  requestIx += 1
-                }
-              } else if (existingReq.get.runningSize < bounceBufferSize) {
-                // bounce buffers already acquired, and the requested amount so far
-                // is less than 1 bounce buffer lengths, therefore the pending request
-                // is added to the `PerClientReadyRequests`.
-                markBytesInFlight(reqToHandle.getLength)
-                existingReq.foreach(_.addRequest(reqToHandle))
-                requestIx += 1
-              } else {
-                requestIx += 1
-                putBack.append(reqToHandle)
-              }
-            } else {
-              fitsInFlight = false
-            }
-          }
-
-          // NOTE: because we skipped some indices above, we need to put these
-          // back into the `altList`.
-          // A _much_ better way of doing this would be to have separate
-          // lists, one per client. This should be cleaned up later.
-          altList.synchronized {
-            putBack.foreach { pb =>
-              // if this handler hasn't been invalidated, we can add the pending request back
-              // like with NOTE above, when this is a queue per client, this gets refactored
-              if (validHandlers.contains(pb.handler)) {
-                altList.add(pb)
-              }
-            }
-          }
-
-          if (perClientReq.nonEmpty) {
-            perClientReq.foreach { case (client, perClientRequests) =>
-              val brs = new BufferReceiveState(perClientRequests.bounceBuffer,
-                perClientRequests.transferRequests)
-              client.issueBufferReceives(brs)
-            }
-          } else if (!hasBounceBuffers) {
-            deviceReceiveBuffMgr.synchronized {
-              while (deviceReceiveBuffMgr.numFree() == 0){
-                deviceReceiveBuffMgr.wait(100)
-              }
-            }
-          } else if (putBack.isEmpty) {
-            // then we must be waiting for the inflight limit
-            inflightMonitor.synchronized {
-              while (!wouldFitInFlightLimit(reqToHandle.getLength)) {
-                inflightMonitor.wait(100)
-              }
-            }
-          }
-        }
-      } catch {
-        case t: Throwable =>
-          logError("Error in the UCX throttle loop", t)
-      }
-    }
-  })
-
-  override def queuePending(reqs: Seq[PendingTransferRequest]): Unit =
-    altList.synchronized {
-      import collection.JavaConverters._
-      validHandlers.add(reqs.head.handler)
-      altList.addAll(reqs.asJava)
-      logDebug(s"THROTTLING ${altList.size} queued requests")
-      altList.notifyAll()
-    }
-
-  override def cancelPending(handler: RapidsShuffleFetchHandler): Unit = {
-    altList.synchronized {
-      if (validHandlers.contains(handler)) {
-        // This is expensive, but will be refactored with a queue per client.
-        // As it stands, in the good case it should be invoked once per task/peer,
-        // on task completion, and `altList` should be empty
-        // will be skipped.
-        // When there are errors, we would get more invocations.
-        if (!altList.isEmpty) {
-          val it = altList.iterator()
-          val toRemove = new ArrayBuffer[PendingTransferRequest]()
-          while (it.hasNext) {
-            val pending = it.next()
-            if (pending.handler == handler) {
-              toRemove.append(pending)
-            }
-          }
-          if (toRemove.nonEmpty) {
-            toRemove.foreach(altList.remove)
-          }
-        }
-        // invalidate the handler
-        validHandlers.remove(handler)
-      }
-    }
+  override def cancelPending(client: RapidsShuffleClient,
+                             handler: RapidsShuffleFetchHandler): Unit = {
+    requestTracker.remove(handler)
   }
 
   override def close(): Unit = {
@@ -518,11 +530,7 @@ class UCXShuffleTransport(shuffleServerId: BlockManagerId, rapidsConf: RapidsCon
     bssExecutor.shutdown()
     clientExecutor.shutdown()
     serverExecutor.shutdown()
-
-    altList.synchronized {
-      inflightStarted = false
-      altList.notifyAll()
-    }
+    requestTracker.close()
 
     if (!exec.awaitTermination(500, TimeUnit.MILLISECONDS)) {
       logError("UCX Shuffle Transport throttle failed to terminate correctly")

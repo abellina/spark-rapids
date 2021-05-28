@@ -711,17 +711,24 @@ class UCX(transport: UCXShuffleTransport, executor: BlockManagerId, rapidsConf: 
    */
   def getConnection(peerExecutorId: Int,
       peerMgmtHost: String,
-      peerMgmtPort: Int): ClientConnection = {
-    val getConnectionStartTime = System.currentTimeMillis()
-    val result = connectionCache.computeIfAbsent(peerExecutorId, _ => {
-      val connection = new UCXClientConnection(
-        peerExecutorId, peerTag.incrementAndGet(), this, transport)
-      startConnection(connection, peerMgmtHost, peerMgmtPort)
-      connection
-    })
-    logDebug(s"Got connection for executor ${peerExecutorId} in " +
-      s"${System.currentTimeMillis() - getConnectionStartTime} ms")
-    result
+      peerMgmtPort: Int,
+      okToFail: Boolean): ClientConnection = {
+    try {
+      val getConnectionStartTime = System.currentTimeMillis()
+      val result = connectionCache.computeIfAbsent(peerExecutorId, _ => {
+        val connection = new UCXClientConnection(
+          peerExecutorId, peerTag.incrementAndGet(), this, transport)
+        startConnection(connection, peerMgmtHost, peerMgmtPort)
+        connection
+      })
+      logDebug(s"Got connection for executor ${peerExecutorId} in " +
+        s"${System.currentTimeMillis() - getConnectionStartTime} ms")
+      result
+    } catch {
+      case _: ConnectException if okToFail =>
+        logError(s"Unable to connect to ${peerMgmtHost}:${peerMgmtPort}. Ignoring.")
+        null
+    }
   }
 
   def onWorkerThreadAsync(task: () => Unit): Unit = {
