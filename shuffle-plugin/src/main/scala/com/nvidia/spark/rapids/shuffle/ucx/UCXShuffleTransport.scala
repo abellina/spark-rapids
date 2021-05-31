@@ -386,7 +386,14 @@ class UCXShuffleTransport(shuffleServerId: BlockManagerId, rapidsConf: RapidsCon
       }
     }
 
-    class ClientRequests(val handler: RapidsShuffleFetchHandler) {
+    class ClientRequests(val client: RapidsShuffleClient) {
+
+      def remove(handler: RapidsShuffleFetchHandler): Int = {
+        val pre = altList.size
+        altList.removeIf(_.handler == handler)
+        pre - altList.size
+      }
+
       var lastTouched = 0L
       def getLastTouched: Long = lastTouched
       private val altList = new HashedPriorityQueue[PendingTransferRequest](
@@ -403,18 +410,17 @@ class UCXShuffleTransport(shuffleServerId: BlockManagerId, rapidsConf: RapidsCon
 
       def addAll(pending: Seq[PendingTransferRequest]): Unit = {
         import collection.JavaConverters._
-        pendingCount += pending.size
         altList.addAll(pending.asJava)
       }
 
       def popRequest(): PendingTransferRequest = {
-        require(pendingCount > 0)
+        require(altList.size > 0)
         lastTouched = System.currentTimeMillis()
-        pendingCount -= 1
-        altList.poll()
+        val req = altList.poll()
+        req
       }
 
-      var pendingCount = 0
+      def pendingCount = altList.size()
     }
 
     private val perClientRequests = new HashedPriorityQueue[ClientRequests](
@@ -428,14 +434,31 @@ class UCXShuffleTransport(shuffleServerId: BlockManagerId, rapidsConf: RapidsCon
         }
       })
 
-    private val clientToRequests = new mutable.HashMap[RapidsShuffleFetchHandler, ClientRequests]()
+    private val handlerToRequests =
+      new mutable.HashMap[RapidsShuffleFetchHandler, mutable.Set[RapidsShuffleClient]]()
+    private val clientToRequests = new mutable.HashMap[RapidsShuffleClient, ClientRequests]()
     var pendingCount = 0
 
     def add(handler: RapidsShuffleFetchHandler, pending: Seq[PendingTransferRequest]): Unit =
       synchronized {
-        val cr = clientToRequests.getOrElseUpdate(handler, new ClientRequests(handler))
-        perClientRequests.add(cr)
-        cr.addAll(pending)
+        val cr = clientToRequests.get(pending.head.client)
+        var clientRequests: ClientRequests = null
+        if (cr.isEmpty) {
+          // peer -> ClientRequests
+          clientRequests = new ClientRequests(pending.head.client)
+          clientToRequests.put(pending.head.client, clientRequests)
+          perClientRequests.add(clientRequests)
+        } else {
+          clientRequests = cr.get
+        }
+        // handler -> Clients
+        var handlerToClientSet: mutable.Set[RapidsShuffleClient] = null
+        if (!handlerToRequests.contains(handler)) {
+          handlerToClientSet = new mutable.HashSet[RapidsShuffleClient]()
+          handlerToRequests.put(handler, handlerToClientSet)
+        }
+        handlerToClientSet.add(pending.head.client)
+        clientRequests.addAll(pending)
         pendingCount += pending.size
         notifyAll()
       }
@@ -443,11 +466,19 @@ class UCXShuffleTransport(shuffleServerId: BlockManagerId, rapidsConf: RapidsCon
     def remove(handler: RapidsShuffleFetchHandler): Unit = synchronized {
       // remove any requests that match the handler, as the handler
       // is done
-      val cr = clientToRequests.remove(handler)
-      if (cr.isDefined) {
-        cr.foreach(c => pendingCount -= c.pendingCount)
-        perClientRequests.remove(cr.get)
-        logWarning(s"Removed ${cr.map(_.pendingCount)} requests belonging to ${handler}")
+      val c = handlerToRequests.remove(handler)
+      if (c.isDefined) {
+        val clients = c.get
+        clients.foreach(c => {
+          val cr = clientToRequests.get(c)
+          pendingCount -= cr.get.remove(handler)
+
+          // if no more requests for this client
+          if (cr.get.pendingCount == 0) {
+            perClientRequests.remove(cr.get)
+            clientToRequests.remove(cr.get.client)
+          }
+        })
       }
     }
 
@@ -457,30 +488,43 @@ class UCXShuffleTransport(shuffleServerId: BlockManagerId, rapidsConf: RapidsCon
         while (inflightStarted && pendingCount == 0) {
           wait(100)
         }
+
+        val startNumFree = deviceReceiveBuffMgr.numFree()
+        var totalBounceBufferSize = bounceBufferSize * startNumFree
         if (inflightStarted) {
           // NOTE: this must be more than 1, since it is checked prior
           // to calling `getRequestsPerClient`
           var bb = tryGetReceiveBounceBuffers(1, 1)
 
           val brss = new ArrayBuffer[(RapidsShuffleClient, BufferReceiveState)]()
+          val startPending = pendingCount
+          val startClients = perClientRequests.size()
 
           // a buffer can be used for a single client at a time
           while (bb.nonEmpty && pendingCount > 0) {
             var runningSize = 0L
-            val req = perClientRequests.peek()
+            // get `ClientRequests` in priority order (last touched)
+            // this means a client that hasn't been serviced will likely
             val requestsToHandle = new ArrayBuffer[PendingTransferRequest]()
+            var req = perClientRequests.peek()
+
+            // fill 1 bounce buffer length
             while (req.pendingCount > 0 && runningSize < bounceBufferSize) {
               val popped = req.popRequest()
               requestsToHandle.append(popped)
               pendingCount -= 1
               runningSize += popped.getLength
             }
-            if (req.pendingCount == 0) { // no need to track it anymore
-              perClientRequests.remove(req)
-              clientToRequests.remove(req.handler)
-            }
+
             brss.append((requestsToHandle.head.client,
               new BufferReceiveState(bb.head, requestsToHandle)))
+
+            if (req.pendingCount == 0) { // no need to track it anymore
+              perClientRequests.remove(req)
+              clientToRequests.remove(req.client)
+              req = perClientRequests.peek()
+            }
+
             // continue to the next free bounce buffer
             bb = if (pendingCount > 0) {
               tryGetReceiveBounceBuffers(1, 1)
@@ -489,7 +533,9 @@ class UCXShuffleTransport(shuffleServerId: BlockManagerId, rapidsConf: RapidsCon
             }
           }
           logInfo(s"Created ${brss.size} BufferReceiveStates for a total of " +
-            s"${brss.map(_._2.getRequests.map(_.getLength).sum).mkString("[",", ","]")} bytes each")
+            s"${brss.map(_._2.getRequests.map(_.getLength).sum).mkString("[",", ","]")} " +
+            s"bytes each. Started with ${startNumFree} bounce buffers and ${startClients} " +
+            s"waiting with ${startPending} pending. Current pending is ${pendingCount}")
           brss
         } else {
           Seq.empty

@@ -311,6 +311,12 @@ class RapidsShuffleIterator(
     Option(resolvedBatches.poll(timeoutSeconds, TimeUnit.SECONDS))
   }
 
+  if (!started) {
+    // kick off if we haven't already
+    start()
+    started = true
+  }
+
   override def next(): ColumnarBatch = {
     var cb: ColumnarBatch = null
     var sb: RapidsBuffer = null
@@ -332,12 +338,6 @@ class RapidsShuffleIterator(
     // thread to schedule the fetches for us, it may be something we consider in the future, given
     // memory pressure.
     taskContext.foreach(GpuSemaphore.acquireIfNecessary)
-
-    if (!started) {
-      // kick off if we haven't already
-      start()
-      started = true
-    }
 
     val blockedStart = System.currentTimeMillis()
     var result: Option[ShuffleClientResult] = None
