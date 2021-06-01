@@ -572,8 +572,7 @@ class UCXShuffleTransport(shuffleServerId: BlockManagerId, rapidsConf: RapidsCon
                             reqs: Seq[PendingTransferRequest]): Unit =
     requestTracker.add(handler, reqs)
 
-  override def cancelPending(client: RapidsShuffleClient,
-                             handler: RapidsShuffleFetchHandler): Unit = {
+  override def cancelPending(handler: RapidsShuffleFetchHandler): Unit = {
     requestTracker.remove(handler)
   }
 
