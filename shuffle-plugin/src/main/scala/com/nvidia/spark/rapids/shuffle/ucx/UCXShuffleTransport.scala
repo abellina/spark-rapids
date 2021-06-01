@@ -416,8 +416,7 @@ class UCXShuffleTransport(shuffleServerId: BlockManagerId, rapidsConf: RapidsCon
       def popRequest(): PendingTransferRequest = {
         require(altList.size > 0)
         lastTouched = System.currentTimeMillis()
-        val req = altList.poll()
-        req
+        altList.poll()
       }
 
       def pendingCount = altList.size()
@@ -494,42 +493,50 @@ class UCXShuffleTransport(shuffleServerId: BlockManagerId, rapidsConf: RapidsCon
         if (inflightStarted) {
           // NOTE: this must be more than 1, since it is checked prior
           // to calling `getRequestsPerClient`
-          var bb = tryGetReceiveBounceBuffers(1, 1)
 
           val brss = new ArrayBuffer[(RapidsShuffleClient, BufferReceiveState)]()
           val startPending = pendingCount
           val startClients = perClientRequests.size()
 
           // a buffer can be used for a single client at a time
-          while (bb.nonEmpty && pendingCount > 0) {
-            var runningSize = 0L
+          var haveBounceBuffers = true
+          while (haveBounceBuffers && pendingCount > 0) {
+            val reqsAndBbs = new ArrayBuffer[(BounceBuffer, ArrayBuffer[PendingTransferRequest])]()
+            var index = 0
             // get `ClientRequests` in priority order (last touched)
             // this means a client that hasn't been serviced will likely
-            val requestsToHandle = new ArrayBuffer[PendingTransferRequest]()
             var req = perClientRequests.peek()
 
             // fill 1 bounce buffer length
-            while (req.pendingCount > 0 && runningSize < bounceBufferSize) {
-              val popped = req.popRequest()
-              requestsToHandle.append(popped)
-              pendingCount -= 1
-              runningSize += popped.getLength
+            while (req.pendingCount > 0) {
+              var runningSize = 0L
+              val bb = tryGetReceiveBounceBuffers(1, 1)
+              if (bb.nonEmpty) {
+                reqsAndBbs.append((bb.head, new ArrayBuffer[PendingTransferRequest]()))
+              }
+              val requestsToHandle = new ArrayBuffer[PendingTransferRequest]()
+              while (req.pendingCount > 0 && runningSize < bounceBufferSize) {
+                val popped = req.popRequest()
+                perClientRequests.priorityUpdated(req)
+                requestsToHandle.append(popped)
+                pendingCount -= 1
+                runningSize += popped.getLength
+              }
+              reqsAndBbs(index % reqsAndBbs.size)._2.appendAll(requestsToHandle)
+              index = index + 1
+              haveBounceBuffers = deviceReceiveBuffMgr.numFree() > 0
             }
 
-            brss.append((requestsToHandle.head.client,
-              new BufferReceiveState(bb.head, requestsToHandle)))
+            reqsAndBbs.foreach { case (bounceBuffer, reqs) =>
+              if (reqs.nonEmpty) {
+                brss.append((reqs.head.client,
+                  new BufferReceiveState(bounceBuffer, reqs)))
+              }
+            }
 
             if (req.pendingCount == 0) { // no need to track it anymore
               perClientRequests.remove(req)
               clientToRequests.remove(req.client)
-              req = perClientRequests.peek()
-            }
-
-            // continue to the next free bounce buffer
-            bb = if (pendingCount > 0) {
-              tryGetReceiveBounceBuffers(1, 1)
-            } else {
-              Seq.empty
             }
           }
           logInfo(s"Created ${brss.size} BufferReceiveStates for a total of " +
