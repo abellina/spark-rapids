@@ -111,6 +111,10 @@ class BufferReceiveState(
 
   override def hasNext: Boolean = synchronized { hasMoreBuffers }
 
+  def getHeaders(): Seq[Long] = {
+    Seq(getFirstTag(currentBlocks)) // TODO
+  }
+
   override def next(): AddressLengthTag = synchronized {
     if (!hasMoreBuffers) {
       throw new NoSuchElementException(

@@ -22,7 +22,7 @@ import java.util.concurrent.ConcurrentHashMap
 
 import scala.collection.mutable.ArrayBuffer
 import ai.rapids.cudf.{MemoryBuffer, NvtxColor, NvtxRange}
-import com.nvidia.spark.rapids.shuffle._
+import com.nvidia.spark.rapids.shuffle.{RequestType, _}
 import org.openucx.jucx.UcxCallback
 import org.openucx.jucx.ucp.UcpRequest
 import org.apache.spark.internal.Logging
@@ -153,11 +153,9 @@ class UCXClientConnection(peerExecutorId: Int, peerClientId: Long,
 
   override def request(
       requestType: RequestType.Value, request: ByteBuffer,
-      cb: TransactionCallback,
-      getBuffer: (Int) => MemoryBuffer, // gets invoked when amData is received, before amData.receive()
-      numPending: Int = 1): Transaction = {
+      cb: TransactionCallback) : Transaction = {
     val tx = createTransaction
-    tx.start(UCXTransactionType.Request, numPending, cb)
+    tx.start(UCXTransactionType.Request, 1, cb)
 
     // this header is unique, so we can send it with the request
     // expecting it to be echoed back in the response
@@ -170,25 +168,10 @@ class UCXClientConnection(peerExecutorId: Int, peerClientId: Long,
         transport.getDirectByteBuffer(size.toInt)
       }
 
-      override def onGPUMemoryReceived(size: Long): MemoryBuffer = {
-        getBuffer(size)
-      }
-
-      // TODO: there could be multiple onSuccess
       override def onSuccess(am: UCXActiveMessage, buff: RefCountedDirectByteBuffer): Unit = {
-        tx.completeWithSuccess(requestType, Option(am.header), Option(buff)) // assert pending count == 1
+        tx.completeWithSuccess(requestType, Option(am.header), Option(buff))
       }
 
-      override def onPartialSuccess(am: UCXActiveMessage, buff: MemoryBuffer): Unit = {
-        tx.partialSuccess(requestType, Option(am.header), Option(buff)) // decrement pending count
-      }
-
-      // TODO overkill?
-      override def onPartialError(am: UCXActiveMessage, ucsStatus: Int, errorMsg: String): Unit = {
-        tx.partialError(errorMsg) // decrement pending count
-      }
-
-      // TODO: there could be multiple onError
       override def onError(am: UCXActiveMessage, ucsStatus: Int, errorMsg: String): Unit = {
         tx.completeWithError(errorMsg)
       }
@@ -228,6 +211,41 @@ class UCXClientConnection(peerExecutorId: Int, peerClientId: Long,
     tx
   }
 
+  override def receive(requestType: RequestType.Value,
+                       header: Long, cb: TransactionCallback): Unit = {
+    val tx = createTransaction
+    tx.start(UCXTransactionType.Receive, 1, cb)
+
+    // This is the response active message handler, when the response shows up
+    // we'll create a transaction, and set header/message and complete it.
+    val amCallback = new UCXAmCallback {
+      override def onHostMessageReceived(size: Long): RefCountedDirectByteBuffer = {
+        transport.getDirectByteBuffer(size.toInt)
+      }
+
+      override def onSuccess(am: UCXActiveMessage, buff: RefCountedDirectByteBuffer): Unit = {
+        tx.completeWithSuccess(requestType, Option(am.header), Option(buff))
+      }
+
+      override def onError(am: UCXActiveMessage, ucsStatus: Int, errorMsg: String): Unit = {
+        tx.completeWithError(errorMsg)
+      }
+
+      override def onMessageStarted(receiveAm: UcpRequest): Unit = {
+        tx.registerPendingMessage(receiveAm)
+      }
+
+      override def onCancel(am: UCXActiveMessage): Unit = {
+        tx.completeCancelled(requestType, am.header)
+      }
+    }
+
+    // Register the active message response handler. Note that the `requestHeader`
+    // is expected to come back with the response, and is used to find the
+    // correct callback (this is an implementation detail in UCX.scala)
+    ucx.registerResponseHandler(
+      UCXConnection.composeResponseAmId(requestType), header, amCallback)
+  }
 }
 
 class UCXConnection(peerExecutorId: Int, val ucx: UCX) extends Connection with Logging {
@@ -298,42 +316,6 @@ class UCXConnection(peerExecutorId: Int, val ucx: UCX) extends Connection with L
       tx.incrementSendSize(alt.length)
     }
 
-    tx
-  }
-
-  override def receive(alt: AddressLengthTag, cb: TransactionCallback): Transaction =  {
-    val tx = createTransaction
-    tx.registerForReceive(alt)
-    tx.start(UCXTransactionType.Receive, 1, cb)
-    val ucxCallback = new UCXTagCallback {
-      override def onError(alt: AddressLengthTag, ucsStatus: Int, errorMsg: String): Unit = {
-        logError(s"Got an error... for tag: ${TransportUtils.toHex(alt.tag)}, tx $tx")
-        tx.handleTagError(alt.tag)
-        tx.completeWithError(errorMsg)
-      }
-
-      override def onSuccess(alt: AddressLengthTag): Unit = {
-        logDebug(s"Successful receive: ${TransportUtils.toHex(alt.tag)}, tx $tx")
-        tx.handleTagCompleted(alt.tag)
-        if (tx.decrementPendingAndGet <= 0) {
-          logDebug(s"Receive done for tag: ${TransportUtils.toHex(alt.tag)}, tx $tx")
-          tx.complete(TransactionStatus.Success)
-        }
-      }
-
-      override def onCancel(alt: AddressLengthTag): Unit = {
-        tx.handleTagCancelled(alt.tag)
-        tx.complete(TransactionStatus.Cancelled)
-      }
-
-      override def onMessageStarted(ucxMessage: UcpRequest): Unit = {
-        tx.registerPendingMessage(ucxMessage)
-      }
-    }
-
-    logDebug(s"Receiving [tag=${TransportUtils.toHex(alt.tag)}, size=${alt.length}]")
-    ucx.receive(alt, ucxCallback)
-    tx.incrementReceiveSize(alt.length)
     tx
   }
 

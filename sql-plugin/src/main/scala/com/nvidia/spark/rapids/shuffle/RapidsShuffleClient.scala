@@ -274,27 +274,29 @@ class RapidsShuffleClient(
     }
   }
 
-  private def receiveBuffers(bufferReceiveState: BufferReceiveState): Transaction = {
-    val alt = bufferReceiveState.next()
+  private def receiveBuffers(bufferReceiveState: BufferReceiveState): Unit = {
+    val headers:Seq[Long] = bufferReceiveState.getHeaders()
 
-    logDebug(s"Issuing receive for $alt")
+    logDebug(s"Issuing receive for $headers")
 
-    connection.receive(alt,
-      tx => {
-        tx.getStatus match {
-          case TransactionStatus.Success =>
-            logDebug(s"Handling response for $alt")
-            asyncOnCopyThread(HandleBounceBufferReceive(tx, bufferReceiveState))
-          case _ => try {
-            val errMsg = s"Unsuccessful buffer receive ${tx}"
-            logError(errMsg)
-            bufferReceiveState.errorOcurred(errMsg)
-          } finally {
-            tx.close()
-            bufferReceiveState.close()
+    headers.foreach { header =>
+      connection.receive(RequestType.TransferRequest, header,
+        tx => {
+          tx.getStatus match {
+            case TransactionStatus.Success =>
+              logDebug(s"Handling response for $header")
+              asyncOnCopyThread(HandleBounceBufferReceive(tx, bufferReceiveState))
+            case _ => try {
+              val errMsg = s"Unsuccessful buffer receive ${tx}"
+              logError(errMsg)
+              bufferReceiveState.errorOcurred(errMsg)
+            } finally {
+              tx.close()
+              bufferReceiveState.close()
+            }
           }
-        }
-      })
+        })
+    }
   }
 
   /**
@@ -311,27 +313,13 @@ class RapidsShuffleClient(
     val transferReq = new RefCountedDirectByteBuffer(
       ShuffleMetadata.buildTransferRequest(requestsToIssue.map(i => (i.tableMeta, i.tag))))
 
-    //issue the buffer transfer request
-    //
-    // X = block
-    // request(amId == 0, hdrX) =>
-    //   - establish response handler (amId == 0x10, headers += ((hdrX, cbX), (hdrR, cbX))
-    //   -- headers must be unique => order is not guaranteed per active message id
-    //   -- worker can disambiguate responses using hdrX on 0x10
-    //   - ep.sendAm(0, hdrX, ...)
-    //   - then server: => ep.sendAm(0x10, hdrX1)
-    //                     ep.sendAm(0x10, hdrX2)
-    //                     ep.sendAm(0x10, hdrX3)
-    //
-    connection.request(RequestType.TransferRequest, transferReq.acquire(), tx => {
+    connection.request(RequestType.TransferRequest, transferReq.acquire(),
+      tx => {
       //  TODO: need to move this one
       withResource(tx.releaseMessage()) { res =>
         withResource(transferReq) { _ =>
           withResource(tx) { _ =>
             tx.getStatus match {
-              case TransactionStatus.PartialSuccess =>
-                // buffer
-                tx.releaseBuffer()
               case TransactionStatus.Success =>
                 // make sure all bufferTxs are still valid (e.g. resp says that they have STARTED)
                 val transferResponse = ShuffleMetadata.getTransferResponse(res.getBuffer())
@@ -344,6 +332,7 @@ class RapidsShuffleClient(
                     throw new IllegalStateException("NOT IMPLEMENTED")
                   }
                 })
+            }
           }
         }
       }

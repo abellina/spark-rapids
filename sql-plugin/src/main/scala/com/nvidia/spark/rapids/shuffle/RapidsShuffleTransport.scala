@@ -207,6 +207,15 @@ trait ClientConnection extends Connection {
     cb: TransactionCallback): Transaction
 
   /**
+   * Function to receive a buffer
+   * @param alt an [[AddressLengthTag]] to receive the message
+   * @param cb callback to trigger once this receive completes
+   * @return a [[Transaction]] that can be used to block while this transaction is not done
+   */
+  def receive(requestType: RequestType.Value,
+              header: Long,
+              cb: TransactionCallback): Unit
+  /**
    * This function assigns tags for individual buffers to be received in this connection.
    * @param msgId an application-level id that should be unique to the peer.
    * @return a Long tag to use for a buffer
@@ -226,17 +235,7 @@ trait ClientConnection extends Connection {
  * [[ServerConnection]] and [[ClientConnection]] extend this, adding a few methods needed
  * in each case.
  */
-trait Connection {
-  /**
-   * Function to receive a buffer
-   * @param alt an [[AddressLengthTag]] to receive the message
-   * @param cb callback to trigger once this receive completes
-   * @return a [[Transaction]] that can be used to block while this transaction is not done
-   */
-  def receive(alt: AddressLengthTag,
-              cb: TransactionCallback): Transaction
-
-}
+trait Connection
 
 object TransactionStatus extends Enumeration {
   val NotStarted, InProgress, Complete, Success, Error, Cancelled = Value
@@ -326,8 +325,6 @@ trait Transaction extends AutoCloseable {
    * @return a `Transaction` object that can be used to wait for this response to complete
    */
   def respond(response: ByteBuffer, cb: TransactionCallback): Transaction
-
-  def stream(buffer: MemoryBuffer)
 
   // client does connection.request(TransferRequest, TransactionCallback)
   // server is listening on TransferRequest active message.
