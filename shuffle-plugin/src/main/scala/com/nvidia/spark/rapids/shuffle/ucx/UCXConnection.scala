@@ -212,7 +212,9 @@ class UCXClientConnection(peerExecutorId: Int, peerClientId: Long,
   }
 
   override def receive(requestType: RequestType.Value,
-                       header: Long, cb: TransactionCallback): Unit = {
+                       header: Long,
+                       memoryBuffer: MemoryBuffer,
+                       cb: TransactionCallback): Unit = {
     val tx = createTransaction
     tx.start(UCXTransactionType.Receive, 1, cb)
 
@@ -220,7 +222,7 @@ class UCXClientConnection(peerExecutorId: Int, peerClientId: Long,
     // we'll create a transaction, and set header/message and complete it.
     val amCallback = new UCXAmCallback {
       override def onHostMessageReceived(size: Long): RefCountedDirectByteBuffer = {
-        transport.getDirectByteBuffer(size.toInt)
+        throw new IllegalStateException("Host message `receive` not allowed")
       }
 
       override def onSuccess(am: UCXActiveMessage, buff: RefCountedDirectByteBuffer): Unit = {

@@ -183,6 +183,8 @@ object RequestType extends Enumeration {
    * A server will respond with: `TransferResponse`
    */
   val TransferRequest = Value
+
+  val BufferReceive = Value
 }
 
 /**
@@ -214,6 +216,7 @@ trait ClientConnection extends Connection {
    */
   def receive(requestType: RequestType.Value,
               header: Long,
+              buff: MemoryBuffer,
               cb: TransactionCallback): Unit
   /**
    * This function assigns tags for individual buffers to be received in this connection.

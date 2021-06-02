@@ -275,28 +275,26 @@ class RapidsShuffleClient(
   }
 
   private def receiveBuffers(bufferReceiveState: BufferReceiveState): Unit = {
-    val headers:Seq[Long] = bufferReceiveState.getHeaders()
+    val alt = bufferReceiveState.next()
 
-    logDebug(s"Issuing receive for $headers")
+    logDebug(s"Issuing receive for $alt")
 
-    headers.foreach { header =>
-      connection.receive(RequestType.TransferRequest, header,
-        tx => {
-          tx.getStatus match {
-            case TransactionStatus.Success =>
-              logDebug(s"Handling response for $header")
-              asyncOnCopyThread(HandleBounceBufferReceive(tx, bufferReceiveState))
-            case _ => try {
-              val errMsg = s"Unsuccessful buffer receive ${tx}"
-              logError(errMsg)
-              bufferReceiveState.errorOcurred(errMsg)
-            } finally {
-              tx.close()
-              bufferReceiveState.close()
-            }
+    connection.receive(RequestType.BufferReceive, alt.tag, alt.memoryBuffer.get,
+      tx => {
+        tx.getStatus match {
+          case TransactionStatus.Success =>
+            logDebug(s"Handling response for $alt")
+            asyncOnCopyThread(HandleBounceBufferReceive(tx, bufferReceiveState))
+          case _ => try {
+            val errMsg = s"Unsuccessful buffer receive ${tx}"
+            logError(errMsg)
+            bufferReceiveState.errorOcurred(errMsg)
+          } finally {
+            tx.close()
+            bufferReceiveState.close()
           }
-        })
-    }
+        }
+      })
   }
 
   /**
