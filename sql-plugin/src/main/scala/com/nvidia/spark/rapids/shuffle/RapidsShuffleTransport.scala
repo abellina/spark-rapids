@@ -193,6 +193,9 @@ object RequestType extends Enumeration {
  * Note that this subclasses from [[Connection]].
  */
 trait ClientConnection extends Connection {
+
+  def registerReceiveHandler(function: (Long, Long) => MemoryBuffer) = ???
+
   /**
    * This performs a request/response for a request of type `RequestType`. The response
    * `Transaction` on completion will call the callback (`cb`). The caller of `request`

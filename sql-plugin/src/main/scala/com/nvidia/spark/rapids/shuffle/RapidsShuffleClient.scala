@@ -151,6 +151,16 @@ class RapidsShuffleClient(
     }
   }
 
+  // on receive from our peer, we get a callback here which we need to route to the correct
+  // `BufferReceiveState`
+  connection.registerReceiveHandler((header: Long, payloadSize: Long) => {
+    // 0) must have a map of header -> BRS
+    // 1) find buffer receive state given header
+    // 2) tall BRS to return its bounce buffer
+    // 3) tie a callback for when RNDV finally finishes, to `consumeWindow`
+
+  })
+
   private[this] def asyncOrBlock(op: Any): Unit = {
     exec.execute(() => handleOp(op))
   }
