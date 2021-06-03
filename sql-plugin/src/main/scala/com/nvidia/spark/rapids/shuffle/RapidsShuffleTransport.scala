@@ -194,8 +194,6 @@ object RequestType extends Enumeration {
  */
 trait ClientConnection extends Connection {
 
-  def registerReceiveHandler(function: (Long, Long) => MemoryBuffer) = ???
-
   /**
    * This performs a request/response for a request of type `RequestType`. The response
    * `Transaction` on completion will call the callback (`cb`). The caller of `request`
@@ -221,6 +219,10 @@ trait ClientConnection extends Connection {
               header: Long,
               buff: MemoryBuffer,
               cb: TransactionCallback): Unit
+
+  def registerReceiveHandler(requestType: RequestType.Value,
+    cb: TransactionCallback)
+
   /**
    * This function assigns tags for individual buffers to be received in this connection.
    * @param msgId an application-level id that should be unique to the peer.
@@ -275,8 +277,11 @@ case class TransactionStats(txTimeMs: Double,
  * outside of [[waitForCompletion]] produces undefined behavior.
  */
 trait Transaction extends AutoCloseable {
+  def receive(alt: AddressLengthTag, function: Transaction => Unit): Unit
+
   /**
    * Get the peer executor id if available
+   *
    * @note this can throw if the `Transaction` was not created due to an Active Message
    */
   def peerExecutorId(): Long

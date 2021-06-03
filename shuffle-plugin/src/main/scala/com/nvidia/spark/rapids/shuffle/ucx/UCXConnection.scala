@@ -24,7 +24,7 @@ import scala.collection.mutable.ArrayBuffer
 import ai.rapids.cudf.{MemoryBuffer, NvtxColor, NvtxRange}
 import com.nvidia.spark.rapids.shuffle.{RequestType, _}
 import org.openucx.jucx.UcxCallback
-import org.openucx.jucx.ucp.UcpRequest
+import org.openucx.jucx.ucp.{UcpAmData, UcpRequest}
 import org.apache.spark.internal.Logging
 
 /**
@@ -247,6 +247,40 @@ class UCXClientConnection(peerExecutorId: Int, peerClientId: Long,
     // correct callback (this is an implementation detail in UCX.scala)
     ucx.registerResponseHandler(
       UCXConnection.composeResponseAmId(requestType), header, amCallback)
+  }
+
+  override def registerReceiveHandler(requestType: RequestType.Value,
+                                      cb: TransactionCallback): Unit = {
+
+    def makeCallback(): UCXAmCallback = {
+      val tx = createTransaction
+      tx.start(UCXTransactionType.Receive, 1, cb)
+      // this transaction needs to know more
+      new UCXAmCallback {
+        override def onHostMessageReceived(size: Long): RefCountedDirectByteBuffer = {
+          throw new IllegalStateException("Host message `receive` not allowed")
+        }
+
+        override def onSuccess(am: UCXActiveMessage, buff: RefCountedDirectByteBuffer): Unit = {
+          tx.completeWithSuccess(requestType, Option(am.header), Option(buff))
+        }
+
+        override def onError(am: UCXActiveMessage, ucsStatus: Int, errorMsg: String): Unit = {
+          tx.completeWithError(errorMsg)
+        }
+
+        override def onMessageStarted(receiveAm: UcpRequest): Unit = {
+          tx.registerPendingMessage(receiveAm)
+        }
+
+        override def onCancel(am: UCXActiveMessage): Unit = {
+          tx.completeCancelled(requestType, am.header)
+        }
+      }
+    }
+
+    ucx.registerRequestHandler(
+      UCXConnection.composeRequestAmId(requestType), makeCallback)
   }
 }
 

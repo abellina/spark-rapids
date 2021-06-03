@@ -16,14 +16,12 @@
 
 package com.nvidia.spark.rapids.shuffle
 
-import java.util.concurrent.Executor
+import java.util.concurrent.{ConcurrentHashMap, Executor}
 
 import scala.collection.mutable.ArrayBuffer
-
 import ai.rapids.cudf.{DeviceMemoryBuffer, NvtxColor, NvtxRange}
 import com.nvidia.spark.rapids._
 import com.nvidia.spark.rapids.format.{MetadataResponse, TableMeta, TransferState}
-
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.rapids.GpuShuffleEnv
 import org.apache.spark.storage.ShuffleBlockBatchId
@@ -151,14 +149,44 @@ class RapidsShuffleClient(
     }
   }
 
-  // on receive from our peer, we get a callback here which we need to route to the correct
-  // `BufferReceiveState`
-  connection.registerReceiveHandler((header: Long, payloadSize: Long) => {
+  // A client's job is to:
+  // - request block and block metadata needed by iterators
+  // - handle block metadata
+  // - handle blocks as they arrive and send them to iterators
+  //
+  connection.registerReceiveHandler(RequestType.BufferReceive,
+    (tx: Transaction) => {
+      // got an active message request on amId "BufferReceive"
+      // lets get the buffer receive state that needs to handle it
+      val bufferReceiveState = headerToBrs.get(tx.getHeader)
+
+      // the buffer receive state has some memory we are going to use
+      // for the eventual receive
+      val alt = bufferReceiveState.next()
+
+      logDebug(s"Issuing receive for $alt")
+
+      // ask the transaction to finalize the receive onto our memory
+      tx.receive(alt,
+        bufferTx => {
+          bufferTx.getStatus match {
+            case TransactionStatus.Success =>
+              logDebug(s"Handling response for $alt")
+              asyncOnCopyThread(HandleBounceBufferReceive(bufferTx, bufferReceiveState))
+            case _ => try {
+              val errMsg = s"Unsuccessful buffer receive ${bufferTx}"
+              logError(errMsg)
+              bufferReceiveState.errorOcurred(errMsg)
+            } finally {
+              tx.close()
+              bufferReceiveState.close()
+            }
+          }
+        })
     // 0) must have a map of header -> BRS
     // 1) find buffer receive state given header
     // 2) tall BRS to return its bounce buffer
     // 3) tie a callback for when RNDV finally finishes, to `consumeWindow`
-
   })
 
   private[this] def asyncOrBlock(op: Any): Unit = {
@@ -264,6 +292,8 @@ class RapidsShuffleClient(
     asyncOnCopyThread(IssueBufferReceives(bufferReceiveState))
   }
 
+  var headerToBrs = new ConcurrentHashMap[Long, BufferReceiveState]()
+
   /**
    * Issues transfers requests (if the state of [[bufferReceiveState]] advances), or continue to
    * work a current request (continue receiving bounce buffer sized chunks from a larger receive).
@@ -274,9 +304,12 @@ class RapidsShuffleClient(
   private[shuffle] def doIssueBufferReceives(bufferReceiveState: BufferReceiveState): Unit = {
     try {
       if (!bufferReceiveState.hasIterated) {
+        // register the buffer against our expected set of headers
+        // TODO: hide this map under the connection
+        headerToBrs.put(bufferReceiveState.id, bufferReceiveState)
         sendTransferRequest(bufferReceiveState)
       }
-      receiveBuffers(bufferReceiveState)
+      //receiveBuffers(bufferReceiveState)
     } catch {
       case t: Throwable =>
         bufferReceiveState.errorOcurred("Error issuing buffer receives", t)
@@ -284,6 +317,7 @@ class RapidsShuffleClient(
     }
   }
 
+/*
   private def receiveBuffers(bufferReceiveState: BufferReceiveState): Unit = {
     val alt = bufferReceiveState.next()
 
@@ -306,6 +340,7 @@ class RapidsShuffleClient(
         }
       })
   }
+ */
 
   /**
    * Sends the [[com.nvidia.spark.rapids.format.TransferRequest]] metadata message, to ask the

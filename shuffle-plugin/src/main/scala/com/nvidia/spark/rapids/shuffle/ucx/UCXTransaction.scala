@@ -23,11 +23,9 @@ import java.util.concurrent.locks.ReentrantLock
 
 import scala.collection.mutable
 import scala.collection.mutable.ArrayBuffer
-
 import ai.rapids.cudf.{NvtxColor, NvtxRange}
 import com.nvidia.spark.rapids.shuffle.{AddressLengthTag, RefCountedDirectByteBuffer, RequestType, Transaction, TransactionCallback, TransactionStats, TransactionStatus, TransportUtils}
-import org.openucx.jucx.ucp.UcpRequest
-
+import org.openucx.jucx.ucp.{UcpAmData, UcpRequest}
 import org.apache.spark.internal.Logging
 
 /**
@@ -379,6 +377,21 @@ private[ucx] class UCXTransaction(conn: UCXConnection, val txId: Long)
     conn match {
       case serverConnection: UCXServerConnection =>
         serverConnection.respond(peerExecutorId(), messageType.get, this.getHeader, response, cb)
+      case _ =>
+        throw new IllegalStateException("Tried to respond using a client connection. " +
+          "This is not supported.")
+    }
+  }
+
+  var _amData: UcpAmData = null
+
+  def receive(alt: AddressLengthTag, cb: Transaction => Unit): Unit = {
+    logDebug(s"Receiving from ${peerExecutorId} at ${TransportUtils.toHex(this.getHeader)} " +
+      s"with ${alt}")
+
+    conn match {
+      case clientConnection: UCXClientConnection =>
+        clientConnection.receiveAm(_amData, alt, cb)
       case _ =>
         throw new IllegalStateException("Tried to respond using a client connection. " +
           "This is not supported.")

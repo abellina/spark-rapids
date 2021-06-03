@@ -440,7 +440,8 @@ class UCXShuffleTransport(shuffleServerId: BlockManagerId, rapidsConf: RapidsCon
 
           if (perClientReq.nonEmpty) {
             perClientReq.foreach { case (client, perClientRequests) =>
-              val brs = new BufferReceiveState(perClientRequests.bounceBuffer,
+              val brs = new BufferReceiveState(ucx.assignResponseTag(),
+                perClientRequests.bounceBuffer,
                 perClientRequests.transferRequests)
               client.issueBufferReceives(brs)
             }

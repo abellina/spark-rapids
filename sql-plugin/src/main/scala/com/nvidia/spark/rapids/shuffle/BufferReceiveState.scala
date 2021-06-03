@@ -51,7 +51,7 @@ case class ConsumedBatchFromBounceBuffer(
  *                 currently requesting
  * @param stream - CUDA stream to use for allocations and copies
  */
-class BufferReceiveState(
+class BufferReceiveState(val id: Long,
     bounceBuffer: BounceBuffer,
     requests: Seq[PendingTransferRequest],
     stream: Cuda.Stream = Cuda.DEFAULT_STREAM)
