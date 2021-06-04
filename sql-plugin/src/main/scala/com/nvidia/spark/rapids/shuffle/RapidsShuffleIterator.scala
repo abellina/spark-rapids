@@ -264,8 +264,7 @@ class RapidsShuffleIterator(
             client.cancelPending(this)
           }
 
-          override def toString: String = {
-            s"RapidsShuffleIterator[taskAttemptId=${taskAttemptId}]"
+          override def toString: String = s"RapidsShuffleIterator[taskAttemptId=${taskAttemptId}]"
         }
 
         logInfo(s"Client $blockManagerId triggered, for ${shuffleRequestsMapIndex.size} blocks")
