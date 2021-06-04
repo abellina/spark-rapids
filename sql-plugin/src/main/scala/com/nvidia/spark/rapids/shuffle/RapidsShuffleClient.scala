@@ -406,7 +406,9 @@ class RapidsShuffleClient(
     } catch {
       case t: Throwable =>
         withResource(bufferReceiveState) { _ =>
-          bufferReceiveState.errorOcurred("Error while handling buffer receives", t)
+          val logMsg = s"Error while handling buffer receives"
+          logError(logMsg, t)
+          bufferReceiveState.errorOcurred(logMsg, t)
         }
     }
   }
