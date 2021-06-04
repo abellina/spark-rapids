@@ -115,7 +115,7 @@ class UCXServerConnection(ucx: UCX, transport: UCXShuffleTransport)
       UCXConnection.composeResponseAmId(messageType), header)
 
     ucx.sendActiveMessage(peerExecutorId, responseAm,
-      buffer.memoryBuffer.get.getAddress, buffer.memoryBuffer.get.getLength,
+      buffer.memoryBuffer.get.getAddress, buffer.length,
       new UcxCallback {
         override def onSuccess(request: UcpRequest): Unit = {
           logDebug(s"AM success respond $responseAm")
@@ -266,6 +266,7 @@ class UCXClientConnection(peerExecutorId: Int, peerClientId: Long,
 
       override def onMessageReceived(size: Long): TransportBuffer = {
         currentAlt = bufferReceiveState.next()
+        require(currentAlt.length == size)
         new CudfTransportBuffer(currentAlt.memoryBuffer.get)
       }
     }
