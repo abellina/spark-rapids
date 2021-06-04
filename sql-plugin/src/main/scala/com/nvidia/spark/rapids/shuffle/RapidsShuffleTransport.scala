@@ -386,8 +386,6 @@ trait RapidsShuffleTransport extends AutoCloseable {
    * @param reqs requests to add to the throttle queue
    */
   def queuePending(reqs: Seq[PendingTransferRequest])
-  def closePending(client: RapidsShuffleClient)
-
 
   /**
    * Cancel requests that are waiting in the queue (not in-flight) for a specific

@@ -30,11 +30,12 @@ import com.nvidia.spark.rapids.shuffle.{AddressLengthTag, ClientConnection, Memo
 import org.openucx.jucx._
 import org.openucx.jucx.ucp._
 import org.openucx.jucx.ucs.UcsConstants
-
 import org.apache.spark.SparkEnv
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.rapids.storage.RapidsStorageUtils
 import org.apache.spark.storage.BlockManagerId
+
+import scala.collection.mutable
 
 case class WorkerAddress(address: ByteBuffer)
 
@@ -96,6 +97,7 @@ class UCX(transport: UCXShuffleTransport, executor: BlockManagerId, rapidsConf: 
   private var worker: UcpWorker = _
   private var listener: Option[UcpListener] = None
   private val endpoints = new ConcurrentHashMap[Long, UcpEndpoint]()
+  private val reverseLookupEndpoints = mutable.HashMap[UcpEndpoint, Long]()
   private val backEndpoints = new ConcurrentHashMap[Long, UcpEndpoint]()
   @volatile private var initialized = false
 
@@ -142,17 +144,16 @@ class UCX(transport: UCXShuffleTransport, executor: BlockManagerId, rapidsConf: 
   // Error handler that would be invoked on endpoint failure.
   private val epErrorHandler = new UcpEndpointErrorHandler {
     override def onError(ucpEndpoint: UcpEndpoint, errorCode: Int, errorString: String): Unit = {
-      endpoints.keySet().forEach((entry: Long) => {
-        if (endpoints.get(entry) == ucpEndpoint) {
-          logError(s"UcpListener detected an error ${errorCode} ${errorString} " +
-            s"${ucpEndpoint}")
-          logError(s"Error for executorId ${entry}: ${errorString}")
-          val conn = connectionCache.remove(entry)
-          logWarning(s"Removed stale client connection for ${entry}")
-          conn.close()
-        }
-      })
-      endpoints.values().removeIf(ep => ep == ucpEndpoint)
+      val executorPeer = reverseLookupEndpoints.remove(ucpEndpoint)
+      executorPeer.foreach { executorId =>
+        logError(s"UcpListener detected an error ${errorCode} ${errorString} " +
+          s"${ucpEndpoint}")
+        logError(s"Error for executorId ${executorId}: ${errorString}")
+        val conn = connectionCache.remove(executorId)
+        logWarning(s"Removed stale client connection for ${executorId}")
+        conn.close()
+        endpoints.remove(executorId)
+      }
       ucpEndpoint.close()
     }
   }
@@ -332,6 +333,7 @@ class UCX(transport: UCXShuffleTransport, executor: BlockManagerId, rapidsConf: 
                         endpoints.synchronized {
                           priorEp.closeNonBlockingFlush()
                           endpoints.put(peerExecId.toLong, ep)
+                          reverseLookupEndpoints.put(ep, peerExecId.toLong)
                         }
                       })
                     } else {
@@ -778,6 +780,7 @@ class UCX(transport: UCXShuffleTransport, executor: BlockManagerId, rapidsConf: 
             logWarning(s"CREATE AN ENDPOINT ON START CONNECTION for ${peerExecutorId}")
             val ep = worker.newEndpoint(epParams)
             endpoints.put(peerExecutorId.toLong, ep)
+            reverseLookupEndpoints.put(ep, peerExecutorId.toLong)
             logInfo(s"Initiated an UCPListener connection to $peerMgmtHost, $peerMgmtPort, ${ep}")
           }
         }

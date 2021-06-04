@@ -548,4 +548,5 @@ class UCXShuffleTransport(shuffleServerId: BlockManagerId, rapidsConf: RapidsCon
     ucx.close()
     freeBounceBufferPools()
   }
+
 }

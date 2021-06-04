@@ -460,8 +460,8 @@ class RapidsShuffleClient(
 
   def close(): Unit = {
     logInfo(s"Closing pending requests for ${connection.getPeerExecutorId}")
-    transport.closePending(this)
     handlersWithInterest.foreach { hndlr =>
+      transport.cancelPending(hndlr)
       logWarning(s"Signaling ${hndlr} that ${connection.getPeerExecutorId} errored")
       hndlr.transferError("Client signaled UCX error")
     }
