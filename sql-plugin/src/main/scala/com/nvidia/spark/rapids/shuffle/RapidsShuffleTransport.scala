@@ -396,12 +396,10 @@ trait RapidsShuffleTransport extends AutoCloseable {
    * This function will connect (if not connected already) to a peer
    * described by `blockManagerId`. Connections are cached.
    *
-   * @param localExecutorId the local executor id
    * @param blockManagerId the peer's block manager id
    * @return RapidsShuffleClient instance that can be used to interact with the peer
    */
-  def makeClient(localExecutorId: Long,
-                 blockManagerId: BlockManagerId): RapidsShuffleClient
+  def makeClient(blockManagerId: BlockManagerId): RapidsShuffleClient
 
   /**
    * Connect to peer given a `BlockManagerId`

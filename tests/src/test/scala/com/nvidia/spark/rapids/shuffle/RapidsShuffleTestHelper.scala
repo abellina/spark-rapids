@@ -144,7 +144,6 @@ class RapidsShuffleTestHelper extends FunSuite
     })
 
     client = spy(new RapidsShuffleClient(
-      1,
       mockConnection,
       mockTransport,
       mockExecutor,

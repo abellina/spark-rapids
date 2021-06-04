@@ -240,35 +240,38 @@ class UCXClientConnection(peerExecutorId: Int, peerClientId: Long,
     tx
   }
 
-  var headerToBrs = new ConcurrentHashMap[Long, BufferReceiveState]()
-
   def registerBufferReceiveState(bufferReceiveState: BufferReceiveState,
                                  cb: TransactionCallback): Unit = {
-    val alt = bufferReceiveState.next()
-    ucx.registerResponseHandler(
-      UCXConnection.composeResponseAmId(RequestType.BufferReceive), alt.tag, new UCXAmCallback {
-        override def onError(am: UCXActiveMessage, ucsStatus: Int, errorMsg: String): Unit = {
-          logError("Error receiving a window")
-        }
 
-        override def onMessageStarted(receiveAm: UcpRequest): Unit = {}
+    val headers = bufferReceiveState.allTags
 
-        override def onSuccess(am: UCXActiveMessage, buff: TransportBuffer): Unit = {
-          // register the next one..
-          if (bufferReceiveState.hasNext) {
-            registerBufferReceiveState(bufferReceiveState, cb)
-          }
-          val tx = createTransaction
-          tx.start(UCXTransactionType.Receive, 1, cb)
-          tx.completeWithSuccess(RequestType.BufferReceive, Some(alt.tag), None)
-        }
+    // we are listening to requests for all clients in the same active message id
+    val amId = UCXConnection.composeResponseAmId(RequestType.BufferReceive)
 
-        override def onCancel(am: UCXActiveMessage): Unit = {}
+    val amCallback = new UCXAmCallback {
+      var currentAlt: AddressLengthTag = null
+      override def onError(am: UCXActiveMessage, ucsStatus: Int, errorMsg: String): Unit = {
+        logError("Error receiving a window")
+      }
 
-        override def onMessageReceived(size: Long): TransportBuffer = {
-          new CudfTransportBuffer(alt.memoryBuffer.get)
-        }
-      })
+      override def onMessageStarted(receiveAm: UcpRequest): Unit = {}
+
+      override def onSuccess(am: UCXActiveMessage, buff: TransportBuffer): Unit = {
+        val tx = createTransaction
+        tx.start(UCXTransactionType.Receive, 1, cb)
+        tx.completeWithSuccess(RequestType.BufferReceive, Some(currentAlt.tag), None)
+      }
+
+      override def onCancel(am: UCXActiveMessage): Unit = {}
+
+      override def onMessageReceived(size: Long): TransportBuffer = {
+        currentAlt = bufferReceiveState.next()
+        new CudfTransportBuffer(currentAlt.memoryBuffer.get)
+      }
+    }
+
+    // we register a specific handler callback for a tag
+    headers.foreach(header => ucx.registerResponseHandler(amId, header, amCallback))
   }
 }
 

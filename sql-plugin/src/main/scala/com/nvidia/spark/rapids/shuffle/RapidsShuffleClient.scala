@@ -82,9 +82,6 @@ case class PendingTransferRequest(client: RapidsShuffleClient,
  * Its counterpart is the [[RapidsShuffleServer]] on a specific peer executor, specified by
  * `connection`.
  *
- * @param localExecutorId this id is sent to the server, it is required for the protocol as
- *                        the server needs to pick an endpoint to send a response back to this
- *                        executor.
  * @param connection a connection object against a remote executor
  * @param transport used to get metadata buffers and to work with the throttle mechanism
  * @param exec Executor used to handle tasks that take time, and should not be in the
@@ -92,7 +89,6 @@ case class PendingTransferRequest(client: RapidsShuffleClient,
  * @param clientCopyExecutor Executors used to handle synchronous mem copies
  */
 class RapidsShuffleClient(
-    localExecutorId: Long,
     connection: ClientConnection,
     transport: RapidsShuffleTransport,
     exec: Executor,
@@ -125,8 +121,6 @@ class RapidsShuffleClient(
     /**
      * When a buffer is received, this event is posted to remove from the progress thread
      * the copy, and the callback into the iterator.
-     *
-     * Currently not used. There is a TODO below.
      *
      * @param tx live transaction for the buffer, to be closed after the buffer is handled
      * @param bufferReceiveState the object maintaining state for receives
@@ -261,29 +255,28 @@ class RapidsShuffleClient(
    */
   private[shuffle] def doIssueBufferReceives(bufferReceiveState: BufferReceiveState): Unit = {
     try {
-      if (!bufferReceiveState.hasIterated) {
-        connection.registerBufferReceiveState(bufferReceiveState, tx => tx.getStatus match {
-          case TransactionStatus.Success =>
-            logDebug(s"Handling response for $bufferReceiveState")
-            asyncOnCopyThread(HandleBounceBufferReceive(tx, bufferReceiveState))
-          case _ => try {
-            val errMsg = s"Unsuccessful buffer receive ${tx}"
-            logError(errMsg)
-            bufferReceiveState.errorOcurred(errMsg)
-          } finally {
-            tx.close()
-            bufferReceiveState.close()
+      // register a receive handler for inbound buffers
+      connection.registerBufferReceiveState(bufferReceiveState, tx => tx.getStatus match {
+        case TransactionStatus.Success =>
+          logDebug(s"Handling response for $bufferReceiveState")
+          asyncOnCopyThread(HandleBounceBufferReceive(tx, bufferReceiveState))
+        case _ =>
+          withResource(tx) { _ =>
+            withResource(bufferReceiveState) { _ =>
+              val errMsg = s"Unsuccessful buffer receive $tx"
+              logError(errMsg)
+              bufferReceiveState.errorOcurred(errMsg)
+            }
           }
-        })
+      })
 
-        sendTransferRequest(bufferReceiveState)
-      }
-
-      //receiveBuffers(bufferReceiveState)
+      // send a transfer request to kick off receives
+      sendTransferRequest(bufferReceiveState)
     } catch {
       case t: Throwable =>
-        bufferReceiveState.errorOcurred("Error issuing buffer receives", t)
-        bufferReceiveState.close()
+        withResource(bufferReceiveState) { _ =>
+          bufferReceiveState.errorOcurred("Error issuing buffer receives", t)
+        }
     }
   }
 
@@ -412,8 +405,9 @@ class RapidsShuffleClient(
       }
     } catch {
       case t: Throwable =>
-        bufferReceiveState.errorOcurred("Error while handling buffer receives", t)
-        bufferReceiveState.close()
+        withResource(bufferReceiveState) { _ =>
+          bufferReceiveState.errorOcurred("Error while handling buffer receives", t)
+        }
     }
   }
 

@@ -241,13 +241,11 @@ class UCXShuffleTransport(shuffleServerId: BlockManagerId, rapidsConf: RapidsCon
       .setDaemon(true)
       .build))
 
-  override def makeClient(localExecutorId: Long,
-                 blockManagerId: BlockManagerId): RapidsShuffleClient = {
+  override def makeClient(blockManagerId: BlockManagerId): RapidsShuffleClient = {
     val peerExecutorId = blockManagerId.executorId.toLong
     val clientConnection = connect(blockManagerId)
     clients.computeIfAbsent(peerExecutorId, _ => {
       new RapidsShuffleClient(
-        localExecutorId,
         clientConnection,
         this,
         clientExecutor,

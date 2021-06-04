@@ -40,7 +40,7 @@ class RapidsShuffleIteratorSuite extends RapidsShuffleTestHelper {
 
     when(mockTransaction.getStatus).thenReturn(TransactionStatus.Error)
 
-    when(mockTransport.makeClient(any(), any())).thenThrow(new IllegalStateException("Test"))
+    when(mockTransport.makeClient(any())).thenThrow(new IllegalStateException("Test"))
 
     assert(cl.hasNext)
     assertThrows[RapidsShuffleFetchFailedException](cl.next())
@@ -67,7 +67,7 @@ class RapidsShuffleIteratorSuite extends RapidsShuffleTestHelper {
         123))
 
       val ac = ArgumentCaptor.forClass(classOf[RapidsShuffleFetchHandler])
-      when(mockTransport.makeClient(any(), any())).thenReturn(client)
+      when(mockTransport.makeClient(any())).thenReturn(client)
       doNothing().when(client).doFetch(any(), ac.capture())
       cl.start()
 
@@ -101,7 +101,7 @@ class RapidsShuffleIteratorSuite extends RapidsShuffleTestHelper {
       123))
 
     val ac = ArgumentCaptor.forClass(classOf[RapidsShuffleFetchHandler])
-    when(mockTransport.makeClient(any(), any())).thenReturn(client)
+    when(mockTransport.makeClient(any())).thenReturn(client)
     doNothing().when(client).doFetch(any(), ac.capture())
     cl.start()
 
@@ -143,7 +143,7 @@ class RapidsShuffleIteratorSuite extends RapidsShuffleTestHelper {
       123))
 
     val ac = ArgumentCaptor.forClass(classOf[RapidsShuffleFetchHandler])
-    when(mockTransport.makeClient(any(), any())).thenReturn(client)
+    when(mockTransport.makeClient(any())).thenReturn(client)
     doNothing().when(client).doFetch(any(), ac.capture())
 
     // signal a timeout to the iterator
@@ -176,7 +176,7 @@ class RapidsShuffleIteratorSuite extends RapidsShuffleTestHelper {
     when(mockTransaction.getStatus).thenReturn(TransactionStatus.Error)
 
     val ac = ArgumentCaptor.forClass(classOf[RapidsShuffleFetchHandler])
-    when(mockTransport.makeClient(any(), any())).thenReturn(client)
+    when(mockTransport.makeClient(any())).thenReturn(client)
     doNothing().when(client).doFetch(any(), ac.capture())
     val bufferId = ShuffleReceivedBufferId(1)
     val mockBuffer = mock[RapidsBuffer]

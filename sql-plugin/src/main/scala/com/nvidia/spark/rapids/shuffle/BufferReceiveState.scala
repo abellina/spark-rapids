@@ -85,6 +85,11 @@ class BufferReceiveState(val id: Long,
   private[this] val windowedBlockIterator = new WindowedBlockIterator[ReceiveBlock](
     requests.map(r => new ReceiveBlock(r)), bounceBuffer.buffer.getLength)
 
+  private[this] val throwAway = new WindowedBlockIterator[ReceiveBlock](
+    requests.map(r => new ReceiveBlock(r)), bounceBuffer.buffer.getLength)
+
+  val allTags = throwAway.map(getFirstTag).toArray
+
   private[this] var hasMoreBuffers = windowedBlockIterator.hasNext
 
   def getRequests: Seq[PendingTransferRequest] = requests
