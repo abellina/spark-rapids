@@ -48,14 +48,23 @@ case class RapidsExecutorHeartbeatMsg(id: BlockManagerId)
  */
 case class RapidsExecutorUpdateMsg(ids: Array[BlockManagerId])
 
-class RapidsShuffleHeartbeatManager extends Logging {
-  private case class ExecutorRegistration(id: BlockManagerId, lastExecutorSeen: Long)
+class RapidsShuffleHeartbeatManager(heartbeatIntervalMs: Long) extends Logging {
+  private case class ExecutorRegistration(id: BlockManagerId, registrationTime: Long)
+
+  private case class LastExecutorHeartbeat(id: BlockManagerId) {
+    var lastHeartbeat: Long = System.currentTimeMillis()
+  }
 
   // Executors ordered from most recently registered to least-recently registered
   private[this] val executors = new ArrayBuffer[ExecutorRegistration]()
 
   // A mapping of executor IDs to registration index (ordered by arrival)
   private[this] val lastRegistrationSeen = new util.HashMap[BlockManagerId, MutableLong]
+
+  // Keep a min-heap with the executor using the last heartbeat received time
+  private[this] val lastExecutorHeartbeats =
+    new HashedPriorityQueue[LastExecutorHeartbeat](
+      (e, e1) => java.lang.Long.compare(e.lastHeartbeat, e1.lastHeartbeat))
 
   /**
    * Called by the driver plugin to handle a new registration from an executor.
@@ -65,12 +74,41 @@ class RapidsShuffleHeartbeatManager extends Logging {
   def registerExecutor(id: BlockManagerId): RapidsExecutorUpdateMsg = synchronized {
     logDebug(s"Registration from RAPIDS executor at $id")
     require(!lastRegistrationSeen.containsKey(id), s"Executor $id already registered")
+
+    lastExecutorHeartbeats.offer(LastExecutorHeartbeat(id))
+
+    checkStaleExecutors()
+
     val allExecutors = executors.map(e => e.id).toArray
 
-    executors.append(ExecutorRegistration(id, System.nanoTime))
+    val registration = ExecutorRegistration(id, System.nanoTime)
+    executors.append(registration)
 
-    lastRegistrationSeen.put(id, new MutableLong(allExecutors.length))
+    lastRegistrationSeen.put(id, new MutableLong(registration.registrationTime))
     RapidsExecutorUpdateMsg(allExecutors)
+  }
+
+  private def checkStaleExecutors(): Unit = {
+    // if we haven't seen the executor in 2 heartbeat intervals
+    val heartbeatTimeout = System.currentTimeMillis() - (heartbeatIntervalMs * 2)
+    if (lastExecutorHeartbeats.peek().lastHeartbeat < heartbeatTimeout) {
+      // found at least 1 executor that has been inactive for twice the heartbeat interval
+      // lets remove it from our list, and iterate to find others that may also be stale
+      val toRemove = new ArrayBuffer[LastExecutorHeartbeat]()
+      val lastHbsIter = lastExecutorHeartbeats.iterator()
+      var validExecutor = false
+      while (lastHbsIter.hasNext || !validExecutor) {
+        val execHb = lastHbsIter.next()
+        validExecutor = execHb.lastHeartbeat >= heartbeatTimeout
+        if (!validExecutor) {
+          toRemove.append(execHb)
+        }
+        // else, the time is within the valid range, so we can stop
+      }
+      toRemove.foreach(toRemoveHb => {
+        lastExecutorHeartbeats.remove(toRemoveHb)
+      })
+    }
   }
 
   /**
@@ -83,6 +121,10 @@ class RapidsShuffleHeartbeatManager extends Logging {
     if (lastRegistration == null) {
       throw new IllegalStateException(s"Heartbeat from unknown executor $id")
     }
+
+    lastExecutorHeartbeats.offer(LastExecutorHeartbeat(id))
+
+    checkStaleExecutors()
 
     val newExecutors = new ArrayBuffer[BlockManagerId]
     val iter = executors.zipWithIndex.reverseIterator
