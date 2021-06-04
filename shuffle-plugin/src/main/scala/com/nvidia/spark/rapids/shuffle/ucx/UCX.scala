@@ -233,7 +233,9 @@ class UCX(transport: UCXShuffleTransport, executor: BlockManagerId, rapidsConf: 
       }
 
       logWarning("Exiting progress thread. Closing endpoints, worker and context.")
-      endpoints.values().forEach(ep => ep.close())
+      endpoints.values().forEach(_.close())
+      endpoints.clear()
+      reverseLookupEndpoints.clear()
       worker.close()
       context.close()
   }
