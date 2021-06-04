@@ -424,6 +424,7 @@ class UCX(transport: UCXShuffleTransport, executor: BlockManagerId, rapidsConf: 
 
     def addResponseActiveMessageHandler(header: Long, responseCallback: UCXAmCallback): Unit = {
       val prior = responseCallbacks.putIfAbsent(header, responseCallback)
+      logInfo(s"${responseCallbacks.size}")
       require(prior == null,
         s"Invalid Active Message re-registration of response handler for " +
           s"${UCX.formatAmIdAndHeader(activeMessageId, header)}")
@@ -440,7 +441,7 @@ class UCX(transport: UCXShuffleTransport, executor: BlockManagerId, rapidsConf: 
    */
   def registerResponseHandler(
       activeMessageId: Int, header: Long, responseCallback: UCXAmCallback): Unit = {
-    logDebug(s"Register Active Message " +
+    logInfo(s"Register Active Message " +
       s"${UCX.formatAmIdAndHeader(activeMessageId, header)} response handler")
 
     amRegistrations.computeIfAbsent(activeMessageId,
@@ -500,10 +501,8 @@ class UCX(transport: UCXShuffleTransport, executor: BlockManagerId, rapidsConf: 
 
               // copy the data onto a buffer we own because it is going to be reused
               // in UCX
-              val dbb = cb.onHostMessageReceived(amData.getLength)
-              val bb = dbb.getBuffer()
-              bb.put(resp)
-              bb.rewind()
+              val dbb = cb.onMessageReceived(amData.getLength)
+              dbb.copy(resp)
               cb.onSuccess(am, dbb)
 
               // we return OK telling UCX `amData` is ok to be closed, along with the eagerly
@@ -512,9 +511,9 @@ class UCX(transport: UCXShuffleTransport, executor: BlockManagerId, rapidsConf: 
             } else {
               // RNDV case: we get a direct buffer and UCX will fill it with data at `receive`
               // callback
-              val resp = cb.onHostMessageReceived(amData.getLength)
+              val resp = cb.onMessageReceived(amData.getLength)
 
-              val receiveAm = amData.receive(UcxUtils.getAddress(resp.getBuffer()),
+              val receiveAm = amData.receive(resp.getAddress(),
                 new UcxCallback {
                   override def onError(ucsStatus: Int, errorMsg: String): Unit = {
                     withResource(resp) { _ =>

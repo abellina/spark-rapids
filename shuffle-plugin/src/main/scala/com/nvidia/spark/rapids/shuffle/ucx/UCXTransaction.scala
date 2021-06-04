@@ -24,7 +24,7 @@ import java.util.concurrent.locks.ReentrantLock
 import scala.collection.mutable
 import scala.collection.mutable.ArrayBuffer
 import ai.rapids.cudf.{NvtxColor, NvtxRange}
-import com.nvidia.spark.rapids.shuffle.{AddressLengthTag, RefCountedDirectByteBuffer, RequestType, Transaction, TransactionCallback, TransactionStats, TransactionStatus, TransportUtils}
+import com.nvidia.spark.rapids.shuffle.{AddressLengthTag, RefCountedDirectByteBuffer, RequestType, Transaction, TransactionCallback, TransactionStats, TransactionStatus, TransportBuffer, TransportUtils}
 import org.openucx.jucx.ucp.{UcpAmData, UcpRequest}
 import org.apache.spark.internal.Logging
 
@@ -367,7 +367,7 @@ private[ucx] class UCXTransaction(conn: UCXConnection, val txId: Long)
 
   var callbackCalled: Boolean = false
 
-  private var activeMessageData: Option[RefCountedDirectByteBuffer] = None
+  private var activeMessageData: Option[TransportBuffer] = None
 
   override def respond(response: ByteBuffer,
                        cb: TransactionCallback): Transaction = {
@@ -383,25 +383,10 @@ private[ucx] class UCXTransaction(conn: UCXConnection, val txId: Long)
     }
   }
 
-  var _amData: UcpAmData = null
-
-  def receive(alt: AddressLengthTag, cb: Transaction => Unit): Unit = {
-    logDebug(s"Receiving from ${peerExecutorId} at ${TransportUtils.toHex(this.getHeader)} " +
-      s"with ${alt}")
-
-    conn match {
-      case clientConnection: UCXClientConnection =>
-        clientConnection.receiveAm(_amData, alt, cb)
-      case _ =>
-        throw new IllegalStateException("Tried to respond using a client connection. " +
-          "This is not supported.")
-    }
-  }
-
   def complete(status: TransactionStatus.Value,
                messageType: Option[RequestType.Value] = None,
                header: Option[Long] = None,
-               message: Option[RefCountedDirectByteBuffer] = None,
+               message: Option[TransportBuffer] = None,
                errorMessage: Option[String] = None): Unit = {
     setHeader(header)
     setActiveMessageData(message)
@@ -425,7 +410,7 @@ private[ucx] class UCXTransaction(conn: UCXConnection, val txId: Long)
   def completeWithSuccess(
     messageType: RequestType.Value,
     hdr: Option[Long],
-    message: Option[RefCountedDirectByteBuffer]): Unit = {
+    message: Option[TransportBuffer]): Unit = {
     complete(TransactionStatus.Success,
       messageType = Option(messageType),
       header = hdr,
@@ -433,12 +418,12 @@ private[ucx] class UCXTransaction(conn: UCXConnection, val txId: Long)
   }
 
   // Reference count is not updated here. The caller is responsible to close
-  private[ucx] def setActiveMessageData(data: Option[RefCountedDirectByteBuffer]): Unit = {
+  private[ucx] def setActiveMessageData(data: Option[TransportBuffer]): Unit = {
     activeMessageData = data
   }
 
   // Reference count is not updated here. The caller is responsible to close
-  override def releaseMessage(): RefCountedDirectByteBuffer = {
+  override def releaseMessage(): TransportBuffer = {
     val msg = activeMessageData.get
     activeMessageData = None
     msg

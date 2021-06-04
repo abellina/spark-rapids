@@ -22,7 +22,6 @@ import java.util.concurrent.atomic.AtomicInteger
 
 import ai.rapids.cudf.{DeviceMemoryBuffer, MemoryBuffer, NvtxColor, NvtxRange}
 import com.nvidia.spark.rapids.RapidsConf
-
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.rapids.storage.RapidsStorageUtils
 import org.apache.spark.storage.BlockManagerId
@@ -139,9 +138,9 @@ trait ServerConnection extends Connection {
    * @param cb callback to trigger once done
    * @return the [[Transaction]], which can be used to block wait for this send.
    */
-  def send(peerExecutorId: Long,
-           buffer: AddressLengthTag,
-           cb: TransactionCallback): Transaction
+ // def send(peerExecutorId: Long,
+ //          buffer: AddressLengthTag,
+ //          cb: TransactionCallback): Transaction
 
   /**
    * Registers a callback that will be called any type a `RequestType` message is
@@ -166,6 +165,11 @@ trait ServerConnection extends Connection {
               header: Long,
               response: ByteBuffer,
               cb: TransactionCallback): Transaction
+
+  def send(peerExecutorId: Long,
+           messageType: RequestType.Value,
+           buffer: AddressLengthTag,
+           cb: TransactionCallback): Transaction
 }
 
 /**
@@ -209,19 +213,8 @@ trait ClientConnection extends Connection {
   def request(requestType: RequestType.Value, request: ByteBuffer,
     cb: TransactionCallback): Transaction
 
-  /**
-   * Function to receive a buffer
-   * @param alt an [[AddressLengthTag]] to receive the message
-   * @param cb callback to trigger once this receive completes
-   * @return a [[Transaction]] that can be used to block while this transaction is not done
-   */
-  def receive(requestType: RequestType.Value,
-              header: Long,
-              buff: MemoryBuffer,
-              cb: TransactionCallback): Unit
-
-  def registerReceiveHandler(requestType: RequestType.Value,
-    cb: TransactionCallback)
+  def registerBufferReceiveState(bufferReceiveState: BufferReceiveState,
+                                 cb: TransactionCallback): Unit
 
   /**
    * This function assigns tags for individual buffers to be received in this connection.
@@ -263,6 +256,39 @@ case class TransactionStats(txTimeMs: Double,
                             sendThroughput: Double,
                             recvThroughput: Double)
 
+trait TransportBuffer extends AutoCloseable {
+  def copy(in: ByteBuffer): Unit
+  def getAddress(): Long
+  def getBuffer(): ByteBuffer
+}
+
+class HostTransportBuffer(dbb: RefCountedDirectByteBuffer) extends TransportBuffer {
+  def copy(in: ByteBuffer): Unit = {
+    val bb = dbb.getBuffer()
+    bb.put(in)
+    bb.rewind()
+  }
+
+  def getAddress(): Long =
+    TransportUtils.getAddress(dbb.getBuffer())
+
+  override def getBuffer(): ByteBuffer = dbb.getBuffer()
+
+  override def close(): Unit = dbb.close()
+}
+
+class CudfTransportBuffer(dbb: MemoryBuffer) extends TransportBuffer {
+  def copy(in: ByteBuffer): Unit =
+    throw new NotImplementedError("Cannot copy from ByteBuffer to MemoryBuffer")
+
+  def getAddress(): Long = dbb.getAddress
+
+  override def getBuffer(): ByteBuffer =
+    throw new NotImplementedError("Cannot get ByteBuffer from MemoryBuffer")
+
+  override def close(): Unit = dbb.close()
+}
+
 /**
  * This trait represents a shuffle "transaction", and it is specific to a transfer (or set of
  * transfers).
@@ -277,8 +303,6 @@ case class TransactionStats(txTimeMs: Double,
  * outside of [[waitForCompletion]] produces undefined behavior.
  */
 trait Transaction extends AutoCloseable {
-  def receive(alt: AddressLengthTag, function: Transaction => Unit): Unit
-
   /**
    * Get the peer executor id if available
    *
@@ -324,7 +348,7 @@ trait Transaction extends AutoCloseable {
    * @note The caller must call `close` on the returned message
    * @return a direct ref counted byte buffer, possible from the byte buffer pool
    */
-  def releaseMessage(): RefCountedDirectByteBuffer
+  def releaseMessage(): TransportBuffer
 
   /**
    * For `Request` transactions, `respond` will be able to reply to a peer who issued

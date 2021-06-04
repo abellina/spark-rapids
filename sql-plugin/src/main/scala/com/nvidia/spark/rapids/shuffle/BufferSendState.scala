@@ -65,7 +65,7 @@ class BufferSendState(
   private[this] var isClosed = false
 
   private[this] val (bufferMetas: Array[BufferMeta], blocksToSend: Seq[SendBlock]) = {
-    withResource(transaction.releaseMessage()) { msg =>
+    withResource(transaction.releaseMessage()) { msg: TransportBuffer =>
       val transferRequest = ShuffleMetadata.getTransferRequest(msg.getBuffer())
 
       val bufferMetas = new Array[BufferMeta](transferRequest.requestsLength())

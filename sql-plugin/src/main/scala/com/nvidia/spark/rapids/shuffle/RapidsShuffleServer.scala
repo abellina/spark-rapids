@@ -342,9 +342,10 @@ class RapidsShuffleServer(transport: RapidsShuffleTransport,
       bufferSendStates.foreach(_.releaseAcquiredToCatalog())
 
       bssBuffers.foreach {
-        case (bufferSendState, buffersToSend) =>
+        case (bufferSendState, buffersToSend: AddressLengthTag) =>
           val peerExecutorId = bufferSendState.getRequestTransaction.peerExecutorId()
-          serverConnection.send(peerExecutorId, buffersToSend, bufferTx =>
+          serverConnection.send(
+              peerExecutorId, RequestType.BufferReceive, buffersToSend, bufferTx =>
             withResource(bufferTx) { _ =>
               logDebug(s"Done with the send for ${bufferSendState} with ${buffersToSend}")
 

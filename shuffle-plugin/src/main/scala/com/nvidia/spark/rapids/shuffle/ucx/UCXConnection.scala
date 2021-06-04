@@ -22,8 +22,9 @@ import java.util.concurrent.ConcurrentHashMap
 
 import scala.collection.mutable.ArrayBuffer
 import ai.rapids.cudf.{MemoryBuffer, NvtxColor, NvtxRange}
+import com.nvidia.spark.rapids.Arm
 import com.nvidia.spark.rapids.shuffle.{RequestType, _}
-import org.openucx.jucx.UcxCallback
+import org.openucx.jucx.{UcxCallback, UcxUtils}
 import org.openucx.jucx.ucp.{UcpAmData, UcpRequest}
 import org.apache.spark.internal.Logging
 
@@ -43,6 +44,7 @@ private[ucx] abstract class UCXTagCallback {
   def onCancel(alt: AddressLengthTag): Unit
 }
 
+
 /**
  * `UCXAmCallback` is used by [[Transaction]] to handle UCX Active Messages operations.
  * The `UCXActiveMessage` object encapsulates an activeMessageId and a header.
@@ -50,12 +52,12 @@ private[ucx] abstract class UCXTagCallback {
 private[ucx] abstract class UCXAmCallback {
   def onError(am: UCXActiveMessage, ucsStatus: Int, errorMsg: String): Unit
   def onMessageStarted(receiveAm: UcpRequest): Unit
-  def onSuccess(am: UCXActiveMessage, buff: RefCountedDirectByteBuffer): Unit
+  def onSuccess(am: UCXActiveMessage, buff: TransportBuffer): Unit
   def onCancel(am: UCXActiveMessage): Unit
 
   // hook to allocate memory on the host
   // a similar hook will be needed for GPU memory
-  def onHostMessageReceived(size: Long): RefCountedDirectByteBuffer
+  def onMessageReceived(size: Long): TransportBuffer
 }
 
 class UCXServerConnection(ucx: UCX, transport: UCXShuffleTransport)
@@ -63,10 +65,6 @@ class UCXServerConnection(ucx: UCX, transport: UCXShuffleTransport)
   override def startManagementPort(host: String): Int = {
     ucx.startManagementPort(host)
   }
-
-  override def send(sendPeerExecutorId: Long, buffer: AddressLengthTag,
-    cb: TransactionCallback): Transaction =
-    send(sendPeerExecutorId, buffer, Seq.empty, cb)
 
   override def registerRequestHandler(
       requestType: RequestType.Value, cb: TransactionCallback): Unit = {
@@ -77,14 +75,14 @@ class UCXServerConnection(ucx: UCX, transport: UCXShuffleTransport)
 
       tx.start(UCXTransactionType.Request, 1, cb)
 
-      override def onSuccess(am: UCXActiveMessage, buff: RefCountedDirectByteBuffer): Unit = {
+      override def onSuccess(am: UCXActiveMessage, buff: TransportBuffer): Unit = {
         logDebug(s"At requestHandler for ${requestType} and am: " +
           s"$am")
         tx.completeWithSuccess(requestType, Option(am.header), Option(buff))
       }
 
-      override def onHostMessageReceived(size: Long): RefCountedDirectByteBuffer = {
-        transport.getDirectByteBuffer(size)
+      override def onMessageReceived(size: Long): TransportBuffer = {
+        new HostTransportBuffer(transport.getDirectByteBuffer(size))
       }
 
       override def onError(am: UCXActiveMessage, ucsStatus: Int, errorMsg: String): Unit = {
@@ -99,6 +97,37 @@ class UCXServerConnection(ucx: UCX, transport: UCXShuffleTransport)
         tx.registerPendingMessage(receiveAm)
       }
     })
+  }
+
+  override def send(peerExecutorId: Long,
+           messageType: RequestType.Value,
+           buffer: AddressLengthTag,
+           cb: TransactionCallback): Transaction = {
+    val tx = createTransaction
+    tx.start(UCXTransactionType.Send, 1, cb)
+
+    val header = buffer.tag
+
+    logDebug(s"Responding to ${peerExecutorId} at ${TransportUtils.toHex(header)} " +
+      s"with ${buffer}")
+
+    val responseAm = UCXActiveMessage(
+      UCXConnection.composeResponseAmId(messageType), header)
+
+    ucx.sendActiveMessage(peerExecutorId, responseAm,
+      buffer.memoryBuffer.get.getAddress, buffer.memoryBuffer.get.getLength,
+      new UcxCallback {
+        override def onSuccess(request: UcpRequest): Unit = {
+          logDebug(s"AM success respond $responseAm")
+          tx.complete(TransactionStatus.Success)
+        }
+
+        override def onError(ucsStatus: Int, errorMsg: String): Unit = {
+          logError(s"AM Error responding ${ucsStatus} ${errorMsg} for $responseAm")
+          tx.completeWithError(errorMsg)
+        }
+      })
+    tx
   }
 
   override def respond(peerExecutorId: Long,
@@ -135,7 +164,7 @@ class UCXServerConnection(ucx: UCX, transport: UCXShuffleTransport)
 
 class UCXClientConnection(peerExecutorId: Int, peerClientId: Long,
     ucx: UCX, transport: UCXShuffleTransport)
-  extends UCXConnection(peerExecutorId, ucx)
+  extends UCXConnection(peerExecutorId, ucx) with Arm
   with ClientConnection {
 
   override def toString: String = {
@@ -151,9 +180,8 @@ class UCXClientConnection(peerExecutorId: Int, peerClientId: Long,
 
   override def getPeerExecutorId: Long = peerExecutorId
 
-  override def request(
-      requestType: RequestType.Value, request: ByteBuffer,
-      cb: TransactionCallback) : Transaction = {
+  override def request(requestType: RequestType.Value, request: ByteBuffer,
+                       cb: TransactionCallback): Transaction = {
     val tx = createTransaction
     tx.start(UCXTransactionType.Request, 1, cb)
 
@@ -164,11 +192,11 @@ class UCXClientConnection(peerExecutorId: Int, peerClientId: Long,
     // This is the response active message handler, when the response shows up
     // we'll create a transaction, and set header/message and complete it.
     val amCallback = new UCXAmCallback {
-      override def onHostMessageReceived(size: Long): RefCountedDirectByteBuffer = {
-        transport.getDirectByteBuffer(size.toInt)
+      override def onMessageReceived(size: Long): TransportBuffer = {
+        new HostTransportBuffer(transport.getDirectByteBuffer(size.toInt))
       }
 
-      override def onSuccess(am: UCXActiveMessage, buff: RefCountedDirectByteBuffer): Unit = {
+      override def onSuccess(am: UCXActiveMessage, buff: TransportBuffer): Unit = {
         tx.completeWithSuccess(requestType, Option(am.header), Option(buff))
       }
 
@@ -199,11 +227,12 @@ class UCXClientConnection(peerExecutorId: Int, peerClientId: Long,
       s"with tx ${tx}. Active messages: request $requestAm")
 
     ucx.sendActiveMessage(peerExecutorId, requestAm,
-        TransportUtils.getAddress(request), request.remaining(),
+      TransportUtils.getAddress(request), request.remaining(),
       new UcxCallback {
         override def onError(ucsStatus: Int, errorMsg: String): Unit = {
           tx.completeWithError(errorMsg)
         }
+
         // we don't handle `onSuccess` here, because we want the response
         // to complete that
       })
@@ -211,76 +240,35 @@ class UCXClientConnection(peerExecutorId: Int, peerClientId: Long,
     tx
   }
 
-  override def receive(requestType: RequestType.Value,
-                       header: Long,
-                       memoryBuffer: MemoryBuffer,
-                       cb: TransactionCallback): Unit = {
-    val tx = createTransaction
-    tx.start(UCXTransactionType.Receive, 1, cb)
+  var headerToBrs = new ConcurrentHashMap[Long, BufferReceiveState]()
 
-    // This is the response active message handler, when the response shows up
-    // we'll create a transaction, and set header/message and complete it.
-    val amCallback = new UCXAmCallback {
-      override def onHostMessageReceived(size: Long): RefCountedDirectByteBuffer = {
-        throw new IllegalStateException("Host message `receive` not allowed")
-      }
-
-      override def onSuccess(am: UCXActiveMessage, buff: RefCountedDirectByteBuffer): Unit = {
-        tx.completeWithSuccess(requestType, Option(am.header), Option(buff))
-      }
-
-      override def onError(am: UCXActiveMessage, ucsStatus: Int, errorMsg: String): Unit = {
-        tx.completeWithError(errorMsg)
-      }
-
-      override def onMessageStarted(receiveAm: UcpRequest): Unit = {
-        tx.registerPendingMessage(receiveAm)
-      }
-
-      override def onCancel(am: UCXActiveMessage): Unit = {
-        tx.completeCancelled(requestType, am.header)
-      }
-    }
-
-    // Register the active message response handler. Note that the `requestHeader`
-    // is expected to come back with the response, and is used to find the
-    // correct callback (this is an implementation detail in UCX.scala)
+  def registerBufferReceiveState(bufferReceiveState: BufferReceiveState,
+                                 cb: TransactionCallback): Unit = {
+    val alt = bufferReceiveState.next()
     ucx.registerResponseHandler(
-      UCXConnection.composeResponseAmId(requestType), header, amCallback)
-  }
-
-  override def registerReceiveHandler(requestType: RequestType.Value,
-                                      cb: TransactionCallback): Unit = {
-
-    def makeCallback(): UCXAmCallback = {
-      val tx = createTransaction
-      tx.start(UCXTransactionType.Receive, 1, cb)
-      // this transaction needs to know more
-      new UCXAmCallback {
-        override def onHostMessageReceived(size: Long): RefCountedDirectByteBuffer = {
-          throw new IllegalStateException("Host message `receive` not allowed")
-        }
-
-        override def onSuccess(am: UCXActiveMessage, buff: RefCountedDirectByteBuffer): Unit = {
-          tx.completeWithSuccess(requestType, Option(am.header), Option(buff))
-        }
-
+      UCXConnection.composeResponseAmId(RequestType.BufferReceive), alt.tag, new UCXAmCallback {
         override def onError(am: UCXActiveMessage, ucsStatus: Int, errorMsg: String): Unit = {
-          tx.completeWithError(errorMsg)
+          logError("Error receiving a window")
         }
 
-        override def onMessageStarted(receiveAm: UcpRequest): Unit = {
-          tx.registerPendingMessage(receiveAm)
+        override def onMessageStarted(receiveAm: UcpRequest): Unit = {}
+
+        override def onSuccess(am: UCXActiveMessage, buff: TransportBuffer): Unit = {
+          // register the next one..
+          if (bufferReceiveState.hasNext) {
+            registerBufferReceiveState(bufferReceiveState, cb)
+          }
+          val tx = createTransaction
+          tx.start(UCXTransactionType.Receive, 1, cb)
+          tx.completeWithSuccess(RequestType.BufferReceive, Some(alt.tag), None)
         }
 
-        override def onCancel(am: UCXActiveMessage): Unit = {
-          tx.completeCancelled(requestType, am.header)
-        }
-      }
-    }
+        override def onCancel(am: UCXActiveMessage): Unit = {}
 
-    ucx.registerRequestHandler(
-      UCXConnection.composeRequestAmId(requestType), makeCallback)
+        override def onMessageReceived(size: Long): TransportBuffer = {
+          new CudfTransportBuffer(alt.memoryBuffer.get)
+        }
+      })
   }
 }
 
