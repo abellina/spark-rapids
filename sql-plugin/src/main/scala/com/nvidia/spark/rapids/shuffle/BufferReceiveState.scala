@@ -100,6 +100,7 @@ class BufferReceiveState(val id: Long,
     if (bounceBuffer != null) {
       bounceBuffer.close()
     }
+    bounceBuffer = null
     if (workingOn != null) {
       logWarning(s"BufferReceiveState closing, but there are unfinished batches")
       workingOn.close()

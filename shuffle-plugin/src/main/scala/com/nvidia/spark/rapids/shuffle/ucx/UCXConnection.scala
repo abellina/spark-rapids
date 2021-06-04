@@ -257,6 +257,7 @@ class UCXClientConnection(peerExecutorId: Int, peerClientId: Long,
       override def onMessageStarted(receiveAm: UcpRequest): Unit = {}
 
       override def onSuccess(am: UCXActiveMessage, buff: TransportBuffer): Unit = {
+        logInfo(s"Success for ${am} hasNext ${bufferReceiveState.hasNext}.")
         val tx = createTransaction
         tx.start(UCXTransactionType.Receive, 1, cb)
         tx.completeWithSuccess(RequestType.BufferReceive, Some(currentAlt.tag), None)
@@ -266,6 +267,7 @@ class UCXClientConnection(peerExecutorId: Int, peerClientId: Long,
 
       override def onMessageReceived(size: Long): TransportBuffer = {
         currentAlt = bufferReceiveState.next()
+        logInfo(s"On receive for ${currentAlt} has Next ${bufferReceiveState.hasNext}.")
         require(currentAlt.length == size)
         new CudfTransportBuffer(currentAlt.memoryBuffer.get)
       }
