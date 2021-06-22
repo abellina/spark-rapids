@@ -207,7 +207,8 @@ class UCX(transport: UCXShuffleTransport, executor: BlockManagerId, rapidsConf: 
       override def onSuccess(am: UCXActiveMessage, buff: TransportBuffer): Unit = {
         withResource(buff) { _ =>
           val (peerExecId, peerRkeys) =
-            UCXConnection.unpackHandshake(buff.getBuffer())
+            UCXConnection.unpackHandshake(
+              buff.asInstanceOf[MetadataTransportBuffer].getBuffer())
 
           val existingEp = endpointManager.getEndpointByExecutorId(peerExecId.toLong)
 
@@ -843,7 +844,8 @@ class UCX(transport: UCXShuffleTransport, executor: BlockManagerId, rapidsConf: 
 
             withResource(buff) { _ =>
               val (peerExecId, peerRkeys) =
-                UCXConnection.unpackHandshake(buff.getBuffer())
+                UCXConnection.unpackHandshake(
+                  buff.asInstanceOf[MetadataTransportBuffer].getBuffer())
 
               logInfo(s"SUCCESS WITH RESPONSE CONTROL: " +
                 s"from ${ep}: $peerExecId")
