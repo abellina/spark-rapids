@@ -122,6 +122,7 @@ else
       export PYSP_TEST_spark_master="local-cluster[$NUM_LOCAL_EXECS,$CORES_PER_EXEC,$MB_PER_EXEC]"
     fi
 
+    export PYSP_TEST_spark_master="spark://192.168.50.80:7077"
     export PYSP_TEST_spark_driver_extraClassPath="${ALL_JARS// /:}"
     export PYSP_TEST_spark_executor_extraClassPath="${ALL_JARS// /:}"
     export PYSP_TEST_spark_driver_extraJavaOptions="-ea -Duser.timezone=UTC $COVERAGE_SUBMIT_FLAGS"
@@ -129,6 +130,12 @@ else
     export PYSP_TEST_spark_ui_showConsoleProgress='false'
     export PYSP_TEST_spark_sql_session_timeZone='UTC'
     export PYSP_TEST_spark_sql_shuffle_partitions='12'
+    export PYSP_TEST_spark_shuffle_manager=com.nvidia.spark.rapids.spark311.RapidsShuffleManager
+    export PYSP_TEST_spark_shuffle_service_enabled=false
+    export PYSP_TEST_spark_executor_cores=3
+    export PYSP_TEST_spark_rapids_memory_gpu_allocFraction=0.1
+    export PYSP_TEST_spark_rapids_memory_gpu_maxAllocFraction=0.1
+    export PYSP_TEST_spark_rapids_memory_gpu_minAllocFraction=0.01
     # prevent cluster shape to change - and fail quicker rather than retry
     export PYSP_TEST_spark_task_maxFailures='1'
     export PYSP_TEST_spark_dynamicAllocation_enabled='false'

@@ -253,10 +253,10 @@ class RapidsShuffleServer(transport: RapidsShuffleTransport,
   def doHandleMetadataRequest(tx: Transaction): Unit = {
     withResource(tx) { _ =>
       withResource(new NvtxRange("doHandleMeta", NvtxColor.PURPLE)) { _ =>
-        withResource(tx.releaseMessage()) { mtb =>
-          if (tx.getStatus == TransactionStatus.Error) {
-            logError("error getting metadata request: " + tx)
-          } else {
+        if (tx.getStatus == TransactionStatus.Error) {
+          logError("error getting metadata request: " + tx)
+        } else {
+          withResource(tx.releaseMessage()) { mtb =>
             val req = ShuffleMetadata.getMetadataRequest(mtb.getBuffer())
 
             logDebug(s"Received request req:\n: ${ShuffleMetadata.printRequest(req)}")
@@ -284,17 +284,17 @@ class RapidsShuffleServer(transport: RapidsShuffleTransport,
               s"${ShuffleMetadata.printResponse("responding", materializedResponse)}")
 
             val responseTx = tx.respond(respBuffer.getBuffer(), responseTx => {
-                withResource(responseTx) { responseTx =>
-                  withResource(respBuffer) { _ =>
-                    if (responseTx.getStatus == TransactionStatus.Error) {
-                      logError(s"Error sending metadata response in tx $tx")
-                    } else {
-                      val stats = responseTx.getStats
-                      logDebug(s"Sent metadata ${stats.sendSize} in ${stats.txTimeMs} ms")
-                    }
+              withResource(responseTx) { responseTx =>
+                withResource(respBuffer) { _ =>
+                  if (responseTx.getStatus == TransactionStatus.Error) {
+                    logError(s"Error sending metadata response in tx $tx")
+                  } else {
+                    val stats = responseTx.getStats
+                    logDebug(s"Sent metadata ${stats.sendSize} in ${stats.txTimeMs} ms")
                   }
                 }
-              })
+              }
+            })
             logDebug(s"Waiting for send metadata to complete: $responseTx")
           }
         }

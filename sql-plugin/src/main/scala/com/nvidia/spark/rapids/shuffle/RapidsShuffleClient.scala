@@ -203,11 +203,11 @@ class RapidsShuffleClient(
       shuffleRequests: Seq[ShuffleBlockBatchId],
       handler: RapidsShuffleFetchHandler): Unit = {
     withResource(tx) { _ =>
-      withResource(tx.releaseMessage()) { mtb =>
-        withResource(new NvtxRange("Client.handleMeta", NvtxColor.CYAN)) { _ =>
-          try {
-            tx.getStatus match {
-              case TransactionStatus.Success =>
+      withResource(new NvtxRange("Client.handleMeta", NvtxColor.CYAN)) { _ =>
+        try {
+          tx.getStatus match {
+            case TransactionStatus.Success =>
+              withResource(tx.releaseMessage()) { mtb =>
                 // start the receives
                 val metadataResponse =
                   ShuffleMetadata.getMetadataResponse(mtb.getBuffer())
@@ -220,14 +220,14 @@ class RapidsShuffleClient(
 
                 // queue up the receives
                 queueTransferRequests(metadataResponse, handler)
-              case _ =>
-                handler.transferError(
-                  tx.getErrorMessage.getOrElse(s"Unsuccessful metadata request ${tx}"))
-            }
-          } catch {
-            case t: Throwable =>
-              handler.transferError("Error occurred while handling metadata", t)
+              }
+            case _ =>
+              handler.transferError(
+                tx.getErrorMessage.getOrElse(s"Unsuccessful metadata request ${tx}"))
           }
+        } catch {
+          case t: Throwable =>
+            handler.transferError("Error occurred while handling metadata", t)
         }
       }
     }
@@ -282,10 +282,10 @@ class RapidsShuffleClient(
       ShuffleMetadata.buildTransferRequest(id, requestsToIssue.map(i => i.tableMeta)))
 
     connection.request(MessageType.TransferRequest, transferReq.acquire(), withResource(_) { tx =>
-      withResource(tx.releaseMessage()) { mtb =>
-        withResource(transferReq) { _ =>
-          tx.getStatus match {
-            case TransactionStatus.Success =>
+      withResource(transferReq) { _ =>
+        tx.getStatus match {
+          case TransactionStatus.Success =>
+            withResource(tx.releaseMessage()) { mtb =>
               // make sure all bufferTxs are still valid (e.g. resp says that they have STARTED)
               val transferResponse = ShuffleMetadata.getTransferResponse(mtb.getBuffer())
               (0 until transferResponse.responsesLength()).foreach(r => {
@@ -297,15 +297,15 @@ class RapidsShuffleClient(
                   throw new IllegalStateException("NOT IMPLEMENTED")
                 }
               })
-            case TransactionStatus.Error =>
-              toIssue.errorOccurred(
-                tx.getErrorMessage.getOrElse("Error receiving a TransferRequest response"),
-                null)
-            case TransactionStatus.Cancelled =>
-              toIssue.errorOccurred(
-                tx.getErrorMessage.getOrElse("TransferRequest response cancelled"),
-                null)
-          }
+            }
+          case TransactionStatus.Error =>
+            toIssue.errorOccurred(
+              tx.getErrorMessage.getOrElse("Error receiving a TransferRequest response"),
+              null)
+          case TransactionStatus.Cancelled =>
+            toIssue.errorOccurred(
+              tx.getErrorMessage.getOrElse("TransferRequest response cancelled"),
+              null)
         }
       }
     })
