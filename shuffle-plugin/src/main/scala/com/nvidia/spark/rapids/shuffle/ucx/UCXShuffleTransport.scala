@@ -374,14 +374,19 @@ class UCXShuffleTransport(shuffleServerId: BlockManagerId, rapidsConf: RapidsCon
   }
 
   def handleBufferTransaction(tx: Transaction): Unit = {
-    val header = tx.getHeader
-    val clientAndBrs = pendingBrs.get(header)
-    require(clientAndBrs != null,
-      s"Unknown header for a buffer receive: ${TransportUtils.toHex(header)}")
-    val client = clientAndBrs.client
-    logDebug(s"Handling for peer ${client.connection.getPeerExecutorId}, " +
-      s"handling ${TransportUtils.toHex(header)}, SUCCESS")
-    client.handleBufferReceive(tx, clientAndBrs.brs)
+    tx.getStatus match {
+      case TransactionStatus.Success =>
+        val header = tx.getHeader
+        val clientAndBrs = pendingBrs.get(header)
+        require(clientAndBrs != null,
+          s"Unknown header for a buffer receive: ${TransportUtils.toHex(header)}")
+        val client = clientAndBrs.client
+        logDebug(s"Handling for peer ${client.connection.getPeerExecutorId}, " +
+          s"handling ${TransportUtils.toHex(header)}, SUCCESS")
+        client.handleBufferReceive(tx, clientAndBrs.brs)
+      case _ =>
+        logError(s"Error with ${tx}")
+    }
   }
 
   def bufferReceiveStateComplete(header: Long): Unit = {
