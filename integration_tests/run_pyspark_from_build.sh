@@ -147,8 +147,13 @@ else
     # see https://issues.apache.org/jira/browse/SPARK-2083).
     export PYSP_TEST_spark_task_maxFailures="$SPARK_TASK_MAXFAILURES"
 
+    export PYSP_TEST_spark_master="spark://192.168.50.80:7077"
+    export PYSP_TEST_spark_executor_cores=3
+    export PYSP_TEST_spark_rapids_memory_gpu_allocFraction=0.1
+    export PYSP_TEST_spark_rapids_memory_gpu_minAllocFraction=0.01
     if ((NUM_LOCAL_EXECS > 0)); then
       export PYSP_TEST_spark_master="local-cluster[$NUM_LOCAL_EXECS,$CORES_PER_EXEC,$MB_PER_EXEC]"
+
     else
       # If a master is not specified, use "local[*, $SPARK_TASK_MAXFAILURES]"
       if [ -z "${PYSP_TEST_spark_master}" ] && [ "$SPARK_SUBMIT_FLAGS" != *"--master"* ]; then
