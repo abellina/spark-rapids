@@ -16,7 +16,11 @@
 
 package com.nvidia.spark.rapids
 
-import ai.rapids.cudf.{BaseDeviceMemoryBuffer, ContiguousTable, Cuda, DeviceMemoryBuffer}
+import java.io.File
+import java.io.FileOutputStream
+import java.util.UUID
+
+import ai.rapids.cudf.{BaseDeviceMemoryBuffer, ContiguousTable, Cuda, DeviceMemoryBuffer, HostMemoryBuffer, ParquetWriterOptions, Table}
 import ai.rapids.cudf.nvcomp.{BatchedLZ4Compressor, BatchedLZ4Decompressor, CompressionType, Decompressor, LZ4Compressor}
 import com.nvidia.spark.rapids.RapidsPluginImplicits._
 import com.nvidia.spark.rapids.format.{BufferMeta, CodecType}
@@ -125,6 +129,17 @@ class BatchedNvcompLZ4Compressor(maxBatchMemorySize: Long, stream: Cuda.Stream)
   override protected def compress(
       tables: Array[ContiguousTable],
       stream: Cuda.Stream): Array[CompressedTable] = {
+    val uuid = UUID.randomUUID()
+    tables.zipWithIndex.foreach { case (ct, ix) => {
+      withResource(HostMemoryBuffer.allocate(ct.getBuffer.getLength)) { hostBuff =>
+        hostBuff.copyFromDeviceBuffer(ct.getBuffer)
+        val bb = hostBuff.asByteBuffer
+        val file = new File(s"/tmp/nvcomp/${uuid}/$ix")
+        val channel = new FileOutputStream(file, false).getChannel()
+        channel.write(bb)
+        channel.close()
+      }
+    }}
     val inputBuffers: Array[BaseDeviceMemoryBuffer] = tables.map(_.getBuffer)
     val compressionResult = BatchedLZ4Compressor.compress(inputBuffers,
       NvcompLZ4CompressionCodec.LZ4_CHUNK_SIZE, stream)
