@@ -22,7 +22,8 @@ import com.nvidia.spark.rapids.RapidsPluginImplicits._
 import com.nvidia.spark.rapids.format.{BufferMeta, CodecType}
 
 /** A table compression codec that uses nvcomp's LZ4-GPU codec */
-class NvcompLZ4CompressionCodec extends TableCompressionCodec with Arm {
+class NvcompLZ4CompressionCodec(codecConfigs: TableCompressionCodecConfig)
+    extends TableCompressionCodec with Arm {
   override val name: String = "nvcomp-LZ4"
   override val codecId: Byte = CodecType.NVCOMP_LZ4
 
@@ -31,7 +32,8 @@ class NvcompLZ4CompressionCodec extends TableCompressionCodec with Arm {
       contigTable: ContiguousTable,
       stream: Cuda.Stream): CompressedTable = {
     val tableBuffer = contigTable.getBuffer
-    val (compressedSize, oversizedBuffer) = NvcompLZ4CompressionCodec.compress(tableBuffer, stream)
+    val (compressedSize, oversizedBuffer) =
+      NvcompLZ4CompressionCodec.compress(tableBuffer, codecConfigs.lz4ChunkSize, stream)
     closeOnExcept(oversizedBuffer) { oversizedBuffer =>
       require(compressedSize <= oversizedBuffer.getLength, "compressed buffer overrun")
       val tableMeta = MetaUtils.buildTableMeta(
@@ -61,7 +63,7 @@ class NvcompLZ4CompressionCodec extends TableCompressionCodec with Arm {
   override def createBatchCompressor(
       maxBatchMemoryBytes: Long,
       stream: Cuda.Stream): BatchedTableCompressor = {
-    new BatchedNvcompLZ4Compressor(maxBatchMemoryBytes, stream)
+    new BatchedNvcompLZ4Compressor(maxBatchMemoryBytes, codecConfigs, stream)
   }
 
   override def createBatchDecompressor(
@@ -72,23 +74,23 @@ class NvcompLZ4CompressionCodec extends TableCompressionCodec with Arm {
 }
 
 object NvcompLZ4CompressionCodec extends Arm {
-  // TODO: Make this a config?
-  val LZ4_CHUNK_SIZE: Int = 64 * 1024
-
   /**
    * Compress a data buffer.
    * @param input buffer containing data to compress
    * @param stream CUDA stream to use
    * @return the size of the compressed data in bytes and the (probably oversized) output buffer
    */
-  def compress(input: DeviceMemoryBuffer, stream: Cuda.Stream): (Long, DeviceMemoryBuffer) = {
-    val tempSize = LZ4Compressor.getTempSize(input, CompressionType.CHAR, LZ4_CHUNK_SIZE)
+  def compress(
+      input: DeviceMemoryBuffer,
+      lz4ChunkSize: Long,
+      stream: Cuda.Stream): (Long, DeviceMemoryBuffer) = {
+    val tempSize = LZ4Compressor.getTempSize(input, CompressionType.CHAR, lz4ChunkSize)
     withResource(DeviceMemoryBuffer.allocate(tempSize)) { tempBuffer =>
       var compressedSize: Long = 0L
-      val outputSize = LZ4Compressor.getOutputSize(input, CompressionType.CHAR, LZ4_CHUNK_SIZE,
+      val outputSize = LZ4Compressor.getOutputSize(input, CompressionType.CHAR, lz4ChunkSize,
         tempBuffer)
       closeOnExcept(DeviceMemoryBuffer.allocate(outputSize)) { outputBuffer =>
-        compressedSize = LZ4Compressor.compress(input, CompressionType.CHAR, LZ4_CHUNK_SIZE,
+        compressedSize = LZ4Compressor.compress(input, CompressionType.CHAR, lz4ChunkSize,
           tempBuffer, outputBuffer, stream)
         require(compressedSize <= outputBuffer.getLength, "compressed buffer overrun")
         (compressedSize, outputBuffer)
@@ -120,14 +122,15 @@ object NvcompLZ4CompressionCodec extends Arm {
   }
 }
 
-class BatchedNvcompLZ4Compressor(maxBatchMemorySize: Long, stream: Cuda.Stream)
+class BatchedNvcompLZ4Compressor(maxBatchMemorySize: Long,
+                                 codecConfigs: TableCompressionCodecConfig, stream: Cuda.Stream)
     extends BatchedTableCompressor(maxBatchMemorySize, stream) {
   override protected def compress(
       tables: Array[ContiguousTable],
       stream: Cuda.Stream): Array[CompressedTable] = {
     val inputBuffers: Array[BaseDeviceMemoryBuffer] = tables.map(_.getBuffer)
     val compressionResult = BatchedLZ4Compressor.compress(inputBuffers,
-      NvcompLZ4CompressionCodec.LZ4_CHUNK_SIZE, stream)
+      codecConfigs.lz4ChunkSize, stream)
     val compressedTables = try {
       val buffers = compressionResult.getCompressedBuffers
       val compressedSizes = compressionResult.getCompressedSizes

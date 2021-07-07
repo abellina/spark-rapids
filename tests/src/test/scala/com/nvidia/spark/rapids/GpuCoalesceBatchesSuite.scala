@@ -36,6 +36,7 @@ import org.apache.spark.sql.types._
 import org.apache.spark.sql.vectorized.{ArrowColumnVector, ColumnarBatch}
 
 class GpuCoalesceBatchesSuite extends SparkQueryCompareTestSuite {
+  val rapidsConf = new RapidsConf(Map.empty[String, String])
 
   test("test with small input batches") {
     withGpuSparkSession(spark => {
@@ -484,7 +485,8 @@ class GpuCoalesceBatchesSuite extends SparkQueryCompareTestSuite {
       dummyMetric,
       dummyMetric,
       RapidsBuffer.defaultSpillCallback,
-      "test concat")
+      "test concat",
+      TableCompressionCodec.makeCodecConfig(rapidsConf))
 
     var expected = 0
     while (coalesceIter.hasNext) {
@@ -567,7 +569,8 @@ class GpuCoalesceBatchesSuite extends SparkQueryCompareTestSuite {
       dummyMetric,
       dummyMetric,
       RapidsBuffer.defaultSpillCallback,
-      "test concat")
+      "test concat",
+      TableCompressionCodec.makeCodecConfig(rapidsConf))
 
     var expected = 0
     while (coalesceIter.hasNext) {
@@ -613,7 +616,8 @@ class GpuCoalesceBatchesSuite extends SparkQueryCompareTestSuite {
   }
 
   private def buildCompressedBatch(start: Int, numRows: Int): ColumnarBatch = {
-    val codec = TableCompressionCodec.getCodec(CodecType.NVCOMP_LZ4)
+    val codec = TableCompressionCodec.getCodec(
+      CodecType.NVCOMP_LZ4, TableCompressionCodec.makeCodecConfig(rapidsConf))
     withResource(codec.createBatchCompressor(0, Cuda.DEFAULT_STREAM)) { compressor =>
       compressor.addTableToCompress(buildContiguousTable(start, numRows))
       withResource(compressor.finish()) { compressed =>

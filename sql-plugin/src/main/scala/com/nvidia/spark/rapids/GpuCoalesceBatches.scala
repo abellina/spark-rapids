@@ -17,10 +17,8 @@
 package com.nvidia.spark.rapids
 
 import scala.collection.mutable.ArrayBuffer
-
 import ai.rapids.cudf.{Cuda, NvtxColor, Table}
 import com.nvidia.spark.rapids.RapidsPluginImplicits._
-
 import org.apache.spark.TaskContext
 import org.apache.spark.internal.Logging
 import org.apache.spark.rdd.RDD
@@ -28,6 +26,7 @@ import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.expressions.{Attribute, Expression, SortOrder}
 import org.apache.spark.sql.catalyst.plans.physical.Partitioning
 import org.apache.spark.sql.execution.{SparkPlan, UnaryExecNode}
+import org.apache.spark.sql.rapids.GpuShuffleEnv
 import org.apache.spark.sql.types.{DataType, NullType, StructType}
 import org.apache.spark.sql.vectorized.ColumnarBatch
 
@@ -413,7 +412,8 @@ class GpuCoalesceIterator(iter: Iterator[ColumnarBatch],
     totalTime: GpuMetric,
     peakDevMemory: GpuMetric,
     spillCallback: RapidsBuffer.SpillCallback,
-    opName: String)
+    opName: String,
+    codecConfigs: TableCompressionCodecConfig)
   extends AbstractGpuCoalesceIterator(iter,
     goal,
     numInputRows,
@@ -454,7 +454,7 @@ class GpuCoalesceIterator(iter: Iterator[ColumnarBatch],
         }
         if (codec == null) {
           val descr = compressedVecs.head.getTableMeta.bufferMeta.codecBufferDescrs(0)
-          codec = TableCompressionCodec.getCodec(descr.codec)
+          codec = TableCompressionCodec.getCodec(descr.codec, codecConfigs)
         }
         withResource(codec.createBatchDecompressor(maxDecompressBatchMemory,
             Cuda.DEFAULT_STREAM)) { decompressor =>
@@ -519,8 +519,11 @@ case class GpuCoalesceBatches(child: SparkPlan, goal: CoalesceGoal)
   extends UnaryExecNode with GpuExec {
   import GpuMetric._
 
-  private[this] val maxDecompressBatchMemory =
-    new RapidsConf(child.conf).shuffleCompressionMaxBatchMemory
+  private[this] val (codecConfigs, maxDecompressBatchMemory) = {
+    val rapidsConf = new RapidsConf(child.conf)
+    (TableCompressionCodec.makeCodecConfig(rapidsConf),
+     rapidsConf.shuffleCompressionMaxBatchMemory)
+  }
 
   protected override val outputRowsLevel: MetricsLevel = ESSENTIAL_LEVEL
   protected override val outputBatchesLevel: MetricsLevel = MODERATE_LEVEL
@@ -585,7 +588,8 @@ case class GpuCoalesceBatches(child: SparkPlan, goal: CoalesceGoal)
           batches.mapPartitions { iter =>
             new GpuCoalesceIterator (iter, outputSchema, sizeGoal, decompressMemoryTarget,
               numInputRows, numInputBatches, numOutputRows, numOutputBatches, collectTime,
-              concatTime, totalTime, peakDevMemory, callback, "GpuCoalesceBatches")
+              concatTime, totalTime, peakDevMemory, callback, "GpuCoalesceBatches",
+              codecConfigs)
           }
         case batchingGoal: BatchedByKey =>
           val targetSize = RapidsConf.GPU_BATCH_SIZE_BYTES.get(conf)
