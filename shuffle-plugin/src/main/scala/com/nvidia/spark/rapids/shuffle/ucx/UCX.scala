@@ -19,7 +19,7 @@ package com.nvidia.spark.rapids.shuffle.ucx
 import java.net._
 import java.nio.ByteBuffer
 import java.security.SecureRandom
-import java.util.concurrent.{ConcurrentHashMap, ConcurrentLinkedQueue, Executors, TimeUnit}
+import java.util.concurrent.{ConcurrentHashMap, ConcurrentLinkedQueue, ExecutorService, Executors, TimeUnit}
 import java.util.concurrent.atomic.AtomicLong
 
 import scala.collection.mutable.ArrayBuffer
@@ -72,17 +72,7 @@ case class UCXActiveMessage(activeMessageId: Int, header: Long) {
 class UCX(transport: UCXShuffleTransport, executor: BlockManagerId, rapidsConf: RapidsConf)
     extends AutoCloseable with Logging with Arm {
 
-  private[this] val context = {
-    val contextParams = new UcpParams()
-      .requestTagFeature()
-      .requestAmFeature()
-    if (rapidsConf.shuffleUcxUseWakeup) {
-      contextParams.requestWakeupFeature()
-    }
-    new UcpContext(contextParams)
-  }
-
-  logInfo(s"UCX context created")
+  private[this] var context: UcpContext = _
 
   val localExecutorId: Long = executor.executorId.toLong
 
@@ -106,12 +96,7 @@ class UCX(transport: UCXShuffleTransport, executor: BlockManagerId, rapidsConf: 
   private val responseTag = new AtomicLong(0) // outgoing message tag
 
   // event loop, used to call [[UcpWorker.progress]], and perform all UCX work
-  private val progressThread = Executors.newFixedThreadPool(1,
-    GpuDeviceManager.wrapThreadFactory(
-      new ThreadFactoryBuilder()
-        .setNameFormat("progress-thread-%d")
-        .setDaemon(true)
-        .build))
+  private var progressThread: ExecutorService = _
 
   // The pending queues are used to enqueue [[PendingReceive]] or [[PendingSend]], from executor
   // task threads and [[progressThread]] will hand them to the UcpWorker thread.
@@ -140,6 +125,24 @@ class UCX(transport: UCXShuffleTransport, executor: BlockManagerId, rapidsConf: 
       if (initialized) {
         throw new IllegalStateException("UCX already initialized")
       }
+      context = {
+        val contextParams = new UcpParams()
+          .requestTagFeature()
+          .requestAmFeature()
+        if (rapidsConf.shuffleUcxUseWakeup) {
+          contextParams.requestWakeupFeature()
+        }
+        new UcpContext(contextParams)
+      }
+
+      logInfo(s"UCX context created")
+
+      progressThread = Executors.newFixedThreadPool(1,
+        GpuDeviceManager.wrapThreadFactory(
+          new ThreadFactoryBuilder()
+            .setNameFormat("progress-thread-%d")
+            .setDaemon(true)
+            .build))
 
       var workerParams = new UcpWorkerParams()
 
@@ -825,7 +828,6 @@ class UCX(transport: UCXShuffleTransport, executor: BlockManagerId, rapidsConf: 
       if (priorEp != null) {
         // if another endpoint won, open the peer rkeys, as it will be used
         // for sends
-        logInfo(s"Unpacking for ${priorEp} also")
         peerRkeys.foreach(priorEp.unpackRemoteKey)
       }
       // always try to unpack on the new endpoint
@@ -1034,7 +1036,6 @@ class UCX(transport: UCXShuffleTransport, executor: BlockManagerId, rapidsConf: 
 
     override def close(): Unit = synchronized {
       reverseLookupEndpoints.forEach((ep, _) => ep.close())
-      endpoints.values().forEach(_.close())
     }
   }
 
