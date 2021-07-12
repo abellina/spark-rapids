@@ -508,7 +508,9 @@ class UCX(transport: UCXShuffleTransport, executor: BlockManagerId, rapidsConf: 
       header.remaining(),
       dataAddress,
       dataSize,
-      activeMessageMode,
+      activeMessageMode |
+        UcpConstants.UCP_AM_FLAG_PERSISTENT_DATA |
+        UcpConstants.UCP_AM_FLAG_WHOLE_MSG,
       new UcxCallback {
         override def onSuccess(request: UcpRequest): Unit = {
           cb.onSuccess(request)
