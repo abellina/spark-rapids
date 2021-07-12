@@ -439,7 +439,9 @@ class UCX(transport: UCXShuffleTransport, executor: BlockManagerId, rapidsConf: 
               UcsConstants.STATUS.UCS_INPROGRESS
             }
           }
-        })
+        },
+        UcpConstants.UCP_AM_FLAG_PERSISTENT_DATA |
+          UcpConstants.UCP_AM_FLAG_WHOLE_MSG)
     })
   }
 
@@ -508,9 +510,7 @@ class UCX(transport: UCXShuffleTransport, executor: BlockManagerId, rapidsConf: 
       header.remaining(),
       dataAddress,
       dataSize,
-      activeMessageMode |
-        UcpConstants.UCP_AM_FLAG_PERSISTENT_DATA |
-        UcpConstants.UCP_AM_FLAG_WHOLE_MSG,
+      activeMessageMode,
       new UcxCallback {
         override def onSuccess(request: UcpRequest): Unit = {
           cb.onSuccess(request)
