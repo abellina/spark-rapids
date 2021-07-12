@@ -19,12 +19,13 @@ package com.nvidia.spark.rapids.shims.spark301
 import java.net.URI
 import java.nio.ByteBuffer
 
+import com.nvidia.spark
 import com.nvidia.spark.rapids._
 import org.apache.arrow.memory.ReferenceManager
 import org.apache.arrow.vector.ValueVector
 import org.apache.hadoop.fs.Path
-
 import org.apache.spark.SparkEnv
+
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.catalyst.{InternalRow, TableIdentifier}
@@ -113,13 +114,23 @@ abstract class SparkBaseShims extends SparkShims {
       joinType: JoinType,
       condition: Option[Expression],
       targetSizeBytes: Long): GpuBroadcastNestedLoopJoinExecBase = {
-    GpuBroadcastNestedLoopJoinExec(left, right, join, joinType, condition, targetSizeBytes)
+    spark.rapids.GpuBroadcastNestedLoopJoinExec(left, right, join, joinType, condition, targetSizeBytes)
   }
 
   override def getGpuBroadcastExchangeExec(
       mode: BroadcastMode,
       child: SparkPlan): GpuBroadcastExchangeExecBase = {
     GpuBroadcastExchangeExec(mode, child)
+  }
+
+  override def getGpuBroadcastExchangeExec(buildPlan: SparkPlan) = {
+    buildPlan match {
+      case BroadcastQueryStageExec(_, gpu: GpuBroadcastExchangeExec) => gpu
+      case BroadcastQueryStageExec(_, reused: ReusedExchangeExec) =>
+        reused.child.asInstanceOf[GpuBroadcastExchangeExec]
+      case gpu: GpuBroadcastExchangeExec => gpu
+      case reused: ReusedExchangeExec => reused.child.asInstanceOf[GpuBroadcastExchangeExec]
+    }
   }
 
   override def getGpuShuffleExchangeExec(

@@ -14,15 +14,11 @@
  * limitations under the License.
  */
 
-package com.nvidia.spark.rapids.shims.spark311
-
-import com.nvidia.spark.rapids._
-import com.nvidia.spark.rapids.shims.spark301.GpuBroadcastExchangeExec
+package com.nvidia.spark.rapids
 
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.catalyst.InternalRow
-import org.apache.spark.sql.catalyst.expressions.{Expression, SortOrder}
-import org.apache.spark.sql.catalyst.optimizer.{BuildLeft, BuildRight}
+import org.apache.spark.sql.catalyst.expressions.Expression
 import org.apache.spark.sql.catalyst.plans.{FullOuter, JoinType}
 import org.apache.spark.sql.catalyst.plans.physical.{BroadcastDistribution, Distribution, UnspecifiedDistribution}
 import org.apache.spark.sql.execution.{BinaryExecNode, SparkPlan}
@@ -32,9 +28,6 @@ import org.apache.spark.sql.execution.joins._
 import org.apache.spark.sql.rapids.execution.{GpuHashJoin, SerializeConcatHostBuffersDeserializeBatch}
 import org.apache.spark.sql.vectorized.ColumnarBatch
 
-/**
- *  Spark 3.1 changed packages of BuildLeft, BuildRight, BuildSide
- */
 class GpuBroadcastHashJoinMeta(
     join: BroadcastHashJoinExec,
     conf: RapidsConf,
@@ -80,7 +73,7 @@ class GpuBroadcastHashJoinMeta(
       leftKeys.map(_.convertToGpu()),
       rightKeys.map(_.convertToGpu()),
       join.joinType,
-      GpuJoinUtils.getGpuBuildSide(join.buildSide),
+      ShimLoader.getSparkShims.getBuildSide(join),
       condition.map(_.convertToGpu()),
       left, right)
   }
@@ -123,13 +116,8 @@ case class GpuBroadcastHashJoinExec(
     case (_, _) => Seq(null, null)
   }
 
-  def broadcastExchange: GpuBroadcastExchangeExec = buildPlan match {
-    case BroadcastQueryStageExec(_, gpu: GpuBroadcastExchangeExec) => gpu
-    case BroadcastQueryStageExec(_, reused: ReusedExchangeExec) =>
-      reused.child.asInstanceOf[GpuBroadcastExchangeExec]
-    case gpu: GpuBroadcastExchangeExec => gpu
-    case reused: ReusedExchangeExec => reused.child.asInstanceOf[GpuBroadcastExchangeExec]
-  }
+  def broadcastExchange: GpuBroadcastExchangeExec =
+    ShimLoader.getSparkShims.getGpuBroadcastExchangeExec(buildPlan)
 
   override def doExecute(): RDD[InternalRow] =
     throw new IllegalStateException(

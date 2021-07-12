@@ -123,6 +123,8 @@ trait SparkShims {
       mode: BroadcastMode,
       child: SparkPlan): GpuBroadcastExchangeExecBase
 
+  def getGpuBroadcastExchangeExec(buildPlan: SparkPlan): GpuBroadcastHashJoinExec
+
   def getGpuShuffleExchangeExec(
       outputPartitioning: Partitioning,
       child: SparkPlan,

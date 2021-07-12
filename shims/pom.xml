@@ -60,25 +60,28 @@
                 <module>spark313</module>
             </modules>
         </profile>
+        <profile>
+            <id>sparkSupportedVersions</id>
+            <modules>
+                <module>spark301emr</module>
+                <module>spark301</module>
+                <module>spark302</module>
+                <module>spark303</module>
+                <module>spark311</module>
+                <module>spark312</module>
+                <module>aggregator</module>
+                <module>spark311cdh</module>
+            </modules>
+        </profile>
     </profiles>
 
-    <modules>
-        <module>spark301emr</module>
-        <module>spark301</module>
-        <module>spark302</module>
-        <module>spark303</module>
-        <module>spark311</module>
-        <module>spark312</module>
-        <module>aggregator</module>
-        <module>spark311cdh</module>
-    </modules>
     <dependencies>
-        <dependency>
-            <groupId>com.nvidia</groupId>
-            <artifactId>rapids-4-spark-sql_${scala.binary.version}</artifactId>
-            <version>${project.version}</version>
-            <scope>provided</scope>
-        </dependency>
+<!--        <dependency>-->
+<!--            <groupId>com.nvidia</groupId>-->
+<!--            <artifactId>rapids-4-spark-sql_${scala.binary.version}</artifactId>-->
+<!--            <version>${project.version}</version>-->
+<!--            <scope>provided</scope>-->
+<!--        </dependency>-->
         <dependency>
             <groupId>ai.rapids</groupId>
             <artifactId>cudf</artifactId>
