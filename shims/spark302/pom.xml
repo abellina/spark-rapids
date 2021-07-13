@@ -35,6 +35,29 @@
     <build>
         <plugins>
             <plugin>
+                <groupId>org.codehaus.mojo</groupId>
+                <artifactId>build-helper-maven-plugin</artifactId>
+                <!-- TODO version in parent pom -->
+                <version>3.0.0</version>
+                <executions>
+                    <execution>
+                        <id>compile-unshimmed</id>
+                        <phase>generate-sources</phase>
+                        <goals>
+                            <goal>add-source</goal>
+                        </goals>
+                        <configuration>
+                            <sources>
+                                <source>${user.dir}/sql-plugin/src/main/scala</source>
+                                <source>${user.dir}/sql-plugin/src/main/java</source>
+                                <source>${user.dir}/shims/spark301/src/main/scala</source>
+                                <source>${user.dir}/shims/spark301/src/main/java</source>
+                            </sources>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+            <plugin>
                 <artifactId>maven-antrun-plugin</artifactId>
                 <executions>
                     <execution>
@@ -73,17 +96,17 @@
           </resource>
         </resources>
     </build>
-
     <dependencies>
-        <dependency>
-            <groupId>com.nvidia</groupId>
-            <artifactId>rapids-4-spark-shims-spark301_${scala.binary.version}</artifactId>
-            <version>${project.version}</version>
-        </dependency>
         <dependency>
             <groupId>org.apache.spark</groupId>
             <artifactId>spark-sql_${scala.binary.version}</artifactId>
-            <version>${spark302.version}</version>
+            <version>${spark.version}</version>
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.spark</groupId>
+            <artifactId>spark-hive_${scala.binary.version}</artifactId>
+            <version>${spark.version}</version>
             <scope>provided</scope>
         </dependency>
     </dependencies>
