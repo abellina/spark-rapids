@@ -20,7 +20,6 @@ import java.net.URI
 import java.nio.ByteBuffer
 
 import com.nvidia.spark.rapids._
-import com.nvidia.spark.rapids.shims.spark301.Spark301Shims
 import com.nvidia.spark.rapids.spark311.RapidsShuffleManager
 import org.apache.arrow.memory.ReferenceManager
 import org.apache.arrow.vector.ValueVector
@@ -31,6 +30,7 @@ import org.apache.spark.sql.catalyst.analysis.Resolver
 import org.apache.spark.sql.catalyst.catalog.{CatalogTable, SessionCatalog}
 import org.apache.spark.sql.catalyst.encoders.ExpressionEncoder
 import org.apache.spark.sql.catalyst.expressions._
+import org.apache.spark.sql.catalyst.optimizer.{BuildLeft, BuildRight, BuildSide}
 import org.apache.spark.sql.catalyst.plans.JoinType
 import org.apache.spark.sql.catalyst.plans.physical.Partitioning
 import org.apache.spark.sql.connector.read.Scan
@@ -43,13 +43,13 @@ import org.apache.spark.sql.execution.exchange.{ENSURE_REQUIREMENTS, ShuffleExch
 import org.apache.spark.sql.execution.joins.{BroadcastHashJoinExec, BroadcastNestedLoopJoinExec, HashJoin, ShuffledHashJoinExec, SortMergeJoinExec}
 import org.apache.spark.sql.internal.{SQLConf, StaticSQLConf}
 import org.apache.spark.sql.rapids.{GpuElementAt, GpuFileSourceScanExec, GpuGetArrayItem, GpuGetArrayItemMeta, GpuGetMapValue, GpuGetMapValueMeta, GpuStringReplace, ShuffleManagerShimBase}
-import org.apache.spark.sql.rapids.execution.{GpuBroadcastNestedLoopJoinExecBase, GpuShuffleExchangeExecBase}
+import org.apache.spark.sql.rapids.execution.{GpuBroadcastNestedLoopJoinExec, GpuBroadcastNestedLoopJoinExecBase, GpuShuffleExchangeExecBase}
 import org.apache.spark.sql.rapids.shims.spark311._
 import org.apache.spark.sql.sources.BaseRelation
 import org.apache.spark.sql.types._
 import org.apache.spark.storage.{BlockId, BlockManagerId}
 
-class Spark311Shims extends Spark301Shims {
+class Spark311Shims extends SparkShims {
 
   override def getSparkShimVersion: ShimVersion = SparkShimServiceProvider.VERSION
 
@@ -301,6 +301,38 @@ class Spark311Shims extends Spark301Shims {
       })
   ).map(r => (r.getClassFor.asSubclass(classOf[Expression]), r)).toMap
 
+  protected def getExprsSansTimeSub: Map[Class[_ <: Expression], ExprRule[_ <: Expression]] = {
+    Seq(
+      GpuOverrides.expr[Cast](
+        "Convert a column of one type of data into another type",
+        new CastChecks(),
+        (cast, conf, p, r) => new CastExprMeta[Cast](cast, SparkSession.active.sessionState.conf
+            .ansiEnabled, conf, p, r)),
+      GpuOverrides.expr[AnsiCast](
+        "Convert a column of one type of data into another type",
+        new CastChecks(),
+        (cast, conf, p, r) => new CastExprMeta[AnsiCast](cast, true, conf, p, r)),
+      GpuOverrides.expr[RegExpReplace](
+        "RegExpReplace support for string literal input patterns",
+        ExprChecks.projectNotLambda(TypeSig.STRING, TypeSig.STRING,
+          Seq(ParamCheck("str", TypeSig.STRING, TypeSig.STRING),
+            ParamCheck("regex", TypeSig.lit(TypeEnum.STRING)
+                .withPsNote(TypeEnum.STRING, "very limited regex support"), TypeSig.STRING),
+            ParamCheck("rep", TypeSig.lit(TypeEnum.STRING), TypeSig.STRING))),
+        (a, conf, p, r) => new TernaryExprMeta[RegExpReplace](a, conf, p, r) {
+          override def tagExprForGpu(): Unit = {
+            if (GpuOverrides.isNullOrEmptyOrRegex(a.regexp)) {
+              willNotWorkOnGpu(
+                "Only non-null, non-empty String literals that are not regex patterns " +
+                    "are supported by RegExpReplace on the GPU")
+            }
+          }
+          override def convertToGpu(lhs: Expression, regexp: Expression,
+              rep: Expression): GpuExpression = GpuStringReplace(lhs, regexp, rep)
+        })
+    ).map(r => (r.getClassFor.asSubclass(classOf[Expression]), r)).toMap
+  }
+
   override def getExprs: Map[Class[_ <: Expression], ExprRule[_ <: Expression]] = {
     getExprsSansTimeSub ++ exprs311
   }
@@ -426,12 +458,21 @@ class Spark311Shims extends Spark301Shims {
       })
   ).map(r => (r.getClassFor.asSubclass(classOf[Scan]), r)).toMap
 
+
+  private def getGpuBuildSide(buildSide: BuildSide): GpuBuildSide = {
+    buildSide match {
+      case BuildRight => GpuBuildRight
+      case BuildLeft => GpuBuildLeft
+      case _ => throw new Exception("unknown buildSide Type")
+    }
+  }
+
   override def getBuildSide(join: HashJoin): GpuBuildSide = {
-    GpuJoinUtils.getGpuBuildSide(join.buildSide)
+    getGpuBuildSide(join.buildSide)
   }
 
   override def getBuildSide(join: BroadcastNestedLoopJoinExec): GpuBuildSide = {
-    GpuJoinUtils.getGpuBuildSide(join.buildSide)
+    getGpuBuildSide(join.buildSide)
   }
 
   override def getRapidsShuffleManagerClass: String = {

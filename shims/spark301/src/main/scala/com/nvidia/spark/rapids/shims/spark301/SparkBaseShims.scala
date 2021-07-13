@@ -393,7 +393,6 @@ abstract class SparkBaseShims extends SparkShims {
     }
   }
 
-
   override def getBuildSide(join: HashJoin): GpuBuildSide = {
     getGpuBuildSide(join.buildSide)
   }

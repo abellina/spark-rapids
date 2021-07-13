@@ -34,14 +34,47 @@
     <profiles>
         <profile>
             <id>spark301</id>
+            <properties>
+                <spark.version>${spark301.version}</spark.version>
+            </properties>
             <modules>
                 <module>spark301</module>
             </modules>
         </profile>
         <profile>
             <id>spark302</id>
+            <properties>
+                <spark.version>${spark302.version}</spark.version>
+            </properties>
             <modules>
                 <module>spark302</module>
+            </modules>
+        </profile>
+        <profile>
+            <id>spark303</id>
+            <properties>
+                <spark.version>${spark303.version}</spark.version>
+            </properties>
+            <modules>
+                <module>spark303</module>
+            </modules>
+        </profile>
+        <profile>
+            <id>spark304</id>
+            <properties>
+                <spark.version>${spark304.version}</spark.version>
+            </properties>
+            <modules>
+                <module>spark304</module>
+            </modules>
+        </profile>
+        <profile>
+            <id>spark311</id>
+            <properties>
+                <spark.version>${spark311.version}</spark.version>
+            </properties>
+            <modules>
+                <module>spark311</module>
             </modules>
         </profile>
         <profile>
@@ -72,19 +105,6 @@
                 <module>spark313</module>
             </modules>
         </profile>
-        <profile>
-            <id>sparkSupportedVersions</id>
-            <modules>
-                <module>spark301emr</module>
-                <module>spark301</module>
-                <module>spark302</module>
-                <module>spark303</module>
-                <module>spark311</module>
-                <module>spark312</module>
-                <module>aggregator</module>
-                <module>spark311cdh</module>
-            </modules>
-        </profile>
     </profiles>
 
     <dependencies>
@@ -99,9 +119,44 @@
             <artifactId>scalatest_${scala.binary.version}</artifactId>
             <scope>test</scope>
         </dependency>
+        <dependency>
+            <groupId>org.apache.spark</groupId>
+            <artifactId>spark-sql_${scala.binary.version}</artifactId>
+            <version>${spark.version}</version>
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.spark</groupId>
+            <artifactId>spark-hive_${scala.binary.version}</artifactId>
+            <version>${spark.version}</version>
+            <scope>provided</scope>
+        </dependency>
     </dependencies>
     <build>
         <plugins>
+            <plugin>
+                <artifactId>maven-antrun-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <id>dependency</id>
+                        <phase>generate-resources</phase>
+                        <configuration>
+                            <target>
+                                <mkdir dir="${project.build.directory}/extra-resources"/>
+                                <exec executable="bash" failonerror="true" output="${project.build.directory}/extra-resources/spark-${spark.version}-info.properties">
+                                    <arg value="${user.dir}/build/dependency-info.sh"/>
+                                    <arg value="${cudf.version}"/>
+                                    <arg value="${cuda.version}"/>
+                                    <arg value="${spark.version}"/>
+                                </exec>
+                            </target>
+                        </configuration>
+                        <goals>
+                            <goal>run</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
             <plugin>
                 <groupId>net.alchim31.maven</groupId>
                 <artifactId>scala-maven-plugin</artifactId>

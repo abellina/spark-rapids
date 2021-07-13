@@ -18,7 +18,7 @@ package com.nvidia.spark.rapids
 
 import org.apache.spark.sql.catalyst.plans.{ExistenceJoin, FullOuter, InnerLike, JoinType, LeftAnti, LeftOuter, LeftSemi, RightOuter}
 import org.apache.spark.sql.execution.SortExec
-import org.apache.spark.sql.execution.joins.{BuildLeft, BuildRight, SortMergeJoinExec}
+import org.apache.spark.sql.execution.joins.SortMergeJoinExec
 import org.apache.spark.sql.rapids.execution.GpuHashJoin
 
 /**
