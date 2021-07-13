@@ -14,25 +14,13 @@
  * limitations under the License.
  */
 
-package com.nvidia.spark.rapids.shims.spark301
-
-import com.nvidia.spark.rapids._
+package com.nvidia.spark.rapids
 
 import org.apache.spark.sql.catalyst.expressions.Expression
 import org.apache.spark.sql.catalyst.plans.JoinType
 import org.apache.spark.sql.execution.SparkPlan
-import org.apache.spark.sql.execution.joins.{BuildLeft, BuildRight, BuildSide, ShuffledHashJoinExec}
+import org.apache.spark.sql.execution.joins.ShuffledHashJoinExec
 import org.apache.spark.sql.rapids.execution.GpuHashJoin
-
-object GpuJoinUtils {
-  def getGpuBuildSide(buildSide: BuildSide): GpuBuildSide = {
-    buildSide match {
-      case BuildRight => GpuBuildRight
-      case BuildLeft => GpuBuildLeft
-      case _ => throw new Exception("unknown buildSide Type")
-    }
-  }
-}
 
 /**
  *  Spark 3.1 changed packages of BuildLeft, BuildRight, BuildSide
@@ -62,7 +50,7 @@ class GpuShuffledHashJoinMeta(
       leftKeys.map(_.convertToGpu()),
       rightKeys.map(_.convertToGpu()),
       join.joinType,
-      GpuJoinUtils.getGpuBuildSide(join.buildSide),
+      ShimLoader.getSparkShims.getBuildSide(join),
       condition.map(_.convertToGpu()),
       left,
       right,
