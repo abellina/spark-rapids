@@ -19,7 +19,6 @@ package com.nvidia.spark.rapids.shims.spark301
 import java.net.URI
 import java.nio.ByteBuffer
 
-import com.nvidia.spark
 import com.nvidia.spark.rapids._
 import org.apache.arrow.memory.ReferenceManager
 import org.apache.arrow.vector.ValueVector
@@ -46,12 +45,12 @@ import org.apache.spark.sql.execution.datasources.rapids.GpuPartitioningUtils
 import org.apache.spark.sql.execution.datasources.v2.orc.OrcScan
 import org.apache.spark.sql.execution.datasources.v2.parquet.ParquetScan
 import org.apache.spark.sql.execution.exchange.{ReusedExchangeExec, ShuffleExchangeExec}
-import org.apache.spark.sql.execution.joins.{BroadcastHashJoinExec, BroadcastNestedLoopJoinExec, HashJoin, ShuffledHashJoinExec, SortMergeJoinExec}
+import org.apache.spark.sql.execution.joins.{BroadcastHashJoinExec, BroadcastNestedLoopJoinExec, BuildLeft, BuildRight, BuildSide, HashJoin, ShuffledHashJoinExec, SortMergeJoinExec}
 import org.apache.spark.sql.execution.python.{AggregateInPandasExec, ArrowEvalPythonExec, FlatMapGroupsInPandasExec, MapInPandasExec, WindowInPandasExec}
 import org.apache.spark.sql.execution.window.WindowExecBase
 import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.rapids.{GpuFileSourceScanExec, GpuStringReplace, GpuTimeSub, ShuffleManagerShimBase}
-import org.apache.spark.sql.rapids.execution.{GpuBroadcastExchangeExecBase, GpuBroadcastNestedLoopJoinExecBase, GpuShuffleExchangeExecBase}
+import org.apache.spark.sql.rapids.execution.{GpuBroadcastExchangeExecBase, GpuBroadcastNestedLoopJoinExec, GpuBroadcastNestedLoopJoinExecBase, GpuShuffleExchangeExecBase}
 import org.apache.spark.sql.rapids.execution.python.{GpuAggregateInPandasExecMeta, GpuArrowEvalPythonExec, GpuFlatMapGroupsInPandasExecMeta, GpuMapInPandasExecMeta, GpuPythonUDF, GpuWindowInPandasExecMetaBase}
 import org.apache.spark.sql.rapids.shims.spark301.{GpuSchemaUtils, ShuffleManagerShim}
 import org.apache.spark.sql.sources.BaseRelation
@@ -114,7 +113,7 @@ abstract class SparkBaseShims extends SparkShims {
       joinType: JoinType,
       condition: Option[Expression],
       targetSizeBytes: Long): GpuBroadcastNestedLoopJoinExecBase = {
-    spark.rapids.GpuBroadcastNestedLoopJoinExec(left, right, join, joinType, condition, targetSizeBytes)
+    GpuBroadcastNestedLoopJoinExec(left, right, join, joinType, condition, targetSizeBytes)
   }
 
   override def getGpuBroadcastExchangeExec(
@@ -386,16 +385,21 @@ abstract class SparkBaseShims extends SparkShims {
       })
   ).map(r => (r.getClassFor.asSubclass(classOf[Scan]), r)).toMap
 
+  private def getGpuBuildSide(buildSide: BuildSide): GpuBuildSide = {
+    buildSide match {
+      case BuildRight => GpuBuildRight
+      case BuildLeft => GpuBuildLeft
+      case _ => throw new Exception("unknown buildSide Type")
+    }
+  }
+
+
   override def getBuildSide(join: HashJoin): GpuBuildSide = {
-    GpuJoinUtils.getGpuBuildSide(join.buildSide)
+    getGpuBuildSide(join.buildSide)
   }
 
   override def getBuildSide(join: BroadcastNestedLoopJoinExec): GpuBuildSide = {
-    GpuJoinUtils.getGpuBuildSide(join.buildSide)
-  }
-
-  override def getBuildSide(join: SortMergeJoinExec): GpuBuildSide = {
-    GpuJoinUtils.getGpuBuildSide(join.buildSide)
+    getGpuBuildSide(join.buildSide)
   }
 
   override def getShuffleManagerShims(): ShuffleManagerShimBase = {

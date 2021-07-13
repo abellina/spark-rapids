@@ -33,6 +33,12 @@
 
     <profiles>
         <profile>
+            <id>spark301</id>
+            <modules>
+                <module>spark301</module>
+            </modules>
+        </profile>
+        <profile>
             <id>databricks301</id>
             <modules>
                 <module>spark301db</module>

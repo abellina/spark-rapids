@@ -68,9 +68,9 @@ class GpuSortMergeJoinMeta(
 
   override def convertToGpu(): GpuExec = {
     val buildSide = if (canBuildRight(join.joinType)) {
-      BuildRight
+      GpuBuildRight
     } else if (canBuildLeft(join.joinType)) {
-      BuildLeft
+      GpuBuildLeft
     } else {
       throw new IllegalStateException(s"Cannot build either side for ${join.joinType} join")
     }
@@ -79,7 +79,7 @@ class GpuSortMergeJoinMeta(
       leftKeys.map(_.convertToGpu()),
       rightKeys.map(_.convertToGpu()),
       join.joinType,
-      ShimLoader.getSparkShims.getBuildSide(join),
+      buildSide,
       condition.map(_.convertToGpu()),
       left,
       right,
