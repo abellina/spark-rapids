@@ -580,5 +580,13 @@ class Spark311Shims extends SparkShims {
   }
 
   /** matches SPARK-33008 fix in 3.1.1 */
-  override def shouldFailDivByZero(): Boolean = SQLConf.get.ansiEnabled
+//  override def shouldFailDivByZero(): Boolean = SQLConf.get.ansiEnabled
+
+//  override def boundarySql(expr: Expression): String = {
+//    expr match {
+//      case e: GpuSpecialFrameBoundary => e.sql
+//      case UnaryMinus(n, _) => n.sql + " PRECEDING"
+//      case e: Expression => e.sql + " FOLLOWING"
+//    }
+//  }
 }

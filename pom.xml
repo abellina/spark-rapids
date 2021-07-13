@@ -226,6 +226,39 @@
                 <cuda.version>cuda11</cuda.version>
             </properties>
         </profile>
+        <profile>
+            <id>spark301</id>
+            <properties>
+                <spark.version>${spark301.version}</spark.version>
+            </properties>
+        </profile>
+        <profile>
+            <id>spark302</id>
+            <properties>
+                <spark.version>${spark302.version}</spark.version>
+            </properties>
+        </profile>
+        <profile>
+            <id>spark303</id>
+            <properties>
+                <spark.version>${spark303.version}</spark.version>
+            </properties>
+        </profile>
+        <profile>
+            <id>spark304</id>
+            <properties>
+                <spark.version>${spark304.version}</spark.version>
+            </properties>
+        </profile>
+        <profile>
+            <id>spark311</id>
+            <properties>
+                <spark.version>${spark311.version}</spark.version>
+            </properties>
+            <activation>
+                <activeByDefault>true</activeByDefault>
+            </activation>
+        </profile>
     </profiles>
 
     <properties>

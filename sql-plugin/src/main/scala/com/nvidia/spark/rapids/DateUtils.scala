@@ -21,12 +21,13 @@ import java.time.LocalDate
 import scala.collection.mutable.ListBuffer
 
 import org.apache.spark.sql.catalyst.util.DateTimeUtils
-import org.apache.spark.sql.catalyst.util.DateTimeUtils.{localDateToDays, SQLDate}
+import org.apache.spark.sql.catalyst.util.DateTimeUtils.localDateToDays
 
 /**
  * Class for helper functions for Date
  */
 object DateUtils {
+  type SQLDate = Int
   val unsupportedCharacter = Set(
     'k', 'K','z', 'V', 'c', 'F', 'W', 'Q', 'q', 'G', 'A', 'n', 'N',
     'O', 'X', 'p', '\'', '[', ']', '#', '{', '}', 'Z', 'w', 'e', 'E', 'x', 'Z', 'Y')

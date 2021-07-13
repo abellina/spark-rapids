@@ -224,4 +224,6 @@ trait SparkShims {
   def hasAliasQuoteFix: Boolean
 
   def hasCastFloatTimestampUpcast: Boolean
+
+  def boundarySql(expr: Expression): String
 }

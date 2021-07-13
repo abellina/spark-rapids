@@ -650,4 +650,12 @@ abstract class SparkBaseShims extends SparkShims {
   override def hasAliasQuoteFix: Boolean = false
 
   override def hasCastFloatTimestampUpcast: Boolean = false
+
+  override def boundarySql(expr: Expression) = {
+    expr match {
+      case e: GpuSpecialFrameBoundary => e.sql
+      case UnaryMinus(n) => n.sql + " PRECEDING"
+      case e: Expression => e.sql + " FOLLOWING"
+    }
+  }
 }

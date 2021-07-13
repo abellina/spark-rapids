@@ -34,48 +34,36 @@
     <profiles>
         <profile>
             <id>spark301</id>
-            <properties>
-                <spark.version>${spark301.version}</spark.version>
-            </properties>
             <modules>
                 <module>spark301</module>
             </modules>
         </profile>
         <profile>
             <id>spark302</id>
-            <properties>
-                <spark.version>${spark302.version}</spark.version>
-            </properties>
             <modules>
                 <module>spark302</module>
             </modules>
         </profile>
         <profile>
             <id>spark303</id>
-            <properties>
-                <spark.version>${spark303.version}</spark.version>
-            </properties>
             <modules>
                 <module>spark303</module>
             </modules>
         </profile>
         <profile>
             <id>spark304</id>
-            <properties>
-                <spark.version>${spark304.version}</spark.version>
-            </properties>
             <modules>
                 <module>spark304</module>
             </modules>
         </profile>
         <profile>
             <id>spark311</id>
-            <properties>
-                <spark.version>${spark311.version}</spark.version>
-            </properties>
             <modules>
                 <module>spark311</module>
             </modules>
+            <activation>
+                <activeByDefault>true</activeByDefault>
+            </activation>
         </profile>
         <profile>
             <id>databricks301</id>
@@ -97,9 +85,6 @@
         </profile>
         <profile>
             <id>snapshot-shims</id>
-            <activation>
-                <activeByDefault>true</activeByDefault>
-            </activation>
             <modules>
                 <module>spark304</module>
                 <module>spark313</module>

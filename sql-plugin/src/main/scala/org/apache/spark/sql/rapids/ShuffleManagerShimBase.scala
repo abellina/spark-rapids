@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, NVIDIA CORPORATION.
+ * Copyright (c) 2020-2021, NVIDIA CORPORATION.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,16 +18,14 @@ package org.apache.spark.sql.rapids
 
 import org.apache.spark.TaskContext
 import org.apache.spark.shuffle.{ShuffleHandle, ShuffleManager, ShuffleReader, ShuffleReadMetricsReporter}
+import org.apache.spark.sql.rapids.execution.ShuffledBatchRDDPartition
 
 trait ShuffleManagerShimBase {
 
-  def getReader[K, C](
+  def getReaderAndPartitionSize[K, C](
       shuffleManager: ShuffleManager,
-      handle: ShuffleHandle,
-      startMapIndex: Int,
-      endMapIndex: Int,
-      startPartition: Int,
-      endPartition: Int,
-      context: TaskContext,
-      metrics: ShuffleReadMetricsReporter): ShuffleReader[K, C]
+      shuffleHandle: ShuffleHandle,
+      taskContext: TaskContext,
+      metrics: ShuffleReadMetricsReporter,
+      shuffledBatchRDDPartition: ShuffledBatchRDDPartition): (ShuffleReader[K, C], Long)
 }

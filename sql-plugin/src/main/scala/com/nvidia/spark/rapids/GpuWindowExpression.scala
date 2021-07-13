@@ -475,8 +475,9 @@ case class GpuSpecifiedWindowFrame(
   }
 
   override def sql: String = {
-    val lowerSql = boundarySql(lower)
-    val upperSql = boundarySql(upper)
+    val shim = ShimLoader.getSparkShims
+    val lowerSql = shim.boundarySql(lower)
+    val upperSql = shim.boundarySql(upper)
     s"${frameType.sql} BETWEEN $lowerSql AND $upperSql"
   }
 
@@ -493,12 +494,6 @@ case class GpuSpecifiedWindowFrame(
   def isOffset: Boolean = (lower, upper) match {
     case (l: Expression, u: Expression) => frameType == RowFrame && l == u
     case _ => false
-  }
-
-  private def boundarySql(expr: Expression): String = expr match {
-    case e: GpuSpecialFrameBoundary => e.sql
-    case UnaryMinus(n) => n.sql + " PRECEDING"
-    case e: Expression => e.sql + " FOLLOWING"
   }
 
   // Check whether the left boundary value is greater than the right boundary value. It's required

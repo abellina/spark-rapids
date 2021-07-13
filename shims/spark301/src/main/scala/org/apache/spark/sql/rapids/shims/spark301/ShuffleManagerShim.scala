@@ -13,18 +13,18 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.spark.sql.rapids.shims.spark311
+package org.apache.spark.sql.rapids.shims.spark301
 
 import com.nvidia.spark.rapids.ShimLoader
 
-import org.apache.spark.{SparkEnv, TaskContext}
+import org.apache.spark.TaskContext
 import org.apache.spark.shuffle.{ShuffleHandle, ShuffleManager, ShuffleReader, ShuffleReadMetricsReporter}
 import org.apache.spark.sql.execution.{CoalescedPartitionSpec, PartialMapperPartitionSpec, PartialReducerPartitionSpec}
-import org.apache.spark.sql.rapids.ShuffleManagerShimBase
 import org.apache.spark.sql.rapids.execution.ShuffledBatchRDDPartition
+import org.apache.spark.sql.rapids.ShuffleManagerShimBase
+
 
 class ShuffleManagerShim extends ShuffleManagerShimBase {
-
   override def getReaderAndPartitionSize[K, C](
       shuffleManager: ShuffleManager,
       shuffleHandle: ShuffleHandle,
@@ -46,9 +46,8 @@ class ShuffleManagerShim extends ShuffleManagerShimBase {
         val partitionSize = blocksByAddress.flatMap(_._2).map(_._2).sum
         (reader, partitionSize)
 
-      case PartialReducerPartitionSpec(reducerIndex, startMapIndex, endMapIndex, _) =>
-        val reader = shuffleManager.getReader[K,C](
-          shuffleManager,
+      case PartialReducerPartitionSpec(reducerIndex, startMapIndex, endMapIndex) =>
+        val reader = shuffleManager.getReaderForRange[K,C](
           shuffleHandle,
           startMapIndex,
           endMapIndex,
@@ -65,8 +64,7 @@ class ShuffleManagerShim extends ShuffleManagerShimBase {
         (reader, partitionSize)
 
       case PartialMapperPartitionSpec(mapIndex, startReducerIndex, endReducerIndex) =>
-        val reader = shuffleManager.getReader[K,C](
-          shuffleManager,
+        val reader = shuffleManager.getReaderForRange[K,C](
           shuffleHandle,
           mapIndex,
           mapIndex + 1,
