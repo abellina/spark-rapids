@@ -40,6 +40,7 @@
                 <version>3.0.0</version>
                 <executions>
                     <execution>
+                        <id>compile-unshimmed</id>
                         <phase>generate-sources</phase>
                         <goals>
                             <goal>add-source</goal>
@@ -47,6 +48,7 @@
                         <configuration>
                             <sources>
                                 <source>${user.dir}/sql-plugin/src/main/scala</source>
+                                <source>${user.dir}/sql-plugin/src/main/java</source>
                             </sources>
                         </configuration>
                     </execution>

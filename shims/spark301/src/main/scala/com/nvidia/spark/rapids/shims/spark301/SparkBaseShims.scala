@@ -23,8 +23,8 @@ import com.nvidia.spark.rapids._
 import org.apache.arrow.memory.ReferenceManager
 import org.apache.arrow.vector.ValueVector
 import org.apache.hadoop.fs.Path
-import org.apache.spark.SparkEnv
 
+import org.apache.spark.SparkEnv
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.catalyst.{InternalRow, TableIdentifier}
@@ -122,7 +122,7 @@ abstract class SparkBaseShims extends SparkShims {
     GpuBroadcastExchangeExec(mode, child)
   }
 
-  override def getGpuBroadcastExchangeExec(buildPlan: SparkPlan) = {
+  override def getGpuBroadcastExchangeExecBase(buildPlan: SparkPlan) = {
     buildPlan match {
       case BroadcastQueryStageExec(_, gpu: GpuBroadcastExchangeExec) => gpu
       case BroadcastQueryStageExec(_, reused: ReusedExchangeExec) =>
