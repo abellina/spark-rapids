@@ -14,9 +14,7 @@
  * limitations under the License.
  */
 
-package com.nvidia.spark.rapids.shims.spark301
-
-import com.nvidia.spark.rapids._
+package com.nvidia.spark.rapids
 
 import org.apache.spark.sql.catalyst.plans.{ExistenceJoin, FullOuter, InnerLike, JoinType, LeftAnti, LeftOuter, LeftSemi, RightOuter}
 import org.apache.spark.sql.execution.SortExec
@@ -81,7 +79,7 @@ class GpuSortMergeJoinMeta(
       leftKeys.map(_.convertToGpu()),
       rightKeys.map(_.convertToGpu()),
       join.joinType,
-      GpuJoinUtils.getGpuBuildSide(buildSide),
+      ShimLoader.getSparkShims.getBuildSide(join),
       condition.map(_.convertToGpu()),
       left,
       right,

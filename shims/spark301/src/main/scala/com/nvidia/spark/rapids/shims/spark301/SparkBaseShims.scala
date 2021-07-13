@@ -394,6 +394,10 @@ abstract class SparkBaseShims extends SparkShims {
     GpuJoinUtils.getGpuBuildSide(join.buildSide)
   }
 
+  override def getBuildSide(join: SortMergeJoinExec): GpuBuildSide = {
+    GpuJoinUtils.getGpuBuildSide(join.buildSide)
+  }
+
   override def getShuffleManagerShims(): ShuffleManagerShimBase = {
     new ShuffleManagerShim
   }
