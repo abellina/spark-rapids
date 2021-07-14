@@ -45,8 +45,7 @@
             </goals>
             <configuration>
               <sources>
-                <source>${user.dir}/sql-plugin/src/main/scala</source>
-                <source>${user.dir}/sql-plugin/src/main/java</source>
+                <!-- intentionally empty -->
               </sources>
             </configuration>
           </execution>

@@ -24,19 +24,6 @@ import org.apache.spark.sql.execution.window.WindowExecBase
 import org.apache.spark.sql.rapids.execution.{GpuBroadcastExchangeExecBase, GpuBroadcastExchangeExecBaseWithFuture, GpuShuffleExchangeExecBase}
 
 abstract class SparkCommonShims extends SparkShims {
-  override def parquetRebaseReadKey: String =
-    SQLConf.LEGACY_PARQUET_REBASE_MODE_IN_READ.key
-  override def parquetRebaseWriteKey: String =
-    SQLConf.LEGACY_PARQUET_REBASE_MODE_IN_WRITE.key
-  override def avroRebaseReadKey: String =
-    SQLConf.LEGACY_AVRO_REBASE_MODE_IN_READ.key
-  override def avroRebaseWriteKey: String =
-    SQLConf.LEGACY_AVRO_REBASE_MODE_IN_WRITE.key
-  override def parquetRebaseRead(conf: SQLConf): String =
-    conf.getConf(SQLConf.LEGACY_PARQUET_REBASE_MODE_IN_READ)
-  override def parquetRebaseWrite(conf: SQLConf): String =
-    conf.getConf(SQLConf.LEGACY_PARQUET_REBASE_MODE_IN_WRITE)
-
   override def getExecs: Map[Class[_ <: SparkPlan], ExecRule[_ <: SparkPlan]] = {
     Seq(
       GpuOverrides.exec[WindowInPandasExec](
