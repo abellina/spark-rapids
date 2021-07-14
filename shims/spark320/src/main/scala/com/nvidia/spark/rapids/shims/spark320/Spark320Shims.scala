@@ -17,7 +17,7 @@
 package com.nvidia.spark.rapids.shims.spark320
 
 import com.nvidia.spark.rapids.ShimVersion
-import com.nvidia.spark.rapids.shims.spark311.Spark311Shims
+import com.nvidia.spark.rapids.SparkCommonShims
 import com.nvidia.spark.rapids.spark320.RapidsShuffleManager
 
 import org.apache.spark.sql.catalyst.TableIdentifier
@@ -28,21 +28,8 @@ import org.apache.spark.sql.execution.command.{RepairTableCommand, RunnableComma
 import org.apache.spark.sql.execution.exchange.ReusedExchangeExec
 import org.apache.spark.sql.internal.SQLConf
 
-class Spark320Shims extends Spark311Shims {
+class Spark320Shims extends SparkCommonShims {
   override def getSparkShimVersion: ShimVersion = SparkShimServiceProvider.VERSION320
-
-  override def parquetRebaseReadKey: String =
-    SQLConf.PARQUET_REBASE_MODE_IN_READ.key
-  override def parquetRebaseWriteKey: String =
-    SQLConf.PARQUET_REBASE_MODE_IN_WRITE.key
-  override def avroRebaseReadKey: String =
-    SQLConf.AVRO_REBASE_MODE_IN_READ.key
-  override def avroRebaseWriteKey: String =
-    SQLConf.AVRO_REBASE_MODE_IN_WRITE.key
-  override def parquetRebaseRead(conf: SQLConf): String =
-    conf.getConf(SQLConf.PARQUET_REBASE_MODE_IN_READ)
-  override def parquetRebaseWrite(conf: SQLConf): String =
-    conf.getConf(SQLConf.PARQUET_REBASE_MODE_IN_WRITE)
 
   override def v1RepairTableCommand(tableName: TableIdentifier): RunnableCommand =
     RepairTableCommand(tableName,

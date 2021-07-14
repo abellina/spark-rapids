@@ -259,6 +259,12 @@
                 <activeByDefault>true</activeByDefault>
             </activation>
         </profile>
+        <profile>
+            <id>spark320</id>
+            <properties>
+                <spark.version>${spark320.version}</spark.version>
+            </properties>
+        </profile>
     </profiles>
 
     <properties>
