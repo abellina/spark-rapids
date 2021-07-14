@@ -175,7 +175,7 @@ abstract class SparkBaseShims extends SparkShims {
             winPy.windowExpression.map(GpuOverrides.wrapExpr(_, conf, Some(this)))
 
           override def convertToGpu(): GpuExec = {
-            GpuWindowInPandasExec(
+            GpuDefaultWindowInPandasExec(
               windowExpressions.map(_.convertToGpu()),
               partitionSpec.map(_.convertToGpu()),
               orderSpec.map(_.convertToGpu().asInstanceOf[SortOrder]),

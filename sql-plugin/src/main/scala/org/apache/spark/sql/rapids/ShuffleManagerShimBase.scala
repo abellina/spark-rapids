@@ -18,7 +18,13 @@ package org.apache.spark.sql.rapids
 
 import org.apache.spark.TaskContext
 import org.apache.spark.shuffle.{ShuffleHandle, ShuffleManager, ShuffleReader, ShuffleReadMetricsReporter}
+import org.apache.spark.sql.execution.PartialReducerPartitionSpec
 import org.apache.spark.sql.rapids.execution.ShuffledBatchRDDPartition
+
+case class GpuPartialReducerPartitionSpec(
+  reducerIndex: Int, startMapIndex: Int, endMapIndex: Int,
+  @transient dataSize: Long
+)
 
 trait ShuffleManagerShimBase {
 
@@ -28,4 +34,7 @@ trait ShuffleManagerShimBase {
       taskContext: TaskContext,
       metrics: ShuffleReadMetricsReporter,
       shuffledBatchRDDPartition: ShuffledBatchRDDPartition): (ShuffleReader[K, C], Long)
+
+  // conversions from Spark to Gpu classes
+  def toGpu(x: PartialReducerPartitionSpec): GpuPartialReducerPartitionSpec
 }

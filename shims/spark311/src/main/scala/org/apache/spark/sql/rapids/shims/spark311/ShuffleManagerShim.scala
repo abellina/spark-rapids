@@ -17,10 +17,10 @@ package org.apache.spark.sql.rapids.shims.spark311
 
 import com.nvidia.spark.rapids.ShimLoader
 
-import org.apache.spark.{SparkEnv, TaskContext}
+import org.apache.spark.TaskContext
 import org.apache.spark.shuffle.{ShuffleHandle, ShuffleManager, ShuffleReader, ShuffleReadMetricsReporter}
 import org.apache.spark.sql.execution.{CoalescedPartitionSpec, PartialMapperPartitionSpec, PartialReducerPartitionSpec}
-import org.apache.spark.sql.rapids.ShuffleManagerShimBase
+import org.apache.spark.sql.rapids.{GpuPartialReducerPartitionSpec, ShuffleManagerShimBase}
 import org.apache.spark.sql.rapids.execution.ShuffledBatchRDDPartition
 
 class ShuffleManagerShim extends ShuffleManagerShimBase {
@@ -48,7 +48,6 @@ class ShuffleManagerShim extends ShuffleManagerShimBase {
 
       case PartialReducerPartitionSpec(reducerIndex, startMapIndex, endMapIndex, _) =>
         val reader = shuffleManager.getReader[K,C](
-          shuffleManager,
           shuffleHandle,
           startMapIndex,
           endMapIndex,
@@ -66,7 +65,6 @@ class ShuffleManagerShim extends ShuffleManagerShimBase {
 
       case PartialMapperPartitionSpec(mapIndex, startReducerIndex, endReducerIndex) =>
         val reader = shuffleManager.getReader[K,C](
-          shuffleManager,
           shuffleHandle,
           mapIndex,
           mapIndex + 1,
@@ -81,5 +79,9 @@ class ShuffleManagerShim extends ShuffleManagerShimBase {
             .map(_._2).sum
         (reader, partitionSize)
     }
+  }
+
+  override def toGpu(x: PartialReducerPartitionSpec): GpuPartialReducerPartitionSpec = {
+    GpuPartialReducerPartitionSpec(x.reducerIndex, x.startMapIndex, x.endMapIndex, x.dataSize)
   }
 }

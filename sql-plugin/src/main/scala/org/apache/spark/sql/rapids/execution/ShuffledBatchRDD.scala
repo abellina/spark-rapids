@@ -19,13 +19,18 @@ package org.apache.spark.sql.rapids.execution
 
 import java.util
 
-import ai.rapids.cudf.NvtxColor
-import com.nvidia.spark.rapids.{GpuMetric, NvtxWithMetrics, ShimLoader}
+import com.nvidia.spark.rapids.{GpuMetric, ShimLoader}
 
-import org.apache.spark._
+import org.apache.spark.MapOutputTrackerMaster
+import org.apache.spark.Partition
+import org.apache.spark.Partitioner
+import org.apache.spark.ShuffleDependency
+import org.apache.spark.SparkEnv
+import org.apache.spark.TaskContext
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.execution.{CoalescedPartitioner, CoalescedPartitionSpec, PartialMapperPartitionSpec, PartialReducerPartitionSpec, ShufflePartitionSpec}
 import org.apache.spark.sql.execution.metric.{SQLMetric, SQLShuffleReadMetricsReporter}
+import org.apache.spark.sql.rapids.GpuPartialReducerPartitionSpec
 import org.apache.spark.sql.vectorized.ColumnarBatch
 
 case class ShuffledBatchRDDPartition(index: Int, spec: ShufflePartitionSpec) extends Partition
@@ -116,6 +121,9 @@ class ShuffledBatchRDD(
       Array.tabulate(dependency.partitioner.numPartitions)(i => CoalescedPartitionSpec(i, i + 1)))
   }
 
+  val shim = ShimLoader.getSparkShims
+  val shuffleManagerShims = shim.getShuffleManagerShims()
+
   override def getDependencies = List(dependency)
 
   override val partitioner: Option[Partitioner] =
@@ -146,7 +154,9 @@ class ShuffledBatchRDD(
           tracker.getPreferredLocationsForShuffle(dependency, reducerIndex)
         }
 
-      case PartialReducerPartitionSpec(_, startMapIndex, endMapIndex) =>
+      case x: PartialReducerPartitionSpec =>
+        val GpuPartialReducerPartitionSpec(_, startMapIndex, endMapIndex, _) =
+          shuffleManagerShims.toGpu(x)
         tracker.getMapLocation(dependency, startMapIndex, endMapIndex)
 
       case PartialMapperPartitionSpec(mapIndex, _, _) =>
@@ -160,8 +170,6 @@ class ShuffledBatchRDD(
     // `SQLShuffleReadMetricsReporter` will update its own metrics for SQL exchange operator,
     // as well as the `tempMetrics` for basic shuffle metrics.
     val sqlMetricsReporter = new SQLShuffleReadMetricsReporter(tempMetrics, metrics)
-    val shim = ShimLoader.getSparkShims
-    val shuffleManagerShims = shim.getShuffleManagerShims()
     val (reader, partitionSize) = shuffleManagerShims.getReaderAndPartitionSize(
       SparkEnv.get.shuffleManager,
       dependency.shuffleHandle,

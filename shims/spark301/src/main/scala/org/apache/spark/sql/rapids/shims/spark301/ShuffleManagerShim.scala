@@ -21,8 +21,7 @@ import org.apache.spark.TaskContext
 import org.apache.spark.shuffle.{ShuffleHandle, ShuffleManager, ShuffleReader, ShuffleReadMetricsReporter}
 import org.apache.spark.sql.execution.{CoalescedPartitionSpec, PartialMapperPartitionSpec, PartialReducerPartitionSpec}
 import org.apache.spark.sql.rapids.execution.ShuffledBatchRDDPartition
-import org.apache.spark.sql.rapids.ShuffleManagerShimBase
-
+import org.apache.spark.sql.rapids.{GpuPartialReducerPartitionSpec, ShuffleManagerShimBase}
 
 class ShuffleManagerShim extends ShuffleManagerShimBase {
   override def getReaderAndPartitionSize[K, C](
@@ -79,5 +78,9 @@ class ShuffleManagerShim extends ShuffleManagerShimBase {
             .map(_._2).sum
         (reader, partitionSize)
     }
+  }
+
+  override def toGpu(x: PartialReducerPartitionSpec): GpuPartialReducerPartitionSpec = {
+    GpuPartialReducerPartitionSpec(x.reducerIndex, x.startMapIndex, x.endMapIndex, -1L)
   }
 }
