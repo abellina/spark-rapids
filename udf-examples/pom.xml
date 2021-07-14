@@ -29,7 +29,6 @@
   <description>Sample implementations of RAPIDS accelerated
     user defined functions for use with the RAPIDS Accelerator
     for Apache Spark</description>
-  <version>21.08.0-SNAPSHOT</version>
 
   <properties>
     <udf.native.build.path>${project.build.directory}/cpp-build</udf.native.build.path>

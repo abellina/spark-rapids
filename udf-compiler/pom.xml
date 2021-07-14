@@ -27,7 +27,6 @@
     <artifactId>rapids-4-spark-udf_2.12</artifactId>
     <name>RAPIDS Accelerator for Apache Spark Scala UDF Plugin</name>
     <description>The RAPIDS Scala UDF plugin for Apache Spark</description>
-    <version>21.08.0-SNAPSHOT</version>
 
     <dependencies>
         <dependency>
@@ -122,6 +121,29 @@
             <plugin>
                 <groupId>net.alchim31.maven</groupId>
                 <artifactId>scala-maven-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <id>scala-compile-first</id>
+                        <phase>none</phase>
+                        <goals>
+                            <goal>compile</goal>
+                        </goals>
+                    </execution>
+                    <execution>
+                        <id>scala-test-compile-first</id>
+                        <phase>none</phase>
+                        <goals>
+                            <goal>testCompile</goal>
+                        </goals>
+                    </execution>
+                    <execution>
+                        <id>attach-scaladocs</id>
+                        <phase>none</phase>
+                        <goals>
+                            <goal>doc-jar</goal>
+                        </goals>
+                    </execution>
+                </executions>
             </plugin>
             <plugin>
                 <groupId>org.scalatest</groupId>

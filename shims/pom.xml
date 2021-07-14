@@ -29,7 +29,6 @@
     <packaging>pom</packaging>
     <name>RAPIDS Accelerator for Apache Spark SQL Plugin Shims</name>
     <description>The RAPIDS SQL plugin for Apache Spark Shims</description>
-    <version>21.08.0-SNAPSHOT</version>
 
     <profiles>
         <profile>
@@ -128,9 +127,45 @@
             <version>${spark.version}</version>
             <scope>provided</scope>
         </dependency>
+        <dependency>
+            <groupId>org.openucx</groupId>
+            <artifactId>jucx</artifactId>
+            <version>1.11.0</version>
+            <scope>compile</scope>
+        </dependency>
     </dependencies>
     <build>
         <plugins>
+            <plugin>
+                <groupId>org.codehaus.mojo</groupId>
+                <artifactId>build-helper-maven-plugin</artifactId>
+                <!-- TODO version in parent pom -->
+                <version>3.0.0</version>
+                <executions>
+                    <execution>
+                        <id>compile-unshimmed-common</id>
+                        <phase>generate-sources</phase>
+                        <goals>
+                            <goal>add-source</goal>
+                        </goals>
+                        <configuration>
+                            <sources>
+                                <source>${user.dir}/sql-plugin/src/main/scala</source>
+                                <source>${user.dir}/sql-plugin/src/main/java</source>
+
+                                <source>${user.dir}/shuffle-plugin/src/main/scala</source>
+                                <source>${user.dir}/shuffle-plugin/src/main/java</source>
+
+                                <source>${user.dir}/udf-compiler/src/main/scala</source>
+                                <source>${user.dir}/udf-compiler/src/main/java</source>
+
+                                <source>${user.dir}/utils/src/main/scala</source>
+                                <source>${user.dir}/utils/src/main/java</source>
+                            </sources>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
             <plugin>
                 <artifactId>maven-antrun-plugin</artifactId>
                 <executions>
