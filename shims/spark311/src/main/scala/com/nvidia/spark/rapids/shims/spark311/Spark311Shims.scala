@@ -324,7 +324,7 @@ class Spark311Shims extends SparkCommonShims {
             ParamCheck("regex", TypeSig.lit(TypeEnum.STRING)
                 .withPsNote(TypeEnum.STRING, "very limited regex support"), TypeSig.STRING),
             ParamCheck("rep", TypeSig.lit(TypeEnum.STRING), TypeSig.STRING))),
-        (a, conf, p, r) => new TernaryExprMeta[RegExpReplace](a, conf, p, r) {
+        (a, conf, p, r) => new QuaternaryExprMeta[RegExpReplace](a, conf, p, r) {
           override def tagExprForGpu(): Unit = {
             if (GpuOverrides.isNullOrEmptyOrRegex(a.regexp)) {
               willNotWorkOnGpu(
@@ -333,7 +333,10 @@ class Spark311Shims extends SparkCommonShims {
             }
           }
           override def convertToGpu(lhs: Expression, regexp: Expression,
-              rep: Expression): GpuExpression = GpuStringReplace(lhs, regexp, rep)
+              rep: Expression, pos: Expression): GpuExpression = {
+            // TODO support replace from a non-0 position
+            GpuStringReplace(lhs, regexp, rep)
+          }
         })
     ).map(r => (r.getClassFor.asSubclass(classOf[Expression]), r)).toMap
   }
