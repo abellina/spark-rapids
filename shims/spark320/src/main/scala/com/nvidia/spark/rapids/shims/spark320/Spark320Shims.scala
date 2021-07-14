@@ -29,6 +29,19 @@ import org.apache.spark.sql.execution.exchange.ReusedExchangeExec
 import org.apache.spark.sql.internal.SQLConf
 
 class Spark320Shims extends SparkCommonShims {
+  override def parquetRebaseReadKey: String =
+    SQLConf.PARQUET_REBASE_MODE_IN_READ.key
+  override def parquetRebaseWriteKey: String =
+    SQLConf.PARQUET_REBASE_MODE_IN_WRITE.key
+  override def avroRebaseReadKey: String =
+    SQLConf.AVRO_REBASE_MODE_IN_READ.key
+  override def avroRebaseWriteKey: String =
+    SQLConf.AVRO_REBASE_MODE_IN_WRITE.key
+  override def parquetRebaseRead(conf: SQLConf): String =
+    conf.getConf(SQLConf.PARQUET_REBASE_MODE_IN_READ)
+  override def parquetRebaseWrite(conf: SQLConf): String =
+    conf.getConf(SQLConf.PARQUET_REBASE_MODE_IN_WRITE)
+
   override def getSparkShimVersion: ShimVersion = SparkShimServiceProvider.VERSION320
 
   override def v1RepairTableCommand(tableName: TableIdentifier): RunnableCommand =
