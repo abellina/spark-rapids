@@ -260,6 +260,15 @@
             </activation>
         </profile>
         <profile>
+            <id>spark312</id>
+            <properties>
+                <spark.version>${spark312.version}</spark.version>
+            </properties>
+            <activation>
+                <activeByDefault>true</activeByDefault>
+            </activation>
+        </profile>
+        <profile>
             <id>spark320</id>
             <properties>
                 <spark.version>${spark320.version}</spark.version>

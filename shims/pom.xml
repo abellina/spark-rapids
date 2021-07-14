@@ -61,6 +61,12 @@
             <modules>
                 <module>spark311</module>
             </modules>
+        </profile>
+        <profile>
+            <id>spark312</id>
+            <modules>
+                <module>spark312</module>
+            </modules>
             <activation>
                 <activeByDefault>true</activeByDefault>
             </activation>
