@@ -72,6 +72,12 @@
             </activation>
         </profile>
         <profile>
+            <id>spark313</id>
+            <modules>
+                <module>spark313</module>
+            </modules>
+        </profile>
+        <profile>
             <id>databricks301</id>
             <modules>
                 <module>spark301db</module>
