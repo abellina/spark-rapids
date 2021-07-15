@@ -38,23 +38,23 @@
             <groupId>org.scala-lang</groupId>
             <artifactId>scala-library</artifactId>
         </dependency>
-<!--        <dependency>-->
-<!--            <groupId>org.apache.spark</groupId>-->
-<!--            <artifactId>spark-sql_${scala.binary.version}</artifactId>-->
-<!--        </dependency>-->
-<!--        <dependency>-->
-<!--            <groupId>org.apache.spark</groupId>-->
-<!--            <artifactId>spark-sql_${scala.binary.version}</artifactId>-->
-<!--            <type>test-jar</type>-->
-<!--            <scope>test</scope>-->
-<!--            <version>${spark.version}</version>-->
-<!--        </dependency>-->
-<!--        <dependency>-->
-<!--            <groupId>org.apache.spark</groupId>-->
-<!--            <artifactId>spark-catalyst_${scala.binary.version}</artifactId>-->
-<!--            <type>test-jar</type>-->
-<!--            <scope>test</scope>-->
-<!--        </dependency>-->
+        <dependency>
+            <groupId>org.apache.spark</groupId>
+            <artifactId>spark-sql_${scala.binary.version}</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.spark</groupId>
+            <artifactId>spark-sql_${scala.binary.version}</artifactId>
+            <type>test-jar</type>
+            <scope>test</scope>
+            <version>${spark.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.spark</groupId>
+            <artifactId>spark-catalyst_${scala.binary.version}</artifactId>
+            <type>test-jar</type>
+            <scope>test</scope>
+        </dependency>
         <dependency>
             <groupId>org.scalatest</groupId>
             <artifactId>scalatest_${scala.binary.version}</artifactId>
