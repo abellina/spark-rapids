@@ -27,18 +27,8 @@ case class CudfVersionMismatchException(errorMsg: String) extends PluginExceptio
  * Extension point to enable GPU SQL processing.
  */
 class SQLExecPlugin extends (SparkSessionExtensions => Unit) with Logging {
-  override def apply(extensions: SparkSessionExtensions): Unit = {
-    val pluginProps = RapidsPluginUtils.loadProps(RapidsPluginUtils.PLUGIN_PROPS_FILENAME)
-    logInfo(s"RAPIDS Accelerator build: $pluginProps")
-    val cudfProps = RapidsPluginUtils.loadProps(RapidsPluginUtils.CUDF_PROPS_FILENAME)
-    logInfo(s"cudf build: $cudfProps")
-    val pluginVersion = pluginProps.getProperty("version", "UNKNOWN")
-    val cudfVersion = cudfProps.getProperty("version", "UNKNOWN")
-    logWarning(s"RAPIDS Accelerator $pluginVersion using cudf $cudfVersion." +
-      s" To disable GPU support set `${RapidsConf.SQL_ENABLED}` to false")
-    extensions.injectColumnar(_ => ColumnarOverrideRules())
-    extensions.injectQueryStagePrepRule(_ => GpuQueryStagePrepOverrides())
-  }
+  override def apply(extensions: SparkSessionExtensions): Unit = ShimLoader
+      .getSparkShims.injectSqlExec(extensions)
 }
 
 

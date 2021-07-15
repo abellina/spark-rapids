@@ -4,26 +4,42 @@ import java.util.UUID
 
 import org.apache.hadoop.fs.Path
 
+import org.apache.spark.api.plugin.{DriverPlugin, ExecutorPlugin}
+import org.apache.spark.internal.Logging
 import org.apache.spark.rdd.RDD
-import org.apache.spark.sql.catalyst.expressions.{Attribute, Expression, NamedExpression, PlanExpression, PythonUDF, SortOrder, UnaryMinus}
-import org.apache.spark.sql.execution.datasources.{FileIndex, FilePartition, FileScanRDD, HadoopFsRelation, InMemoryFileIndex, PartitionDirectory, PartitionedFile}
-import org.apache.spark.sql.execution.python.{AggregateInPandasExec, ArrowEvalPythonExec, FlatMapGroupsInPandasExec, MapInPandasExec, WindowInPandasExec}
-import org.apache.spark.sql.execution.{FileSourceScanExec, PartitionedFileUtil, SparkPlan}
-import org.apache.spark.sql.execution.joins.{BroadcastHashJoinExec, ShuffledHashJoinExec, SortMergeJoinExec}
-import org.apache.spark.sql.internal.SQLConf
-import org.apache.spark.sql.rapids.execution.python.{GpuAggregateInPandasExecMeta, GpuArrowEvalPythonExec, GpuFlatMapGroupsInPandasExecMeta, GpuMapInPandasExecMeta, GpuPythonUDF, GpuWindowInPandasExecMetaBase}
-import org.apache.spark.sql.rapids.GpuFileSourceScanExec
-import org.apache.spark.sql.SparkSession
+import org.apache.spark.sql.{SparkSession, SparkSessionExtensions}
+import org.apache.spark.sql.catalyst.expressions.{Attribute, Expression, NamedExpression, PlanExpression, PythonUDF, SortOrder}
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.plans.logical.Statistics
 import org.apache.spark.sql.catalyst.plans.physical.BroadcastMode
+import org.apache.spark.sql.execution.{FileSourceScanExec, PartitionedFileUtil, SparkPlan}
 import org.apache.spark.sql.execution.adaptive.{BroadcastQueryStageExec, ShuffleQueryStageExec}
+import org.apache.spark.sql.execution.datasources.{FileIndex, FilePartition, FileScanRDD, HadoopFsRelation, InMemoryFileIndex, PartitionDirectory, PartitionedFile}
 import org.apache.spark.sql.execution.datasources.rapids.GpuPartitioningUtils
 import org.apache.spark.sql.execution.exchange.{BroadcastExchangeLike, ReusedExchangeExec}
+import org.apache.spark.sql.execution.joins.{BroadcastHashJoinExec, ShuffledHashJoinExec, SortMergeJoinExec}
+import org.apache.spark.sql.execution.python.{AggregateInPandasExec, ArrowEvalPythonExec, FlatMapGroupsInPandasExec, MapInPandasExec, WindowInPandasExec}
 import org.apache.spark.sql.execution.window.WindowExecBase
+import org.apache.spark.sql.rapids.execution.python.{GpuAggregateInPandasExecMeta, GpuArrowEvalPythonExec, GpuFlatMapGroupsInPandasExecMeta, GpuMapInPandasExecMeta, GpuPythonUDF, GpuWindowInPandasExecMetaBase}
+import org.apache.spark.sql.rapids.GpuFileSourceScanExec
 import org.apache.spark.sql.rapids.execution.{GpuBroadcastExchangeExecBase, GpuBroadcastExchangeExecBaseWithFuture, GpuShuffleExchangeExecBase}
 
-abstract class SparkCommonShims extends SparkShims {
+abstract class SparkCommonShims extends SparkShims with Logging {
+  override def driverPlugin(): DriverPlugin = new RapidsDriverPlugin
+  override def executorPlugin(): ExecutorPlugin = new RapidsExecutorPlugin
+  override def injectSqlExec(extensions: SparkSessionExtensions): Unit = {
+    val pluginProps = RapidsPluginUtils.loadProps(RapidsPluginUtils.PLUGIN_PROPS_FILENAME)
+    logInfo(s"RAPIDS Accelerator build: $pluginProps")
+    val cudfProps = RapidsPluginUtils.loadProps(RapidsPluginUtils.CUDF_PROPS_FILENAME)
+    logInfo(s"cudf build: $cudfProps")
+    val pluginVersion = pluginProps.getProperty("version", "UNKNOWN")
+    val cudfVersion = cudfProps.getProperty("version", "UNKNOWN")
+    logWarning(s"RAPIDS Accelerator $pluginVersion using cudf $cudfVersion." +
+        s" To disable GPU support set `${RapidsConf.SQL_ENABLED}` to false")
+    extensions.injectColumnar(_ => ColumnarOverrideRules())
+    extensions.injectQueryStagePrepRule(_ => GpuQueryStagePrepOverrides())
+  }
+
   override def getExecs: Map[Class[_ <: SparkPlan], ExecRule[_ <: SparkPlan]] = {
     Seq(
       GpuOverrides.exec[WindowInPandasExec](

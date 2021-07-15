@@ -27,14 +27,19 @@ object ShimLoader extends Logging {
   private var shimProviderClass: String = null
   private var sparkShims: SparkShims = null
 
-  private def detectShimProvider(): SparkShimServiceProvider = {
+  private def detectShimProvider(classLoader: ClassLoader): SparkShimServiceProvider = {
     val sparkVersion = getSparkVersion
     logInfo(s"Loading shim for Spark version: $sparkVersion")
 
+    val allSparkShimLoaders = ServiceLoader.load(classOf[SparkShimServiceProvider],
+      classLoader // avoid shim classloader
+    ).asScala
+
+    logInfo(s"Available shims: $allSparkShimLoaders")
+
     // This is not ideal, but pass the version in here because otherwise loader that match the
     // same version (3.0.1 Apache and 3.0.1 Databricks) would need to know how to differentiate.
-    val sparkShimLoaders = ServiceLoader.load(classOf[SparkShimServiceProvider])
-        .asScala.filter(_.matchesVersion(sparkVersion))
+    val sparkShimLoaders = allSparkShimLoaders.filter(_.matchesVersion(sparkVersion))
     if (sparkShimLoaders.size > 1) {
       throw new IllegalArgumentException(s"Multiple Spark Shim Loaders found: $sparkShimLoaders")
     }
@@ -47,21 +52,23 @@ object ShimLoader extends Logging {
     loader
   }
 
-  private def findShimProvider(): SparkShimServiceProvider = {
+  private def findShimProvider(classLoader: ClassLoader): SparkShimServiceProvider = {
     if (shimProviderClass == null) {
-      detectShimProvider()
+      detectShimProvider(classLoader)
     } else {
       logWarning(s"Overriding Spark shims provider to $shimProviderClass. " +
           "This may be an untested configuration!")
-      val providerClass = Class.forName(shimProviderClass)
+      val providerClass = classLoader.loadClass(shimProviderClass)
       val constructor = providerClass.getConstructor()
       constructor.newInstance().asInstanceOf[SparkShimServiceProvider]
     }
   }
 
-  def getSparkShims: SparkShims = {
+  def getSparkShims: SparkShims = getSparkShims(getClass.getClassLoader)
+
+  def getSparkShims(classLoader: ClassLoader): SparkShims = {
     if (sparkShims == null) {
-      val provider = findShimProvider()
+      val provider = findShimProvider(classLoader)
       sparkShims = provider.buildShim
     }
     sparkShims

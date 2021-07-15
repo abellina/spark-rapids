@@ -23,8 +23,9 @@ import org.apache.arrow.memory.ReferenceManager
 import org.apache.arrow.vector.ValueVector
 import org.apache.hadoop.fs.Path
 
+import org.apache.spark.api.plugin.{DriverPlugin, ExecutorPlugin}
 import org.apache.spark.rdd.RDD
-import org.apache.spark.sql.SparkSession
+import org.apache.spark.sql.{SparkSession, SparkSessionExtensions}
 import org.apache.spark.sql.catalyst.{InternalRow, TableIdentifier}
 import org.apache.spark.sql.catalyst.analysis.Resolver
 import org.apache.spark.sql.catalyst.catalog.{CatalogTable, SessionCatalog}
@@ -77,6 +78,10 @@ case class EMRShimVersion(major: Int, minor: Int, patch: Int) extends ShimVersio
 }
 
 trait SparkShims {
+  def driverPlugin(): DriverPlugin
+  def executorPlugin(): ExecutorPlugin
+  def injectSqlExec(extensions: SparkSessionExtensions)
+
   def getSparkShimVersion: ShimVersion
   def parquetRebaseReadKey: String
   def parquetRebaseWriteKey: String

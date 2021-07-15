@@ -31,7 +31,7 @@ class ShuffleManagerShim extends ShuffleManagerShimBase {
       metrics: ShuffleReadMetricsReporter,
       shuffledBatchRDDPartition: ShuffledBatchRDDPartition): (ShuffleReader[K, C], Long) = {
 
-    val shim = ShimLoader.getSparkShims
+    @transient val shim = ShimLoader.getSparkShims
     shuffledBatchRDDPartition.spec match {
       case CoalescedPartitionSpec(startReducerIndex, endReducerIndex) =>
         val reader = shuffleManager.getReader[K,C](
