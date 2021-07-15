@@ -46,6 +46,15 @@
                         </goals>
                         <configuration>
                             <sources>
+                                <source>${user.dir}/sql-plugin/src/main/scala</source>
+                                <source>${user.dir}/sql-plugin/src/main/java</source>
+
+                                <source>${user.dir}/shuffle-plugin/src/main/scala</source>
+                                <source>${user.dir}/shuffle-plugin/src/main/java</source>
+
+                                <source>${user.dir}/udf-compiler/src/main/scala</source>
+                                <source>${user.dir}/udf-compiler/src/main/java</source>
+
                                 <source>${user.dir}/shims/spark311/src/main/scala</source>
                                 <source>${user.dir}/shims/spark311/src/main/java</source>
                             </sources>
@@ -69,4 +78,13 @@
           </resource>
         </resources>
     </build>
+
+    <dependencies>
+        <dependency>
+            <groupId>org.apache.spark</groupId>
+            <artifactId>spark-hive_${scala.binary.version}</artifactId>
+            <version>${spark312.version}</version>
+	    <scope>provided</scope>
+        </dependency>
+    </dependencies>
 </project>

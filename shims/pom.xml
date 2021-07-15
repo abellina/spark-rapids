@@ -104,20 +104,31 @@
     </profiles>
 
     <modules>
-        <module>spark301emr</module>
-        <module>spark301</module>
-        <module>spark302</module>
-        <module>spark303</module>
-        <module>spark311</module>
-        <module>spark312</module>
         <module>aggregator</module>
-        <module>spark311cdh</module>
     </modules>
     <dependencies>
         <dependency>
             <groupId>com.nvidia</groupId>
             <artifactId>rapids-4-spark-sql_${scala.binary.version}</artifactId>
             <version>${project.version}</version>
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
+            <groupId>com.nvidia</groupId>
+            <artifactId>rapids-4-spark-shuffle_${scala.binary.version}</artifactId>
+            <version>${project.version}</version>
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
+            <groupId>com.nvidia</groupId>
+            <artifactId>rapids-4-spark-udf_${scala.binary.version}</artifactId>
+            <version>${project.version}</version>
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.openucx</groupId>
+            <artifactId>jucx</artifactId>
+            <version>1.11.0</version>
             <scope>provided</scope>
         </dependency>
         <dependency>
@@ -131,56 +142,9 @@
             <artifactId>scalatest_${scala.binary.version}</artifactId>
             <scope>test</scope>
         </dependency>
-        <dependency>
-            <groupId>org.apache.spark</groupId>
-            <artifactId>spark-sql_${scala.binary.version}</artifactId>
-            <version>${spark.version}</version>
-            <scope>provided</scope>
-        </dependency>
-        <dependency>
-            <groupId>org.apache.spark</groupId>
-            <artifactId>spark-hive_${scala.binary.version}</artifactId>
-            <version>${spark.version}</version>
-            <scope>provided</scope>
-        </dependency>
-        <dependency>
-            <groupId>org.openucx</groupId>
-            <artifactId>jucx</artifactId>
-            <version>1.11.0</version>
-            <scope>compile</scope>
-        </dependency>
     </dependencies>
     <build>
         <plugins>
-            <plugin>
-                <groupId>org.codehaus.mojo</groupId>
-                <artifactId>build-helper-maven-plugin</artifactId>
-                <version>${build-helper-maven-plugin.version}</version>
-                <executions>
-                    <execution>
-                        <id>compile-unshimmed-common</id>
-                        <phase>generate-sources</phase>
-                        <goals>
-                            <goal>add-source</goal>
-                        </goals>
-                        <configuration>
-                            <sources>
-                                <source>${user.dir}/sql-plugin/src/main/scala</source>
-                                <source>${user.dir}/sql-plugin/src/main/java</source>
-
-                                <source>${user.dir}/shuffle-plugin/src/main/scala</source>
-                                <source>${user.dir}/shuffle-plugin/src/main/java</source>
-
-                                <source>${user.dir}/udf-compiler/src/main/scala</source>
-                                <source>${user.dir}/udf-compiler/src/main/java</source>
-
-                                <source>${user.dir}/utils/src/main/scala</source>
-                                <source>${user.dir}/utils/src/main/java</source>
-                            </sources>
-                        </configuration>
-                    </execution>
-                </executions>
-            </plugin>
             <plugin>
                 <artifactId>maven-antrun-plugin</artifactId>
                 <executions>
