@@ -49,18 +49,18 @@
        <artifactId>rapids-4-spark-udf_${scala.binary.version}</artifactId>
        <version>${project.version}</version>
     </dependency>
-    <dependency>
-       <!-- required for conf generation script -->
-       <groupId>org.apache.spark</groupId>
-       <artifactId>spark-sql_${scala.binary.version}</artifactId>
-       <scope>provided</scope>
-    </dependency>
-    <dependency>
-      <!-- required for conf generation script -->
-      <groupId>org.apache.spark</groupId>
-      <artifactId>spark-hive_${scala.binary.version}</artifactId>
-      <scope>provided</scope>
-    </dependency>
+<!--    <dependency>-->
+<!--       &lt;!&ndash; required for conf generation script &ndash;&gt;-->
+<!--       <groupId>org.apache.spark</groupId>-->
+<!--       <artifactId>spark-sql_${scala.binary.version}</artifactId>-->
+<!--       <scope>test</scope>-->
+<!--    </dependency>-->
+<!--    <dependency>-->
+<!--      &lt;!&ndash; required for conf generation script &ndash;&gt;-->
+<!--      <groupId>org.apache.spark</groupId>-->
+<!--      <artifactId>spark-hive_${scala.binary.version}</artifactId>-->
+<!--      <scope>test</scope>-->
+<!--    </dependency>-->
   </dependencies>
 
   <build>
