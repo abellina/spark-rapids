@@ -78,41 +78,31 @@
         </configuration>
         <executions>
           <execution>
-            <id>relocate-shim301</id>
-            <phase>package</phase>
-            <goals>
-              <goal>shade</goal>
-            </goals>
-            <configuration>
-               <filters>
-                <filter>
-                  <artifact>com.nvidia:rapids-4-spark-shims-shim301_${scala.binary.version}</artifact>
-                </filter>
-              </filters>
-              <relocations>
-                <relocation>
-                  <pattern></pattern>
-                  <shadedPattern>nv.shim301</shadedPattern>
-                </relocation>
-              </relocations>
-            </configuration>
-          </execution>
-          <execution>
             <id>relocate-shim302</id>
             <phase>package</phase>
             <goals>
               <goal>shade</goal>
             </goals>
             <configuration>
-              <filters>
-                <filter>
-                  <artifact>com.nvidia:rapids-4-spark-shims-shim302_${scala.binary.version}</artifact>
-                </filter>
-              </filters>
+              <shadeSourcesContent>true</shadeSourcesContent>
+              <artifactSet>
+                <includes>
+                  <include>*:rapids-4-spark-shims-spark302_${scala.binary.version}:*</include>
+                </includes>
+                <excludes>
+                  <exclude>org.apache.spark:*</exclude>
+                </excludes>
+              </artifactSet>
               <relocations>
                 <relocation>
-                  <pattern>/</pattern>
-                  <shadedPattern>nv.shim302</shadedPattern>
+                  <pattern></pattern>
+                  <shadedPattern>nv.shim302.</shadedPattern>
+                  <excludes>
+                    <exclude>com.nvidia.spark.SQLPlugin*</exclude>
+                    <exclude>com.nvidia.spark.rapids.SQLExecPlugin*</exclude>
+                    <exclude>com.nvidia.spark.udf.Plugin*</exclude>
+                    <exclude>com.nvidia.spark.rapids.ShimLoader*</exclude>
+                  </excludes>
                 </relocation>
               </relocations>
             </configuration>
