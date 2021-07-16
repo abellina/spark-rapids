@@ -74,12 +74,6 @@
             <version>${project.version}</version>
             <scope>provided</scope>
         </dependency>
-        <dependency>
-            <groupId>com.nvidia</groupId>
-	        <artifactId>rapids-4-spark-shims-aggregator_${scala.binary.version}</artifactId>
-            <version>${project.version}</version>
-            <scope>provided</scope>
-        </dependency>
     </dependencies>
 
     <build>
