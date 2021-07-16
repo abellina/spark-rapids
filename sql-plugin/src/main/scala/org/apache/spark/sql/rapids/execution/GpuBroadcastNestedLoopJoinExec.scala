@@ -421,18 +421,3 @@ abstract class GpuBroadcastNestedLoopJoinExecBase(
   }
 }
 
-case class GpuBroadcastNestedLoopJoinExec(
-    left: SparkPlan,
-    right: SparkPlan,
-    join: BroadcastNestedLoopJoinExec,
-    joinType: JoinType,
-    condition: Option[Expression],
-    targetSizeBytes: Long)
-    extends GpuBroadcastNestedLoopJoinExecBase(left, right, joinType, condition,
-      targetSizeBytes) {
-
-  def getGpuBuildSide: GpuBuildSide = {
-    ShimLoader.getSparkShims.getBuildSide(join)
-  }
-}
-

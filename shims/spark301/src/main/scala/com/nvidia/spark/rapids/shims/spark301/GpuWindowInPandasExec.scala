@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-package com.nvidia.spark.rapids
+package com.nvidia.spark.rapids.shims.spark301
 
 import org.apache.spark.sql.catalyst.expressions.{Attribute, Expression, NamedExpression, SortOrder}
 import org.apache.spark.sql.execution.SparkPlan
@@ -25,7 +25,7 @@ import org.apache.spark.sql.vectorized.ColumnarBatch
  * This GpuWindowInPandasExec aims at accelerating the data transfer between
  * JVM and Python, and scheduling GPU resources for Python processes
  */
-case class GpuDefaultWindowInPandasExec(
+case class GpuWindowInPandasExec(
     windowExpression: Seq[Expression],
     partitionSpec: Seq[Expression],
     orderSpec: Seq[SortOrder],

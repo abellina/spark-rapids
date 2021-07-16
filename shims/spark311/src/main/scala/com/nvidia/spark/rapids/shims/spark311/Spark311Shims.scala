@@ -20,53 +20,36 @@ import java.net.URI
 import java.nio.ByteBuffer
 
 import com.nvidia.spark.rapids._
+import com.nvidia.spark.rapids.shims.spark301.Spark301Shims
 import com.nvidia.spark.rapids.spark311.RapidsShuffleManager
 import org.apache.arrow.memory.ReferenceManager
 import org.apache.arrow.vector.ValueVector
-import org.apache.spark.SparkEnv
 
+import org.apache.spark.SparkEnv
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.catalyst.analysis.Resolver
 import org.apache.spark.sql.catalyst.catalog.{CatalogTable, SessionCatalog}
 import org.apache.spark.sql.catalyst.encoders.ExpressionEncoder
-import org.apache.spark.sql.catalyst.errors.attachTree
 import org.apache.spark.sql.catalyst.expressions._
-import org.apache.spark.sql.catalyst.optimizer.{BuildLeft, BuildRight, BuildSide}
 import org.apache.spark.sql.catalyst.plans.JoinType
 import org.apache.spark.sql.catalyst.plans.physical.Partitioning
-import org.apache.spark.sql.catalyst.trees.TreeNode
-import org.apache.spark.sql.catalyst.TableIdentifier
 import org.apache.spark.sql.connector.read.Scan
 import org.apache.spark.sql.execution._
-import org.apache.spark.sql.execution.adaptive.{BroadcastQueryStageExec, ShuffleQueryStageExec}
 import org.apache.spark.sql.execution.columnar.InMemoryTableScanExec
-import org.apache.spark.sql.execution.command.{AlterTableRecoverPartitionsCommand, RunnableCommand}
-import org.apache.spark.sql.execution.datasources.{FilePartition, HadoopFsRelation, PartitionedFile}
+import org.apache.spark.sql.execution.datasources.HadoopFsRelation
 import org.apache.spark.sql.execution.datasources.v2.orc.OrcScan
 import org.apache.spark.sql.execution.datasources.v2.parquet.ParquetScan
-import org.apache.spark.sql.execution.exchange.{ENSURE_REQUIREMENTS, ReusedExchangeExec, ShuffleExchangeExec}
+import org.apache.spark.sql.execution.exchange.{ENSURE_REQUIREMENTS, ShuffleExchangeExec}
 import org.apache.spark.sql.execution.joins.{BroadcastHashJoinExec, BroadcastNestedLoopJoinExec, HashJoin, ShuffledHashJoinExec, SortMergeJoinExec}
 import org.apache.spark.sql.internal.{SQLConf, StaticSQLConf}
 import org.apache.spark.sql.rapids.{GpuElementAt, GpuFileSourceScanExec, GpuGetArrayItem, GpuGetArrayItemMeta, GpuGetMapValue, GpuGetMapValueMeta, GpuStringReplace, ShuffleManagerShimBase}
-import org.apache.spark.sql.rapids.execution.{GpuBroadcastNestedLoopJoinExec, GpuBroadcastNestedLoopJoinExecBase, GpuShuffleExchangeExecBase}
+import org.apache.spark.sql.rapids.execution.{GpuBroadcastNestedLoopJoinExecBase, GpuShuffleExchangeExecBase}
 import org.apache.spark.sql.rapids.shims.spark311._
 import org.apache.spark.sql.sources.BaseRelation
 import org.apache.spark.sql.types._
 import org.apache.spark.storage.{BlockId, BlockManagerId}
 
-class Spark311Shims extends SparkCommonShims {
-  override def parquetRebaseReadKey: String =
-    SQLConf.LEGACY_PARQUET_REBASE_MODE_IN_READ.key
-  override def parquetRebaseWriteKey: String =
-    SQLConf.LEGACY_PARQUET_REBASE_MODE_IN_WRITE.key
-  override def avroRebaseReadKey: String =
-    SQLConf.LEGACY_AVRO_REBASE_MODE_IN_READ.key
-  override def avroRebaseWriteKey: String =
-    SQLConf.LEGACY_AVRO_REBASE_MODE_IN_WRITE.key
-  override def parquetRebaseRead(conf: SQLConf): String =
-    conf.getConf(SQLConf.LEGACY_PARQUET_REBASE_MODE_IN_READ)
-  override def parquetRebaseWrite(conf: SQLConf): String =
-    conf.getConf(SQLConf.LEGACY_PARQUET_REBASE_MODE_IN_WRITE)
+class Spark311Shims extends Spark301Shims {
 
   override def getSparkShimVersion: ShimVersion = SparkShimServiceProvider.VERSION
 
@@ -318,41 +301,6 @@ class Spark311Shims extends SparkCommonShims {
       })
   ).map(r => (r.getClassFor.asSubclass(classOf[Expression]), r)).toMap
 
-  protected def getExprsSansTimeSub: Map[Class[_ <: Expression], ExprRule[_ <: Expression]] = {
-    Seq(
-      GpuOverrides.expr[Cast](
-        "Convert a column of one type of data into another type",
-        new CastChecks(),
-        (cast, conf, p, r) => new CastExprMeta[Cast](cast, SparkSession.active.sessionState.conf
-            .ansiEnabled, conf, p, r)),
-      GpuOverrides.expr[AnsiCast](
-        "Convert a column of one type of data into another type",
-        new CastChecks(),
-        (cast, conf, p, r) => new CastExprMeta[AnsiCast](cast, true, conf, p, r)),
-      GpuOverrides.expr[RegExpReplace](
-        "RegExpReplace support for string literal input patterns",
-        ExprChecks.projectNotLambda(TypeSig.STRING, TypeSig.STRING,
-          Seq(ParamCheck("str", TypeSig.STRING, TypeSig.STRING),
-            ParamCheck("regex", TypeSig.lit(TypeEnum.STRING)
-                .withPsNote(TypeEnum.STRING, "very limited regex support"), TypeSig.STRING),
-            ParamCheck("rep", TypeSig.lit(TypeEnum.STRING), TypeSig.STRING))),
-        (a, conf, p, r) => new QuaternaryExprMeta[RegExpReplace](a, conf, p, r) {
-          override def tagExprForGpu(): Unit = {
-            if (GpuOverrides.isNullOrEmptyOrRegex(a.regexp)) {
-              willNotWorkOnGpu(
-                "Only non-null, non-empty String literals that are not regex patterns " +
-                    "are supported by RegExpReplace on the GPU")
-            }
-          }
-          override def convertToGpu(lhs: Expression, regexp: Expression,
-              rep: Expression, pos: Expression): GpuExpression = {
-            // TODO support replace from a non-0 position
-            GpuStringReplace(lhs, regexp, rep)
-          }
-        })
-    ).map(r => (r.getClassFor.asSubclass(classOf[Expression]), r)).toMap
-  }
-
   override def getExprs: Map[Class[_ <: Expression], ExprRule[_ <: Expression]] = {
     getExprsSansTimeSub ++ exprs311
   }
@@ -478,21 +426,12 @@ class Spark311Shims extends SparkCommonShims {
       })
   ).map(r => (r.getClassFor.asSubclass(classOf[Scan]), r)).toMap
 
-
-  private def getGpuBuildSide(buildSide: BuildSide): GpuBuildSide = {
-    buildSide match {
-      case BuildRight => GpuBuildRight
-      case BuildLeft => GpuBuildLeft
-      case _ => throw new Exception("unknown buildSide Type")
-    }
-  }
-
   override def getBuildSide(join: HashJoin): GpuBuildSide = {
-    getGpuBuildSide(join.buildSide)
+    GpuJoinUtils.getGpuBuildSide(join.buildSide)
   }
 
   override def getBuildSide(join: BroadcastNestedLoopJoinExec): GpuBuildSide = {
-    getGpuBuildSide(join.buildSide)
+    GpuJoinUtils.getGpuBuildSide(join.buildSide)
   }
 
   override def getRapidsShuffleManagerClass: String = {
@@ -599,31 +538,6 @@ class Spark311Shims extends SparkCommonShims {
     (arrowBuf.nioBuffer(), arrowBuf.getReferenceManager)
   }
 
-  override def reusedExchangeExecPfn: PartialFunction[SparkPlan, ReusedExchangeExec] = {
-    case ShuffleQueryStageExec(_, e: ReusedExchangeExec) => e
-    case BroadcastQueryStageExec(_, e: ReusedExchangeExec) => e
-  }
-
   /** matches SPARK-33008 fix in 3.1.1 */
   override def shouldFailDivByZero(): Boolean = SQLConf.get.ansiEnabled
-
-  /** dropped by SPARK-34234 */
-  override def attachTreeIfSupported[TreeType <: TreeNode[_], A](
-      tree: TreeType,
-      msg: String)(
-      f: => A
-  ): A = {
-    attachTree(tree, msg)(f)
-  }
-
-  override def v1RepairTableCommand(tableName: TableIdentifier): RunnableCommand =
-    AlterTableRecoverPartitionsCommand(tableName)
-
-  override def boundarySql(expr: Expression): String = {
-    expr match {
-      case e: GpuSpecialFrameBoundary => e.sql
-      case UnaryMinus(n, _) => n.sql + " PRECEDING"
-      case e: Expression => e.sql + " FOLLOWING"
-    }
-  }
 }

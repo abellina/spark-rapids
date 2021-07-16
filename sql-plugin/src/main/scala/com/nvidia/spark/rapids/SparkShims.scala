@@ -23,20 +23,21 @@ import org.apache.arrow.memory.ReferenceManager
 import org.apache.arrow.vector.ValueVector
 import org.apache.hadoop.fs.Path
 
-import org.apache.spark.api.plugin.{DriverPlugin, ExecutorPlugin}
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.{SparkSession, SparkSessionExtensions}
 import org.apache.spark.sql.catalyst.{InternalRow, TableIdentifier}
 import org.apache.spark.sql.catalyst.analysis.Resolver
 import org.apache.spark.sql.catalyst.catalog.{CatalogTable, SessionCatalog}
 import org.apache.spark.sql.catalyst.encoders.ExpressionEncoder
-import org.apache.spark.sql.catalyst.expressions.{Alias, Expression, ExprId, NamedExpression, NullOrdering, SortDirection, SortOrder}
+import org.apache.spark.sql.catalyst.expressions.{Alias, Expression, ExprId, NullOrdering, SortDirection, SortOrder}
 import org.apache.spark.sql.catalyst.plans.JoinType
+import org.apache.spark.sql.catalyst.plans.logical.Statistics
 import org.apache.spark.sql.catalyst.plans.physical.{BroadcastMode, Partitioning}
+import org.apache.spark.sql.catalyst.rules.Rule
 import org.apache.spark.sql.catalyst.trees.TreeNode
 import org.apache.spark.sql.connector.read.Scan
 import org.apache.spark.sql.execution.SparkPlan
-import org.apache.spark.sql.execution.adaptive.ShuffleQueryStageExec
+import org.apache.spark.sql.execution.adaptive.{QueryStageExec, ShuffleQueryStageExec}
 import org.apache.spark.sql.execution.command.RunnableCommand
 import org.apache.spark.sql.execution.datasources.{FileIndex, FilePartition, HadoopFsRelation, PartitionDirectory, PartitionedFile}
 import org.apache.spark.sql.execution.exchange.{ReusedExchangeExec, ShuffleExchangeExec}
@@ -78,10 +79,6 @@ case class EMRShimVersion(major: Int, minor: Int, patch: Int) extends ShimVersio
 }
 
 trait SparkShims {
-  def driverPlugin(): DriverPlugin
-  def executorPlugin(): ExecutorPlugin
-  def injectSqlExec(extensions: SparkSessionExtensions)
-
   def getSparkShimVersion: ShimVersion
   def parquetRebaseReadKey: String
   def parquetRebaseWriteKey: String
@@ -125,8 +122,6 @@ trait SparkShims {
   def getGpuBroadcastExchangeExec(
       mode: BroadcastMode,
       child: SparkPlan): GpuBroadcastExchangeExecBase
-
-  def getGpuBroadcastExchangeExecBase(buildPlan: SparkPlan): GpuBroadcastExchangeExecBase
 
   def getGpuShuffleExchangeExec(
       outputPartitioning: Partitioning,
@@ -229,6 +224,4 @@ trait SparkShims {
   def hasAliasQuoteFix: Boolean
 
   def hasCastFloatTimestampUpcast: Boolean
-
-  def boundarySql(expr: Expression): String
 }

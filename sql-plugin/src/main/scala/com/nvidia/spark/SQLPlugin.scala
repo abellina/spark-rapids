@@ -16,7 +16,7 @@
 
 package com.nvidia.spark
 
-import com.nvidia.spark.rapids.ShimLoader
+import com.nvidia.spark.rapids.{RapidsDriverPlugin, RapidsExecutorPlugin}
 
 import org.apache.spark.api.plugin.{DriverPlugin, ExecutorPlugin, SparkPlugin}
 import org.apache.spark.internal.Logging
@@ -26,6 +26,6 @@ import org.apache.spark.internal.Logging
  * To enable this plugin, set the config "spark.plugins" to `com.nvidia.spark.SQLPlugin`
  */
 class SQLPlugin extends SparkPlugin with Logging {
-  override def driverPlugin(): DriverPlugin = ShimLoader.getSparkShims.driverPlugin()
-  override def executorPlugin(): ExecutorPlugin = ShimLoader.getSparkShims.executorPlugin()
+  override def driverPlugin(): DriverPlugin = new RapidsDriverPlugin
+  override def executorPlugin(): ExecutorPlugin = new RapidsExecutorPlugin
 }

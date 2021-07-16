@@ -14,18 +14,27 @@
  * limitations under the License.
  */
 
-package com.nvidia.spark.rapids
+package com.nvidia.spark.rapids.shims.spark311
+
+import com.nvidia.spark.rapids._
+import com.nvidia.spark.rapids.shims.spark301.GpuBroadcastExchangeExec
 
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.catalyst.InternalRow
-import org.apache.spark.sql.catalyst.expressions.Expression
+import org.apache.spark.sql.catalyst.expressions.{Expression, SortOrder}
+import org.apache.spark.sql.catalyst.optimizer.{BuildLeft, BuildRight}
 import org.apache.spark.sql.catalyst.plans.{FullOuter, JoinType}
 import org.apache.spark.sql.catalyst.plans.physical.{BroadcastDistribution, Distribution, UnspecifiedDistribution}
 import org.apache.spark.sql.execution.{BinaryExecNode, SparkPlan}
+import org.apache.spark.sql.execution.adaptive.BroadcastQueryStageExec
+import org.apache.spark.sql.execution.exchange.ReusedExchangeExec
 import org.apache.spark.sql.execution.joins._
-import org.apache.spark.sql.rapids.execution.{GpuBroadcastExchangeExecBase, GpuHashJoin, SerializeConcatHostBuffersDeserializeBatch}
+import org.apache.spark.sql.rapids.execution.{GpuHashJoin, SerializeConcatHostBuffersDeserializeBatch}
 import org.apache.spark.sql.vectorized.ColumnarBatch
 
+/**
+ *  Spark 3.1 changed packages of BuildLeft, BuildRight, BuildSide
+ */
 class GpuBroadcastHashJoinMeta(
     join: BroadcastHashJoinExec,
     conf: RapidsConf,
@@ -45,9 +54,9 @@ class GpuBroadcastHashJoinMeta(
   override def tagPlanForGpu(): Unit = {
     GpuHashJoin.tagJoin(this, join.joinType, join.leftKeys, join.rightKeys, join.condition)
     val Seq(leftChild, rightChild) = childPlans
-    val buildSide = ShimLoader.getSparkShims.getBuildSide(join) match {
-      case GpuBuildLeft => leftChild
-      case GpuBuildRight => rightChild
+    val buildSide = join.buildSide match {
+      case BuildLeft => leftChild
+      case BuildRight => rightChild
     }
 
     if (!canBuildSideBeReplaced(buildSide)) {
@@ -62,16 +71,16 @@ class GpuBroadcastHashJoinMeta(
   override def convertToGpu(): GpuExec = {
     val Seq(left, right) = childPlans.map(_.convertIfNeeded())
     // The broadcast part of this must be a BroadcastExchangeExec
-    val buildSide = ShimLoader.getSparkShims.getBuildSide(join) match {
-      case GpuBuildLeft => left
-      case GpuBuildRight => right
+    val buildSide = join.buildSide match {
+      case BuildLeft => left
+      case BuildRight => right
     }
     verifyBuildSideWasReplaced(buildSide)
     GpuBroadcastHashJoinExec(
       leftKeys.map(_.convertToGpu()),
       rightKeys.map(_.convertToGpu()),
       join.joinType,
-      ShimLoader.getSparkShims.getBuildSide(join),
+      GpuJoinUtils.getGpuBuildSide(join.buildSide),
       condition.map(_.convertToGpu()),
       left, right)
   }
@@ -114,8 +123,13 @@ case class GpuBroadcastHashJoinExec(
     case (_, _) => Seq(null, null)
   }
 
-  def broadcastExchange: GpuBroadcastExchangeExecBase =
-    ShimLoader.getSparkShims.getGpuBroadcastExchangeExecBase(buildPlan)
+  def broadcastExchange: GpuBroadcastExchangeExec = buildPlan match {
+    case BroadcastQueryStageExec(_, gpu: GpuBroadcastExchangeExec) => gpu
+    case BroadcastQueryStageExec(_, reused: ReusedExchangeExec) =>
+      reused.child.asInstanceOf[GpuBroadcastExchangeExec]
+    case gpu: GpuBroadcastExchangeExec => gpu
+    case reused: ReusedExchangeExec => reused.child.asInstanceOf[GpuBroadcastExchangeExec]
+  }
 
   override def doExecute(): RDD[InternalRow] =
     throw new IllegalStateException(

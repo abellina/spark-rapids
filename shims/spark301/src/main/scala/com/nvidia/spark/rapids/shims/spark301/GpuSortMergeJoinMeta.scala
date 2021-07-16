@@ -14,11 +14,13 @@
  * limitations under the License.
  */
 
-package com.nvidia.spark.rapids
+package com.nvidia.spark.rapids.shims.spark301
+
+import com.nvidia.spark.rapids._
 
 import org.apache.spark.sql.catalyst.plans.{ExistenceJoin, FullOuter, InnerLike, JoinType, LeftAnti, LeftOuter, LeftSemi, RightOuter}
 import org.apache.spark.sql.execution.SortExec
-import org.apache.spark.sql.execution.joins.SortMergeJoinExec
+import org.apache.spark.sql.execution.joins.{BuildLeft, BuildRight, SortMergeJoinExec}
 import org.apache.spark.sql.rapids.execution.GpuHashJoin
 
 /**
@@ -68,9 +70,9 @@ class GpuSortMergeJoinMeta(
 
   override def convertToGpu(): GpuExec = {
     val buildSide = if (canBuildRight(join.joinType)) {
-      GpuBuildRight
+      BuildRight
     } else if (canBuildLeft(join.joinType)) {
-      GpuBuildLeft
+      BuildLeft
     } else {
       throw new IllegalStateException(s"Cannot build either side for ${join.joinType} join")
     }
@@ -79,7 +81,7 @@ class GpuSortMergeJoinMeta(
       leftKeys.map(_.convertToGpu()),
       rightKeys.map(_.convertToGpu()),
       join.joinType,
-      buildSide,
+      GpuJoinUtils.getGpuBuildSide(buildSide),
       condition.map(_.convertToGpu()),
       left,
       right,

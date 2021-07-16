@@ -63,16 +63,6 @@ class Spark301dbShims extends Spark301Shims {
     GpuBroadcastExchangeExec(mode, child)
   }
 
-  override def getGpuBroadcastExchangeExecBase(buildPlan: SparkPlan): GpuBroadcastExchangeExecBase = {
-    buildPlan match {
-      case BroadcastQueryStageExec(_, gpu: GpuBroadcastExchangeExec, _) => gpu
-      case BroadcastQueryStageExec(_, reused: ReusedExchangeExec, _) =>
-        reused.child.asInstanceOf[GpuBroadcastExchangeExec]
-      case gpu: GpuBroadcastExchangeExec => gpu
-      case reused: ReusedExchangeExec => reused.child.asInstanceOf[GpuBroadcastExchangeExec]
-    }
-  }
-
   override def isGpuBroadcastHashJoin(plan: SparkPlan): Boolean = {
     plan match {
       case _: GpuBroadcastHashJoinExec => true

@@ -13,15 +13,15 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
-package org.apache.spark.sql.rapids
+package org.apache.spark.sql.rapids.shims.spark301
 
 import org.apache.spark.TaskContext
 import org.apache.spark.shuffle.{ShuffleHandle, ShuffleManager, ShuffleReader, ShuffleReadMetricsReporter}
+import org.apache.spark.sql.rapids.ShuffleManagerShimBase
 
-trait ShuffleManagerShimBase {
+class ShuffleManagerShim extends ShuffleManagerShimBase {
 
-  def getReader[K, C](
+  override def getReader[K, C](
       shuffleManager: ShuffleManager,
       handle: ShuffleHandle,
       startMapIndex: Int,
@@ -29,5 +29,9 @@ trait ShuffleManagerShimBase {
       startPartition: Int,
       endPartition: Int,
       context: TaskContext,
-      metrics: ShuffleReadMetricsReporter): ShuffleReader[K, C]
+      metrics: ShuffleReadMetricsReporter): ShuffleReader[K, C] = {
+    shuffleManager.getReaderForRange(
+      handle, startMapIndex, endMapIndex, startPartition, endPartition, context, metrics)
+  }
+
 }
