@@ -69,6 +69,14 @@
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-shade-plugin</artifactId>
         <configuration>
+          <shadeSourcesContent>true</shadeSourcesContent>
+          <artifactSet>
+            <includes>
+              <include>*:rapids-4-spark-shims-*_${scala.binary.version}:*</include>
+              <include>com.google.flatbuffers:*</include>
+              <include>org.openucx:*</include>
+            </includes>
+          </artifactSet>
 	  <transformers>
             <transformer implementation="org.apache.maven.plugins.shade.resource.ServicesResourceTransformer"/>
 	  </transformers>
@@ -84,15 +92,12 @@
               <goal>shade</goal>
             </goals>
             <configuration>
-              <shadeSourcesContent>true</shadeSourcesContent>
               <artifactSet>
                 <includes>
                   <include>*:rapids-4-spark-shims-spark302_${scala.binary.version}:*</include>
+                  <include>com.google.flatbuffers:*</include>
+                  <include>org.openucx:*</include>
                 </includes>
-                <excludes>
-                  <exclude>org.apache.spark:*</exclude>
-                  <exclude>ai.rapids:*</exclude>
-                </excludes>
               </artifactSet>
               <relocations>
                 <relocation>
@@ -102,10 +107,14 @@
                     <include>com.nvidia</include>
                   </includes>
                   <excludes>
+                    <exclude>com.google.flatbuffers.*</exclude>
+                    <exclude>org.openucx.*</exclude>
+
                     <exclude>com.nvidia.spark.SQLPlugin*</exclude>
                     <exclude>com.nvidia.spark.rapids.SQLExecPlugin*</exclude>
                     <exclude>com.nvidia.spark.udf.Plugin*</exclude>
                     <exclude>com.nvidia.spark.rapids.ShimLoader*</exclude>
+
                     <exclude>org.apache.spark.api.*</exclude>
                   </excludes>
                 </relocation>
