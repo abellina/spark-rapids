@@ -84,14 +84,14 @@
               <goal>shade</goal>
             </goals>
             <configuration>
-              <filters>
+               <filters>
                 <filter>
                   <artifact>com.nvidia:rapids-4-spark-shims-shim301_${scala.binary.version}</artifact>
                 </filter>
               </filters>
               <relocations>
                 <relocation>
-                  <pattern>com.nvidia</pattern>
+                  <pattern></pattern>
                   <shadedPattern>nv.shim301</shadedPattern>
                 </relocation>
               </relocations>
@@ -104,9 +104,6 @@
               <goal>shade</goal>
             </goals>
             <configuration>
-            <shadeSourcesContent>true</shadeSourcesContent>
-          <createSourcesJar>true</createSourcesJar>
-
               <filters>
                 <filter>
                   <artifact>com.nvidia:rapids-4-spark-shims-shim302_${scala.binary.version}</artifact>
@@ -114,7 +111,7 @@
               </filters>
               <relocations>
                 <relocation>
-                  <pattern>com.nvidia</pattern>
+                  <pattern>/</pattern>
                   <shadedPattern>nv.shim302</shadedPattern>
                 </relocation>
               </relocations>
