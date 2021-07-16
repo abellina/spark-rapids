@@ -91,17 +91,22 @@
                 </includes>
                 <excludes>
                   <exclude>org.apache.spark:*</exclude>
+                  <exclude>ai.rapids:*</exclude>
                 </excludes>
               </artifactSet>
               <relocations>
                 <relocation>
                   <pattern></pattern>
                   <shadedPattern>nv.shim302.</shadedPattern>
+                  <includes>
+                    <include>com.nvidia</include>
+                  </includes>
                   <excludes>
                     <exclude>com.nvidia.spark.SQLPlugin*</exclude>
                     <exclude>com.nvidia.spark.rapids.SQLExecPlugin*</exclude>
                     <exclude>com.nvidia.spark.udf.Plugin*</exclude>
                     <exclude>com.nvidia.spark.rapids.ShimLoader*</exclude>
+                    <exclude>org.apache.spark.api.*</exclude>
                   </excludes>
                 </relocation>
               </relocations>
