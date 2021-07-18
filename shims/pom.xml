@@ -32,51 +32,6 @@
 
     <profiles>
         <profile>
-            <id>spark301</id>
-            <modules>
-                <module>spark301</module>
-            </modules>
-        </profile>
-        <profile>
-            <id>spark302</id>
-            <modules>
-                <module>spark302</module>
-            </modules>
-        </profile>
-        <profile>
-            <id>spark303</id>
-            <modules>
-                <module>spark303</module>
-            </modules>
-        </profile>
-        <profile>
-            <id>spark304</id>
-            <modules>
-                <module>spark304</module>
-            </modules>
-        </profile>
-        <profile>
-            <id>spark311</id>
-            <modules>
-                <module>spark311</module>
-            </modules>
-        </profile>
-        <profile>
-            <id>spark312</id>
-            <modules>
-                <module>spark312</module>
-            </modules>
-            <activation>
-                <activeByDefault>true</activeByDefault>
-            </activation>
-        </profile>
-        <profile>
-            <id>spark313</id>
-            <modules>
-                <module>spark313</module>
-            </modules>
-        </profile>
-        <profile>
             <id>databricks301</id>
             <modules>
                 <module>spark301db</module>
@@ -96,13 +51,23 @@
         </profile>
         <profile>
             <id>snapshot-shims</id>
+            <activation>
+                <activeByDefault>true</activeByDefault>
+            </activation>
             <modules>
                 <module>spark304</module>
                 <module>spark313</module>
             </modules>
         </profile>
+        <profile>
+            <id>released30x-shims</id>
+            <modules>
+                <module>spark301</module>
+                <module>spark302</module>
+                <module>spark303</module>
+            </modules>
+        </profile>
     </profiles>
-
     <modules>
         <module>aggregator</module>
     </modules>
@@ -110,18 +75,6 @@
         <dependency>
             <groupId>com.nvidia</groupId>
             <artifactId>rapids-4-spark-sql_${scala.binary.version}</artifactId>
-            <version>${project.version}</version>
-            <scope>provided</scope>
-        </dependency>
-        <dependency>
-            <groupId>com.nvidia</groupId>
-            <artifactId>rapids-4-spark-shuffle_${scala.binary.version}</artifactId>
-            <version>${project.version}</version>
-            <scope>provided</scope>
-        </dependency>
-        <dependency>
-            <groupId>com.nvidia</groupId>
-            <artifactId>rapids-4-spark-udf_${scala.binary.version}</artifactId>
             <version>${project.version}</version>
             <scope>provided</scope>
         </dependency>
