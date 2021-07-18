@@ -116,36 +116,6 @@
               </relocations>
             </configuration>
           </execution>
-<!--          <execution>-->
-<!--            <id>relocate-shim303</id>-->
-<!--            <phase>package</phase>-->
-<!--            <goals><goal>shade</goal></goals>-->
-<!--            <configuration>-->
-<!--              <artifactSet>-->
-<!--                <includes>-->
-<!--                  <include>*:rapids-4-spark-shims-spark303_${scala.binary.version}:*</include>-->
-<!--                </includes>-->
-<!--              </artifactSet>-->
-<!--              <filters>-->
-<!--                <filter>-->
-<!--                  <artifact>*:rapids-4-spark-shims-spark303_${scala.binary.version}:*</artifact>-->
-<!--                </filter>-->
-<!--              </filters>-->
-<!--              <relocations>-->
-<!--                <relocation>-->
-<!--                  <pattern>com.nvidia</pattern>-->
-<!--                  <shadedPattern>nv.spark303</shadedPattern>-->
-<!--                  <excludes>-->
-<!--                    <exclude>com.nvidia.spark.rapids.shims.*</exclude>-->
-<!--                    <exclude>com.nvidia.spark.SQLPlugin*</exclude>-->
-<!--                    <exclude>com.nvidia.spark.rapids.SQLExecPlugin*</exclude>-->
-<!--                    <exclude>com.nvidia.spark.udf.Plugin*</exclude>-->
-<!--                    <exclude>com.nvidia.spark.rapids.ShimLoader*</exclude>-->
-<!--                  </excludes>-->
-<!--                </relocation>-->
-<!--              </relocations>-->
-<!--            </configuration>-->
-<!--          </execution>-->
         </executions>
       </plugin>
       <plugin>
