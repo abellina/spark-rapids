@@ -69,51 +69,66 @@
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-shade-plugin</artifactId>
         <configuration>
-          <shadeSourcesContent>true</shadeSourcesContent>
-          <artifactSet>
-            <includes>
-              <include>*:rapids-4-spark-shims-*_${scala.binary.version}:*</include>
-              <include>com.google.flatbuffers:*</include>
-              <include>org.openucx:*</include>
-            </includes>
-          </artifactSet>
 	  <transformers>
             <transformer implementation="org.apache.maven.plugins.shade.resource.ServicesResourceTransformer"/>
 	  </transformers>
           <shadedArtifactAttached>false</shadedArtifactAttached>
           <createDependencyReducedPom>true</createDependencyReducedPom>
-          <createSourcesJar>true</createSourcesJar>
+          <relocations>
+            <!-- Shade ORC and Hive and their dependencies -->
+            <relocation>
+              <pattern>org.apache.orc.</pattern>
+              <shadedPattern>${rapids.shade.package}.orc.</shadedPattern>
+            </relocation>
+            <relocation>
+              <pattern>org.apache.hadoop.hive.</pattern>
+              <shadedPattern>${rapids.shade.package}.hadoop.hive.</shadedPattern>
+              <excludes>
+                <exclude>org.apache.hadoop.hive.conf.HiveConf</exclude>
+                <exclude>org.apache.hadoop.hive.ql.exec.UDF</exclude>
+                <exclude>org.apache.hadoop.hive.ql.udf.generic.GenericUDF</exclude>
+              </excludes>
+            </relocation>
+            <relocation>
+              <pattern>org.apache.hive.</pattern>
+              <shadedPattern>${rapids.shade.package}.hive.</shadedPattern>
+            </relocation>
+            <relocation>
+              <pattern>io.airlift.compress.</pattern>
+              <shadedPattern>${rapids.shade.package}.io.airlift.compress.</shadedPattern>
+            </relocation>
+            <relocation>
+              <pattern>org.apache.commons.codec.</pattern>
+              <shadedPattern>${rapids.shade.package}.org.apache.commons.codec.</shadedPattern>
+            </relocation>
+            <relocation>
+              <pattern>org.apache.commons.lang.</pattern>
+              <shadedPattern>${rapids.shade.package}.org.apache.commons.lang.</shadedPattern>
+            </relocation>
+
+            <!-- Shade Guava, Flatbuffers, and Protobuf -->
+            <relocation>
+              <pattern>com.google</pattern>
+              <shadedPattern>${rapids.shade.package}.com.google</shadedPattern>
+            </relocation>
+          </relocations>
         </configuration>
         <executions>
           <execution>
-            <id>relocate-shim302</id>
             <phase>package</phase>
             <goals><goal>shade</goal></goals>
             <configuration>
-              <artifactSet>
-                <includes>
-                  <include>*:rapids-4-spark-shims-spark302_${scala.binary.version}:*</include>
-                </includes>
-              </artifactSet>
               <filters>
                 <filter>
-                  <artifact>*:rapids-4-spark-shims-spark302_${scala.binary.version}:*</artifact>
+                  <artifact>com.nvidia:rapids-4-spark_2.12</artifact>
+                <includes>
+                    <include>META-INF/**</include>
+                </includes>
+                  <excludes>
+                    <exclude>META-INF/services/**</exclude>
+                  </excludes>
                 </filter>
               </filters>
-              <relocations>
-                <relocation>
-                  <pattern>com.nvidia</pattern>
-                  <shadedPattern>nv.spark302</shadedPattern>
-                  <excludes>
-                    <exclude>com.nvidia.spark.rapids.shims*</exclude>
-                    <exclude>com.nvidia.spark.rapids.SparkShimServiceProvider*</exclude>
-                    <exclude>com.nvidia.spark.SQLPlugin*</exclude>
-                    <exclude>com.nvidia.spark.rapids.SQLExecPlugin*</exclude>
-                    <exclude>com.nvidia.spark.udf.Plugin*</exclude>
-                    <exclude>com.nvidia.spark.rapids.ShimLoader*</exclude>
-                  </excludes>
-                </relocation>
-              </relocations>
             </configuration>
           </execution>
         </executions>
