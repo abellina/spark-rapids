@@ -50,7 +50,7 @@
                             <includeGroupIds>com.nvidia</includeGroupIds>
 
                             <!-- entire source code is pulled via shim301 source jar -->
-                            <includeArtifactIds>rapids-4-spark-shims-spark301</includeArtifactIds>
+                            <includeArtifactIds>rapids-4-spark-shims-spark301_${scala.binary.version}</includeArtifactIds>
                             <excludeTransitive>true</excludeTransitive>
 
                             <outputDirectory>${project.build.directory}/generated-sources/shim-common-src</outputDirectory>
