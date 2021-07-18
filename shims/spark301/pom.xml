@@ -28,34 +28,32 @@
     <artifactId>rapids-4-spark-shims-spark301_2.12</artifactId>
     <name>RAPIDS Accelerator for Apache Spark SQL Plugin Spark 3.0.1 Shim</name>
     <description>The RAPIDS SQL plugin for Apache Spark 3.0.1 Shim</description>
+    <version>21.08.0-SNAPSHOT</version>
 
     <!-- Set 'spark.version' for the shims layer -->
     <!-- Create a separate file 'SPARK_VER.properties' in the jar to save cudf & spark version info -->
     <build>
         <plugins>
             <plugin>
-                <groupId>org.codehaus.mojo</groupId>
-                <artifactId>build-helper-maven-plugin</artifactId>
-                <version>${build-helper-maven-plugin.version}</version>
+                <artifactId>maven-antrun-plugin</artifactId>
                 <executions>
                     <execution>
-                        <id>compile-unshimmed</id>
-                        <phase>generate-sources</phase>
-                        <goals>
-                            <goal>add-source</goal>
-                        </goals>
+                        <id>dependency</id>
+                        <phase>generate-resources</phase>
                         <configuration>
-                            <sources>
-                                <source>${user.dir}/sql-plugin/src/main/scala</source>
-                                <source>${user.dir}/sql-plugin/src/main/java</source>
-
-                                <source>${user.dir}/shuffle-plugin/src/main/scala</source>
-                                <source>${user.dir}/shuffle-plugin/src/main/java</source>
-
-                                <source>${user.dir}/udf-compiler/src/main/scala</source>
-                                <source>${user.dir}/udf-compiler/src/main/java</source>
-                            </sources>
+                            <target>
+                                <mkdir dir="${project.build.directory}/extra-resources"/>
+                                <exec executable="bash" failonerror="true" output="${project.build.directory}/extra-resources/spark-${spark301.version}-info.properties">
+                                    <arg value="${user.dir}/build/dependency-info.sh"/>
+                                    <arg value="${cudf.version}"/>
+                                    <arg value="${cuda.version}"/>
+                                    <arg value="${spark301.version}"/>
+                                </exec>
+                            </target>
                         </configuration>
+                        <goals>
+                            <goal>run</goal>
+                        </goals>
                     </execution>
                 </executions>
             </plugin>
@@ -80,12 +78,6 @@
         <dependency>
             <groupId>org.apache.spark</groupId>
             <artifactId>spark-sql_${scala.binary.version}</artifactId>
-            <version>${spark301.version}</version>
-            <scope>provided</scope>
-        </dependency>
-        <dependency>
-            <groupId>org.apache.spark</groupId>
-            <artifactId>spark-hive_${scala.binary.version}</artifactId>
             <version>${spark301.version}</version>
             <scope>provided</scope>
         </dependency>
