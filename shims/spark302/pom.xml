@@ -58,10 +58,43 @@
                     </execution>
                 </executions>
             </plugin>
-            <plugin>
-                <groupId>org.apache.maven.plugins</groupId>
-                <artifactId>maven-antrun-plugin</artifactId>
-            </plugin>
+<!--            <plugin>-->
+<!--                <groupId>org.apache.maven.plugins</groupId>-->
+<!--                <artifactId>maven-antrun-plugin</artifactId>-->
+<!--                <executions>-->
+<!--                    <execution>-->
+<!--                        <id>shade-src</id>-->
+<!--                        <phase>process-sources</phase>-->
+<!--                        <goals>-->
+<!--                            <goal>run</goal>-->
+<!--                        </goals>-->
+<!--                        <configuration>-->
+<!--                            <target>-->
+<!--                                <replaceregexp>-->
+<!--                                    <regexp pattern="package com\.nvidia\.(.*)"/>-->
+<!--                                    <substitution expression="package nv.spark302.\1"/>-->
+<!--                                    <fileset dir="${project.build.directory}/generated-sources">-->
+<!--                                        <include name="**/*.scala"/>-->
+<!--                                        <include name="**/*.java"/>-->
+<!--                                        <exclude name="**/Shim*"/>-->
+<!--                                        <exclude name="**/spark3*/**"/>-->
+<!--                                        <exclude name="**/shim/**"/>-->
+<!--                                        <exclude name="**/ai/rapids/**"/>-->
+<!--                                    </fileset>-->
+<!--                                </replaceregexp>-->
+<!--                                <replaceregexp byline="true">-->
+<!--                                    <regexp pattern="(.*)(ShimLoader\.getSparkShims.*)"/>-->
+<!--                                    <substitution expression="\1com.nvidia.spark.rapids.\2"/>-->
+<!--                                    <fileset dir="${project.build.directory}/generated-sources">-->
+<!--                                        <include name="**/*.scala"/>-->
+<!--                                        <include name="**/*.java"/>-->
+<!--                                    </fileset>-->
+<!--                                </replaceregexp>-->
+<!--                            </target>-->
+<!--                        </configuration>-->
+<!--                    </execution>-->
+<!--                </executions>-->
+<!--            </plugin>-->
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-source-plugin</artifactId>
