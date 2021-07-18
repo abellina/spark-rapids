@@ -60,12 +60,6 @@
         </dependency>
         <dependency>
             <groupId>com.nvidia</groupId>
-            <artifactId>rapids-4-spark_${scala.binary.version}</artifactId>
-            <version>${project.version}</version>
-            <scope>test</scope>
-        </dependency>
-        <dependency>
-            <groupId>com.nvidia</groupId>
             <artifactId>rapids-4-spark-shims-aggregator_${scala.binary.version}</artifactId>
             <version>${project.version}</version>
             <scope>test</scope>
@@ -87,7 +81,6 @@
           <scope>test</scope>
         </dependency>
     </dependencies>
-
     <build>
         <plugins>
             <plugin>
