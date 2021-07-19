@@ -48,8 +48,8 @@
                             <classifier>sources</classifier>
                             <failOnMissingClassifierArtifact>true</failOnMissingClassifierArtifact>
                             <includeGroupIds>com.nvidia</includeGroupIds>
-                            <useSubDirectoryPerArtifact>false</useSubDirectoryPerArtifact>
-                            <excludeTransitive>false</excludeTransitive>
+                            <useSubDirectoryPerArtifact>true</useSubDirectoryPerArtifact>
+                            <excludeTransitive>true</excludeTransitive>
                             <outputDirectory>${project.build.directory}/generated-sources/shim-common-src</outputDirectory>
                         </configuration>
                     </execution>
@@ -65,58 +65,12 @@
                         <goals><goal>run</goal></goals>
                         <configuration>
                             <target>
-                                <copy todir="${project.build.directory}/generated-sources/src-main">
+                                <copy failonerror="false" todir="${project.build.directory}/generated-sources/src-main">
                                     <fileset dir="${project.basedir}/src/main"/>
                                 </copy>
                             </target>
                         </configuration>
                     </execution>
-<!--                    <execution>-->
-<!--                        <id>shade-src</id>-->
-<!--                        <phase>process-sources</phase>-->
-<!--                        <goals><goal>run</goal></goals>-->
-<!--                        <configuration>-->
-<!--                            <target>-->
-<!--                                <replaceregexp byline="true">-->
-<!--                                    <regexp pattern="package com\.nvidia\.(.*)"/>-->
-<!--                                    <substitution expression="package nv.spark301.\1"/>-->
-<!--                                    <fileset dir="${project.build.directory}/generated-sources">-->
-<!--                                        <include name="**/*.scala"/>-->
-<!--                                        <include name="**/*.java"/>-->
-<!--                                        <selector>-->
-<!--                                            <and>-->
-<!--                                                <contains text="package com.nvidia.spark"/>-->
-<!--                                                <not>-->
-<!--                                                    <containsregexp expression="package .*spark3.*"/>-->
-<!--                                                </not>-->
-<!--                                                <not>-->
-<!--                                                    <containsregexp expression="package com\.nvidia\..*shims.*"/>-->
-<!--                                                </not>-->
-<!--                                            </and>-->
-<!--                                        </selector>-->
-<!--                                    </fileset>-->
-<!--                                </replaceregexp>-->
-<!--                                <replaceregexp byline="true">-->
-<!--                                    <regexp pattern="import com\.nvidia\.(.*)"/>-->
-<!--                                    <substitution expression="import com.nvidia.reshim301.\1"/>-->
-<!--                                    <fileset dir="${project.build.directory}/generated-sources">-->
-<!--                                        <include name="**/*.scala"/>-->
-<!--                                        <include name="**/*.java"/>-->
-<!--                                        <exclude name="**/ai/rapids/**"/>-->
-<!--                                    </fileset>-->
-<!--                                </replaceregexp>-->
-
-<!--                                <replaceregexp byline="true">-->
-<!--                                    <regexp pattern="(.*)(ShimLoader\.getSparkShims.*)"/>-->
-<!--                                    <substitution expression="\1com.nvidia.spark.rapids.\2"/>-->
-<!--                                    <fileset dir="${project.build.directory}/generated-sources">-->
-<!--                                        <include name="**/*.scala"/>-->
-<!--                                        <include name="**/*.java"/>-->
-<!--                                    </fileset>-->
-<!--                                </replaceregexp>-->
-<!--                            </target>-->
-<!--                        </configuration>-->
-<!--                    </execution>-->
                 </executions>
             </plugin>
             <plugin>
@@ -125,29 +79,6 @@
                 <configuration>
                     <sourceDir>${project.build.directory}/generated-sources</sourceDir>
                 </configuration>
-            </plugin>
-            <plugin>
-                <artifactId>maven-antrun-plugin</artifactId>
-                <executions>
-                    <execution>
-                        <id>dependency</id>
-                        <phase>generate-resources</phase>
-                        <configuration>
-                            <target>
-                                <mkdir dir="${project.build.directory}/extra-resources"/>
-                                <exec executable="bash" failonerror="true" output="${project.build.directory}/extra-resources/spark-${spark301.version}-info.properties">
-                                    <arg value="${user.dir}/build/dependency-info.sh"/>
-                                    <arg value="${cudf.version}"/>
-                                    <arg value="${cuda.version}"/>
-                                    <arg value="${spark301.version}"/>
-                                </exec>
-                            </target>
-                        </configuration>
-                        <goals>
-                            <goal>run</goal>
-                        </goals>
-                    </execution>
-                </executions>
             </plugin>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
@@ -171,6 +102,24 @@
     </build>
 
     <dependencies>
+        <dependency>
+            <groupId>com.nvidia</groupId>
+            <artifactId>rapids-4-spark-sql_${scala.binary.version}</artifactId>
+            <version>${project.version}</version>
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
+            <groupId>com.nvidia</groupId>
+            <artifactId>rapids-4-spark-shuffle_${scala.binary.version}</artifactId>
+            <version>${project.version}</version>
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
+            <groupId>com.nvidia</groupId>
+            <artifactId>rapids-4-spark-udf_${scala.binary.version}</artifactId>
+            <version>${project.version}</version>
+            <scope>provided</scope>
+        </dependency>
         <dependency>
             <groupId>org.apache.spark</groupId>
             <artifactId>spark-hive_${scala.binary.version}</artifactId>

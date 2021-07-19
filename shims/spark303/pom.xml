@@ -46,18 +46,40 @@
                         <configuration>
                             <classifier>sources</classifier>
                             <failOnMissingClassifierArtifact>true</failOnMissingClassifierArtifact>
-                            <useSubDirectoryPerArtifact>true</useSubDirectoryPerArtifact>
                             <includeGroupIds>com.nvidia</includeGroupIds>
-
-                            <!-- entire source code is pulled via shim302 source jar -->
-                            <includeArtifactIds>rapids-4-spark-shims-spark302_${scala.binary.version}</includeArtifactIds>
+                            <useSubDirectoryPerArtifact>true</useSubDirectoryPerArtifact>
                             <excludeTransitive>true</excludeTransitive>
-
                             <outputDirectory>${project.build.directory}/generated-sources/shim-common-src</outputDirectory>
                         </configuration>
                     </execution>
                 </executions>
             </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-antrun-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <id>copy-this-module-src</id>
+                        <phase>process-sources</phase>
+                        <goals><goal>run</goal></goals>
+                        <configuration>
+                            <target>
+                                <copy failonerror="false" todir="${project.build.directory}/generated-sources/src-main">
+                                    <fileset dir="${project.basedir}/src/main"/>
+                                </copy>
+                            </target>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+            <plugin>
+                <groupId>net.alchim31.maven</groupId>
+                <artifactId>scala-maven-plugin</artifactId>
+                <configuration>
+                    <sourceDir>${project.build.directory}/generated-sources</sourceDir>
+                </configuration>
+            </plugin>
+
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-antrun-plugin</artifactId>
