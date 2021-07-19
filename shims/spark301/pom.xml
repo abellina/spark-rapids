@@ -48,12 +48,86 @@
                             <classifier>sources</classifier>
                             <failOnMissingClassifierArtifact>true</failOnMissingClassifierArtifact>
                             <includeGroupIds>com.nvidia</includeGroupIds>
-                            <useSubDirectoryPerArtifact>true</useSubDirectoryPerArtifact>
+                            <useSubDirectoryPerArtifact>false</useSubDirectoryPerArtifact>
                             <excludeTransitive>false</excludeTransitive>
                             <outputDirectory>${project.build.directory}/generated-sources/shim-common-src</outputDirectory>
                         </configuration>
                     </execution>
                 </executions>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-antrun-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <id>copy-this-module-src</id>
+                        <phase>process-sources</phase>
+                        <goals><goal>run</goal></goals>
+                        <configuration>
+                            <target>
+                                <echo>
+                                    Copying ${project.basedir}/src/main to ${project.build.directory}/generated-sources/src-main
+                                </echo>
+                                <copy todir="${project.build.directory}/generated-sources/src-main">
+                                    <fileset dir="${project.basedir}/src/main"/>
+                                </copy>
+                            </target>
+                        </configuration>
+                    </execution>
+                    <execution>
+                        <id>shade-src</id>
+                        <phase>process-sources</phase>
+                        <goals><goal>run</goal></goals>
+                        <configuration>
+                            <target>
+                                <replaceregexp byline="true">
+                                    <regexp pattern="package com\.nvidia\.(.*)"/>
+                                    <substitution expression="package nv.spark301.\1"/>
+                                    <fileset dir="${project.build.directory}/generated-sources">
+                                        <include name="**/*.scala"/>
+                                        <include name="**/*.java"/>
+                                        <selector>
+                                            <and>
+                                                <contains text="package com.nvidia.spark"/>
+                                                <not>
+                                                    <containsregexp expression="package .*spark3.*"/>
+                                                </not>
+                                                <not>
+                                                    <containsregexp expression="package com\.nvidia\..*shims.*"/>
+                                                </not>
+                                            </and>
+                                        </selector>
+                                    </fileset>
+                                </replaceregexp>
+<!--                                <replaceregexp byline="true">-->
+<!--                                    <regexp pattern="import com\.nvidia\.(.*)"/>-->
+<!--                                    <substitution expression="import com.nvidia.reshim301.\1"/>-->
+<!--                                    <fileset dir="${project.build.directory}/generated-sources">-->
+<!--                                        <include name="**/*.scala"/>-->
+<!--                                        <include name="**/*.java"/>-->
+<!--                                        <exclude name="**/ai/rapids/**"/>-->
+<!--                                    </fileset>-->
+<!--                                </replaceregexp>-->
+
+<!--                                <replaceregexp byline="true">-->
+<!--                                    <regexp pattern="(.*)(ShimLoader\.getSparkShims.*)"/>-->
+<!--                                    <substitution expression="\1com.nvidia.spark.rapids.\2"/>-->
+<!--                                    <fileset dir="${project.build.directory}/generated-sources">-->
+<!--                                        <include name="**/*.scala"/>-->
+<!--                                        <include name="**/*.java"/>-->
+<!--                                    </fileset>-->
+<!--                                </replaceregexp>-->
+                            </target>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+            <plugin>
+                <groupId>net.alchim31.maven</groupId>
+                <artifactId>scala-maven-plugin</artifactId>
+                <configuration>
+                    <sourceDir>${project.build.directory}/generated-sources</sourceDir>
+                </configuration>
             </plugin>
             <plugin>
                 <artifactId>maven-antrun-plugin</artifactId>
