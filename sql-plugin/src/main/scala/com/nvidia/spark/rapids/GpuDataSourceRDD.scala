@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, NVIDIA CORPORATION.
+ * Copyright (c) 2020-2021, NVIDIA CORPORATION.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,40 +16,12 @@
 
 package com.nvidia.spark.rapids
 
-import org.apache.spark.{InterruptibleIterator, Partition, SparkContext, SparkException, TaskContext}
-import org.apache.spark.sql.catalyst.InternalRow
-import org.apache.spark.sql.connector.read.{InputPartition, PartitionReader, PartitionReaderFactory}
-import org.apache.spark.sql.execution.datasources.v2.{DataSourceRDD, DataSourceRDDPartition}
+import org.apache.spark.TaskContext
+import org.apache.spark.sql.connector.read.PartitionReader
 import org.apache.spark.sql.rapids.execution.TrampolineUtil
 import org.apache.spark.sql.vectorized.ColumnarBatch
 
-/**
- * A replacement for DataSourceRDD that does NOT compute the bytes read input metric.
- * DataSourceRDD assumes all reads occur on the task thread, and some GPU input sources
- * use multithreaded readers that cannot generate proper metrics with DataSourceRDD.
- * @note It is the responsibility of users of this RDD to generate the bytes read input
- *       metric explicitly!
- */
-class GpuDataSourceRDD(
-    sc: SparkContext,
-    @transient private val inputPartitions: Seq[InputPartition],
-    partitionReaderFactory: PartitionReaderFactory)
-    extends DataSourceRDD(sc, inputPartitions, partitionReaderFactory, columnarReads = true) {
 
-  private def castPartition(split: Partition): DataSourceRDDPartition = split match {
-    case p: DataSourceRDDPartition => p
-    case _ => throw new SparkException(s"[BUG] Not a DataSourceRDDPartition: $split")
-  }
-
-  override def compute(split: Partition, context: TaskContext): Iterator[InternalRow] = {
-    val inputPartition = castPartition(split).inputPartition
-    val batchReader = partitionReaderFactory.createColumnarReader(inputPartition)
-    val iter = new MetricsBatchIterator(new PartitionIterator[ColumnarBatch](batchReader))
-    context.addTaskCompletionListener[Unit](_ => batchReader.close())
-    // TODO: SPARK-25083 remove the type erasure hack in data source scan
-    new InterruptibleIterator(context, iter.asInstanceOf[Iterator[InternalRow]])
-  }
-}
 
 private class PartitionIterator[T](reader: PartitionReader[T]) extends Iterator[T] {
   private[this] var valuePrepared = false

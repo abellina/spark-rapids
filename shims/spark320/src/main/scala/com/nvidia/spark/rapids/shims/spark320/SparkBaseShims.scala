@@ -16,23 +16,32 @@
 
 package com.nvidia.spark.rapids.shims.spark320
 
+import com.nvidia.spark.rapids._
 import org.apache.hadoop.fs.Path
+import org.apache.parquet.schema.MessageType
 
+import org.apache.spark.SparkContext
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.catalyst.{InternalRow, TableIdentifier}
 import org.apache.spark.sql.catalyst.expressions._
 import org.apache.spark.sql.catalyst.plans.physical.BroadcastMode
 import org.apache.spark.sql.catalyst.trees.TreeNode
+import org.apache.spark.sql.connector.read.{InputPartition, PartitionReaderFactory}
 import org.apache.spark.sql.execution._
 import org.apache.spark.sql.execution.adaptive.{BroadcastQueryStageExec, ShuffleQueryStageExec}
 import org.apache.spark.sql.execution.command.RunnableCommand
 import org.apache.spark.sql.execution.datasources.{FileIndex, FilePartition, FileScanRDD, HadoopFsRelation, InMemoryFileIndex, PartitionDirectory, PartitionedFile}
+import org.apache.spark.sql.execution.datasources.parquet.ParquetFilters
+import org.apache.spark.sql.execution.datasources.rapids.GpuPartitioningUtils
 import org.apache.spark.sql.execution.exchange.ReusedExchangeExec
 import org.apache.spark.sql.execution.joins.{BroadcastHashJoinExec, ShuffledHashJoinExec, SortMergeJoinExec}
 import org.apache.spark.sql.execution.python.{AggregateInPandasExec, ArrowEvalPythonExec, FlatMapGroupsInPandasExec, MapInPandasExec, WindowInPandasExec}
 import org.apache.spark.sql.execution.window.WindowExecBase
 import org.apache.spark.sql.internal.SQLConf
+import org.apache.spark.sql.rapids.{GpuFileSourceScanExec, GpuStringReplace}
+import org.apache.spark.sql.rapids.execution.{GpuBroadcastExchangeExecBase, GpuShuffleExchangeExecBase}
+import org.apache.spark.sql.rapids.execution.python.{GpuAggregateInPandasExecMeta, GpuArrowEvalPythonExec, GpuFlatMapGroupsInPandasExecMeta, GpuMapInPandasExecMeta, GpuPythonUDF, GpuWindowInPandasExecMetaBase}
 
 /**
  * This class contains the default implementation for most shim methods and should be compiled
@@ -44,17 +53,17 @@ import org.apache.spark.sql.internal.SQLConf
 abstract class SparkBaseShims extends PluginShims {
 
   override def parquetRebaseReadKey: String =
-    SQLConf.LEGACY_PARQUET_REBASE_MODE_IN_READ.key
+    SQLConf.PARQUET_REBASE_MODE_IN_READ.key
   override def parquetRebaseWriteKey: String =
-    SQLConf.LEGACY_PARQUET_REBASE_MODE_IN_WRITE.key
+    SQLConf.PARQUET_REBASE_MODE_IN_WRITE.key
   override def avroRebaseReadKey: String =
-    SQLConf.LEGACY_AVRO_REBASE_MODE_IN_READ.key
+    SQLConf.AVRO_REBASE_MODE_IN_READ.key
   override def avroRebaseWriteKey: String =
-    SQLConf.LEGACY_AVRO_REBASE_MODE_IN_WRITE.key
+    SQLConf.AVRO_REBASE_MODE_IN_WRITE.key
   override def parquetRebaseRead(conf: SQLConf): String =
-    conf.getConf(SQLConf.LEGACY_PARQUET_REBASE_MODE_IN_READ)
+    conf.getConf(SQLConf.PARQUET_REBASE_MODE_IN_READ)
   override def parquetRebaseWrite(conf: SQLConf): String =
-    conf.getConf(SQLConf.LEGACY_PARQUET_REBASE_MODE_IN_WRITE)
+    conf.getConf(SQLConf.PARQUET_REBASE_MODE_IN_WRITE)
 
   override def v1RepairTableCommand(tableName: TableIdentifier): RunnableCommand =
     AlterTableRecoverPartitionsCommand(tableName)
@@ -374,19 +383,13 @@ abstract class SparkBaseShims extends PluginShims {
     partitionDir.files.map(f => replaceFunc(f.getPath))
   }
 
-  override def reusedExchangeExecPfn: PartialFunction[SparkPlan, ReusedExchangeExec] = {
-    case ShuffleQueryStageExec(_, e: ReusedExchangeExec) => e
-    case BroadcastQueryStageExec(_, e: ReusedExchangeExec) => e
-  }
+  override def createGpuDataSourceRDD(
+      sparkContext: SparkContext,
+      partitions: Seq[InputPartition],
+      readerFactory: PartitionReaderFactory
+  ): RDD[InternalRow] = new GpuDataSourceRDD(sparkContext, partitions, readerFactory)
 
-  /** dropped by SPARK-34234 */
-  override def attachTreeIfSupported[TreeType <: TreeNode[_], A](
-    tree: TreeType,
-    msg: String)(
-    f: => A
-  ): A = {
-    attachTree(tree, msg)(f)
+  override def sessionFromPlan(plan: SparkPlan): SparkSession = {
+    plan.session
   }
-
-  override def hasAliasQuoteFix: Boolean = false
 }

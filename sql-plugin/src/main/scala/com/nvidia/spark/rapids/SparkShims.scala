@@ -25,11 +25,10 @@ import org.apache.arrow.vector.ValueVector
 import org.apache.hadoop.fs.Path
 import org.apache.parquet.schema.MessageType
 
-import org.apache.spark.SparkConf
-import org.apache.spark.api.plugin.{DriverPlugin, ExecutorPlugin}
+import org.apache.spark.{SparkConf, SparkContext}
 import org.apache.spark.rdd.RDD
 import org.apache.spark.resource.{ResourceInformation, ResourceRequest}
-import org.apache.spark.sql.{SparkSession, SparkSessionExtensions}
+import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.catalyst.{InternalRow, TableIdentifier}
 import org.apache.spark.sql.catalyst.analysis.Resolver
 import org.apache.spark.sql.catalyst.catalog.{CatalogTable, SessionCatalog}
@@ -38,7 +37,7 @@ import org.apache.spark.sql.catalyst.expressions.{Alias, Expression, ExprId, Nul
 import org.apache.spark.sql.catalyst.plans.JoinType
 import org.apache.spark.sql.catalyst.plans.physical.{BroadcastMode, Partitioning}
 import org.apache.spark.sql.catalyst.trees.TreeNode
-import org.apache.spark.sql.connector.read.Scan
+import org.apache.spark.sql.connector.read.{InputPartition, PartitionReaderFactory, Scan}
 import org.apache.spark.sql.execution.SparkPlan
 import org.apache.spark.sql.execution.adaptive.ShuffleQueryStageExec
 import org.apache.spark.sql.execution.command.RunnableCommand
@@ -84,6 +83,14 @@ case class EMRShimVersion(major: Int, minor: Int, patch: Int) extends ShimVersio
 }
 
 trait SparkShims {
+  def sessionFromPlan(plan: SparkPlan): SparkSession
+
+  def createGpuDataSourceRDD(
+      sparkContext: SparkContext,
+      partitions: Seq[InputPartition],
+      readerFactory: PartitionReaderFactory
+  ): RDD[InternalRow]
+
   def discoverResource(
       request: ResourceRequest,
       sparkconf: SparkConf

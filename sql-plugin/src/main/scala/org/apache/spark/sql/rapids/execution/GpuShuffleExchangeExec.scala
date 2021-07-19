@@ -55,9 +55,11 @@ class GpuShuffleMeta(
     wrapped.getTagValue(gpuSupportedTag).foreach(_.foreach(willNotWorkOnGpu))
 
     shuffle.outputPartitioning match {
-      case _: RoundRobinPartitioning if shuffle.sqlContext.conf.sortBeforeRepartition =>
-        val orderableTypes = GpuOverrides.pluginSupportedOrderableSig
-        shuffle.output.map(_.dataType)
+      case _: RoundRobinPartitioning
+        if ShimLoader.getSparkShims.sessionFromPlan(shuffle).sessionState.conf
+            .sortBeforeRepartition =>
+          val orderableTypes = GpuOverrides.pluginSupportedOrderableSig
+          shuffle.output.map(_.dataType)
             .filterNot(orderableTypes.isSupportedByPlugin(_, conf.decimalTypeEnabled))
             .foreach { dataType =>
               willNotWorkOnGpu(s"round-robin partitioning cannot sort $dataType to run " +

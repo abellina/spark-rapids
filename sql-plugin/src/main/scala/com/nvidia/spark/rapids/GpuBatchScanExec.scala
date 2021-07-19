@@ -74,7 +74,7 @@ case class GpuBatchScanExec(
   override lazy val readerFactory: PartitionReaderFactory = batch.createReaderFactory()
 
   override lazy val inputRDD: RDD[InternalRow] = {
-    new GpuDataSourceRDD(sparkContext, partitions, readerFactory)
+    ShimLoader.getSparkShims.createGpuDataSourceRDD(sparkContext, partitions, readerFactory)
   }
 
   override def doCanonicalize(): GpuBatchScanExec = {

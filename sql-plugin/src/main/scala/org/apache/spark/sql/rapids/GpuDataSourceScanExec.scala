@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, NVIDIA CORPORATION.
+ * Copyright (c) 2020-2021, NVIDIA CORPORATION.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -31,6 +31,7 @@ import org.apache.spark.util.Utils
 trait GpuDataSourceScanExec extends LeafExecNode {
   def relation: BaseRelation
   def tableIdentifier: Option[TableIdentifier]
+  def sparkSession = ShimLoader.getSparkShims.sessionFromPlan(this)
 
   protected val nodeNamePrefix: String = ""
 
@@ -42,7 +43,7 @@ trait GpuDataSourceScanExec extends LeafExecNode {
   protected def metadata: Map[String, String]
 
   protected val maxMetadataValueLength = ShimLoader.getSparkShims
-    .getFileSourceMaxMetadataValueLength(sqlContext.sessionState.conf)
+    .getFileSourceMaxMetadataValueLength(sparkSession.sessionState.conf)
 
   override def simpleString(maxFields: Int): String = {
     val metadataEntries = metadata.toSeq.sorted.map {
@@ -74,7 +75,7 @@ trait GpuDataSourceScanExec extends LeafExecNode {
    * Shorthand for calling redactString() without specifying redacting rules
    */
   protected def redact(text: String): String = {
-    Utils.redact(sqlContext.sessionState.conf.stringRedactionPattern, text)
+    Utils.redact(sparkSession.sessionState.conf.stringRedactionPattern, text)
   }
 
   /**

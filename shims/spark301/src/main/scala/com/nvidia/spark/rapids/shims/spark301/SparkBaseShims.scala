@@ -25,7 +25,7 @@ import org.apache.arrow.vector.ValueVector
 import org.apache.hadoop.fs.Path
 import org.apache.parquet.schema.MessageType
 
-import org.apache.spark.SparkEnv
+import org.apache.spark.{SparkContext, SparkEnv}
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.catalyst.{InternalRow, TableIdentifier}
@@ -37,7 +37,7 @@ import org.apache.spark.sql.catalyst.expressions._
 import org.apache.spark.sql.catalyst.plans.JoinType
 import org.apache.spark.sql.catalyst.plans.physical.{BroadcastMode, Partitioning}
 import org.apache.spark.sql.catalyst.trees.TreeNode
-import org.apache.spark.sql.connector.read.Scan
+import org.apache.spark.sql.connector.read.{InputPartition, PartitionReaderFactory, Scan}
 import org.apache.spark.sql.execution._
 import org.apache.spark.sql.execution.adaptive.{BroadcastQueryStageExec, ShuffleQueryStageExec}
 import org.apache.spark.sql.execution.command.{AlterTableRecoverPartitionsCommand, RunnableCommand}
@@ -647,4 +647,15 @@ abstract class SparkBaseShims extends PluginShims {
   override def hasAliasQuoteFix: Boolean = false
 
   override def hasCastFloatTimestampUpcast: Boolean = false
+
+  override def createGpuDataSourceRDD(
+      sparkContext: SparkContext,
+      partitions: Seq[InputPartition],
+      readerFactory: PartitionReaderFactory): RDD[InternalRow] = {
+    new GpuDataSourceRDD(sparkContext, partitions, readerFactory)
+  }
+
+  override def sessionFromPlan(plan: SparkPlan): SparkSession = {
+    plan.sqlContext.sparkSession
+  }
 }

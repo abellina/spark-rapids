@@ -18,30 +18,19 @@ package com.nvidia.spark.rapids.shims.spark320
 
 import com.nvidia.spark.rapids.ShimVersion
 import com.nvidia.spark.rapids.spark320.RapidsShuffleManager
+import org.apache.parquet.schema.MessageType
 
 import org.apache.spark.sql.catalyst.TableIdentifier
 import org.apache.spark.sql.catalyst.trees.TreeNode
 import org.apache.spark.sql.execution.SparkPlan
 import org.apache.spark.sql.execution.adaptive.{BroadcastQueryStageExec, ShuffleQueryStageExec}
 import org.apache.spark.sql.execution.command.{RepairTableCommand, RunnableCommand}
+import org.apache.spark.sql.execution.datasources.parquet.ParquetFilters
 import org.apache.spark.sql.execution.exchange.ReusedExchangeExec
 import org.apache.spark.sql.internal.SQLConf
 
 class Spark320Shims extends SparkBaseShims {
   override def getSparkShimVersion: ShimVersion = SparkShimServiceProvider.VERSION320
-
-  override def parquetRebaseReadKey: String =
-    SQLConf.PARQUET_REBASE_MODE_IN_READ.key
-  override def parquetRebaseWriteKey: String =
-    SQLConf.PARQUET_REBASE_MODE_IN_WRITE.key
-  override def avroRebaseReadKey: String =
-    SQLConf.AVRO_REBASE_MODE_IN_READ.key
-  override def avroRebaseWriteKey: String =
-    SQLConf.AVRO_REBASE_MODE_IN_WRITE.key
-  override def parquetRebaseRead(conf: SQLConf): String =
-    conf.getConf(SQLConf.PARQUET_REBASE_MODE_IN_READ)
-  override def parquetRebaseWrite(conf: SQLConf): String =
-    conf.getConf(SQLConf.PARQUET_REBASE_MODE_IN_WRITE)
 
   override def getParquetFilters(
       schema: MessageType,
@@ -53,7 +42,7 @@ class Spark320Shims extends SparkBaseShims {
       caseSensitive: Boolean,
       datetimeRebaseMode: SQLConf.LegacyBehaviorPolicy.Value): ParquetFilters =
     new ParquetFilters(schema, pushDownDate, pushDownTimestamp, pushDownDecimal, pushDownStartWith,
-      pushDownInFilterThreshold, caseSensitive, datetimeRebaseMode, datetimeRebaseMode)
+      pushDownInFilterThreshold, caseSensitive, datetimeRebaseMode)
 
   override def v1RepairTableCommand(tableName: TableIdentifier): RunnableCommand =
     RepairTableCommand(tableName,
