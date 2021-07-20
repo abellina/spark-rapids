@@ -132,6 +132,22 @@
               </filters>
             </configuration>
           </execution>
+          <execution>
+            <id>shim311-fat-jar</id>
+            <phase>package</phase>
+            <goals><goal>shade</goal></goals>
+            <configuration>
+              <shadedClassifierName>spark311</shadedClassifierName>
+              <shadedArtifactAttached>true</shadedArtifactAttached>
+              <filters>
+                <filter>
+                  <artifact>*:rapids-4-spark-shims-spark311_${scala.binary.version}:*</artifact>
+                  <artifact>com.google.flatbuffers:flatbuffers-java</artifact>
+                  <artifact>org.openucx:jucx</artifact>
+                </filter>
+              </filters>
+            </configuration>
+          </execution>
         </executions>
       </plugin>
       <plugin>
