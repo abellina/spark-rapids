@@ -69,7 +69,6 @@
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-shade-plugin</artifactId>
         <configuration>
-          <shadeSourcesContent>true</shadeSourcesContent>
           <artifactSet>
             <includes>
               <include>*:rapids-4-spark-shims-*_${scala.binary.version}:*</include>
@@ -86,34 +85,51 @@
         </configuration>
         <executions>
           <execution>
-            <id>relocate-shim302</id>
+            <id>shim301-fat-jar</id>
             <phase>package</phase>
             <goals><goal>shade</goal></goals>
             <configuration>
-              <artifactSet>
-                <includes>
-                  <include>*:rapids-4-spark-shims-spark302_${scala.binary.version}:*</include>
-                </includes>
-              </artifactSet>
+              <shadedClassifierName>spark301</shadedClassifierName>
+              <shadedArtifactAttached>true</shadedArtifactAttached>
+              <filters>
+                <filter>
+                  <artifact>*:rapids-4-spark-shims-spark301_${scala.binary.version}:*</artifact>
+                  <artifact>com.google.flatbuffers:flatbuffers-java</artifact>
+                  <artifact>org.openucx:jucx</artifact>
+                </filter>
+              </filters>
+            </configuration>
+          </execution>
+          <execution>
+            <id>shim302-fat-jar</id>
+            <phase>package</phase>
+            <goals><goal>shade</goal></goals>
+            <configuration>
+              <shadedClassifierName>spark302</shadedClassifierName>
+              <shadedArtifactAttached>true</shadedArtifactAttached>
               <filters>
                 <filter>
                   <artifact>*:rapids-4-spark-shims-spark302_${scala.binary.version}:*</artifact>
+                  <artifact>com.google.flatbuffers:flatbuffers-java</artifact>
+                  <artifact>org.openucx:jucx</artifact>
                 </filter>
               </filters>
-              <relocations>
-                <relocation>
-                  <pattern>com.nvidia</pattern>
-                  <shadedPattern>spark302.com.nvidia</shadedPattern>
-                  <excludes>
-                    <!-- keep only documented classes in the original namespace -->
-                    <exclude>com.nvidia.spark.rapids.SparkShim*</exclude>
-                    <exclude>com.nvidia.spark.SQLPlugin*</exclude>
-                    <exclude>com.nvidia.spark.rapids.SQLExecPlugin*</exclude>
-                    <exclude>com.nvidia.spark.udf.Plugin*</exclude>
-                    <exclude>com.nvidia.spark.rapids.ShimLoader*</exclude>
-                  </excludes>
-                </relocation>
-              </relocations>
+            </configuration>
+          </execution>
+          <execution>
+            <id>shim303-fat-jar</id>
+            <phase>package</phase>
+            <goals><goal>shade</goal></goals>
+            <configuration>
+              <shadedClassifierName>spark303</shadedClassifierName>
+              <shadedArtifactAttached>true</shadedArtifactAttached>
+              <filters>
+                <filter>
+                  <artifact>*:rapids-4-spark-shims-spark303_${scala.binary.version}:*</artifact>
+                  <artifact>com.google.flatbuffers:flatbuffers-java</artifact>
+                  <artifact>org.openucx:jucx</artifact>
+                </filter>
+              </filters>
             </configuration>
           </execution>
         </executions>
