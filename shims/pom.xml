@@ -67,6 +67,24 @@
                 <module>spark303</module>
             </modules>
         </profile>
+        <profile>
+            <id>released31x-shims</id>
+            <modules>
+                <module>spark311</module>
+                <module>spark312</module>
+            </modules>
+        </profile>
+        <profile>
+            <id>last-patch-per-major</id>
+            <modules>
+                <module>spark303</module>
+
+                <!-- faking transitive only if we keep source dependencies -->
+                <module>spark311</module>
+
+                <module>spark312</module>
+            </modules>
+        </profile>
     </profiles>
     <modules>
         <module>aggregator</module>

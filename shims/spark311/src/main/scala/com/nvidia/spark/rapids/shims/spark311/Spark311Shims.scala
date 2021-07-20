@@ -20,7 +20,6 @@ import java.net.URI
 import java.nio.ByteBuffer
 
 import com.nvidia.spark.rapids._
-import com.nvidia.spark.rapids.shims.spark301.Spark301Shims
 import com.nvidia.spark.rapids.spark311.RapidsShuffleManager
 import org.apache.arrow.memory.ReferenceManager
 import org.apache.arrow.vector.ValueVector
@@ -49,7 +48,7 @@ import org.apache.spark.sql.sources.BaseRelation
 import org.apache.spark.sql.types._
 import org.apache.spark.storage.{BlockId, BlockManagerId}
 
-class Spark311Shims extends Spark301Shims {
+class Spark311Shims extends SparkBaseShims {
 
   override def getSparkShimVersion: ShimVersion = SparkShimServiceProvider.VERSION
 
@@ -540,4 +539,6 @@ class Spark311Shims extends Spark301Shims {
 
   /** matches SPARK-33008 fix in 3.1.1 */
   override def shouldFailDivByZero(): Boolean = SQLConf.get.ansiEnabled
+
+  override def hasCastFloatTimestampUpcast: Boolean = false
 }
