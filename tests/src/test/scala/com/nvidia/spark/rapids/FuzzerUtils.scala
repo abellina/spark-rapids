@@ -38,7 +38,10 @@ object FuzzerUtils {
   /**
    * Default options when generating random data.
    */
-  private val DEFAULT_OPTIONS = FuzzerOptions()
+  private val DEFAULT_OPTIONS = FuzzerOptions(
+    numbersAsStrings = true,
+    asciiStringsOnly = false,
+    maxStringLen = 64)
 
   /**
    * Create a schema with the specified data types.
@@ -328,6 +331,20 @@ class EnhancedRandom(protected val r: Random, protected val options: FuzzerOptio
     }
   }
 
+  def nextString(): String = {
+    if (options.numbersAsStrings) {
+      r.nextInt(5) match {
+        case 0 => String.valueOf(r.nextInt())
+        case 1 => String.valueOf(r.nextLong())
+        case 2 => String.valueOf(r.nextFloat())
+        case 3 => String.valueOf(r.nextDouble())
+        case 4 => generateString()
+      }
+    } else {
+      generateString()
+    }
+  }
+
   def nextDate(): Date = {
     val futureDate = 6321706291000L // Upper limit Sunday, April 29, 2170 9:31:31 PM
     new Date((futureDate * r.nextDouble()).toLong);
@@ -338,26 +355,22 @@ class EnhancedRandom(protected val r: Random, protected val options: FuzzerOptio
     new Timestamp((futureDate * r.nextDouble()).toLong)
   }
 
-  def nextString(): String = {
-    val length = r.nextInt(options.maxStringLen)
-    options.validStringChars match {
-      case Some(ch) => nextString(ch, length)
-      case _ =>
-        // delegate to Scala's Random.nextString
-        r.nextString(length)
+  private def generateString(): String = {
+    if (options.asciiStringsOnly) {
+      val b = new StringBuilder()
+      for (_ <- 0 until options.maxStringLen) {
+        b.append(ASCII_CHARS.charAt(r.nextInt(ASCII_CHARS.length)))
+      }
+      b.toString
+    } else {
+      r.nextString(r.nextInt(options.maxStringLen))
     }
   }
 
-  def nextString(validStringChars: String, maxStringLen: Int): String = {
-    val b = new StringBuilder(maxStringLen)
-    for (_ <- 0 until maxStringLen) {
-      b.append(validStringChars.charAt(r.nextInt(validStringChars.length)))
-    }
-    b.toString
-  }
-
+  private val ASCII_CHARS = "abcdefghijklmnopqrstuvwxyz"
 }
 
 case class FuzzerOptions(
-    validStringChars: Option[String] = None,
+    numbersAsStrings: Boolean = true,
+    asciiStringsOnly: Boolean = false,
     maxStringLen: Int = 64)

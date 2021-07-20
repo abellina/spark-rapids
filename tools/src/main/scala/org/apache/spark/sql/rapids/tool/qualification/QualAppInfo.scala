@@ -20,7 +20,6 @@ import scala.collection.mutable.{ArrayBuffer, HashMap, HashSet}
 
 import com.nvidia.spark.rapids.tool.EventLogInfo
 import com.nvidia.spark.rapids.tool.profiling._
-import com.nvidia.spark.rapids.tool.qualification._
 import org.apache.hadoop.conf.Configuration
 
 import org.apache.spark.internal.Logging
@@ -32,9 +31,7 @@ import org.apache.spark.sql.rapids.tool.{AppBase, ToolUtils}
 class QualAppInfo(
     numOutputRows: Int,
     eventLogInfo: EventLogInfo,
-    hadoopConf: Configuration,
-    pluginTypeChecker: Option[PluginTypeChecker],
-    readScorePercent: Int)
+    hadoopConf: Configuration)
   extends AppBase(numOutputRows, eventLogInfo, hadoopConf) with Logging {
 
   var appId: String = ""
@@ -55,20 +52,17 @@ class QualAppInfo(
   val jobIdToSqlID: HashMap[Int, Long] = HashMap.empty[Int, Long]
   val sqlIDtoJobFailures: HashMap[Long, ArrayBuffer[Int]] = HashMap.empty[Long, ArrayBuffer[Int]]
 
-  val sqlIDtoProblematic: HashMap[Long, Set[String]] = HashMap[Long, Set[String]]()
+  val problematicSQL: ArrayBuffer[ProblematicSQLCase] = ArrayBuffer[ProblematicSQLCase]()
 
   // SQL containing any Dataset operation
   val sqlIDToDataSetCase: HashSet[Long] = HashSet[Long]()
-
-  val notSupportFormatAndTypes: HashMap[String, Set[String]] = HashMap[String, Set[String]]()
 
   private lazy val eventProcessor =  new QualEventProcessor()
 
   processEvents()
 
-  override def processEvent(event: SparkListenerEvent): Boolean = {
+  override def processEvent(event: SparkListenerEvent): Unit = {
     eventProcessor.processAnyEvent(this, event)
-    false
   }
 
   // time in ms
@@ -92,52 +86,25 @@ class QualAppInfo(
     ProfileUtils.OptionLongMinusLong(estimatedResult, startTime)
   }
 
-  /**
-   * The score starts out based on the over all task time spent in SQL dataframe
-   * operations and then can only decrease from there based on if it has operations not
-   * supported by the plugin.
-   */
-  private def calculateScore(readScoreRatio: Double, sqlDataframeTaskDuration: Long): Double = {
-    // the readScorePercent is an integer representation of percent
-    val ratioForReadScore = readScorePercent / 100.0
-    val ratioForRestOfScore = 1.0 - ratioForReadScore
-    // get the part of the duration that will apply to the read score
-    val partForReadScore = sqlDataframeTaskDuration * ratioForReadScore
-    // calculate the score for the read part based on the read format score
-    val readScore = partForReadScore * readScoreRatio
-    // get the rest of the duration that doesn't apply to the read score
-    val scoreRestPart = sqlDataframeTaskDuration * ratioForRestOfScore
-    scoreRestPart + readScore
+  private def calculateScore(sqlDataframeDur: Long, appDuration: Long): Double = {
+    ToolUtils.calculatePercent(sqlDataframeDur, appDuration)
   }
 
-  // if the SQL contains a dataset, then duration for it is 0
-  // for the SQL dataframe duration
-  private def calculateSqlDataframeDuration: Long = {
+  // if the sql contains a dataset, then duration for it is 0
+  // for the sql dataframe duration
+  private def calculateSqlDataframDuration: Long = {
     sqlDurationTime.filterNot { case (sqlID, dur) =>
         sqlIDToDataSetCase.contains(sqlID) || dur == -1
     }.values.sum
   }
 
-  private def probNotDataset: HashMap[Long, Set[String]] = {
-    sqlIDtoProblematic.filterNot { case (sqlID, _) => sqlIDToDataSetCase.contains(sqlID) }
-  }
-
-  // The total task time for all tasks that ran during SQL dataframe
-  // operations.  if the SQL contains a dataset, it isn't counted.
-  private def calculateTaskDataframeDuration: Long = {
-    val validSums = sqlIDToTaskEndSum.filterNot { case (sqlID, _) =>
-      sqlIDToDataSetCase.contains(sqlID) || sqlDurationTime.getOrElse(sqlID, -1) == -1
-    }
-    validSums.values.map(dur => dur.totalTaskDuration).sum
-  }
-
   private def getPotentialProblems: String = {
-    probNotDataset.values.flatten.toSet.mkString(":")
+    problematicSQL.map(_.reason).toSet.mkString(",")
   }
 
   private def getSQLDurationProblematic: Long = {
-    probNotDataset.keys.map { sqlId =>
-      sqlDurationTime.getOrElse(sqlId, 0L)
+    problematicSQL.map { prob =>
+      sqlDurationTime.getOrElse(prob.sqlID, 0L)
     }.sum
   }
 
@@ -151,82 +118,36 @@ class QualAppInfo(
     val totalRunTime = validSums.values.map { dur =>
       dur.executorRunTime
     }.sum
-    ToolUtils.calculateDurationPercent(totalCpuTime, totalRunTime)
-  }
-
-  private def getAllReadFileFormats: String = {
-    dataSourceInfo.map { ds =>
-      s"${ds.format.toLowerCase()}[${ds.schema}]"
-    }.mkString(":")
-  }
-  
-  // For the read score we look at all the read formats and datatypes for each
-  // format and for each read give it a value 0.0 - 1.0 depending on whether
-  // the format is supported and if the data types are supported. We then sum
-  // those together and divide by the total number.  So if none of the data types
-  // are supported, the score would be 0.0 and if all formats and datatypes are
-  // supported the score would be 1.0.
-  private def calculateReadScoreRatio(): Double = {
-    pluginTypeChecker.map { checker =>
-      if (dataSourceInfo.size == 0) {
-        1.0
-      } else {
-        val readFormatSum = dataSourceInfo.map { ds =>
-          val (readScore, nsTypes) = checker.scoreReadDataTypes(ds.format, ds.schema)
-          if (nsTypes.nonEmpty) {
-            val currentFormat = notSupportFormatAndTypes.get(ds.format).getOrElse(Set.empty[String])
-            notSupportFormatAndTypes(ds.format) = (currentFormat ++ nsTypes)
-          }
-          readScore
-        }.sum
-        readFormatSum / dataSourceInfo.size
-      }
-    }.getOrElse(1.0)
+    ToolUtils.calculatePercent(totalCpuTime, totalRunTime)
   }
 
   def aggregateStats(): Option[QualificationSummaryInfo] = {
     appInfo.map { info =>
       val appDuration = calculateAppDuration(info.startTime).getOrElse(0L)
-      val sqlDataframeDur = calculateSqlDataframeDuration
+      val sqlDataframeDur = calculateSqlDataframDuration
+      val score = calculateScore(sqlDataframeDur, appDuration)
       val problems = getPotentialProblems
       val executorCpuTimePercent = calculateCpuTimePercent
       val endDurationEstimated = this.appEndTime.isEmpty && appDuration > 0
       val sqlDurProblem = getSQLDurationProblematic
-      val readScoreRatio = calculateReadScoreRatio
-      val sqlDataframeTaskDuration = calculateTaskDataframeDuration
-      val readScoreHumanPercent = 100 * readScoreRatio
-      val readScoreHumanPercentRounded = f"${readScoreHumanPercent}%1.2f".toDouble
-      val score = calculateScore(readScoreRatio, sqlDataframeTaskDuration)
-      val scoreRounded = f"${score}%1.2f".toDouble
       val failedIds = sqlIDtoJobFailures.filter { case (_, v) =>
         v.size > 0
       }.keys.mkString(",")
-      val notSupportFormatAndTypesString = notSupportFormatAndTypes.map { case(format, types) =>
-        val typeString = types.mkString(":").replace(",", ":")
-        s"${format}[$typeString]"
-      }.mkString(";")
-
-      new QualificationSummaryInfo(info.appName, appId, scoreRounded, problems,
-        sqlDataframeDur, sqlDataframeTaskDuration, appDuration, executorCpuTimePercent,
-        endDurationEstimated, sqlDurProblem, failedIds, readScorePercent,
-        readScoreHumanPercentRounded, notSupportFormatAndTypesString,
-        getAllReadFileFormats)
+      new QualificationSummaryInfo(info.appName, appId, score, problems,
+        sqlDataframeDur, appDuration, executorCpuTimePercent, endDurationEstimated,
+        sqlDurProblem, failedIds)
     }
   }
 
   def processSQLPlan(sqlID: Long, planInfo: SparkPlanInfo): Unit = {
-    checkMetadataForReadSchema(sqlID, planInfo)
     val planGraph = SparkPlanGraph(planInfo)
     val allnodes = planGraph.allNodes
     for (node <- allnodes) {
-      checkGraphNodeForBatchScan(sqlID, node)
       if (isDataSetPlan(node.desc)) {
         sqlIDToDataSetCase += sqlID
       }
-      val issues = findPotentialIssues(node.desc)
-      if (issues.nonEmpty) {
-        val existingIssues = sqlIDtoProblematic.getOrElse(sqlID, Set.empty[String])
-        sqlIDtoProblematic(sqlID) = existingIssues ++ issues
+      findPotentialIssues(node.desc).foreach { issues =>
+        problematicSQL += ProblematicSQLCase(sqlID, issues)
       }
     }
   }
@@ -236,8 +157,7 @@ class StageTaskQualificationSummary(
     val stageId: Int,
     val stageAttemptId: Int,
     var executorRunTime: Long,
-    var executorCPUTime: Long,
-    var totalTaskDuration: Long)
+    var executorCPUTime: Long)
 
 case class QualApplicationInfo(
     appName: String,
@@ -264,26 +184,19 @@ case class QualificationSummaryInfo(
     score: Double,
     potentialProblems: String,
     sqlDataFrameDuration: Long,
-    sqlDataframeTaskDuration: Long,
     appDuration: Long,
     executorCpuTimePercent: Double,
     endDurationEstimated: Boolean,
     sqlDurationForProblematic: Long,
-    failedSQLIds: String,
-    readScorePercent: Int,
-    readFileFormatScore: Double,
-    readFileFormatAndTypesNotSupported: String,
-    readFileFormats: String)
+    failedSQLIds: String)
 
 object QualAppInfo extends Logging {
   def createApp(
       path: EventLogInfo,
       numRows: Int,
-      hadoopConf: Configuration,
-      pluginTypeChecker: Option[PluginTypeChecker],
-      readScorePercent: Int): Option[QualAppInfo] = {
+      hadoopConf: Configuration): Option[QualAppInfo] = {
     val app = try {
-        val app = new QualAppInfo(numRows, path, hadoopConf, pluginTypeChecker, readScorePercent)
+        val app = new QualAppInfo(numRows, path, hadoopConf)
         logInfo(s"${path.eventLog.toString} has App: ${app.appId}")
         Some(app)
       } catch {

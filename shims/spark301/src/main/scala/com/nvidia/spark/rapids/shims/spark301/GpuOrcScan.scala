@@ -41,10 +41,9 @@ case class GpuOrcScan(
     pushedFilters: Array[Filter],
     partitionFilters: Seq[Expression],
     dataFilters: Seq[Expression],
-    rapidsConf: RapidsConf,
-    queryUsesInputFile: Boolean = false)
+    rapidsConf: RapidsConf)
   extends GpuOrcScanBase(sparkSession, hadoopConf, dataSchema, readDataSchema,
-    readPartitionSchema, pushedFilters, rapidsConf, queryUsesInputFile) with FileScan {
+    readPartitionSchema, pushedFilters, rapidsConf) with FileScan {
 
   override def isSplitable(path: Path): Boolean = super.isSplitableBase(path)
 
@@ -53,8 +52,7 @@ case class GpuOrcScan(
   override def equals(obj: Any): Boolean = obj match {
     case o: GpuOrcScan =>
       super.equals(o) && dataSchema == o.dataSchema && options == o.options &&
-        equivalentFilters(pushedFilters, o.pushedFilters) && rapidsConf == o.rapidsConf &&
-        queryUsesInputFile == o.queryUsesInputFile
+        equivalentFilters(pushedFilters, o.pushedFilters) && rapidsConf == o.rapidsConf
     case _ => false
   }
 

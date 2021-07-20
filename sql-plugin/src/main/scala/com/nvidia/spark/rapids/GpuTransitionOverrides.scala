@@ -38,8 +38,7 @@ import org.apache.spark.sql.vectorized.ColumnarBatch
  * These rules insert transitions to and from the GPU, and then optimize various transitions.
  */
 class GpuTransitionOverrides extends Rule[SparkPlan] {
-  // previous name of the field `conf` collides with Rule#conf as of Spark 3.1.1
-  var rapidsConf: RapidsConf = null
+  var conf: RapidsConf = null
 
   def optimizeGpuPlanTransitions(plan: SparkPlan): SparkPlan = plan match {
     case HostColumnarToGpu(r2c: RowToColumnarExec, goal) =>
@@ -57,9 +56,9 @@ class GpuTransitionOverrides extends Rule[SparkPlan] {
   /** Adds the appropriate coalesce after a shuffle depending on the type of shuffle configured */
   private def addPostShuffleCoalesce(plan: SparkPlan): SparkPlan = {
     if (GpuShuffleEnv.isRapidsShuffleEnabled) {
-      GpuCoalesceBatches(plan, TargetSize(rapidsConf.gpuTargetBatchSizeBytes))
+      GpuCoalesceBatches(plan, TargetSize(conf.gpuTargetBatchSizeBytes))
     } else {
-      GpuShuffleCoalesceExec(plan, rapidsConf.gpuTargetBatchSizeBytes)
+      GpuShuffleCoalesceExec(plan, conf.gpuTargetBatchSizeBytes)
     }
   }
 
@@ -159,11 +158,9 @@ class GpuTransitionOverrides extends Rule[SparkPlan] {
       p.withNewChildren(p.children.map(c => optimizeAdaptiveTransitions(c, Some(p))))
   }
 
-  private def isGpuShuffleLike(execNode: SparkPlan): Boolean = execNode match {
-    case _: GpuShuffleExchangeExecBase | _: GpuCustomShuffleReaderExec => true
-    case qs: ShuffleQueryStageExec => isGpuShuffleLike(qs.plan)
-    case _ => false
-  }
+  private def isGpuShuffleLike(execNode: SparkPlan): Boolean =
+    execNode.isInstanceOf[GpuShuffleExchangeExecBase] ||
+      execNode.isInstanceOf[GpuCustomShuffleReaderExec]
 
   /**
    * This optimizes the plan to remove [[GpuCoalesceBatches]] nodes that are unnecessary
@@ -285,10 +282,9 @@ class GpuTransitionOverrides extends Rule[SparkPlan] {
   private def updateScansForInput(plan: SparkPlan,
       disableUntilInput: Boolean = false): SparkPlan = plan match {
     case batchScan: GpuBatchScanExec =>
-      if ((batchScan.scan.isInstanceOf[GpuParquetScanBase] ||
-        batchScan.scan.isInstanceOf[GpuOrcScanBase]) &&
-          (disableUntilInput || disableScanUntilInput(batchScan))) {
-        ShimLoader.getSparkShims.copyBatchScanExec(batchScan, true)
+      if (batchScan.scan.isInstanceOf[GpuParquetScanBase] &&
+        (disableUntilInput || disableScanUntilInput(batchScan))) {
+        ShimLoader.getSparkShims.copyParquetBatchScanExec(batchScan, true)
       } else {
         batchScan
       }
@@ -317,7 +313,7 @@ class GpuTransitionOverrides extends Rule[SparkPlan] {
       val tmp = exec.withNewChildren(insertCoalesce(exec.children, exec.childrenCoalesceGoal,
         shouldDisable))
       if (exec.coalesceAfter && !shouldDisable) {
-        GpuCoalesceBatches(tmp, TargetSize(rapidsConf.gpuTargetBatchSizeBytes))
+        GpuCoalesceBatches(tmp, TargetSize(conf.gpuTargetBatchSizeBytes))
       } else {
         tmp
       }
@@ -338,7 +334,7 @@ class GpuTransitionOverrides extends Rule[SparkPlan] {
     case exec: GpuShuffleExchangeExecBase =>
       // always follow a GPU shuffle with a shuffle coalesce
       GpuShuffleCoalesceExec(exec.withNewChildren(exec.children.map(insertShuffleCoalesce)),
-        rapidsConf.gpuTargetBatchSizeBytes)
+        conf.gpuTargetBatchSizeBytes)
     case exec => exec.withNewChildren(plan.children.map(insertShuffleCoalesce))
   }
 
@@ -359,14 +355,14 @@ class GpuTransitionOverrides extends Rule[SparkPlan] {
   private def insertColumnarToGpu(plan: SparkPlan): SparkPlan = {
     val nonQueryStagePlan = GpuTransitionOverrides.getNonQueryStagePlan(plan)
     if (nonQueryStagePlan.supportsColumnar && !nonQueryStagePlan.isInstanceOf[GpuExec]) {
-      HostColumnarToGpu(insertColumnarFromGpu(plan), TargetSize(rapidsConf.gpuTargetBatchSizeBytes))
+      HostColumnarToGpu(insertColumnarFromGpu(plan), TargetSize(conf.gpuTargetBatchSizeBytes))
     } else {
       plan.withNewChildren(plan.children.map(insertColumnarToGpu))
     }
   }
 
   private def insertHashOptimizeSorts(plan: SparkPlan): SparkPlan = {
-    if (rapidsConf.enableHashOptimizeSort) {
+    if (conf.enableHashOptimizeSort) {
       // Insert a sort after the last hash-based op before the query result if there are no
       // intermediate nodes that have a specified sort order. This helps with the size of
       // Parquet and Orc files
@@ -391,7 +387,7 @@ class GpuTransitionOverrides extends Rule[SparkPlan] {
 
   private def getOptimizedSortOrder(plan: SparkPlan): Seq[SortOrder] = {
     plan.output.map { expr =>
-      val wrapped = GpuOverrides.wrapExpr(expr, rapidsConf, None)
+      val wrapped = GpuOverrides.wrapExpr(expr, conf, None)
       wrapped.tagForGpu()
       assert(wrapped.canThisBeReplaced)
       ShimLoader.getSparkShims.sortOrder(
@@ -441,8 +437,8 @@ class GpuTransitionOverrides extends Rule[SparkPlan] {
             // used feature. This prevents those from failing tests. This also allows
             // the columnar to row transitions to not cause test issues because they too
             // are not columnar (they output rows) but are instances of GpuExec.
-            !plan.isInstanceOf[GpuExec] &&
-            !conf.testingAllowedNonGpu.exists(nonGpuClass =>
+            !plan.isInstanceOf[GpuExec] && 
+            !conf.testingAllowedNonGpu.exists(nonGpuClass => 
                 PlanUtils.sameClass(plan, nonGpuClass))) {
           throw new IllegalArgumentException(s"Part of the plan is not columnar " +
             s"${plan.getClass}\n${plan}")
@@ -487,8 +483,8 @@ class GpuTransitionOverrides extends Rule[SparkPlan] {
   }
 
   override def apply(plan: SparkPlan): SparkPlan = {
-    this.rapidsConf = new RapidsConf(plan.conf)
-    if (rapidsConf.isSqlEnabled) {
+    this.conf = new RapidsConf(plan.conf)
+    if (conf.isSqlEnabled) {
       var updatedPlan = insertHashOptimizeSorts(plan)
       updatedPlan = updateScansForInput(updatedPlan)
       updatedPlan = insertColumnarFromGpu(updatedPlan)
@@ -503,15 +499,15 @@ class GpuTransitionOverrides extends Rule[SparkPlan] {
         updatedPlan = optimizeGpuPlanTransitions(updatedPlan)
       }
       updatedPlan = optimizeCoalesce(updatedPlan)
-      if (rapidsConf.exportColumnarRdd) {
+      if (conf.exportColumnarRdd) {
         updatedPlan = detectAndTagFinalColumnarOutput(updatedPlan)
       }
-      if (rapidsConf.isTestEnabled) {
-        assertIsOnTheGpu(updatedPlan, rapidsConf)
+      if (conf.isTestEnabled) {
+        assertIsOnTheGpu(updatedPlan, conf)
         // Generate the canonicalized plan to ensure no incompatibilities.
         // The plan itself is not currently checked.
         updatedPlan.canonicalized
-        validateExecsInGpuPlan(updatedPlan, rapidsConf)
+        validateExecsInGpuPlan(updatedPlan, conf)
       }
       updatedPlan
     } else {

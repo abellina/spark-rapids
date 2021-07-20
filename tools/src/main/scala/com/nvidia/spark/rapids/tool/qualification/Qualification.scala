@@ -32,9 +32,7 @@ import org.apache.spark.sql.rapids.tool.qualification._
  * reports.
  */
 class Qualification(outputDir: String, numRows: Int, hadoopConf: Configuration,
-    timeout: Option[Long], nThreads: Int, order: String,
-    pluginTypeChecker: Option[PluginTypeChecker], readScorePercent: Int,
-    reportReadSchema: Boolean, printStdout: Boolean) extends Logging {
+    timeout: Option[Long], nThreads: Int, order: String) extends Logging {
 
   private val allApps = new ConcurrentLinkedQueue[QualificationSummaryInfo]()
   // default is 24 hours
@@ -73,7 +71,7 @@ class Qualification(outputDir: String, numRows: Int, hadoopConf: Configuration,
     val sortedDesc = allAppsSum.sortBy(sum => {
         (-sum.score, -sum.sqlDataFrameDuration, -sum.appDuration)
     })
-    val qWriter = new QualOutputWriter(outputDir, reportReadSchema, printStdout)
+    val qWriter = new QualOutputWriter(outputDir)
     qWriter.writeCSV(sortedDesc)
 
     val sortedForReport = if (QualificationArgs.isOrderAsc(order)) {
@@ -93,8 +91,7 @@ class Qualification(outputDir: String, numRows: Int, hadoopConf: Configuration,
       hadoopConf: Configuration): Unit = {
     try {
       val startTime = System.currentTimeMillis()
-      val app = QualAppInfo.createApp(path, numRows, hadoopConf, pluginTypeChecker,
-        readScorePercent)
+      val app = QualAppInfo.createApp(path, numRows, hadoopConf)
       if (!app.isDefined) {
         logWarning(s"No Application found that contain SQL for ${path.eventLog.toString}!")
         None

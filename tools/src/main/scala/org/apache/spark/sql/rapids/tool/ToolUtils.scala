@@ -30,15 +30,14 @@ object ToolUtils extends Logging {
     df.showString(numRows, 0)
   }
 
-  // given to duration values, calculate a human readable percent
-  // rounded to 2 decimal places. ie 39.12%
-  def calculateDurationPercent(first: Long, total: Long): Double = {
+  // get percent to 2 decimal places
+  def calculatePercent(first: Long, total: Long): Double = {
     val firstDec = BigDecimal.decimal(first)
     val totalDec = BigDecimal.decimal(total)
     if (firstDec == 0 || totalDec == 0) {
       0.toDouble
     } else {
-      val res = (firstDec / totalDec) * 100
+      val res = (firstDec * 100) / totalDec
       val resScale = res.setScale(2, BigDecimal.RoundingMode.HALF_UP)
       resScale.toDouble
     }

@@ -71,29 +71,25 @@ class HealthCheck(apps: Seq[ApplicationInfo], textFileWriter: ToolTextFileWriter
 
   //Function to list all SparkListenerBlockManagerRemoved
   def listRemovedBlockManager(): Unit = {
-    val header = "\nRemoved BlockManager(s):\n"
-    val query = apps
-      .filter { p =>
-        (p.allDataFrames.contains(s"blockManagersRemovedDF_${p.index}"))
-      }.map(app => "(" + app.getblockManagersRemoved + ")")
-      .mkString(" union ")
-    if (query.nonEmpty) {
-      apps.head.runQuery(query + "order by appIndex, executorID", false,
-        fileWriter = Some(textFileWriter), messageHeader = header)
+    for (app <- apps) {
+      if (app.allDataFrames.contains(s"blockManagersRemovedDF_${app.index}")) {
+        val blockManagersMessageHeader =
+          s"Removed BlockManager(s):\n"
+        app.runQuery(query = app.getblockManagersRemoved, fileWriter = Some(textFileWriter),
+          messageHeader = blockManagersMessageHeader)
+      }
     }
   }
 
   //Function to list all SparkListenerExecutorRemoved
   def listRemovedExecutors(): Unit = {
-    val header = "\nRemoved Executors(s):\n"
-    val query = apps
-      .filter { p =>
-        (p.allDataFrames.contains(s"executorsRemovedDF_${p.index}"))
-      }.map(app => "(" + app.getExecutorsRemoved + ")")
-      .mkString(" union ")
-    if (query.nonEmpty) {
-      apps.head.runQuery(query + "order by appIndex, executorID", false,
-        fileWriter = Some(textFileWriter), messageHeader = header)
+    for (app <- apps) {
+      if (app.allDataFrames.contains(s"executorsRemovedDF_${app.index}")) {
+        val executorsRemovedMessageHeader =
+          s"Removed Executors(s):\n"
+        app.runQuery(query = app.getExecutorsRemoved, fileWriter = Some(textFileWriter),
+          messageHeader = executorsRemovedMessageHeader)
+      }
     }
   }
 
