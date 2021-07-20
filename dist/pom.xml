@@ -83,10 +83,19 @@
           <createDependencyReducedPom>true</createDependencyReducedPom>
           <createSourcesJar>true</createSourcesJar>
         </configuration>
+        <!-- number of shims can be reduced to the number of compatibility domain
+         Use the most recent version from each compatibilty domain. Typically we expect
+         that patch releases are backwards compatible. So we take the shim representing the
+         most recent version in the backwards compatibility domain to take care of the entire
+         domain
+
+         spark3.0.1 through spark 3.0.3, potentially 3.0.4 if the current breakage is eliminated
+         spark 3.1.x , as long as patch version don't break us
+         spark 3.2.x,  as long as patch version don't break us
+         -->
         <executions>
           <execution>
             <id>shim301-fat-jar</id>
-            <phase>package</phase>
             <goals><goal>shade</goal></goals>
             <configuration>
               <shadedClassifierName>spark301</shadedClassifierName>
@@ -102,7 +111,6 @@
           </execution>
           <execution>
             <id>shim302-fat-jar</id>
-            <phase>package</phase>
             <goals><goal>shade</goal></goals>
             <configuration>
               <shadedClassifierName>spark302</shadedClassifierName>
@@ -118,7 +126,6 @@
           </execution>
           <execution>
             <id>shim303-fat-jar</id>
-            <phase>package</phase>
             <goals><goal>shade</goal></goals>
             <configuration>
               <shadedClassifierName>spark303</shadedClassifierName>
@@ -134,7 +141,6 @@
           </execution>
           <execution>
             <id>shim311-fat-jar</id>
-            <phase>package</phase>
             <goals><goal>shade</goal></goals>
             <configuration>
               <shadedClassifierName>spark311</shadedClassifierName>
@@ -148,8 +154,96 @@
               </filters>
             </configuration>
           </execution>
+          <execution>
+            <id>shim312-fat-jar</id>
+            <goals><goal>shade</goal></goals>
+            <configuration>
+              <shadedClassifierName>spark312</shadedClassifierName>
+              <shadedArtifactAttached>true</shadedArtifactAttached>
+              <filters>
+                <filter>
+                  <artifact>*:rapids-4-spark-shims-spark312_${scala.binary.version}:*</artifact>
+                  <artifact>com.google.flatbuffers:flatbuffers-java</artifact>
+                  <artifact>org.openucx:jucx</artifact>
+                </filter>
+              </filters>
+            </configuration>
+          </execution>
         </executions>
       </plugin>
+      <!-- iterate individual fat jars to create a single fat jar with the the dependencies prefixed -->
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-antrun-plugin</artifactId>
+        <executions>
+          <execution>
+            <phase>package</phase>
+            <goals><goal>run</goal></goals>
+            <id>create-parallel-world</id>
+            <configuration>
+              <target>
+                <unzip
+                        src="${project.build.directory}/rapids-4-spark_${scala.binary.version}-${project.version}-spark312.jar"
+                        dest="${project.build.directory}/parallel-world"
+                >
+                  <patternset>
+                    <include name="META-INF/services/**"/>
+                    <include name="com/nvidia/spark/SQLPlugin*"/>
+                    <include name="com/nvidia/spark/rapids/SQLExecPlugin*"/>
+                    <include name="com/nvidia/spark/rapids/ShimLoader*"/>
+                    <include name="com/nvidia/spark/rapids/SparkShims*"/>
+                    <include name="com/nvidia/spark/udf/Plugin*"/>
+                  </patternset>
+                </unzip>
+
+                <unzip
+                        src="${project.build.directory}/rapids-4-spark_${scala.binary.version}-${project.version}-spark301.jar"
+                        dest="${project.build.directory}/parallel-world/spark301"
+                >
+                  <patternset id="shimPattern">
+                    <exclude name="META-INF/services/**"/>
+                    <exclude name="com/nvidia/spark/SQLPlugin*"/>
+                    <exclude name="com/nvidia/spark/rapids/SQLExecPlugin*"/>
+                    <exclude name="com/nvidia/spark/rapids/ShimLoader*"/>
+                    <exclude name="com/nvidia/spark/rapids/SparkShims*"/>
+                    <exclude name="com/nvidia/spark/udf/Plugin*"/>
+                  </patternset>
+                </unzip>
+                <unzip
+                        src="${project.build.directory}/rapids-4-spark_${scala.binary.version}-${project.version}-spark302.jar"
+                        dest="${project.build.directory}/parallel-world/spark302"
+                >
+                  <patternset refid="shimPattern"/>
+                </unzip>
+                <unzip
+                        src="${project.build.directory}/rapids-4-spark_${scala.binary.version}-${project.version}-spark303.jar"
+                        dest="${project.build.directory}/parallel-world/spark303"
+                >
+                  <patternset refid="shimPattern"/>
+                </unzip>
+                <unzip
+                        src="${project.build.directory}/rapids-4-spark_${scala.binary.version}-${project.version}-spark311.jar"
+                        dest="${project.build.directory}/parallel-world/spark311"
+                >
+                  <patternset refid="shimPattern"/>
+                </unzip>
+                <unzip
+                        src="${project.build.directory}/rapids-4-spark_${scala.binary.version}-${project.version}-spark312.jar"
+                        dest="${project.build.directory}/parallel-world/spark312"
+                >
+                  <patternset refid="shimPattern"/>
+                </unzip>
+                <jar
+                        destfile="${project.build.directory}/rapids-4-spark_${scala.binary.version}-${project.version}.jar"
+                        basedir="${project.build.directory}/parallel-world"
+                >
+                </jar>
+              </target>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+
       <plugin>
         <groupId>net.alchim31.maven</groupId>
         <artifactId>scala-maven-plugin</artifactId>
