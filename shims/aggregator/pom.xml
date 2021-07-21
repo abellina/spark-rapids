@@ -116,7 +116,7 @@
            </dependencies>
        </profile>
        <profile>
-           <id>released30x-shims</id>
+           <id>released30x</id>
            <dependencies>
                <dependency>
                    <groupId>com.nvidia</groupId>
@@ -139,28 +139,8 @@
            </dependencies>
        </profile>
        <profile>
-           <id>released31x-shims</id>
+           <id>released31x</id>
            <dependencies>
-               <dependency>
-                   <groupId>com.nvidia</groupId>
-                   <artifactId>rapids-4-spark-shims-spark311_${scala.binary.version}</artifactId>
-                   <version>${project.version}</version>
-               </dependency>
-               <dependency>
-                   <groupId>com.nvidia</groupId>
-                   <artifactId>rapids-4-spark-shims-spark312_${scala.binary.version}</artifactId>
-                   <version>${project.version}</version>
-               </dependency>
-           </dependencies>
-       </profile>
-       <profile>
-           <id>last-patch-per-major</id>
-           <dependencies>
-               <dependency>
-                   <groupId>com.nvidia</groupId>
-                   <artifactId>rapids-4-spark-shims-spark303_${scala.binary.version}</artifactId>
-                   <version>${project.version}</version>
-               </dependency>
                <dependency>
                    <groupId>com.nvidia</groupId>
                    <artifactId>rapids-4-spark-shims-spark311_${scala.binary.version}</artifactId>

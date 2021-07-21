@@ -60,7 +60,7 @@
             </modules>
         </profile>
         <profile>
-            <id>released30x-shims</id>
+            <id>released30x</id>
             <modules>
                 <module>spark301</module>
                 <module>spark302</module>
@@ -68,20 +68,9 @@
             </modules>
         </profile>
         <profile>
-            <id>released31x-shims</id>
+            <id>released31x</id>
             <modules>
                 <module>spark311</module>
-                <module>spark312</module>
-            </modules>
-        </profile>
-        <profile>
-            <id>last-patch-per-major</id>
-            <modules>
-                <module>spark303</module>
-
-                <!-- faking transitive only if we keep source dependencies -->
-                <module>spark311</module>
-
                 <module>spark312</module>
             </modules>
         </profile>

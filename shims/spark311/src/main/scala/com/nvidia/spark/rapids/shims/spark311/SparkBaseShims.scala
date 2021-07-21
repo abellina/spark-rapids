@@ -47,7 +47,7 @@ import org.apache.spark.sql.rapids.execution.python.{GpuAggregateInPandasExecMet
  * that version should be folded into here. Any shim methods that are implemented only in the
  * updated base version can then be removed from the shim interface.
  */
-abstract class SparkBaseShims extends SparkShims {
+abstract class SparkBaseShims extends PluginShims {
 
   override def parquetRebaseReadKey: String =
     SQLConf.LEGACY_PARQUET_REBASE_MODE_IN_READ.key

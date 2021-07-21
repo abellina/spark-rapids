@@ -17,20 +17,18 @@
 package com.nvidia.spark.udf
 
 import ai.rapids.cudf.{NvtxColor, NvtxRange}
-import com.nvidia.spark.rapids.RapidsConf
+import com.nvidia.spark.rapids.{RapidsConf, ShimLoader}
 
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.SparkSessionExtensions
-import org.apache.spark.sql.catalyst.expressions.{Alias, Expression, NamedExpression, ScalaUDF}
+import org.apache.spark.sql.catalyst.expressions.{Expression, NamedExpression, ScalaUDF}
 import org.apache.spark.sql.catalyst.plans.logical.{LogicalPlan, Project}
 import org.apache.spark.sql.catalyst.rules.Rule
 import org.apache.spark.sql.rapids.GpuScalaUDF.getRapidsUDFInstance
 
-class Plugin extends Function1[SparkSessionExtensions, Unit] with Logging {
+class Plugin extends (SparkSessionExtensions => Unit) {
   override def apply(extensions: SparkSessionExtensions): Unit = {
-    logWarning("Installing rapids UDF compiler extensions to Spark. The compiler is disabled" +
-        s" by default. To enable it, set `${RapidsConf.UDF_COMPILER_ENABLED}` to true")
-    extensions.injectResolutionRule(_ => LogicalPlanRules())
+    ShimLoader.getSparkShims.udfRules(extensions)
   }
 }
 

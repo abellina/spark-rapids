@@ -18,6 +18,7 @@ package com.nvidia.spark.rapids
 
 import java.util.ServiceLoader
 
+import com.sun.istack.internal.tools.ParallelWorldClassLoader
 import scala.collection.JavaConverters._
 
 import org.apache.spark.{SPARK_BUILD_USER, SPARK_VERSION}
@@ -28,13 +29,28 @@ object ShimLoader extends Logging {
   private var sparkShims: SparkShims = null
 
   private def detectShimProvider(): SparkShimServiceProvider = {
+    // chain classloaders
+    // caller -> spark301 -> spark302 -> spark303 -> ..
+    val spark301ClassLoader = new ParallelWorldClassLoader(getClass.getClassLoader, "spark301")
+    val shimClassloader = Seq(
+      "spark302",
+      "spark303",
+      "spark311",
+      "spark312"
+    ).foldLeft(spark301ClassLoader) { case (prevClassLoader, shimPrefix) =>
+      new ParallelWorldClassLoader(prevClassLoader, shimPrefix)
+    }
+
     val sparkVersion = getSparkVersion
     logInfo(s"Loading shim for Spark version: $sparkVersion")
-
     // This is not ideal, but pass the version in here because otherwise loader that match the
     // same version (3.0.1 Apache and 3.0.1 Databricks) would need to know how to differentiate.
-    val sparkShimLoaders = ServiceLoader.load(classOf[SparkShimServiceProvider])
-        .asScala.filter(_.matchesVersion(sparkVersion))
+    val serviceLoaders = ServiceLoader
+        .load(classOf[SparkShimServiceProvider], shimClassloader)
+        .asScala
+    logError("GERA_DEBUG loaded service providers\n" + serviceLoaders.mkString("\n"))
+    val sparkShimLoaders = serviceLoaders.filter(_.matchesVersion(sparkVersion))
+
     if (sparkShimLoaders.size > 1) {
       throw new IllegalArgumentException(s"Multiple Spark Shim Loaders found: $sparkShimLoaders")
     }

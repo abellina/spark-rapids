@@ -189,10 +189,10 @@
                   <patternset>
                     <include name="META-INF/services/**"/>
                     <include name="com/nvidia/spark/SQLPlugin*"/>
-                    <include name="com/nvidia/spark/rapids/SQLExecPlugin*"/>
                     <include name="com/nvidia/spark/rapids/ShimLoader*"/>
-                    <include name="com/nvidia/spark/rapids/SparkShims*"/>
+                    <include name="com/nvidia/spark/rapids/SparkShimServiceProvider*"/>
                     <include name="com/nvidia/spark/udf/Plugin*"/>
+                    <include name="com/nvidia/spark/rapids/SQLExecPlugin*"/>
                   </patternset>
                 </unzip>
 
@@ -203,10 +203,10 @@
                   <patternset id="shimPattern">
                     <exclude name="META-INF/services/**"/>
                     <exclude name="com/nvidia/spark/SQLPlugin*"/>
-                    <exclude name="com/nvidia/spark/rapids/SQLExecPlugin*"/>
                     <exclude name="com/nvidia/spark/rapids/ShimLoader*"/>
-                    <exclude name="com/nvidia/spark/rapids/SparkShims*"/>
+                    <exclude name="com/nvidia/spark/rapids/SparkShimServiceProvider*"/>
                     <exclude name="com/nvidia/spark/udf/Plugin*"/>
+                    <exclude name="com/nvidia/spark/rapids/SQLExecPlugin*"/>
                   </patternset>
                 </unzip>
                 <unzip

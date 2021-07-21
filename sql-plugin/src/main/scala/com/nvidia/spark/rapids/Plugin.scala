@@ -16,20 +16,20 @@
 
 package com.nvidia.spark.rapids
 
-import java.util
 import java.util.Properties
 import java.util.concurrent.atomic.{AtomicBoolean, AtomicReference}
 
 import scala.collection.JavaConverters._
 import scala.util.Try
 
+import com.nvidia.spark.SQLExecPlugin
 import com.nvidia.spark.rapids.python.PythonWorkerSemaphore
 
 import org.apache.spark.{SparkConf, SparkContext}
 import org.apache.spark.api.plugin.{DriverPlugin, ExecutorPlugin, PluginContext}
 import org.apache.spark.internal.Logging
 import org.apache.spark.serializer.{JavaSerializer, KryoSerializer}
-import org.apache.spark.sql.{DataFrame, SparkSessionExtensions}
+import org.apache.spark.sql.DataFrame
 import org.apache.spark.sql.catalyst.expressions.Expression
 import org.apache.spark.sql.catalyst.rules.Rule
 import org.apache.spark.sql.execution._
@@ -49,24 +49,6 @@ case class ColumnarOverrideRules() extends ColumnarRule with Logging {
   override def preColumnarTransitions : Rule[SparkPlan] = overrides
 
   override def postColumnarTransitions: Rule[SparkPlan] = overrideTransitions
-}
-
-/**
- * Extension point to enable GPU SQL processing.
- */
-class SQLExecPlugin extends (SparkSessionExtensions => Unit) with Logging {
-  override def apply(extensions: SparkSessionExtensions): Unit = {
-    val pluginProps = RapidsPluginUtils.loadProps(RapidsPluginUtils.PLUGIN_PROPS_FILENAME)
-    logInfo(s"RAPIDS Accelerator build: $pluginProps")
-    val cudfProps = RapidsPluginUtils.loadProps(RapidsPluginUtils.CUDF_PROPS_FILENAME)
-    logInfo(s"cudf build: $cudfProps")
-    val pluginVersion = pluginProps.getProperty("version", "UNKNOWN")
-    val cudfVersion = cudfProps.getProperty("version", "UNKNOWN")
-    logWarning(s"RAPIDS Accelerator $pluginVersion using cudf $cudfVersion." +
-      s" To disable GPU support set `${RapidsConf.SQL_ENABLED}` to false")
-    extensions.injectColumnar(_ => ColumnarOverrideRules())
-    extensions.injectQueryStagePrepRule(_ => GpuQueryStagePrepOverrides())
-  }
 }
 
 object RapidsPluginUtils extends Logging {
@@ -151,7 +133,10 @@ class RapidsDriverPlugin extends DriverPlugin with Logging {
     }
   }
 
-  override def init(sc: SparkContext, pluginContext: PluginContext): util.Map[String, String] = {
+  override def init(
+      sc: SparkContext,
+      pluginContext: PluginContext
+  ): java.util.Map[String, String] = {
     val sparkConf = pluginContext.conf
     RapidsPluginUtils.fixupConfigs(sparkConf)
     val conf = new RapidsConf(sparkConf)
@@ -174,7 +159,7 @@ class RapidsExecutorPlugin extends ExecutorPlugin with Logging {
 
   override def init(
       pluginContext: PluginContext,
-      extraConf: util.Map[String, String]): Unit = {
+      extraConf: java.util.Map[String, String]): Unit = {
     try {
       val conf = new RapidsConf(extraConf.asScala.toMap)
       if (conf.shimsProviderOverride.isDefined) {
