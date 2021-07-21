@@ -29,8 +29,11 @@ import org.apache.spark.sql.types.DataType
 import org.apache.spark.sql.vectorized.ColumnarBatch
 
 trait GpuPartitioning extends Partitioning with Arm {
-  private[this] val maxCompressionBatchSize =
-    new RapidsConf(SQLConf.get).shuffleCompressionMaxBatchMemory
+  private[this] val (maxCompressionBatchSize, useRapidsShuffle) = {
+    val rapidsConf = new RapidsConf(SQLConf.get)
+    (rapidsConf.shuffleCompressionMaxBatchMemory,
+      GpuShuffleEnv.shouldUseRapidsShuffle(rapidsConf))
+  }
 
   def sliceBatch(vectors: Array[RapidsHostColumnVector], start: Int, end: Int): ColumnarBatch = {
     var ret: ColumnarBatch = null
@@ -95,12 +98,10 @@ trait GpuPartitioning extends Partitioning with Arm {
     }
   }
 
-  private val rapidsShuffleEnabled = GpuShuffleEnv.isRapidsShuffleEnabled
-
   def sliceInternalGpuOrCpu(numRows: Int, partitionIndexes: Array[Int],
       partitionColumns: Array[GpuColumnVector]): Array[ColumnarBatch] = {
 
-    val nvtxRangeKey = if (rapidsShuffleEnabled) {
+    val nvtxRangeKey = if (useRapidsShuffle) {
       "sliceInternalOnGpu"
     } else {
       "sliceInternalOnCpu"
@@ -109,7 +110,7 @@ trait GpuPartitioning extends Partitioning with Arm {
     // for large number of small splits.
     val sliceRange = new NvtxRange(nvtxRangeKey, NvtxColor.CYAN)
     try {
-      if (rapidsShuffleEnabled) {
+      if (useRapidsShuffle) {
         sliceInternalOnGpu(numRows, partitionIndexes, partitionColumns)
       } else {
         sliceInternalOnCpu(numRows, partitionIndexes, partitionColumns)

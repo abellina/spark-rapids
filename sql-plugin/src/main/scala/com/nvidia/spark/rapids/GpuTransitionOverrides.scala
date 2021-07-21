@@ -55,7 +55,7 @@ class GpuTransitionOverrides extends Rule[SparkPlan] {
 
   /** Adds the appropriate coalesce after a shuffle depending on the type of shuffle configured */
   private def addPostShuffleCoalesce(plan: SparkPlan): SparkPlan = {
-    if (GpuShuffleEnv.isRapidsShuffleEnabled) {
+    if (GpuShuffleEnv.shouldUseRapidsShuffle(conf)) {
       GpuCoalesceBatches(plan, TargetSize(conf.gpuTargetBatchSizeBytes))
     } else {
       GpuShuffleCoalesceExec(plan, conf.gpuTargetBatchSizeBytes)
@@ -493,7 +493,7 @@ class GpuTransitionOverrides extends Rule[SparkPlan] {
       updatedPlan = insertColumnarFromGpu(updatedPlan)
       updatedPlan = insertCoalesce(updatedPlan)
       // only insert shuffle coalesces when using normal shuffle
-      if (!GpuShuffleEnv.isRapidsShuffleEnabled) {
+      if (!GpuShuffleEnv.shouldUseRapidsShuffle(conf)) {
         updatedPlan = insertShuffleCoalesce(updatedPlan)
       }
       if (plan.conf.adaptiveExecutionEnabled) {

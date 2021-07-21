@@ -83,14 +83,8 @@ object GpuShuffleEnv extends Logging {
     isRapidsManager && !externalShuffle
   }
 
-  var isShuffleManagerEnabled: Boolean = false
-
-  def setShuffleManagerEnabled(enabled: Boolean) = {
-    isShuffleManagerEnabled = enabled
-  }
-
-  def isRapidsShuffleEnabled: Boolean = {
-    isShuffleManagerEnabled &&
+  def shouldUseRapidsShuffle(conf: RapidsConf): Boolean = {
+    conf.shuffleManagerEnabled &&
       isRapidsShuffleConfigured
   }
 
