@@ -200,6 +200,10 @@
                     <include name="com/nvidia/spark/rapids/SparkShimServiceProvider*"/>
                     <include name="com/nvidia/spark/rapids/SQLExecPlugin*"/>
                     <include name="com/nvidia/spark/udf/Plugin*"/>
+
+                    <include name="com/google/flatbuffers/**"/>
+                    <include name="libjucx.so"/>
+                    <include name="org/openucx/**"/>
                   </patternset>
                 </unzip>
 
@@ -216,6 +220,10 @@
                     <exclude name="com/nvidia/spark/rapids/SparkShimServiceProvider*"/>
                     <exclude name="com/nvidia/spark/rapids/SQLExecPlugin*"/>
                     <exclude name="com/nvidia/spark/udf/Plugin*"/>
+
+                    <exclude name="com/google/flatbuffers/**"/>
+                    <exclude name="libjucx.so"/>
+                    <exclude name="org/openucx/**"/>
                   </patternset>
                 </unzip>
                 <unzip
