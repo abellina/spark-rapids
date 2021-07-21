@@ -16,10 +16,10 @@
 
 package com.nvidia.spark.rapids
 
-import java.util.ServiceLoader
+import scala.io.Source
+import scala.util.Try
 
 import com.sun.istack.internal.tools.ParallelWorldClassLoader
-import scala.collection.JavaConverters._
 
 import org.apache.spark.{SPARK_BUILD_USER, SPARK_VERSION}
 import org.apache.spark.internal.Logging
@@ -28,29 +28,37 @@ object ShimLoader extends Logging {
   private var shimProviderClass: String = null
   private var sparkShims: SparkShims = null
 
+  private def loadShimProviders(cl: ClassLoader): Iterator[SparkShimServiceProvider] = {
+    val serviceResourceListFile = "META-INF/services/" + classOf[SparkShimServiceProvider].getName
+    logError("GERA_DEBUG: loading " + serviceResourceListFile)
+    Option(cl.getResourceAsStream(serviceResourceListFile))
+        .map(is => Source.fromInputStream(is).getLines())
+        .getOrElse {
+          logError("GERA_DEBUG: no service providers found")
+          Iterator.empty
+        }
+        .flatMap(provideClass => Try(
+          cl.loadClass(provideClass).newInstance().asInstanceOf[SparkShimServiceProvider]
+        ).toOption)
+  }
+
   private def detectShimProvider(): SparkShimServiceProvider = {
-    // chain classloaders
-    // caller -> spark301 -> spark302 -> spark303 -> ..
-    val spark301ClassLoader = new ParallelWorldClassLoader(getClass.getClassLoader, "spark301")
-    val shimClassloader = Seq(
+    val shimClassloaders = Seq(
+      "spark301",
       "spark302",
       "spark303",
       "spark311",
       "spark312"
-    ).foldLeft(spark301ClassLoader) { case (prevClassLoader, shimPrefix) =>
-      new ParallelWorldClassLoader(prevClassLoader, shimPrefix)
-    }
+    ).map(prefix => new ParallelWorldClassLoader(getClass.getClassLoader, s"$prefix/"))
 
     val sparkVersion = getSparkVersion
     logInfo(s"Loading shim for Spark version: $sparkVersion")
     // This is not ideal, but pass the version in here because otherwise loader that match the
     // same version (3.0.1 Apache and 3.0.1 Databricks) would need to know how to differentiate.
-    val serviceLoaders = ServiceLoader
-        .load(classOf[SparkShimServiceProvider], shimClassloader)
-        .asScala
-    logError("GERA_DEBUG loaded service providers\n" + serviceLoaders.mkString("\n"))
-    val sparkShimLoaders = serviceLoaders.filter(_.matchesVersion(sparkVersion))
-
+    val sparkShimLoaders = shimClassloaders
+        .flatMap(cl =>
+          loadShimProviders(cl).filter(_.matchesVersion(sparkVersion))
+        )
     if (sparkShimLoaders.size > 1) {
       throw new IllegalArgumentException(s"Multiple Spark Shim Loaders found: $sparkShimLoaders")
     }

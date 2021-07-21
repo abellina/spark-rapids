@@ -187,17 +187,19 @@
             <id>create-parallel-world</id>
             <configuration>
               <target>
+                <!-- common code is taken from the most recent version -->
                 <unzip
                         src="${project.build.directory}/rapids-4-spark_${scala.binary.version}-${project.version}-spark312.jar"
                         dest="${project.build.directory}/parallel-world"
                 >
-                  <patternset>
-<!--                    <include name="META-INF/services/**"/>-->
+                  <patternset id="sharedWorld">
                     <include name="com/nvidia/spark/SQLPlugin*"/>
+                    <include name="com/nvidia/spark/ExclusiveModeGpuDiscoveryPlugin*"/>
                     <include name="com/nvidia/spark/rapids/ShimLoader*"/>
+                    <include name="com/nvidia/spark/rapids/SparkShims*"/>
                     <include name="com/nvidia/spark/rapids/SparkShimServiceProvider*"/>
-                    <include name="com/nvidia/spark/udf/Plugin*"/>
                     <include name="com/nvidia/spark/rapids/SQLExecPlugin*"/>
+                    <include name="com/nvidia/spark/udf/Plugin*"/>
                   </patternset>
                 </unzip>
 
@@ -205,13 +207,15 @@
                         src="${project.build.directory}/rapids-4-spark_${scala.binary.version}-${project.version}-spark301.jar"
                         dest="${project.build.directory}/parallel-world/spark301"
                 >
+                  <!-- to keep in sync with sharedWorld: inverse it to exclude -->
                   <patternset id="shimPattern">
-<!--                    <exclude name="META-INF/services/**"/>-->
                     <exclude name="com/nvidia/spark/SQLPlugin*"/>
+                    <exclude name="com/nvidia/spark/ExclusiveModeGpuDiscoveryPlugin*"/>
                     <exclude name="com/nvidia/spark/rapids/ShimLoader*"/>
+                    <exclude name="com/nvidia/spark/rapids/SparkShims*"/>
                     <exclude name="com/nvidia/spark/rapids/SparkShimServiceProvider*"/>
-                    <exclude name="com/nvidia/spark/udf/Plugin*"/>
                     <exclude name="com/nvidia/spark/rapids/SQLExecPlugin*"/>
+                    <exclude name="com/nvidia/spark/udf/Plugin*"/>
                   </patternset>
                 </unzip>
                 <unzip

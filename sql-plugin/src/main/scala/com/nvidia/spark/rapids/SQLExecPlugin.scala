@@ -14,19 +14,12 @@
  * limitations under the License.
  */
 
-package com.nvidia.spark.rapids.shims.spark312
+package com.nvidia.spark.rapids
 
-import com.nvidia.spark.rapids.ShimVersion
-import com.nvidia.spark.rapids.shims.spark311.Spark311Shims
-import com.nvidia.spark.rapids.spark312.RapidsShuffleManager
+import org.apache.spark.sql.SparkSessionExtensions
 
-class Spark312Shims extends Spark311Shims {
-
-  override def getSparkShimVersion: ShimVersion = SparkShimServiceProvider.VERSION
-
-  override def getRapidsShuffleManagerClass: String = {
-    classOf[RapidsShuffleManager].getCanonicalName
-  }
-
-  override def hasCastFloatTimestampUpcast: Boolean = true
+class SQLExecPlugin extends (SparkSessionExtensions => Unit) {
+  val sparkShims = ShimLoader.getSparkShims
+  override def apply(extensions: SparkSessionExtensions): Unit =
+    sparkShims.sqlExecRules(extensions)
 }

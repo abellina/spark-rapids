@@ -22,7 +22,6 @@ import java.util.concurrent.atomic.{AtomicBoolean, AtomicReference}
 import scala.collection.JavaConverters._
 import scala.util.Try
 
-import com.nvidia.spark.SQLExecPlugin
 import com.nvidia.spark.rapids.python.PythonWorkerSemaphore
 
 import org.apache.spark.{SparkConf, SparkContext}

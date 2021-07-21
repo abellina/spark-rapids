@@ -37,9 +37,3 @@ class SQLPlugin extends SparkPlugin {
     sparkShims.executorPlugin()
   }
 }
-
-class SQLExecPlugin extends (SparkSessionExtensions => Unit) {
-  val sparkShims = ShimLoader.getSparkShims
-  override def apply(extensions: SparkSessionExtensions): Unit =
-    sparkShims.sqlExecRules(extensions)
-}
