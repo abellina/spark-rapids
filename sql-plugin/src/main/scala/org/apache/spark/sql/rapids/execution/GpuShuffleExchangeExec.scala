@@ -100,13 +100,15 @@ abstract class GpuShuffleExchangeExecBase(
     child: SparkPlan) extends Exchange with GpuExec {
   import GpuMetric._
 
-  // Shuffle produces a lot of small output batches that should be coalesced together.
-  // This coalesce occurs on the GPU and should always be done when using RAPIDS shuffle.
-  // Normal shuffle performs the coalesce on the CPU to optimize the transfers to the GPU.
-  override def coalesceAfter: Boolean = {
+  private lazy val useRapidsShuffle = {
     val rapidsConf = new RapidsConf(SQLConf.get)
     GpuShuffleEnv.shouldUseRapidsShuffle(rapidsConf)
   }
+
+  // Shuffle produces a lot of small output batches that should be coalesced together.
+  // This coalesce occurs on the GPU and should always be done when using RAPIDS shuffle.
+  // Normal shuffle performs the coalesce on the CPU to optimize the transfers to the GPU.
+  override def coalesceAfter: Boolean = useRapidsShuffle
 
   private lazy val writeMetrics =
     SQLShuffleWriteMetricsReporter.createShuffleWriteMetrics(sparkContext)
