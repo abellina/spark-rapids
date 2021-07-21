@@ -53,22 +53,15 @@ object ShimLoader extends Logging {
 
     val sparkVersion = getSparkVersion
     logInfo(s"Loading shim for Spark version: $sparkVersion")
-    // This is not ideal, but pass the version in here because otherwise loader that match the
-    // same version (3.0.1 Apache and 3.0.1 Databricks) would need to know how to differentiate.
-    val sparkShimLoaders = shimClassloaders
+    // TODO current fat jar has multiple copies due to being merged from other fat jars
+    val shimLoader = shimClassloaders.toIterator
         .flatMap(cl =>
-          loadShimProviders(cl).filter(_.matchesVersion(sparkVersion))
-        )
-    if (sparkShimLoaders.size > 1) {
-      throw new IllegalArgumentException(s"Multiple Spark Shim Loaders found: $sparkShimLoaders")
+          loadShimProviders(cl)
+        ).find(_.matchesVersion(sparkVersion))
+
+    shimLoader.getOrElse {
+      throw new IllegalArgumentException(s"Could not find Spark Shim Loader for $sparkVersion")
     }
-    logInfo(s"Found shims: $sparkShimLoaders")
-    val loader = sparkShimLoaders.headOption match {
-      case Some(loader) => loader
-      case None =>
-        throw new IllegalArgumentException(s"Could not find Spark Shim Loader for $sparkVersion")
-    }
-    loader
   }
 
   private def findShimProvider(): SparkShimServiceProvider = {
