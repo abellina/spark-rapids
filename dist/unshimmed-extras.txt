@@ -1,0 +1,4 @@
+com/google/flatbuffers/**
+libjucx.so
+org/openucx/**
+rapids4spark-version-info.properties

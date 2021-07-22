@@ -193,13 +193,14 @@
                         dest="${project.build.directory}/parallel-world"
                 >
                   <!--
+                  to obtain unshimmed-classes.txt
+                  put sys.exit(1) into beginning of apply in SQLExecPlugin
+                  and enable verbose:class
                    grep rapids-4-spark_2.12-21.08.0-SNAPSHOT-spark301.jar /tmp/beforeShimClassLoad.log | cut -d' ' -f 2 | tr '.' '/' | cut -d \$ -f 1 | sort | uniq | xargs -I% -n 1 echo %'*'
                   -->
                   <patternset id="sharedWorld">
-                    <includesfile name="${project.basedir}/unshimmed-files.txt"/>
-                    <include name="com/google/flatbuffers/**"/>
-                    <include name="libjucx.so"/>
-                    <include name="org/openucx/**"/>
+                    <includesfile name="${project.basedir}/unshimmed-classes.txt"/>
+                    <includesfile name="${project.basedir}/unshimmed-extras.txt"/>
                   </patternset>
                 </unzip>
 
@@ -209,7 +210,8 @@
                 >
                   <!-- to keep in sync with sharedWorld: inverse it to exclude -->
                   <patternset id="shimPattern">
-                    <excludesfile name="${project.basedir}/unshimmed-files.txt"/>
+                    <excludesfile name="${project.basedir}/unshimmed-classes.txt"/>
+                    <!-- TODO move to file once finalized -->
                     <exclude name="com/google/flatbuffers/**"/>
                     <exclude name="libjucx.so"/>
                     <exclude name="org/openucx/**"/>
@@ -296,7 +298,7 @@
         <groupId>org.apache.rat</groupId>
         <artifactId>apache-rat-plugin</artifactId>
         <configuration>
-          <excludes>unshimmed-files.txt</excludes>
+          <excludes>unshimmed-classes.txt,unshimmed-extras.txt</excludes>
         </configuration>
       </plugin>
     </plugins>

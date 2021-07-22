@@ -3092,6 +3092,12 @@ object GpuOverrides {
 }
 /** Tag the initial plan when AQE is enabled */
 case class GpuQueryStagePrepOverrides() extends Rule[SparkPlan] with Logging {
+  def apply() = {
+    //    this(0)
+    // TODO hack for collecting classes prior to SQLExec
+    sys.exit(1)
+    this
+  }
   override def apply(plan: SparkPlan) :SparkPlan = {
     // Note that we disregard the GPU plan returned here and instead rely on side effects of
     // tagging the underlying SparkPlan.
