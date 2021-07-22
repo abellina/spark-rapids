@@ -16,10 +16,30 @@
 
 package com.nvidia.spark.rapids
 
-import org.apache.spark.sql.SparkSessionExtensions
+import org.apache.spark.internal.Logging
+import org.apache.spark.sql.{SparkSession, SparkSessionExtensions}
+import org.apache.spark.sql.execution.ColumnarRule
 
-class SQLExecPlugin extends (SparkSessionExtensions => Unit) {
-  val sparkShims = ShimLoader.getSparkShims
-  override def apply(extensions: SparkSessionExtensions): Unit =
-    sparkShims.sqlExecRules(extensions)
+class SQLExecPlugin extends (SparkSessionExtensions => Unit) with Logging {
+  override def apply(extensions: SparkSessionExtensions): Unit = {
+    val pluginProps = RapidsPluginUtils.loadProps(RapidsPluginUtils.PLUGIN_PROPS_FILENAME)
+    logInfo(s"RAPIDS Accelerator build: $pluginProps")
+    val cudfProps = RapidsPluginUtils.loadProps(RapidsPluginUtils.CUDF_PROPS_FILENAME)
+    logInfo(s"cudf build: $cudfProps")
+    val pluginVersion = pluginProps.getProperty("version", "UNKNOWN")
+    val cudfVersion = cudfProps.getProperty("version", "UNKNOWN")
+    logWarning(s"RAPIDS Accelerator $pluginVersion using cudf $cudfVersion." +
+        s" To disable GPU support set `${RapidsConf.SQL_ENABLED}` to false")
+    val columnarRules: SparkSession => ColumnarRule = { sparkSession =>
+      val urls = sparkSession.sharedState.jarClassLoader.getURLs
+      logError(s"GERA_DEBUG: Current jar URLs $urls")
+      val shimURL = ShimLoader.getShimURL
+      logError(s"GERA_DEBUG adding Shim URL $shimURL")
+      sparkSession.sharedState.jarClassLoader.addURL(shimURL)
+      ColumnarOverrideRules()
+    }
+
+    extensions.injectColumnar(columnarRules)
+    extensions.injectQueryStagePrepRule(_ => GpuQueryStagePrepOverrides())
+  }
 }

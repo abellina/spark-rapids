@@ -16,6 +16,8 @@
 
 package com.nvidia.spark.rapids
 
+import java.net.URL
+
 import scala.io.Source
 import scala.util.{Failure, Try}
 
@@ -25,11 +27,15 @@ import org.apache.spark.{SPARK_BUILD_USER, SPARK_VERSION}
 import org.apache.spark.internal.Logging
 
 object ShimLoader extends Logging {
+  private val serviceResourceListFile =
+    "META-INF/services/" + classOf[SparkShimServiceProvider].getName
+
+  private var shimProvider: SparkShimServiceProvider = null
   private var shimProviderClass: String = null
   private var sparkShims: SparkShims = null
+  private var shimURL: URL = null
 
   private def loadShimProviders(cl: ClassLoader): Iterator[SparkShimServiceProvider] = {
-    val serviceResourceListFile = "META-INF/services/" + classOf[SparkShimServiceProvider].getName
     logError("GERA_DEBUG: loading " + serviceResourceListFile)
     Option(cl.getResourceAsStream(serviceResourceListFile))
         .map(is => Source.fromInputStream(is).getLines())
@@ -38,6 +44,23 @@ object ShimLoader extends Logging {
           Iterator.empty
         }
         .map(provideClass => createShimProvider(cl, provideClass))
+  }
+
+  def getRapidsShuffleManagerClass: String = {
+    val provider = findShimProvider()
+    s"${provider.getClass.getPackage.getName}.RapidsShuffleManager"
+  }
+
+
+  def getShimURL(): URL = {
+    if (shimURL == null) {
+      val providerClassLoader = findShimProvider().getClass.getClassLoader
+      val rsrcURL = providerClassLoader.getResource(serviceResourceListFile)
+      val urlStr = rsrcURL.toString
+      val shimRootUrlStr = urlStr.substring(0, urlStr.indexOf("/META-INF"))
+      shimURL = new URL(shimRootUrlStr)
+    }
+    shimURL
   }
 
   private def createShimProvider(cl: ClassLoader, providerClass: String) = {
@@ -83,14 +106,15 @@ object ShimLoader extends Logging {
 
   private def findShimProvider(): SparkShimServiceProvider = {
     if (shimProviderClass == null) {
-      detectShimProvider()
+      shimProvider = detectShimProvider()
     } else {
       logWarning(s"Overriding Spark shims provider to $shimProviderClass. " +
           "This may be an untested configuration!")
       val providerClass = Class.forName(shimProviderClass)
       val constructor = providerClass.getConstructor()
-      constructor.newInstance().asInstanceOf[SparkShimServiceProvider]
+      shimProvider = constructor.newInstance().asInstanceOf[SparkShimServiceProvider]
     }
+    shimProvider
   }
 
   def getSparkShims: SparkShims = {
@@ -98,7 +122,8 @@ object ShimLoader extends Logging {
       val provider = findShimProvider()
       sparkShims = provider.buildShim
 
-      // TODO related to https://stackoverflow.com/questions/28186607/java-lang-classcastexception-using-lambda-expressions-in-spark-job-on-remote-ser/28367602#28367602
+      // TODO related to https://stackoverflow.com/questions/28186607/java-lang-classcastexception
+      //  -using-lambda-expressions-in-spark-job-on-remote-ser/28367602#28367602
       // is there a better way to propagate the classloader to serde
       Thread.currentThread().setContextClassLoader(sparkShims.getClass.getClassLoader)
     }

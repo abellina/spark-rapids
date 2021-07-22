@@ -87,7 +87,7 @@ trait SparkShims {
   ): Optional[ResourceInformation]
 
   def udfRules(extensions: SparkSessionExtensions): Unit
-  def sqlExecRules(extensions: SparkSessionExtensions): Unit
+
   def driverPlugin(): DriverPlugin
   def executorPlugin(): ExecutorPlugin
 

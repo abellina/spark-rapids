@@ -16,24 +16,15 @@
 
 package com.nvidia.spark
 
-import com.nvidia.spark.rapids.ShimLoader
+import com.nvidia.spark.rapids.{RapidsDriverPlugin, RapidsExecutorPlugin}
 
 import org.apache.spark.api.plugin.{DriverPlugin, ExecutorPlugin, SparkPlugin}
-import org.apache.spark.sql.SparkSessionExtensions
 
 /**
  * The RAPIDS plugin for Spark.
  * To enable this plugin, set the config "spark.plugins" to `com.nvidia.spark.SQLPlugin`
  */
 class SQLPlugin extends SparkPlugin {
-  val sparkShims = ShimLoader.getSparkShims
-  override def driverPlugin(): DriverPlugin = {
-    println("GERA_DEBUG Loading Driver plugin")
-    sparkShims.driverPlugin()
-  }
-
-  override def executorPlugin(): ExecutorPlugin = {
-    println("GERA_DEBUG Loading Executor plugin")
-    sparkShims.executorPlugin()
-  }
+  override def driverPlugin(): DriverPlugin = new RapidsDriverPlugin
+  override def executorPlugin(): ExecutorPlugin = new RapidsExecutorPlugin
 }

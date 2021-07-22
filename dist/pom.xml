@@ -192,16 +192,14 @@
                         src="${project.build.directory}/rapids-4-spark_${scala.binary.version}-${project.version}-spark301.jar"
                         dest="${project.build.directory}/parallel-world"
                 >
+                  <!--
+                  grep rapids-4-spark_2.12-21.08.0-SNAPSHOT-spark301.jar \
+                    /tmp/beforeShimClassLoad.log | \
+                    cut -d' ' -f 2 | tr '.' '/' | \
+                    cut -d \$ -f 1 | sort | uniq
+                  -->
                   <patternset id="sharedWorld">
-                    <include name="com/nvidia/spark/SQLPlugin*"/>
-                    <include name="com/nvidia/spark/ExclusiveModeGpuDiscoveryPlugin*"/>
-                    <include name="com/nvidia/spark/rapids/ShimJavaClassLoader*"/>
-                    <include name="com/nvidia/spark/rapids/ShimLoader*"/>
-                    <include name="com/nvidia/spark/rapids/SparkShims*"/>
-                    <include name="com/nvidia/spark/rapids/SparkShimServiceProvider*"/>
-                    <include name="com/nvidia/spark/rapids/SQLExecPlugin*"/>
-                    <include name="com/nvidia/spark/udf/Plugin*"/>
-
+                    <includesfile name="${project.basedir}/unshimmed-files.txt"/>
                     <include name="com/google/flatbuffers/**"/>
                     <include name="libjucx.so"/>
                     <include name="org/openucx/**"/>
@@ -214,15 +212,7 @@
                 >
                   <!-- to keep in sync with sharedWorld: inverse it to exclude -->
                   <patternset id="shimPattern">
-                    <exclude name="com/nvidia/spark/SQLPlugin*"/>
-                    <exclude name="com/nvidia/spark/ExclusiveModeGpuDiscoveryPlugin*"/>
-                    <exclude name="com/nvidia/spark/rapids/ShimJavaClassLoader*"/>
-                    <exclude name="com/nvidia/spark/rapids/ShimLoader*"/>
-                    <exclude name="com/nvidia/spark/rapids/SparkShims*"/>
-                    <exclude name="com/nvidia/spark/rapids/SparkShimServiceProvider*"/>
-                    <exclude name="com/nvidia/spark/rapids/SQLExecPlugin*"/>
-                    <exclude name="com/nvidia/spark/udf/Plugin*"/>
-
+                    <excludesfile name="${project.basedir}/unshimmed-files.txt"/>
                     <exclude name="com/google/flatbuffers/**"/>
                     <exclude name="libjucx.so"/>
                     <exclude name="org/openucx/**"/>
@@ -308,6 +298,9 @@
       <plugin>
         <groupId>org.apache.rat</groupId>
         <artifactId>apache-rat-plugin</artifactId>
+        <configuration>
+          <excludes>unshimmed-files.txt</excludes>
+        </configuration>
       </plugin>
     </plugins>
   </build>

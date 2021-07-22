@@ -26,23 +26,12 @@ import org.apache.spark.SparkConf
 import org.apache.spark.api.plugin.{DriverPlugin, ExecutorPlugin}
 import org.apache.spark.internal.Logging
 import org.apache.spark.resource.{ResourceInformation, ResourceRequest}
-import org.apache.spark.sql.SparkSessionExtensions
+import org.apache.spark.sql.{SparkSession, SparkSessionExtensions}
+import org.apache.spark.sql.execution.ColumnarRule
 
 abstract class PluginShims extends SparkShims with Logging {
   override def driverPlugin(): DriverPlugin = new RapidsDriverPlugin
   override def executorPlugin(): ExecutorPlugin = new RapidsExecutorPlugin
-  override def sqlExecRules(extensions: SparkSessionExtensions) = {
-    val pluginProps = RapidsPluginUtils.loadProps(RapidsPluginUtils.PLUGIN_PROPS_FILENAME)
-    logInfo(s"RAPIDS Accelerator build: $pluginProps")
-    val cudfProps = RapidsPluginUtils.loadProps(RapidsPluginUtils.CUDF_PROPS_FILENAME)
-    logInfo(s"cudf build: $cudfProps")
-    val pluginVersion = pluginProps.getProperty("version", "UNKNOWN")
-    val cudfVersion = cudfProps.getProperty("version", "UNKNOWN")
-    logWarning(s"RAPIDS Accelerator $pluginVersion using cudf $cudfVersion." +
-        s" To disable GPU support set `${RapidsConf.SQL_ENABLED}` to false")
-    extensions.injectColumnar(_ => ColumnarOverrideRules())
-    extensions.injectQueryStagePrepRule(_ => GpuQueryStagePrepOverrides())
-  }
 
   override def udfRules(extensions: SparkSessionExtensions): Unit = {
     logWarning("Installing rapids UDF compiler extensions to Spark. The compiler is disabled" +
