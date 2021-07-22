@@ -29,6 +29,7 @@ import org.apache.spark.scheduler.MapStatus
 import org.apache.spark.shuffle._
 import org.apache.spark.shuffle.sort.SortShuffleManager
 import org.apache.spark.sql.execution.metric.SQLMetric
+import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.vectorized.ColumnarBatch
 import org.apache.spark.storage._
 
@@ -313,8 +314,9 @@ abstract class RapidsShuffleInternalManagerBase(conf: SparkConf, val isDriver: B
       dependency: ShuffleDependency[K, V, C]): ShuffleHandle = {
     // Always register with the wrapped handler so we can write to it ourselves if needed
     val orig = wrapped.registerShuffle(shuffleId, dependency)
-    if (GpuShuffleEnv.shouldUseRapidsShuffle(rapidsConf) &&
-      !shouldFallThroughOnEverything && dependency.isInstanceOf[GpuShuffleDependency[K, V, C]]) {
+    if (GpuShuffleEnv.shouldUseRapidsShuffle(new RapidsConf(SQLConf.get)) &&
+      !shouldFallThroughOnEverything && 
+      dependency.isInstanceOf[GpuShuffleDependency[K, V, C]]) {
       val handle = new GpuShuffleHandle(orig,
         dependency.asInstanceOf[GpuShuffleDependency[K, V, V]])
       handle
