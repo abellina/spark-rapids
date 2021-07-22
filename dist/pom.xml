@@ -187,14 +187,15 @@
             <id>create-parallel-world</id>
             <configuration>
               <target>
-                <!-- common code is taken from the most recent version -->
+                <!-- TODO common code should be taken from the most recent version -->
                 <unzip
-                        src="${project.build.directory}/rapids-4-spark_${scala.binary.version}-${project.version}-spark312.jar"
+                        src="${project.build.directory}/rapids-4-spark_${scala.binary.version}-${project.version}-spark301.jar"
                         dest="${project.build.directory}/parallel-world"
                 >
                   <patternset id="sharedWorld">
                     <include name="com/nvidia/spark/SQLPlugin*"/>
                     <include name="com/nvidia/spark/ExclusiveModeGpuDiscoveryPlugin*"/>
+                    <include name="com/nvidia/spark/rapids/ShimJavaClassLoader*"/>
                     <include name="com/nvidia/spark/rapids/ShimLoader*"/>
                     <include name="com/nvidia/spark/rapids/SparkShims*"/>
                     <include name="com/nvidia/spark/rapids/SparkShimServiceProvider*"/>
@@ -215,6 +216,7 @@
                   <patternset id="shimPattern">
                     <exclude name="com/nvidia/spark/SQLPlugin*"/>
                     <exclude name="com/nvidia/spark/ExclusiveModeGpuDiscoveryPlugin*"/>
+                    <exclude name="com/nvidia/spark/rapids/ShimJavaClassLoader*"/>
                     <exclude name="com/nvidia/spark/rapids/ShimLoader*"/>
                     <exclude name="com/nvidia/spark/rapids/SparkShims*"/>
                     <exclude name="com/nvidia/spark/rapids/SparkShimServiceProvider*"/>

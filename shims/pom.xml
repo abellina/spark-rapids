@@ -74,6 +74,13 @@
                 <module>spark312</module>
             </modules>
         </profile>
+        <profile>
+            <id>testShims</id>
+            <modules>
+                <module>spark301</module>
+                <module>spark311</module>
+            </modules>
+        </profile>
     </profiles>
     <modules>
         <module>aggregator</module>

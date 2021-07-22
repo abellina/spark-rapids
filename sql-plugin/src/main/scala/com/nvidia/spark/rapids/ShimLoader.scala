@@ -17,7 +17,7 @@
 package com.nvidia.spark.rapids
 
 import scala.io.Source
-import scala.util.Try
+import scala.util.{Failure, Try}
 
 import com.sun.istack.internal.tools.ParallelWorldClassLoader
 
@@ -37,24 +37,41 @@ object ShimLoader extends Logging {
           logError("GERA_DEBUG: no service providers found")
           Iterator.empty
         }
-        .flatMap(provideClass => Try(
-          cl.loadClass(provideClass).newInstance().asInstanceOf[SparkShimServiceProvider]
-        ).toOption)
+        .map(provideClass => createShimProvider(cl, provideClass))
+  }
+
+  private def createShimProvider(cl: ClassLoader, providerClass: String) = {
+    System.err.println("GERA_DEBUG: createShimProvider cl=" + cl + "\n" +
+      "    for interface classloader " + classOf[SparkShimServiceProvider].getClassLoader)
+    val res = Try(
+      classOf[SparkShimServiceProvider].cast(cl.loadClass(providerClass).newInstance())
+    ).recoverWith { case e =>
+      e.printStackTrace()
+      Failure(e)
+    }.get
+
+    logError("GERA_DEBUG:  created provider " + res)
+    res
   }
 
   private def detectShimProvider(): SparkShimServiceProvider = {
-    val shimClassloaders = Seq(
+    val shimParentClassLoader = classOf[SparkShimServiceProvider].getClassLoader
+    val shimMasks = Seq(
       "spark301",
       "spark302",
       "spark303",
       "spark311",
       "spark312"
-    ).map(prefix => new ParallelWorldClassLoader(getClass.getClassLoader, s"$prefix/"))
+    )
+    val shimClassloaders = shimMasks.map { prefix =>
+      new ParallelWorldClassLoader(shimParentClassLoader, s"$prefix/")
+//      new ShimJavaClassLoader(shimParentClassLoader, prefix)
+    }
 
     val sparkVersion = getSparkVersion
     logInfo(s"Loading shim for Spark version: $sparkVersion")
     // TODO current fat jar has multiple copies due to being merged from other fat jars
-    val shimLoader = shimClassloaders.toIterator
+    val shimLoader = shimClassloaders
         .flatMap(cl =>
           loadShimProviders(cl)
         ).find(_.matchesVersion(sparkVersion))
@@ -80,6 +97,10 @@ object ShimLoader extends Logging {
     if (sparkShims == null) {
       val provider = findShimProvider()
       sparkShims = provider.buildShim
+
+      // TODO related to https://stackoverflow.com/questions/28186607/java-lang-classcastexception-using-lambda-expressions-in-spark-job-on-remote-ser/28367602#28367602
+      // is there a better way to propagate the classloader to serde
+      Thread.currentThread().setContextClassLoader(sparkShims.getClass.getClassLoader)
     }
     sparkShims
   }
