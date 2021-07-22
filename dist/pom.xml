@@ -193,10 +193,7 @@
                         dest="${project.build.directory}/parallel-world"
                 >
                   <!--
-                  grep rapids-4-spark_2.12-21.08.0-SNAPSHOT-spark301.jar \
-                    /tmp/beforeShimClassLoad.log | \
-                    cut -d' ' -f 2 | tr '.' '/' | \
-                    cut -d \$ -f 1 | sort | uniq
+                   grep rapids-4-spark_2.12-21.08.0-SNAPSHOT-spark301.jar /tmp/beforeShimClassLoad.log | cut -d' ' -f 2 | tr '.' '/' | cut -d \$ -f 1 | sort | uniq | xargs -I% -n 1 echo %'*'
                   -->
                   <patternset id="sharedWorld">
                     <includesfile name="${project.basedir}/unshimmed-files.txt"/>
