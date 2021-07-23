@@ -20,24 +20,13 @@ import java.util.Optional
 import scala.collection.mutable.ArrayBuffer
 
 import ai.rapids.cudf.Cuda
-import com.nvidia.spark.udf.LogicalPlanRules
 
 import org.apache.spark.SparkConf
 import org.apache.spark.api.plugin.{DriverPlugin, ExecutorPlugin}
 import org.apache.spark.internal.Logging
 import org.apache.spark.resource.{ResourceInformation, ResourceRequest}
-import org.apache.spark.sql.{SparkSession, SparkSessionExtensions}
-import org.apache.spark.sql.execution.ColumnarRule
 
 abstract class PluginShims extends SparkShims with Logging {
-  override def driverPlugin(): DriverPlugin = new RapidsDriverPlugin
-  override def executorPlugin(): ExecutorPlugin = new RapidsExecutorPlugin
-
-  override def udfRules(extensions: SparkSessionExtensions): Unit = {
-    logWarning("Installing rapids UDF compiler extensions to Spark. The compiler is disabled" +
-        s" by default. To enable it, set `${RapidsConf.UDF_COMPILER_ENABLED}` to true")
-    extensions.injectResolutionRule(_ => LogicalPlanRules())
-  }
 
   override def discoverResource(
       request: ResourceRequest,

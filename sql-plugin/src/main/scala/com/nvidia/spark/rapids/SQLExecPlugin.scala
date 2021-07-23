@@ -18,10 +18,18 @@ package com.nvidia.spark.rapids
 
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.{SparkSession, SparkSessionExtensions}
-import org.apache.spark.sql.execution.ColumnarRule
+import org.apache.spark.sql.catalyst.rules.Rule
+import org.apache.spark.sql.execution.{ColumnarRule, SparkPlan}
 
 class SQLExecPlugin extends (SparkSessionExtensions => Unit) with Logging {
   override def apply(extensions: SparkSessionExtensions): Unit = {
+    logRapidsVersionInfo()
+    extensions.injectColumnar(shimClassLoaderRule)
+    extensions.injectColumnar(columnarOverrides)
+    extensions.injectQueryStagePrepRule(queryStagePrepOverrides)
+  }
+
+  private def logRapidsVersionInfo() = {
     val pluginProps = RapidsPluginUtils.loadProps(RapidsPluginUtils.PLUGIN_PROPS_FILENAME)
     logInfo(s"RAPIDS Accelerator build: $pluginProps")
     val cudfProps = RapidsPluginUtils.loadProps(RapidsPluginUtils.CUDF_PROPS_FILENAME)
@@ -30,16 +38,33 @@ class SQLExecPlugin extends (SparkSessionExtensions => Unit) with Logging {
     val cudfVersion = cudfProps.getProperty("version", "UNKNOWN")
     logWarning(s"RAPIDS Accelerator $pluginVersion using cudf $cudfVersion." +
         s" To disable GPU support set `${RapidsConf.SQL_ENABLED}` to false")
-    val columnarRules: SparkSession => ColumnarRule = { sparkSession =>
-      val urls = sparkSession.sharedState.jarClassLoader.getURLs
-      logError(s"GERA_DEBUG: Current jar URLs ${urls.mkString("\n")}")
-      val shimURL = ShimLoader.getShimURL
-      logError(s"GERA_DEBUG adding Shim URL $shimURL")
-      sparkSession.sharedState.jarClassLoader.addURL(shimURL)
-      ColumnarOverrideRules()
-    }
+  }
 
-    extensions.injectColumnar(columnarRules)
-    extensions.injectQueryStagePrepRule(_ => GpuQueryStagePrepOverrides())
+  private def shimClassLoaderRule(sparkSession: SparkSession): ColumnarRule = {
+    // accessing shared state should be fine
+    // Base Session State Builder will have inited shared state
+    // due to https://scala-lang.org/files/archive/spec/
+    // 2.12/06-expressions.html#function-applications
+    // function parameter evaluation
+    val urls = sparkSession.sharedState.jarClassLoader.getURLs
+    logError(s"GERA_DEBUG: Current jar URLs ${urls.mkString("\n")}")
+    val shimURL = ShimLoader.getShimURL
+    logError(s"GERA_DEBUG adding Shim URL $shimURL")
+    sparkSession.sharedState.jarClassLoader.addURL(shimURL)
+    new ColumnarRule // identity
+  }
+
+  private def columnarOverrides(sparkSession: SparkSession): ColumnarRule = {
+    sparkSession.sharedState.jarClassLoader
+        .loadClass("com.nvidia.spark.rapids.ColumnarOverrideRules")
+        .newInstance()
+        .asInstanceOf[ColumnarRule]
+  }
+
+  private def queryStagePrepOverrides(sparkSession: SparkSession): Rule[SparkPlan] = {
+    sparkSession.sharedState.jarClassLoader
+        .loadClass("com.nvidia.spark.rapids.GpuQueryStagePrepOverrides")
+        .newInstance()
+        .asInstanceOf[Rule[SparkPlan]]
   }
 }

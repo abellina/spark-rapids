@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, NVIDIA CORPORATION.
+ * Copyright (c) 2020-2021, NVIDIA CORPORATION.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,6 +17,9 @@
 package com.nvidia.spark.rapids.shims.spark301
 
 import com.nvidia.spark.rapids.{SparkShims, SparkShimVersion}
+import com.nvidia.spark.rapids.shims.spark301.SparkShimServiceProvider.VERSION
+
+import org.apache.spark.sql.SparkSession
 
 object SparkShimServiceProvider {
   val VERSION = SparkShimVersion(3, 0, 1)
@@ -29,6 +32,14 @@ class SparkShimServiceProvider extends com.nvidia.spark.rapids.SparkShimServiceP
   }
 
   def buildShim: SparkShims = {
-    new Spark301Shims()
+    // TODO hack
+    SparkSession.getActiveSession.map {
+      _.sharedState.jarClassLoader
+          .loadClass("com.nvidia.spark.rapids.shims.spark301.Spark301Shims")
+          .newInstance()
+          .asInstanceOf[SparkShims]
+    }.getOrElse {
+      sys.error("Failed to create shims for " + VERSION)
+    }
   }
 }

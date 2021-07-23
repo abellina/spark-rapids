@@ -86,11 +86,6 @@ trait SparkShims {
       sparkconf: SparkConf
   ): Optional[ResourceInformation]
 
-  def udfRules(extensions: SparkSessionExtensions): Unit
-
-  def driverPlugin(): DriverPlugin
-  def executorPlugin(): ExecutorPlugin
-
   def getSparkShimVersion: ShimVersion
   def parquetRebaseReadKey: String
   def parquetRebaseWriteKey: String

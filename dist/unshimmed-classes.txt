@@ -1,6 +1,5 @@
 com/nvidia/spark/rapids/AddressSpaceAllocator*
 com/nvidia/spark/rapids/Arm*
-com/nvidia/spark/rapids/ColumnarOverrideRules*
 com/nvidia/spark/rapids/ConfBuilder*
 com/nvidia/spark/rapids/ConfEntry*
 com/nvidia/spark/rapids/ConfEntryWithDefault*
@@ -11,7 +10,6 @@ com/nvidia/spark/rapids/DuplicateBufferException*
 com/nvidia/spark/rapids/Errored*
 com/nvidia/spark/rapids/GpuDeviceManager*
 com/nvidia/spark/rapids/GpuKryoRegistrator*
-com/nvidia/spark/rapids/GpuQueryStagePrepOverrides*
 com/nvidia/spark/rapids/GpuSemaphore*
 com/nvidia/spark/rapids/HashedPriorityQueue*
 com/nvidia/spark/rapids/Initialized*
@@ -30,7 +28,6 @@ com/nvidia/spark/rapids/RapidsGdsStore*
 com/nvidia/spark/rapids/RapidsHostMemoryStore*
 com/nvidia/spark/rapids/RapidsPluginUtils*
 com/nvidia/spark/rapids/ShimLoader*
-com/nvidia/spark/rapids/shims/spark301/SparkShimServiceProvider*
 com/nvidia/spark/rapids/ShimVersion*
 com/nvidia/spark/rapids/SparkShims*
 com/nvidia/spark/rapids/SparkShimServiceProvider*
@@ -42,3 +39,6 @@ com/nvidia/spark/rapids/Uninitialized*
 com/nvidia/spark/SQLPlugin*
 org/apache/spark/sql/rapids/GpuShuffleEnv*
 org/apache/spark/sql/rapids/RapidsDiskBlockManager*
+com/nvidia/spark/rapids/python/**
+com/nvidia/spark/udf/Plugin*
+com/nvidia/spark/udf/LogicalPlanRules*
