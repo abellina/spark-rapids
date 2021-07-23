@@ -32,7 +32,7 @@ class SQLExecPlugin extends (SparkSessionExtensions => Unit) with Logging {
         s" To disable GPU support set `${RapidsConf.SQL_ENABLED}` to false")
     val columnarRules: SparkSession => ColumnarRule = { sparkSession =>
       val urls = sparkSession.sharedState.jarClassLoader.getURLs
-      logError(s"GERA_DEBUG: Current jar URLs $urls")
+      logError(s"GERA_DEBUG: Current jar URLs ${urls.mkString("\n")}")
       val shimURL = ShimLoader.getShimURL
       logError(s"GERA_DEBUG adding Shim URL $shimURL")
       sparkSession.sharedState.jarClassLoader.addURL(shimURL)

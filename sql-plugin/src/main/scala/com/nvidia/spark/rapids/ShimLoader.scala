@@ -28,7 +28,7 @@ import org.apache.spark.internal.Logging
 
 object ShimLoader extends Logging {
   private val serviceResourceListFile =
-    "META-INF/services/" + classOf[SparkShimServiceProvider].getName
+    "/META-INF/services/" + classOf[SparkShimServiceProvider].getName
 
   private var shimProvider: SparkShimServiceProvider = null
   private var shimProviderClass: String = null
@@ -56,6 +56,7 @@ object ShimLoader extends Logging {
     if (shimURL == null) {
       val providerClassLoader = findShimProvider().getClass.getClassLoader
       val rsrcURL = providerClassLoader.getResource(serviceResourceListFile)
+      A
       val urlStr = rsrcURL.toString
       val shimRootUrlStr = urlStr.substring(0, urlStr.indexOf("/META-INF"))
       shimURL = new URL(shimRootUrlStr)
