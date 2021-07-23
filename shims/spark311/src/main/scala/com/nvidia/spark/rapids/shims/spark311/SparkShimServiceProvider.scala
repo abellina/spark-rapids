@@ -18,6 +18,8 @@ package com.nvidia.spark.rapids.shims.spark311
 
 import com.nvidia.spark.rapids.{SparkShims, SparkShimVersion}
 
+import org.apache.spark.sql.SparkSession
+
 object SparkShimServiceProvider {
   val VERSION = SparkShimVersion(3, 1, 1)
   val VERSIONNAMES = Seq(s"$VERSION")
@@ -30,6 +32,15 @@ class SparkShimServiceProvider extends com.nvidia.spark.rapids.SparkShimServiceP
   }
 
   def buildShim: SparkShims = {
-    new Spark311Shims()
+    // TODO prevent launch class loader
+    SparkSession.getActiveSession.map {
+      _.sharedState.jarClassLoader
+          .loadClass("com.nvidia.spark.rapids.shims.spark311.Spark311Shims")
+          .newInstance()
+          .asInstanceOf[SparkShims]
+    }.getOrElse {
+      sys.error("Failed to create shims for " + SparkShimServiceProvider.VERSION)
+    }
+//    new Spark311Shims()
   }
 }

@@ -36,6 +36,7 @@ import org.apache.spark.sql.execution.adaptive.AdaptiveSparkPlanExec
 import org.apache.spark.sql.internal.StaticSQLConf
 import org.apache.spark.sql.rapids.GpuShuffleEnv
 import org.apache.spark.sql.util.QueryExecutionListener
+import org.apache.spark.util.{MutableURLClassLoader, ParentClassLoader}
 
 class PluginException(msg: String) extends RuntimeException(msg)
 
@@ -160,6 +161,19 @@ class RapidsExecutorPlugin extends ExecutorPlugin with Logging {
       pluginContext: PluginContext,
       extraConf: java.util.Map[String, String]): Unit = {
     try {
+      val shimURL = ShimLoader.getShimURL()
+      val contextClassLoader = Thread.currentThread().getContextClassLoader
+      val mutableURLClassLoader = contextClassLoader match {
+        case mutable: MutableURLClassLoader => mutable
+        case replCL if replCL.getClass.getName == "org.apache.spark.repl.ExecutorClassLoader" =>
+          val parentLoaderField = replCL.getClass.getDeclaredMethod("parentLoader")
+          val parentLoader = parentLoaderField.invoke(replCL).asInstanceOf[ParentClassLoader]
+          parentLoader.getParent.asInstanceOf[MutableURLClassLoader]
+        case _ =>
+          sys.error(s"Can't fix up executor class loader $contextClassLoader for shimming")
+      }
+      mutableURLClassLoader.addURL(shimURL)
+
       val conf = new RapidsConf(extraConf.asScala.toMap)
       if (conf.shimsProviderOverride.isDefined) {
         ShimLoader.setSparkShimProviderClass(conf.shimsProviderOverride.get)
