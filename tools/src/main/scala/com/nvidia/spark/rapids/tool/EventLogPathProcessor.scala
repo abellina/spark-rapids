@@ -168,7 +168,7 @@ object EventLogPathProcessor extends Logging {
       logsWithTimestamp.filterKeys(_.eventLog.getName.contains(strMatch))
     }.getOrElse(logsWithTimestamp)
 
-    val filteredLogs = if (filterNLogs.nonEmpty && !filterByAppCriteria(filterNLogs)) {
+    val filteredLogs = filterNLogs.map { filter =>
       val filteredInfo = filterNLogs.get.split("-")
       val numberofEventLogs = filteredInfo(0).toInt
       val criteria = filteredInfo(1)
@@ -177,19 +177,13 @@ object EventLogPathProcessor extends Logging {
       } else if (criteria.equals("oldest")) {
         LinkedHashMap(matchedLogs.toSeq.sortWith(_._2 < _._2): _*)
       } else {
-        logError("Criteria should be either newest-filesystem or oldest-filesystem")
+        logError("Criteria should be either newest or oldest")
         Map.empty[EventLogInfo, Long]
       }
       matched.take(numberofEventLogs)
-    } else {
-      matchedLogs
-    }
-    filteredLogs.keys.toSeq
-  }
+    }.getOrElse(matchedLogs)
 
-  def filterByAppCriteria(filterNLogs: Option[String]): Boolean = {
-    filterNLogs.get.endsWith("-oldest") || filterNLogs.get.endsWith("-newest") ||
-        filterNLogs.get.endsWith("per-app-name")
+    filteredLogs.keys.toSeq
   }
 
   def logApplicationInfo(app: ApplicationInfo) = {

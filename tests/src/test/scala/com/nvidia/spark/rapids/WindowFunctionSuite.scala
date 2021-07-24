@@ -23,9 +23,6 @@ import org.apache.spark.sql.functions._
 import org.apache.spark.sql.types.DecimalType
 
 class WindowFunctionSuite extends SparkQueryCompareTestSuite {
-  // The logical plan optimizer in Spark 3.0.x is non-deterministic when planning windows
-  // over the same range, so avoid trying to compare canonicalized plans on Spark 3.0.x
-  private val skipRangeCanon = cmpSparkVersion(3, 1, 1) < 0
 
   def windowAggregationTester(windowSpec: WindowSpec): DataFrame => DataFrame =
     (df : DataFrame) => df.select(
@@ -85,6 +82,18 @@ class WindowFunctionSuite extends SparkQueryCompareTestSuite {
       ).orderBy("sum_dollars", "min_dollars", "max_dollars",
                 "row_num", "count_all")
     }
+
+  /* There is no easy way to make dateLong not nullable with how these test are written
+  Very similar functionality is covered by the python integration tests.  When
+  https://github.com/NVIDIA/spark-rapids/issues/1039 is fixed then we can enable these tests again
+  testSparkResultsAreEqual("[Window] [ROWS/RANGE] [default] ", windowTestDfOrcNonNullable,
+      execsAllowedNonGpu=Seq("DeserializeToObjectExec", "CreateExternalRow",
+        "Invoke", "StaticInvoke")) {
+    val rowsWindow = Window.partitionBy("uid")
+        .orderBy("dateLong")
+    windowAggregationTester(rowsWindow)
+  }
+  */
 
   testSparkResultsAreEqual("[Window] [ROWS] [-2, 3] ", windowTestDfOrc) {
     val rowsWindow = Window.partitionBy("uid")
@@ -203,8 +212,7 @@ class WindowFunctionSuite extends SparkQueryCompareTestSuite {
            |""".stripMargin)
     }
 
-  testSparkResultsAreEqual("[Window] [RANGE] [ ASC] [-2 DAYS, 3 DAYS] ", windowTestDfOrc,
-    skipCanonicalizationCheck = skipRangeCanon) {
+  testSparkResultsAreEqual("[Window] [RANGE] [ ASC] [-2 DAYS, 3 DAYS] ", windowTestDfOrc) {
 
     val windowClause =
       """
@@ -216,8 +224,7 @@ class WindowFunctionSuite extends SparkQueryCompareTestSuite {
     testAllWindowAggregations(windowClause)
   }
 
-  testSparkResultsAreEqual("[Window] [RANGE] [DESC] [-2 DAYS, 3 DAYS] ", windowTestDfOrc,
-    skipCanonicalizationCheck = skipRangeCanon) {
+  testSparkResultsAreEqual("[Window] [RANGE] [DESC] [-2 DAYS, 3 DAYS] ", windowTestDfOrc) {
 
     val windowClause =
       """
@@ -229,8 +236,7 @@ class WindowFunctionSuite extends SparkQueryCompareTestSuite {
     testAllWindowAggregations(windowClause)
   }
 
-  testSparkResultsAreEqual("[Window] [RANGE] [ ASC] [-2 DAYS, CURRENT ROW] ", windowTestDfOrc,
-    skipCanonicalizationCheck = skipRangeCanon) {
+  testSparkResultsAreEqual("[Window] [RANGE] [ ASC] [-2 DAYS, CURRENT ROW] ", windowTestDfOrc) {
 
     val windowClause =
       """
@@ -242,8 +248,7 @@ class WindowFunctionSuite extends SparkQueryCompareTestSuite {
     testAllWindowAggregations(windowClause)
   }
 
-  testSparkResultsAreEqual("[Window] [RANGE] [DESC] [-2 DAYS, CURRENT ROW] ", windowTestDfOrc,
-    skipCanonicalizationCheck = skipRangeCanon) {
+  testSparkResultsAreEqual("[Window] [RANGE] [DESC] [-2 DAYS, CURRENT ROW] ", windowTestDfOrc) {
 
     val windowClause =
       """
@@ -255,8 +260,37 @@ class WindowFunctionSuite extends SparkQueryCompareTestSuite {
     testAllWindowAggregations(windowClause)
   }
 
-  testSparkResultsAreEqual("[Window] [RANGE] [ ASC] [CURRENT ROW, 3 DAYS] ", windowTestDfOrc,
-    skipCanonicalizationCheck = skipRangeCanon) {
+  /* There is no easy way to make dateLong not nullable with how these test are written
+  Very similar functionality is covered by the python integration tests.  When
+  https://github.com/NVIDIA/spark-rapids/issues/1039 is fixed then we can enable these tests again
+  testSparkResultsAreEqual("[Window] [RANGE] [ ASC] [-2 DAYS, UNBOUNDED FOLLOWING] ",
+      windowTestDfOrc) {
+
+    val windowClause =
+      """
+        | (PARTITION BY uid
+        | ORDER BY CAST(dateLong AS TIMESTAMP) ASC
+        | RANGE BETWEEN INTERVAL 2 DAYS PRECEDING AND UNBOUNDED FOLLOWING)
+        |""".stripMargin
+
+    testAllWindowAggregations(windowClause)
+  }
+
+  testSparkResultsAreEqual("[Window] [RANGE] [DESC] [-2 DAYS, UNBOUNDED FOLLOWING] ",
+      windowTestDfOrc) {
+
+    val windowClause =
+      """
+        | (PARTITION BY uid
+        | ORDER BY CAST(dateLong AS TIMESTAMP) DESC
+        | RANGE BETWEEN INTERVAL 2 DAYS PRECEDING AND UNBOUNDED FOLLOWING)
+        |""".stripMargin
+
+    testAllWindowAggregations(windowClause)
+  }
+  */
+
+  testSparkResultsAreEqual("[Window] [RANGE] [ ASC] [CURRENT ROW, 3 DAYS] ", windowTestDfOrc) {
 
     val windowClause =
       """
@@ -268,8 +302,7 @@ class WindowFunctionSuite extends SparkQueryCompareTestSuite {
     testAllWindowAggregations(windowClause)
   }
 
-  testSparkResultsAreEqual("[Window] [RANGE] [DESC] [CURRENT ROW, 3 DAYS] ", windowTestDfOrc,
-    skipCanonicalizationCheck = skipRangeCanon) {
+  testSparkResultsAreEqual("[Window] [RANGE] [DESC] [CURRENT ROW, 3 DAYS] ", windowTestDfOrc) {
 
     val windowClause =
       """
@@ -282,7 +315,7 @@ class WindowFunctionSuite extends SparkQueryCompareTestSuite {
   }
 
   testSparkResultsAreEqual("[Window] [RANGE] [ ASC] [CURRENT ROW, CURRENT ROW] ",
-      windowTestDfOrc, skipCanonicalizationCheck = skipRangeCanon) {
+      windowTestDfOrc) {
 
     val windowClause =
       """
@@ -295,7 +328,7 @@ class WindowFunctionSuite extends SparkQueryCompareTestSuite {
   }
 
   testSparkResultsAreEqual("[Window] [RANGE] [DESC] [CURRENT ROW, CURRENT ROW] ",
-      windowTestDfOrc, skipCanonicalizationCheck = skipRangeCanon) {
+      windowTestDfOrc) {
 
     val windowClause =
       """
@@ -308,7 +341,7 @@ class WindowFunctionSuite extends SparkQueryCompareTestSuite {
   }
 
   testSparkResultsAreEqual("[Window] [RANGE] [ASC] [Integral Type]",
-    windowTestDfOrc, skipCanonicalizationCheck = skipRangeCanon) {
+    windowTestDfOrc) {
 
     val windowClause =
       """
@@ -321,8 +354,7 @@ class WindowFunctionSuite extends SparkQueryCompareTestSuite {
   }
 
   testSparkResultsAreEqual("[Window] [RANGE] [ASC] [Short Type]", windowTestDfOrc,
-      new SparkConf().set("spark.rapids.sql.window.range.short.enabled", "true"),
-      skipCanonicalizationCheck = skipRangeCanon) {
+      new SparkConf().set("spark.rapids.sql.window.range.short.enabled", "true")) {
 
     val windowClause =
       """
@@ -335,7 +367,7 @@ class WindowFunctionSuite extends SparkQueryCompareTestSuite {
   }
 
   testSparkResultsAreEqual("[Window] [RANGE] [ASC] [Long Type]",
-    windowTestDfOrc, skipCanonicalizationCheck = skipRangeCanon) {
+    windowTestDfOrc) {
 
     val windowClause =
       """
@@ -348,8 +380,7 @@ class WindowFunctionSuite extends SparkQueryCompareTestSuite {
   }
 
   testSparkResultsAreEqual("[Window] [RANGE] [ASC] [Byte Type]", windowTestDfOrc,
-      new SparkConf().set("spark.rapids.sql.window.range.byte.enabled", "true"),
-      skipCanonicalizationCheck = skipRangeCanon) {
+      new SparkConf().set("spark.rapids.sql.window.range.byte.enabled", "true")) {
 
     val windowClause =
       """
@@ -362,7 +393,7 @@ class WindowFunctionSuite extends SparkQueryCompareTestSuite {
   }
 
   testSparkResultsAreEqual("[Window] [RANGE] [ASC] [Date Type]",
-    windowTestDfOrc, skipCanonicalizationCheck = skipRangeCanon) {
+    windowTestDfOrc) {
 
     val windowClause =
       """
@@ -374,8 +405,139 @@ class WindowFunctionSuite extends SparkQueryCompareTestSuite {
     testAllWindowAggregations(windowClause)
   }
 
+
+  /* There is no easy way to make dateLong not nullable with how these test are written
+  Very similar functionality is covered by the python integration tests.  When
+  https://github.com/NVIDIA/spark-rapids/issues/1039 is fixed then we can enable these tests again
+  testSparkResultsAreEqual("[Window] [RANGE] [ ASC] [CURRENT ROW, UNBOUNDED FOLLOWING] ",
+      windowTestDfOrc) {
+
+    val windowClause =
+      """
+        | (PARTITION BY uid
+        | ORDER BY CAST(dateLong AS TIMESTAMP) ASC
+        | RANGE BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING)
+        |""".stripMargin
+
+    testAllWindowAggregations(windowClause)
+  }
+
+  testSparkResultsAreEqual("[Window] [RANGE] [DESC] [CURRENT ROW, UNBOUNDED FOLLOWING] ",
+      windowTestDfOrc) {
+
+    val windowClause =
+      """
+        | (PARTITION BY uid
+        | ORDER BY CAST(dateLong AS TIMESTAMP) DESC
+        | RANGE BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING)
+        |""".stripMargin
+
+    testAllWindowAggregations(windowClause)
+  }
+
+  testSparkResultsAreEqual("[Window] [RANGE] [ ASC] [UNBOUNDED PRECEDING, 3 DAYS] ",
+      windowTestDfOrc) {
+
+    val windowClause =
+      """
+        | (PARTITION BY uid
+        | ORDER BY CAST(dateLong AS TIMESTAMP) ASC
+        | RANGE BETWEEN UNBOUNDED PRECEDING AND INTERVAL 3 DAYS FOLLOWING)
+        |""".stripMargin
+
+    testAllWindowAggregations(windowClause)
+  }
+
+  testSparkResultsAreEqual("[Window] [RANGE] [DESC] [UNBOUNDED PRECEDING, 3 DAYS] ",
+      windowTestDfOrc) {
+
+    val windowClause =
+      """
+        | (PARTITION BY uid
+        | ORDER BY CAST(dateLong AS TIMESTAMP) DESC
+        | RANGE BETWEEN UNBOUNDED PRECEDING AND INTERVAL 3 DAYS FOLLOWING)
+        |""".stripMargin
+
+    testAllWindowAggregations(windowClause)
+  }
+
+  testSparkResultsAreEqual("[Window] [RANGE] [ ASC] [UNBOUNDED PRECEDING, CURRENT ROW] ",
+      windowTestDfOrc) {
+
+    val windowClause =
+      """
+        | (PARTITION BY uid
+        | ORDER BY CAST(dateLong AS TIMESTAMP) ASC
+        | RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)
+        |""".stripMargin
+
+    testAllWindowAggregations(windowClause)
+  }
+
+  testSparkResultsAreEqual("[Window] [RANGE] [DESC] [UNBOUNDED PRECEDING, CURRENT ROW] ",
+      windowTestDfOrc) {
+
+    val windowClause =
+      """
+        | (PARTITION BY uid
+        | ORDER BY CAST(dateLong AS TIMESTAMP) DESC
+        | RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)
+        |""".stripMargin
+
+    testAllWindowAggregations(windowClause)
+  }
+
+  testSparkResultsAreEqual("[Window] [RANGE] [ ASC] [UNBOUNDED PRECEDING, UNBOUNDED FOLLOWING] ",
+      windowTestDfOrc) {
+
+    val windowClause =
+      """
+        | (PARTITION BY uid
+        | ORDER BY CAST(dateLong AS TIMESTAMP) ASC
+        | RANGE BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)
+        |""".stripMargin
+
+    testAllWindowAggregations(windowClause)
+  }
+
+  testSparkResultsAreEqual("[Window] [RANGE] [DESC] [UNBOUNDED PRECEDING, UNBOUNDED FOLLOWING] ",
+      windowTestDfOrc) {
+
+    val windowClause =
+      """
+        | (PARTITION BY uid
+        | ORDER BY CAST(dateLong AS TIMESTAMP) DESC
+        | RANGE BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)
+        |""".stripMargin
+
+    testAllWindowAggregations(windowClause)
+  }
+
+  testSparkResultsAreEqual("[Window] [RANGE] [ ASC] [Unspecified bounds] ", windowTestDfOrc) {
+
+    val windowClause =
+      """
+        | (PARTITION BY uid
+        | ORDER BY CAST(dateLong AS TIMESTAMP) ASC)
+        |""".stripMargin
+
+    testAllWindowAggregations(windowClause)
+  }
+
+  testSparkResultsAreEqual("[Window] [RANGE] [DESC] [Unspecified bounds] ", windowTestDfOrc) {
+
+    val windowClause =
+      """
+        | (PARTITION BY uid
+        | ORDER BY CAST(dateLong AS TIMESTAMP) DESC)
+        |""".stripMargin
+
+    testAllWindowAggregations(windowClause)
+  }
+  */
+
   IGNORE_ORDER_testSparkResultsAreEqual("[Window] [MIXED WINDOW SPECS] ",
-      windowTestDfOrc, skipCanonicalizationCheck = skipRangeCanon) {
+      windowTestDfOrc) {
     (df : DataFrame) => {
       df.createOrReplaceTempView("mytable")
       // scalastyle:off line.size.limit
@@ -405,8 +567,7 @@ class WindowFunctionSuite extends SparkQueryCompareTestSuite {
       "SpecifiedWindowFrame",
       "WindowExec",
       "WindowExpression",
-      "WindowSpecDefinition"),
-    skipCanonicalizationCheck = skipRangeCanon) {
+      "WindowSpecDefinition")) {
     (df : DataFrame) => {
       df.createOrReplaceTempView("mytable")
       // scalastyle:off line.size.limit

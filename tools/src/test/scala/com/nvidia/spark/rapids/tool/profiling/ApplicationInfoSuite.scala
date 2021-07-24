@@ -41,7 +41,6 @@ class ApplicationInfoSuite extends FunSuite with Logging {
 
   private val expRoot = ToolTestUtils.getTestResourceFile("ProfilingExpectations")
   private val logDir = ToolTestUtils.getTestResourcePath("spark-events-profiling")
-  private val qualLogDir = ToolTestUtils.getTestResourcePath("spark-events-qualification")
 
   test("test single event") {
     testSqlCompression()
@@ -272,9 +271,9 @@ class ApplicationInfoSuite extends FunSuite with Logging {
     val appArgs = new ProfileArgs(Array(
       "--match-event-logs",
       matchFileName,
-      s"$qualLogDir/udf_func_eventlog",
-      s"$qualLogDir/udf_dataset_eventlog",
-      s"$qualLogDir/dataset_eventlog"
+      "src/test/resources/spark-events-qualification/udf_func_eventlog",
+      "src/test/resources/spark-events-qualification/udf_dataset_eventlog",
+      "src/test/resources/spark-events-qualification/dataset_eventlog"
     ))
 
     val result = EventLogPathProcessor.processAllPaths(appArgs.filterCriteria.toOption,
@@ -298,7 +297,7 @@ class ApplicationInfoSuite extends FunSuite with Logging {
       tempFile2.setLastModified(12324567) // oldest file
       tempFile3.setLastModified(34567891) // second newest file
       tempFile4.setLastModified(23456789)
-      val filterNew = "2-newest-filesystem"
+      val filterNew = "2-newest"
       val appArgs = new ProfileArgs(Array(
         "--filter-criteria",
         filterNew,
@@ -339,7 +338,7 @@ class ApplicationInfoSuite extends FunSuite with Logging {
       tempFile3.setLastModified(34567891) // second newest file
       tempFile4.setLastModified(23456789)
 
-      val filterOld = "3-oldest-filesystem"
+      val filterOld = "3-oldest"
       val matchFileName = "temp"
       val appArgs = new ProfileArgs(Array(
         "--filter-criteria",
