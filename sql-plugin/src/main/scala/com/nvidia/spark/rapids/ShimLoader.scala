@@ -22,7 +22,9 @@ import scala.io.Source
 import scala.util.{Failure, Try}
 
 import org.apache.spark.{SPARK_BUILD_USER, SPARK_VERSION}
+import org.apache.spark.api.plugin.ExecutorPlugin
 import org.apache.spark.internal.Logging
+import org.apache.spark.util.{MutableURLClassLoader, ParentClassLoader}
 
 object ShimLoader extends Logging {
   private val serviceResourceListFile =
@@ -158,5 +160,24 @@ object ShimLoader extends Logging {
 
   def setSparkShimProviderClass(classname: String): Unit = {
     shimProviderClass = classname
+  }
+
+  def executorPlugin(): ExecutorPlugin = {
+    val pluginClassLoaderURL = ShimLoader.getShimURL()
+    val contextClassLoader = Thread.currentThread().getContextClassLoader
+    val mutableURLClassLoader = contextClassLoader match {
+      case mutable: MutableURLClassLoader => mutable
+      case replCL if replCL.getClass.getName == "org.apache.spark.repl.ExecutorClassLoader" =>
+        val parentLoaderField = replCL.getClass.getDeclaredMethod("parentLoader")
+        val parentLoader = parentLoaderField.invoke(replCL).asInstanceOf[ParentClassLoader]
+        parentLoader.getParent.asInstanceOf[MutableURLClassLoader]
+      case _ =>
+        sys.error(s"Can't fix up executor class loader $contextClassLoader for shimming")
+    }
+    mutableURLClassLoader.addURL(pluginClassLoaderURL)
+    contextClassLoader
+        .loadClass(getClass.getPackage.getName + ".RapidsExecutorPlugin")
+        .newInstance()
+        .asInstanceOf[ExecutorPlugin]
   }
 }

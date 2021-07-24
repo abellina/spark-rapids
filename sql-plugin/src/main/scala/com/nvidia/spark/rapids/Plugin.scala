@@ -161,19 +161,6 @@ class RapidsExecutorPlugin extends ExecutorPlugin with Logging {
       pluginContext: PluginContext,
       extraConf: java.util.Map[String, String]): Unit = {
     try {
-      val shimURL = ShimLoader.getShimURL()
-      val contextClassLoader = Thread.currentThread().getContextClassLoader
-      val mutableURLClassLoader = contextClassLoader match {
-        case mutable: MutableURLClassLoader => mutable
-        case replCL if replCL.getClass.getName == "org.apache.spark.repl.ExecutorClassLoader" =>
-          val parentLoaderField = replCL.getClass.getDeclaredMethod("parentLoader")
-          val parentLoader = parentLoaderField.invoke(replCL).asInstanceOf[ParentClassLoader]
-          parentLoader.getParent.asInstanceOf[MutableURLClassLoader]
-        case _ =>
-          sys.error(s"Can't fix up executor class loader $contextClassLoader for shimming")
-      }
-      mutableURLClassLoader.addURL(shimURL)
-
       val conf = new RapidsConf(extraConf.asScala.toMap)
       if (conf.shimsProviderOverride.isDefined) {
         ShimLoader.setSparkShimProviderClass(conf.shimsProviderOverride.get)

@@ -16,7 +16,7 @@
 
 package com.nvidia.spark
 
-import com.nvidia.spark.rapids.{RapidsDriverPlugin, RapidsExecutorPlugin}
+import com.nvidia.spark.rapids.{RapidsDriverPlugin, ShimLoader}
 
 import org.apache.spark.api.plugin.{DriverPlugin, ExecutorPlugin, SparkPlugin}
 
@@ -26,5 +26,5 @@ import org.apache.spark.api.plugin.{DriverPlugin, ExecutorPlugin, SparkPlugin}
  */
 class SQLPlugin extends SparkPlugin {
   override def driverPlugin(): DriverPlugin = new RapidsDriverPlugin
-  override def executorPlugin(): ExecutorPlugin = new RapidsExecutorPlugin
+  override def executorPlugin(): ExecutorPlugin = ShimLoader.executorPlugin()
 }
