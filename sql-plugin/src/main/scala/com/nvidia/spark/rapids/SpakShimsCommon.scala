@@ -22,7 +22,6 @@ import scala.collection.mutable.ArrayBuffer
 import ai.rapids.cudf.Cuda
 
 import org.apache.spark.SparkConf
-import org.apache.spark.api.plugin.{DriverPlugin, ExecutorPlugin}
 import org.apache.spark.internal.Logging
 import org.apache.spark.resource.{ResourceInformation, ResourceRequest}
 
