@@ -145,7 +145,10 @@ class RapidsDriverPlugin extends DriverPlugin with Logging {
     }
     if (GpuShuffleEnv.isRapidsShuffleEnabled &&
         conf.shuffleTransportEarlyStart) {
-      rapidsShuffleHeartbeatManager = new RapidsShuffleHeartbeatManager()
+      rapidsShuffleHeartbeatManager =
+          new RapidsShuffleHeartbeatManager(
+            conf.shuffleTransportEarlyStartHeartbeatInterval,
+            conf.shuffleTransportEarlyStartHeartbeatTimeout)
     }
     conf.rapidsConfMap
   }
