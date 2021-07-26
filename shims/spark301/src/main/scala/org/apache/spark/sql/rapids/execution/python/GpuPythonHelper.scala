@@ -1,11 +1,14 @@
 /*
- * Copyright (c) 2020, NVIDIA CORPORATION.
+ * Copyright (c) 2021, NVIDIA CORPORATION.
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
- *     http://www.apache.org/licenses/LICENSE-2.0
+ *    http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -18,13 +21,13 @@ package org.apache.spark.sql.rapids.execution.python
 
 import ai.rapids.cudf.Cuda
 import com.nvidia.spark.rapids.{GpuDeviceManager, RapidsConf}
-import com.nvidia.spark.rapids.python.PythonConfEntries._
+import com.nvidia.spark.rapids.python.PythonConfEntries.{CONCURRENT_PYTHON_WORKERS, PYTHON_GPU_ENABLED, PYTHON_POOLED_MEM, PYTHON_RMM_ALLOC_FRACTION, PYTHON_RMM_MAX_ALLOC_FRACTION, PYTHON_UVM_ENABLED}
 
 import org.apache.spark.{SparkConf, SparkEnv}
 import org.apache.spark.api.python.ChainedPythonFunctions
 import org.apache.spark.internal.Logging
 import org.apache.spark.internal.config.{CPUS_PER_TASK, EXECUTOR_CORES}
-import org.apache.spark.internal.config.Python._
+import org.apache.spark.internal.config.Python.{PYTHON_DAEMON_MODULE, PYTHON_USE_DAEMON, PYTHON_WORKER_MODULE}
 import org.apache.spark.sql.internal.SQLConf
 
 object GpuPythonHelper extends Logging {
@@ -32,14 +35,14 @@ object GpuPythonHelper extends Logging {
   private val sparkConf = SparkEnv.get.conf
   private lazy val rapidsConf = new RapidsConf(sparkConf)
   private lazy val gpuId = GpuDeviceManager.getDeviceId()
-    .getOrElse(throw new IllegalStateException("No gpu id!"))
-    .toString
+      .getOrElse(throw new IllegalStateException("No gpu id!"))
+      .toString
   private lazy val isPythonPooledMemEnabled = rapidsConf.get(PYTHON_POOLED_MEM)
-    .getOrElse(rapidsConf.isPooledMemEnabled)
-    .toString
+      .getOrElse(rapidsConf.isPooledMemEnabled)
+      .toString
   private lazy val isPythonUvmEnabled = rapidsConf.get(PYTHON_UVM_ENABLED)
-    .getOrElse(rapidsConf.isUvmEnabled)
-    .toString
+      .getOrElse(rapidsConf.isUvmEnabled)
+      .toString
   private lazy val (initAllocPerWorker, maxAllocPerWorker) = {
     val info = Cuda.memGetInfo()
     val maxFactionTotal = rapidsConf.get(PYTHON_RMM_MAX_ALLOC_FRACTION)
@@ -47,21 +50,21 @@ object GpuPythonHelper extends Logging {
     // Initialize pool size for all pythons workers. If the fraction is not set,
     // use half of the free memory as default.
     val initAllocTotal = rapidsConf.get(PYTHON_RMM_ALLOC_FRACTION)
-      .map { fraction =>
-        if (0 < maxFactionTotal && maxFactionTotal < fraction) {
-          throw new IllegalArgumentException(s"The value of '$PYTHON_RMM_MAX_ALLOC_FRACTION' " +
-            s"should not be less than that of '$PYTHON_RMM_ALLOC_FRACTION', but found " +
-            s"$maxFactionTotal < $fraction")
+        .map { fraction =>
+          if (0 < maxFactionTotal && maxFactionTotal < fraction) {
+            throw new IllegalArgumentException(s"The value of '$PYTHON_RMM_MAX_ALLOC_FRACTION' " +
+                s"should not be less than that of '$PYTHON_RMM_ALLOC_FRACTION', but found " +
+                s"$maxFactionTotal < $fraction")
+          }
+          (fraction * info.total).toLong
         }
-        (fraction * info.total).toLong
-      }
-      .getOrElse((0.5 * info.free).toLong)
+        .getOrElse((0.5 * info.free).toLong)
     if (initAllocTotal > info.free) {
       logWarning(s"Initial RMM allocation(${initAllocTotal / 1024.0 / 1024} MB) for " +
-        s"all the Python workers is larger than free memory(${info.free / 1024.0 / 1024} MB)")
+          s"all the Python workers is larger than free memory(${info.free / 1024.0 / 1024} MB)")
     } else {
       logDebug(s"Configure ${initAllocTotal / 1024.0 / 1024}MB GPU memory for " +
-        s"all the Python workers.")
+          s"all the Python workers.")
     }
 
     // Calculate the pool size for each Python worker.
@@ -125,8 +128,8 @@ object GpuPythonHelper extends Logging {
         val isAllowedDaemon = allPythonModules.exists(v => v._1 == daemon)
         if (!isAllowedDaemon) {
           throw new IllegalArgumentException("Python daemon module config conflicts." +
-            s" Expect one of [${allPythonModules.map(v => v._1).toSet.mkString(", ")}]," +
-            s" but found $daemon")
+              s" Expect one of [${allPythonModules.map(v => v._1).toSet.mkString(", ")}]," +
+              s" but found $daemon")
         }
       } else {
         // Set daemon only when not specified
@@ -139,8 +142,8 @@ object GpuPythonHelper extends Logging {
         val isAllowedWorker = allPythonModules.exists(v => v._2 == worker)
         if (!isAllowedWorker) {
           throw new IllegalArgumentException("Python worker module config conflicts." +
-            s" Expect one of (${allPythonModules.map(v => v._2).toSet.mkString(", ")})," +
-            s" but found $worker")
+              s" Expect one of (${allPythonModules.map(v => v._2).toSet.mkString(", ")})," +
+              s" but found $worker")
         }
       } else {
         // Set worker only when not specified

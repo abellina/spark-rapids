@@ -24,12 +24,10 @@ import org.apache.spark.api.python.{ChainedPythonFunctions, PythonEvalType}
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.expressions._
-import org.apache.spark.sql.catalyst.plans.physical.{AllTuples, ClusteredDistribution,
-  Distribution, Partitioning}
+import org.apache.spark.sql.catalyst.plans.physical.{AllTuples, ClusteredDistribution, Distribution, Partitioning}
 import org.apache.spark.sql.execution.{BinaryExecNode, CoGroupedIterator, SparkPlan}
-import org.apache.spark.sql.execution.python.{CoGroupedArrowPythonRunner,
-  FlatMapCoGroupsInPandasExec}
-import org.apache.spark.sql.execution.python.rapids.GpuPandasUtils._
+import org.apache.spark.sql.execution.python.{CoGroupedArrowPythonRunner, FlatMapCoGroupsInPandasExec}
+import org.apache.spark.sql.execution.python.GpuPandasUtils._
 import org.apache.spark.sql.types.StructType
 import org.apache.spark.sql.util.ArrowUtils
 import org.apache.spark.sql.vectorized.ColumnarBatch

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, NVIDIA CORPORATION.
+ * Copyright (c) 2021, NVIDIA CORPORATION.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,13 +14,12 @@
  * limitations under the License.
  */
 
-package org.apache.spark.sql.execution.python.rapids
+package org.apache.spark.sql.execution.python
 
 import org.apache.spark.api.python.BasePythonRunner
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.expressions.Attribute
 import org.apache.spark.sql.execution.SparkPlan
-import org.apache.spark.sql.execution.python.PandasGroupUtils
 import org.apache.spark.sql.vectorized.ColumnarBatch
 
 /*
@@ -36,10 +35,10 @@ private[sql] object GpuPandasUtils {
   }
 
   def groupAndProject(
-    input: Iterator[InternalRow],
-    groupingAttributes: Seq[Attribute],
-    inputSchema: Seq[Attribute],
-    dedupSchema: Seq[Attribute]):
+      input: Iterator[InternalRow],
+      groupingAttributes: Seq[Attribute],
+      inputSchema: Seq[Attribute],
+      dedupSchema: Seq[Attribute]):
   Iterator[(InternalRow, Iterator[InternalRow])] = {
     PandasGroupUtils.groupAndProject(input, groupingAttributes, inputSchema, dedupSchema)
   }

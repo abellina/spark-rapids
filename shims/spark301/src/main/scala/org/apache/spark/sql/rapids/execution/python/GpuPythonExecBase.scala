@@ -1,11 +1,14 @@
 /*
  * Copyright (c) 2021, NVIDIA CORPORATION.
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
- *     http://www.apache.org/licenses/LICENSE-2.0
+ *    http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -16,8 +19,8 @@
 
 package org.apache.spark.sql.rapids.execution.python
 
-import com.nvidia.spark.rapids._
-import com.nvidia.spark.rapids.GpuMetric._
+import com.nvidia.spark.rapids.{GpuExec, GpuMetric}
+import com.nvidia.spark.rapids.GpuMetric.{DEBUG_LEVEL, DESCRIPTION_NUM_INPUT_BATCHES, DESCRIPTION_NUM_INPUT_ROWS, DESCRIPTION_NUM_OUTPUT_BATCHES, DESCRIPTION_NUM_OUTPUT_ROWS, NUM_INPUT_BATCHES, NUM_INPUT_ROWS, NUM_OUTPUT_BATCHES, NUM_OUTPUT_ROWS}
 import com.nvidia.spark.rapids.RapidsBuffer.SpillCallback
 
 import org.apache.spark.rdd.RDD
@@ -44,21 +47,20 @@ trait GpuPythonExecBase extends GpuExec {
 
   /**
    * Return the common metrics in order of
-   *   NUM_INPUT_ROWS
-   *   NUM_INPUT_BATCHES
-   *   NUM_OUTPUT_ROWS
-   *   NUM_OUTPUT_BATCHES
-   *   SpillCallback
+   * NUM_INPUT_ROWS
+   * NUM_INPUT_BATCHES
+   * NUM_OUTPUT_ROWS
+   * NUM_OUTPUT_BATCHES
+   * SpillCallback
    * as a tuple.
    */
   protected def commonGpuMetrics(): (GpuMetric, GpuMetric, GpuMetric, GpuMetric,
       SpillCallback) = (
-    gpuLongMetric(NUM_INPUT_ROWS),
-    gpuLongMetric(NUM_INPUT_BATCHES),
-    gpuLongMetric(NUM_OUTPUT_ROWS),
-    gpuLongMetric(NUM_OUTPUT_BATCHES),
-    GpuMetric.makeSpillCallback(allMetrics)
+      gpuLongMetric(NUM_INPUT_ROWS),
+      gpuLongMetric(NUM_INPUT_BATCHES),
+      gpuLongMetric(NUM_OUTPUT_ROWS),
+      gpuLongMetric(NUM_OUTPUT_BATCHES),
+      GpuMetric.makeSpillCallback(allMetrics)
   )
 
 }
-
