@@ -18,23 +18,18 @@ package com.nvidia.spark.rapids.shims.spark320
 
 import com.nvidia.spark.rapids._
 import org.apache.hadoop.fs.Path
-import org.apache.parquet.schema.MessageType
 
 import org.apache.spark.SparkContext
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.SparkSession
-import org.apache.spark.sql.catalyst.{InternalRow, TableIdentifier}
+import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.expressions._
 import org.apache.spark.sql.catalyst.plans.physical.BroadcastMode
-import org.apache.spark.sql.catalyst.trees.TreeNode
 import org.apache.spark.sql.connector.read.{InputPartition, PartitionReaderFactory}
 import org.apache.spark.sql.execution._
-import org.apache.spark.sql.execution.adaptive.{BroadcastQueryStageExec, ShuffleQueryStageExec}
-import org.apache.spark.sql.execution.command.RunnableCommand
+import org.apache.spark.sql.execution.adaptive.ShuffleQueryStageExec
 import org.apache.spark.sql.execution.datasources.{FileIndex, FilePartition, FileScanRDD, HadoopFsRelation, InMemoryFileIndex, PartitionDirectory, PartitionedFile}
-import org.apache.spark.sql.execution.datasources.parquet.ParquetFilters
 import org.apache.spark.sql.execution.datasources.rapids.GpuPartitioningUtils
-import org.apache.spark.sql.execution.exchange.ReusedExchangeExec
 import org.apache.spark.sql.execution.joins.{BroadcastHashJoinExec, ShuffledHashJoinExec, SortMergeJoinExec}
 import org.apache.spark.sql.execution.python.{AggregateInPandasExec, ArrowEvalPythonExec, FlatMapGroupsInPandasExec, MapInPandasExec, WindowInPandasExec}
 import org.apache.spark.sql.execution.window.WindowExecBase
@@ -64,9 +59,6 @@ abstract class SparkBaseShims extends PluginShims {
     conf.getConf(SQLConf.PARQUET_REBASE_MODE_IN_READ)
   override def parquetRebaseWrite(conf: SQLConf): String =
     conf.getConf(SQLConf.PARQUET_REBASE_MODE_IN_WRITE)
-
-  override def v1RepairTableCommand(tableName: TableIdentifier): RunnableCommand =
-    AlterTableRecoverPartitionsCommand(tableName)
 
   override def getGpuBroadcastExchangeExec(
       mode: BroadcastMode,

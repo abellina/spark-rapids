@@ -18,9 +18,22 @@ package com.nvidia.spark.rapids.shims.spark320
 
 import com.nvidia.spark.rapids._
 
+import org.apache.spark.sql.catalyst.expressions.Expression
+import org.apache.spark.sql.catalyst.optimizer.{BuildLeft, BuildRight, BuildSide}
+import org.apache.spark.sql.catalyst.plans.JoinType
+import org.apache.spark.sql.execution.SparkPlan
 import org.apache.spark.sql.execution.joins.ShuffledHashJoinExec
 import org.apache.spark.sql.rapids.execution.GpuHashJoin
 
+object GpuJoinUtils {
+  def getGpuBuildSide(buildSide: BuildSide): GpuBuildSide = {
+    buildSide match {
+      case BuildRight => GpuBuildRight
+      case BuildLeft => GpuBuildLeft
+      case _ => throw new Exception("unknown buildSide Type")
+    }
+  }
+}
 
 /**
  *  Spark 3.1 changed packages of BuildLeft, BuildRight, BuildSide
@@ -30,7 +43,7 @@ class GpuShuffledHashJoinMeta(
     conf: RapidsConf,
     parent: Option[RapidsMeta[_, _, _]],
     rule: DataFromReplacementRule)
-  extends SparkPlanMeta[ShuffledHashJoinExec](join, conf, parent, rule) {
+    extends SparkPlanMeta[ShuffledHashJoinExec](join, conf, parent, rule) {
   val leftKeys: Seq[BaseExprMeta[_]] =
     join.leftKeys.map(GpuOverrides.wrapExpr(_, conf, Some(this)))
   val rightKeys: Seq[BaseExprMeta[_]] =
@@ -58,4 +71,18 @@ class GpuShuffledHashJoinMeta(
   }
 }
 
-
+case class GpuShuffledHashJoinExec(
+    leftKeys: Seq[Expression],
+    rightKeys: Seq[Expression],
+    joinType: JoinType,
+    buildSide: GpuBuildSide,
+    override val condition: Option[Expression],
+    left: SparkPlan,
+    right: SparkPlan,
+    override val isSkewJoin: Boolean)
+  extends GpuShuffledHashJoinBase(
+    leftKeys,
+    rightKeys,
+    buildSide,
+    condition,
+    isSkewJoin = isSkewJoin)

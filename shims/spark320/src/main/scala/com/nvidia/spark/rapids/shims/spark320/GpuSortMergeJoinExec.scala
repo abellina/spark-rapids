@@ -17,7 +17,6 @@
 package com.nvidia.spark.rapids.shims.spark320
 
 import com.nvidia.spark.rapids._
-import com.nvidia.spark.rapids.spark320.{GpuJoinUtils, GpuShuffledHashJoinExec}
 
 import org.apache.spark.sql.catalyst.optimizer.{BuildLeft, BuildRight}
 import org.apache.spark.sql.catalyst.plans.{ExistenceJoin, FullOuter, InnerLike, JoinType, LeftAnti, LeftOuter, LeftSemi, RightOuter}

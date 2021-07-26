@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, NVIDIA CORPORATION.
+ * Copyright (c) 2020-2021, NVIDIA CORPORATION.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,13 +14,12 @@
  * limitations under the License.
  */
 
-package com.nvidia.spark.rapids.spark320
+package org.apache.spark.sql.rapids.shims.spark320
 
-import org.apache.spark.SparkConf
-import org.apache.spark.sql.rapids.shims.spark320.RapidsShuffleInternalManager
+import com.nvidia.spark.rapids.GpuColumnarToRowExecParent
 
-/** A shuffle manager optimized for the RAPIDS Plugin for Apache Spark. */
-sealed class RapidsShuffleManager(
-    conf: SparkConf,
-    isDriver: Boolean) extends RapidsShuffleInternalManager(conf, isDriver) {
-}
+import org.apache.spark.sql.execution.{ColumnarToRowTransition, SparkPlan}
+
+case class GpuColumnarToRowTransitionExec(child: SparkPlan,
+   override val exportColumnarRdd: Boolean = false)
+   extends GpuColumnarToRowExecParent(child, exportColumnarRdd) with ColumnarToRowTransition

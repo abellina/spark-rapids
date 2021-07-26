@@ -40,7 +40,7 @@ class SparkShimServiceProvider extends com.nvidia.spark.rapids.SparkShimServiceP
           .newInstance()
           .asInstanceOf[SparkShims]
     }.getOrElse {
-      sys.error("Failed to create shims for " + SparkShimServiceProvider.VERSION)
+      sys.error("Failed to create shims for " + SparkShimServiceProvider.VERSION320)
     }
 //    new Spark320Shims()
   }
