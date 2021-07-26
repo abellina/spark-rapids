@@ -16,7 +16,7 @@
 
 package org.apache.spark.sql.rapids
 
-import com.nvidia.spark.rapids.ShimLoader
+import com.nvidia.spark.rapids.{GpuExec, ShimLoader}
 import org.apache.commons.lang3.StringUtils
 import org.apache.hadoop.fs.Path
 
@@ -28,10 +28,9 @@ import org.apache.spark.sql.sources.BaseRelation
 import org.apache.spark.util.Utils
 
 /** GPU implementation of Spark's `DataSourceScanExec` */
-trait GpuDataSourceScanExec extends LeafExecNode {
+trait GpuDataSourceScanExec extends LeafExecNode with GpuExec {
   def relation: BaseRelation
   def tableIdentifier: Option[TableIdentifier]
-  def sparkSession = ShimLoader.getSparkShims.sessionFromPlan(this)
 
   protected val nodeNamePrefix: String = ""
 

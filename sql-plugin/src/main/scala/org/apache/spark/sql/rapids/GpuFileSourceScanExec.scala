@@ -67,7 +67,7 @@ case class GpuFileSourceScanExec(
     dataFilters: Seq[Expression],
     tableIdentifier: Option[TableIdentifier],
     queryUsesInputFile: Boolean = false)(@transient val rapidsConf: RapidsConf)
-    extends GpuDataSourceScanExec with GpuExec {
+    extends GpuDataSourceScanExec {
   import GpuMetric._
 
   private val isPerFileReadEnabled = relation.fileFormat match {
