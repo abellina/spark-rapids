@@ -16,6 +16,8 @@
 
 package com.nvidia.spark.rapids.shims.spark320
 
+import com.nvidia.spark.rapids.shims.ShimUnaryExecNode
+
 import org.apache.spark.sql.catalyst.expressions.{Attribute, Expression, NamedExpression, SortOrder}
 import org.apache.spark.sql.execution.SparkPlan
 import org.apache.spark.sql.rapids.execution.python.GpuWindowInPandasExecBase
@@ -29,7 +31,7 @@ case class GpuWindowInPandasExec(
     windowExpression: Seq[Expression],
     partitionSpec: Seq[Expression],
     orderSpec: Seq[SortOrder],
-    child: SparkPlan) extends GpuWindowInPandasExecBase {
+    child: SparkPlan) extends GpuWindowInPandasExecBase with ShimUnaryExecNode {
 
   override final def pythonModuleKey: String = "spark"
 

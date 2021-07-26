@@ -18,6 +18,7 @@ package com.nvidia.spark.rapids.shims.spark320
 import java.util.UUID
 
 import com.nvidia.spark.rapids.GpuMetric
+import com.nvidia.spark.rapids.shims.{ShimSparkPlan, ShimUnaryExecNode}
 
 import org.apache.spark.sql.catalyst.plans.logical.Statistics
 import org.apache.spark.sql.catalyst.plans.physical.BroadcastMode
@@ -28,7 +29,7 @@ import org.apache.spark.sql.rapids.execution.GpuBroadcastExchangeExecBaseWithFut
 case class GpuBroadcastExchangeExec(
     override val mode: BroadcastMode,
     child: SparkPlan) extends GpuBroadcastExchangeExecBaseWithFuture(mode, child)
-    with BroadcastExchangeLike {
+    with BroadcastExchangeLike with ShimUnaryExecNode {
 
   override def runId: UUID = _runId
 

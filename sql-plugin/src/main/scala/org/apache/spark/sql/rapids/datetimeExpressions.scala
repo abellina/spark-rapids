@@ -119,7 +119,9 @@ abstract class GpuTimeMath(
     start: Expression,
     interval: Expression,
     timeZoneId: Option[String] = None)
-   extends BinaryExpression with GpuExpression with TimeZoneAwareExpression with ExpectsInputTypes
+   extends BinaryExpression
+       with com.nvidia.spark.rapids.shims.ShimBinaryExpression
+       with GpuExpression with TimeZoneAwareExpression with ExpectsInputTypes
    with Serializable {
 
   def this(start: Expression, interval: Expression) = this(start, interval, None)

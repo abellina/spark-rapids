@@ -18,7 +18,7 @@ package com.nvidia.spark.rapids.shims
 
 import org.apache.spark.sql.catalyst.expressions.{BinaryExpression, Expression, TernaryExpression, UnaryExpression}
 import org.apache.spark.sql.catalyst.plans.logical.{LogicalPlan, UnaryCommand}
-import org.apache.spark.sql.execution.{SparkPlan, UnaryExecNode}
+import org.apache.spark.sql.execution.{BinaryExecNode, SparkPlan, UnaryExecNode}
 
 trait ShimExpression extends Expression {
   override def withNewChildrenInternal(newChildren: IndexedSeq[Expression]): Expression = {
@@ -45,6 +45,12 @@ trait ShimSparkPlan extends SparkPlan {
 trait ShimUnaryExecNode extends UnaryExecNode {
   override def withNewChildInternal(newChild: SparkPlan): SparkPlan = {
     legacyWithNewChildren(Seq(newChild))
+  }
+}
+
+trait ShimBinaryExecNode extends BinaryExecNode {
+  override def withNewChildInternal(newLeft: SparkPlan, newRight: SparkPlan): SparkPlan = {
+    legacyWithNewChildren(Seq(newLeft, newRight))
   }
 }
 

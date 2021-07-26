@@ -17,6 +17,7 @@
 package com.nvidia.spark.rapids.shims.spark320
 
 import com.nvidia.spark.rapids._
+import com.nvidia.spark.rapids.shims.ShimBinaryExecNode
 
 import org.apache.spark.sql.catalyst.expressions.Expression
 import org.apache.spark.sql.catalyst.optimizer.{BuildLeft, BuildRight, BuildSide}
@@ -85,4 +86,4 @@ case class GpuShuffledHashJoinExec(
     rightKeys,
     buildSide,
     condition,
-    isSkewJoin = isSkewJoin)
+    isSkewJoin = isSkewJoin) with ShimBinaryExecNode

@@ -19,8 +19,9 @@ package org.apache.spark.sql.rapids.execution.python
 import ai.rapids.cudf
 import com.nvidia.spark.rapids._
 import com.nvidia.spark.rapids.python.PythonWorkerSemaphore
-
+import com.nvidia.spark.rapids.shims.ShimUnaryExecNode
 import org.apache.spark.TaskContext
+
 import org.apache.spark.api.python.{ChainedPythonFunctions, PythonEvalType}
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.catalyst.expressions.{Attribute, AttributeSet, Expression, PythonUDF}
@@ -70,7 +71,7 @@ case class GpuMapInPandasExec(
     func: Expression,
     output: Seq[Attribute],
     child: SparkPlan)
-  extends UnaryExecNode with GpuPythonExecBase {
+  extends ShimUnaryExecNode with GpuPythonExecBase {
 
   private val pandasFunction = func.asInstanceOf[GpuPythonUDF].func
 
