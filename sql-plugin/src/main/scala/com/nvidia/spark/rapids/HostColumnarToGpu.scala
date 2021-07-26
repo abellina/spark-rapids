@@ -376,7 +376,7 @@ class HostToGpuCoalesceIterator(iter: Iterator[ColumnarBatch],
  * Put columnar formatted data on the GPU.
  */
 case class HostColumnarToGpu(child: SparkPlan, goal: CoalesceSizeGoal)
-  extends UnaryExecNode
+  extends GpuUnaryExecNode
   with GpuExec {
   import GpuMetric._
   protected override val outputRowsLevel: MetricsLevel = ESSENTIAL_LEVEL

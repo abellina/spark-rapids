@@ -34,7 +34,10 @@ import org.apache.spark.sql.vectorized.ColumnarBatch
  */
 case class GpuRangePartitioning(
     gpuOrdering: Seq[SortOrder],
-    numPartitions: Int) extends GpuExpression with GpuPartitioning {
+    numPartitions: Int)
+    extends GpuExpression
+        with GpuPartitioning
+        with com.nvidia.spark.rapids.shims.ShimExpression {
 
   override def children: Seq[SortOrder] = gpuOrdering
   override def nullable: Boolean = false

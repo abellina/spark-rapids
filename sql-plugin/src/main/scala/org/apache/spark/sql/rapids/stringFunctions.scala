@@ -64,6 +64,9 @@ case class GpuStringLocate(substr: Expression, col: Expression, start: Expressio
 
   override def dataType: DataType = IntegerType
   override def inputTypes: Seq[DataType] = Seq(StringType, StringType, IntegerType)
+  def first = substr
+  def second = col
+  def third = start
   override def children: Seq[Expression] = Seq(substr, col, start)
 
   def this(substr: Expression, col: Expression) = {
@@ -214,7 +217,8 @@ case class GpuEndsWith(left: Expression, right: Expression)
 }
 
 case class GpuStringTrim(column: Expression, trimParameters: Option[Expression] = None)
-    extends GpuString2TrimExpression with ImplicitCastInputTypes {
+    extends com.nvidia.spark.rapids.shims.ShimExpression
+    with GpuString2TrimExpression with ImplicitCastInputTypes {
 
   override def srcStr: Expression = column
 
@@ -232,7 +236,8 @@ case class GpuStringTrim(column: Expression, trimParameters: Option[Expression] 
 }
 
 case class GpuStringTrimLeft(column: Expression, trimParameters: Option[Expression] = None)
-  extends GpuString2TrimExpression with ImplicitCastInputTypes {
+  extends com.nvidia.spark.rapids.shims.ShimExpression
+  with GpuString2TrimExpression with ImplicitCastInputTypes {
 
   override def srcStr: Expression = column
 
@@ -250,7 +255,8 @@ case class GpuStringTrimLeft(column: Expression, trimParameters: Option[Expressi
 }
 
 case class GpuStringTrimRight(column: Expression, trimParameters: Option[Expression] = None)
-    extends GpuString2TrimExpression with ImplicitCastInputTypes {
+    extends com.nvidia.spark.rapids.shims.ShimExpression
+    with GpuString2TrimExpression with ImplicitCastInputTypes {
 
   override def srcStr: Expression = column
 
@@ -268,7 +274,7 @@ case class GpuStringTrimRight(column: Expression, trimParameters: Option[Express
 }
 
 case class GpuConcatWs(children: Seq[Expression])
-    extends GpuExpression with ImplicitCastInputTypes {
+    extends GpuShimExpression with ImplicitCastInputTypes {
   override def dataType: DataType = StringType
   override def nullable: Boolean = children.head.nullable
   override def foldable: Boolean = children.forall(_.foldable)
@@ -415,6 +421,10 @@ case class GpuSubstring(str: Expression, pos: Expression, len: Expression)
   override def inputTypes: Seq[AbstractDataType] =
     Seq(TypeCollection(StringType, BinaryType), IntegerType, IntegerType)
 
+  def first = str
+  def second = pos
+  def third = len
+
   override def children: Seq[Expression] = Seq(str, pos, len)
 
   def this(str: Expression, pos: Expression) = {
@@ -497,6 +507,9 @@ case class GpuStringReplace(
 
   override def inputTypes: Seq[DataType] = Seq(StringType, StringType, StringType)
 
+  def first: Expression = srcExpr
+  def second: Expression = searchExpr
+  def third: Expression = replaceExpr
   override def children: Seq[Expression] = Seq(srcExpr, searchExpr, replaceExpr)
 
   def this(srcExpr: Expression, searchExpr: Expression) = {
@@ -726,6 +739,11 @@ case class GpuSubstringIndex(strExpr: Expression,
 
   override def dataType: DataType = StringType
   override def inputTypes: Seq[DataType] = Seq(StringType, StringType, IntegerType)
+
+  def first: Expression = strExpr
+  def second: Expression = ignoredDelimExpr
+  def third: Expression = ignoredCountExpr
+
   override def children: Seq[Expression] = Seq(strExpr, ignoredDelimExpr, ignoredCountExpr)
   override def prettyName: String = "substring_index"
 
@@ -802,6 +820,10 @@ trait BasePad extends GpuTernaryExpression with ImplicitCastInputTypes with Null
   val len: Expression
   val pad: Expression
   val direction: PadSide
+
+  def first: Expression = str
+  def second: Expression = len
+  def third: Expression = pad
 
   override def children: Seq[Expression] = str :: len :: pad :: Nil
   override def dataType: DataType = StringType
@@ -922,6 +944,9 @@ case class GpuStringSplit(str: Expression, regex: Expression, limit: Expression)
 
   override def dataType: DataType = ArrayType(StringType)
   override def inputTypes: Seq[DataType] = Seq(StringType, StringType, IntegerType)
+  def first: Expression = str
+  def second: Expression = regex
+  def third: Expression = limit
   override def children: Seq[Expression] = str :: regex :: limit :: Nil
 
   def this(exp: Expression, regex: Expression) = this(exp, regex, GpuLiteral(-1, IntegerType))

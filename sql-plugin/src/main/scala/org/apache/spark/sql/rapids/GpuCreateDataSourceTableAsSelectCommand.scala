@@ -36,7 +36,8 @@ case class GpuCreateDataSourceTableAsSelectCommand(
     outputColumnNames: Seq[String],
     origProvider: Class[_],
     gpuFileFormat: ColumnarFileFormat)
-  extends GpuDataWritingCommand {
+  extends GpuDataWritingCommand
+  with com.nvidia.spark.rapids.shims.ShimUnaryCommand {
 
   override def runColumnar(sparkSession: SparkSession, child: SparkPlan): Seq[ColumnarBatch] = {
     assert(table.tableType != CatalogTableType.VIEW)

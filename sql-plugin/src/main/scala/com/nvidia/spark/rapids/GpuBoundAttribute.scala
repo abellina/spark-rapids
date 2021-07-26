@@ -91,7 +91,8 @@ object GpuBindReferences extends Logging {
 }
 
 case class GpuBoundReference(ordinal: Int, dataType: DataType, nullable: Boolean)
-  extends GpuLeafExpression {
+  extends GpuLeafExpression
+  with com.nvidia.spark.rapids.shims.ShimExpression {
 
   override def toString: String = s"input[$ordinal, ${dataType.simpleString}, $nullable]"
 

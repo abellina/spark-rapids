@@ -54,7 +54,7 @@ trait GpuDataWritingCommand extends DataWritingCommand {
 }
 
 case class GpuDataWritingCommandExec(cmd: GpuDataWritingCommand, child: SparkPlan)
-    extends UnaryExecNode with GpuExec {
+    extends GpuUnaryExecNode with GpuExec {
   override lazy val allMetrics: Map[String, GpuMetric] = GpuMetric.wrap(cmd.metrics)
 
   private lazy val sideEffectResult: Seq[ColumnarBatch] =

@@ -166,7 +166,9 @@ object GpuRangePartitioner {
 
 case class GpuRangePartitioner(
     rangeBounds: Array[InternalRow],
-    sorter: GpuSorter) extends GpuExpression with GpuPartitioning {
+    sorter: GpuSorter)
+    extends com.nvidia.spark.rapids.shims.ShimExpression
+    with GpuExpression with GpuPartitioning {
 
   private lazy val converters = new GpuRowToColumnConverter(
     TrampolineUtil.fromAttributes(sorter.projectedBatchSchema))

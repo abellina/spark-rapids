@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, NVIDIA CORPORATION.
+ * Copyright (c) 2020-2021, NVIDIA CORPORATION.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -28,7 +28,9 @@ import org.apache.spark.util.Utils
 import org.apache.spark.util.random.XORShiftRandom
 
 /** Generate a random column with i.i.d. uniformly distributed values in [0, 1). */
-case class GpuRand(child: Expression) extends UnaryExpression with GpuExpression
+case class GpuRand(child: Expression)
+    extends com.nvidia.spark.rapids.shims.ShimUnaryExpression
+    with GpuExpression
   with ExpectsInputTypes with ExpressionWithRandomSeed {
 
   def this() = this(GpuLiteral(Utils.random.nextLong(), LongType))

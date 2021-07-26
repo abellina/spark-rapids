@@ -797,7 +797,7 @@ object GeneratedUnsafeRowToCudfRowIterator extends Logging {
  * GPU version of row to columnar transition.
  */
 case class GpuRowToColumnarExec(child: SparkPlan, goal: CoalesceSizeGoal)
-  extends UnaryExecNode with GpuExec {
+  extends GpuUnaryExecNode with GpuExec {
   import GpuMetric._
 
   override def output: Seq[Attribute] = child.output

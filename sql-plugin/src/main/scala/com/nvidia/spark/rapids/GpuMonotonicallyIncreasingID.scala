@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, NVIDIA CORPORATION.
+ * Copyright (c) 2020-2021, NVIDIA CORPORATION.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -29,7 +29,9 @@ import org.apache.spark.sql.vectorized.ColumnarBatch
  * This implementations should match what spark does which is to put the partition ID in the upper
  * 31 bits, and the lower 33 bits represent the record number within each partition.
  */
-case class GpuMonotonicallyIncreasingID() extends GpuLeafExpression {
+case class GpuMonotonicallyIncreasingID()
+    extends GpuLeafExpression
+    with com.nvidia.spark.rapids.shims.ShimExpression {
   /**
    * We need to recompute this if something fails.
    */

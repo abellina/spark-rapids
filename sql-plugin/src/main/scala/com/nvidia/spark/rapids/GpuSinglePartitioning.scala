@@ -21,7 +21,10 @@ import org.apache.spark.sql.catalyst.plans.physical.{BroadcastDistribution, Dist
 import org.apache.spark.sql.types.{DataType, IntegerType}
 import org.apache.spark.sql.vectorized.ColumnarBatch
 
-case object GpuSinglePartitioning extends GpuExpression with GpuPartitioning {
+case object GpuSinglePartitioning
+    extends GpuExpression
+        with GpuPartitioning
+        with com.nvidia.spark.rapids.shims.ShimExpression {
   /**
    * Returns the result of evaluating this expression on the entire `ColumnarBatch`.
    * The result of calling this may be a single [[GpuColumnVector]] or a scalar value.

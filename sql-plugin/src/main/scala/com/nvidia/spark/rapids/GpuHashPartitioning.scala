@@ -26,7 +26,9 @@ import org.apache.spark.sql.types.{DataType, IntegerType}
 import org.apache.spark.sql.vectorized.ColumnarBatch
 
 case class GpuHashPartitioning(expressions: Seq[Expression], numPartitions: Int)
-  extends GpuExpression with GpuPartitioning {
+  extends GpuExpression
+      with GpuPartitioning
+      with com.nvidia.spark.rapids.shims.ShimExpression {
 
   override def children: Seq[Expression] = expressions
   override def nullable: Boolean = false

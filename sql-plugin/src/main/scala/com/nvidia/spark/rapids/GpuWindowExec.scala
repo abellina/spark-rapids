@@ -358,7 +358,7 @@ object GpuWindowExec extends Arm {
   }
 }
 
-trait GpuWindowBaseExec extends UnaryExecNode with GpuExec {
+trait GpuWindowBaseExec extends GpuUnaryExecNode with GpuExec {
   val windowOps: Seq[NamedExpression]
   val partitionSpec: Seq[Expression]
   val orderSpec: Seq[SortOrder]

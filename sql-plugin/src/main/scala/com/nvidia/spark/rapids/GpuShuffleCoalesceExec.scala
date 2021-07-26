@@ -38,7 +38,7 @@ import org.apache.spark.sql.vectorized.ColumnarBatch
  *       not being used.
  */
 case class GpuShuffleCoalesceExec(child: SparkPlan, targetBatchByteSize: Long)
-    extends UnaryExecNode with GpuExec {
+    extends GpuUnaryExecNode with GpuExec {
 
   import GpuMetric._
 

@@ -49,7 +49,8 @@ case class GpuInsertIntoHadoopFsRelationCommand(
     catalogTable: Option[CatalogTable],
     fileIndex: Option[FileIndex],
     outputColumnNames: Seq[String])
-  extends GpuDataWritingCommand {
+  extends GpuDataWritingCommand
+    with com.nvidia.spark.rapids.shims.ShimUnaryCommand {
 
   override def runColumnar(sparkSession: SparkSession, child: SparkPlan): Seq[ColumnarBatch] = {
     // Most formats don't do well with duplicate columns, so lets not allow that

@@ -150,6 +150,9 @@ trait GpuExpression extends Expression with Arm {
   }
 }
 
+trait GpuShimExpression extends GpuExpression
+    with com.nvidia.spark.rapids.shims.ShimExpression
+
 abstract class GpuLeafExpression extends GpuExpression {
   override final def children: Seq[Expression] = Nil
 }
@@ -164,7 +167,9 @@ abstract class GpuUnevaluableUnaryExpression extends GpuUnaryExpression with Gpu
     throw new UnsupportedOperationException(s"Cannot columnar evaluate expression: $this")
 }
 
-abstract class GpuUnaryExpression extends UnaryExpression with GpuExpression {
+abstract class GpuUnaryExpression
+    extends com.nvidia.spark.rapids.shims.ShimUnaryExpression
+        with GpuExpression {
   protected def doColumnar(input: GpuColumnVector): ColumnVector
 
   def outputTypeOverride: DType = null
@@ -192,7 +197,9 @@ trait CudfUnaryExpression extends GpuUnaryExpression {
   override def doColumnar(input: GpuColumnVector): ColumnVector = input.getBase.unaryOp(unaryOp)
 }
 
-trait GpuBinaryExpression extends BinaryExpression with GpuExpression {
+trait GpuBinaryExpression
+    extends com.nvidia.spark.rapids.shims.ShimBinaryExpression
+    with GpuExpression {
 
   def doColumnar(lhs: GpuColumnVector, rhs: GpuColumnVector): ColumnVector
   def doColumnar(lhs: GpuScalar, rhs: GpuColumnVector): ColumnVector
@@ -311,7 +318,9 @@ trait GpuString2TrimExpression extends String2TrimExpression with GpuExpression 
   }
 }
 
-trait GpuTernaryExpression extends TernaryExpression with GpuExpression {
+trait GpuTernaryExpression
+    extends com.nvidia.spark.rapids.shims.ShimTernaryExpression
+        with GpuExpression {
 
   def doColumnar(
       val0: GpuColumnVector, val1: GpuColumnVector, val2: GpuColumnVector): ColumnVector

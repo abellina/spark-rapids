@@ -380,7 +380,7 @@ case class GpuGenerateExec(
     requiredChildOutput: Seq[Attribute],
     outer: Boolean,
     generatorOutput: Seq[Attribute],
-    child: SparkPlan) extends UnaryExecNode with GpuExec {
+    child: SparkPlan) extends GpuUnaryExecNode with GpuExec {
 
   import GpuMetric._
 

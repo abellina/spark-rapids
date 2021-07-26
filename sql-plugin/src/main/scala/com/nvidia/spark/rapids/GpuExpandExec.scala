@@ -68,7 +68,7 @@ case class GpuExpandExec(
     projections: Seq[Seq[Expression]],
     output: Seq[Attribute],
     child: SparkPlan)
-    extends UnaryExecNode with GpuExec {
+    extends GpuUnaryExecNode with GpuExec {
 
   override val outputRowsLevel: MetricsLevel = ESSENTIAL_LEVEL
   override val outputBatchesLevel: MetricsLevel = MODERATE_LEVEL

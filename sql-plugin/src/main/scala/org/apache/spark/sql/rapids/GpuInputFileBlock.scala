@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, NVIDIA CORPORATION.
+ * Copyright (c) 2020-2021, NVIDIA CORPORATION.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -88,7 +88,8 @@ case class GpuInputFileBlockStart() extends GpuLeafExpression {
  * This is extra difficult because we cannot coalesce batches in between when this
  * is used and the input file or else we could run into problems with returning the wrong thing.
  */
-case class GpuInputFileBlockLength() extends GpuLeafExpression {
+case class GpuInputFileBlockLength() extends GpuLeafExpression
+    with com.nvidia.spark.rapids.shims.ShimExpression{
   /**
    * We need to recompute this if something fails.
    */

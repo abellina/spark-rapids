@@ -15,7 +15,7 @@
  */
 package org.apache.spark.sql.rapids.execution
 
-import com.nvidia.spark.rapids.{CoalesceGoal, GpuExec, GpuMetric, ShimLoader}
+import com.nvidia.spark.rapids.{CoalesceGoal, GpuExec, GpuMetric, GpuUnaryExecNode, ShimLoader}
 
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.catalyst.InternalRow
@@ -35,7 +35,7 @@ import org.apache.spark.sql.vectorized.ColumnarBatch
  */
 case class GpuCustomShuffleReaderExec(
     child: SparkPlan,
-    partitionSpecs: Seq[ShufflePartitionSpec]) extends UnaryExecNode with GpuExec  {
+    partitionSpecs: Seq[ShufflePartitionSpec]) extends GpuUnaryExecNode with GpuExec  {
   import GpuMetric._
 
   /**

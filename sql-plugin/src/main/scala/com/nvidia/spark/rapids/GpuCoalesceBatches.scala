@@ -139,7 +139,9 @@ object CoalesceGoal {
 /**
  * Provides a goal for batching of data.
  */
-sealed abstract class CoalesceGoal extends GpuUnevaluable {
+sealed abstract class CoalesceGoal
+    extends GpuUnevaluable
+    with com.nvidia.spark.rapids.shims.ShimExpression {
   override def nullable: Boolean = false
 
   override def dataType: DataType = NullType
@@ -516,7 +518,7 @@ class GpuCoalesceIterator(iter: Iterator[ColumnarBatch],
 }
 
 case class GpuCoalesceBatches(child: SparkPlan, goal: CoalesceGoal)
-  extends UnaryExecNode with GpuExec {
+  extends GpuUnaryExecNode with GpuExec {
   import GpuMetric._
 
   private[this] val maxDecompressBatchMemory =

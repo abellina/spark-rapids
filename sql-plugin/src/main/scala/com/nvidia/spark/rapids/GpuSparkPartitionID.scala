@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, NVIDIA CORPORATION.
+ * Copyright (c) 2020-2021, NVIDIA CORPORATION.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -25,7 +25,8 @@ import org.apache.spark.sql.vectorized.ColumnarBatch
  * An expression that returns the current partition id just like
  * `org.apache.spark.sql.catalyst.expressions.SparkPartitionID`
  */
-case class GpuSparkPartitionID() extends GpuLeafExpression {
+case class GpuSparkPartitionID() extends GpuLeafExpression
+    with com.nvidia.spark.rapids.shims.ShimExpression {
   /**
    * We need to recompute this if something fails.
    */

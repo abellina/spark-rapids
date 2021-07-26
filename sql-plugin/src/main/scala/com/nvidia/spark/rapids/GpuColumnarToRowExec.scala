@@ -266,7 +266,7 @@ object CudfRowTransitions {
 }
 
 abstract class GpuColumnarToRowExecParent(child: SparkPlan, val exportColumnarRdd: Boolean)
-    extends UnaryExecNode with GpuExec {
+    extends GpuUnaryExecNode with GpuExec {
   import GpuMetric._
   // We need to do this so the assertions don't fail
   override def supportsColumnar = false

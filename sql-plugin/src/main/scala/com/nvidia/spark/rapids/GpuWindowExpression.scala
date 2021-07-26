@@ -163,7 +163,7 @@ class GpuWindowExpressionMeta(
 }
 
 case class GpuWindowExpression(windowFunction: Expression, windowSpec: GpuWindowSpecDefinition)
-  extends GpuUnevaluable {
+  extends GpuUnevaluable with com.nvidia.spark.rapids.shims.ShimExpression  {
 
   override def children: Seq[Expression] = windowFunction :: windowSpec :: Nil
 
@@ -236,7 +236,9 @@ case class GpuWindowSpecDefinition(
     partitionSpec: Seq[Expression],
     orderSpec: Seq[SortOrder],
     frameSpecification: GpuWindowFrame)
-  extends GpuExpression with GpuUnevaluable {
+  extends GpuExpression
+      with GpuUnevaluable
+      with com.nvidia.spark.rapids.shims.ShimExpression{
 
   override def children: Seq[Expression] = partitionSpec ++ orderSpec :+ frameSpecification
 
@@ -429,14 +431,16 @@ trait GpuWindowFrame extends GpuExpression with GpuUnevaluable {
   override def nullable: Boolean = false
 }
 
-case object GpuUnspecifiedFrame extends GpuWindowFrame // Placeholder, to handle UnspecifiedFrame
+case object GpuUnspecifiedFrame extends GpuWindowFrame
+  with com.nvidia.spark.rapids.shims.ShimExpression // Placeholder, to handle UnspecifiedFrame
 
 // This class closely follows what's done in SpecifiedWindowFrame.
 case class GpuSpecifiedWindowFrame(
                                     frameType: FrameType,
                                     lower: Expression,
                                     upper: Expression)
-  extends GpuWindowFrame {
+  extends GpuWindowFrame
+      with com.nvidia.spark.rapids.shims.ShimExpression {
 
   override def children: Seq[Expression] = lower :: upper :: Nil
 

@@ -91,7 +91,7 @@ case class GpuProjectExec(
    //   immutable/List.scala#L516
    projectList: List[Expression],
    child: SparkPlan
- ) extends UnaryExecNode with GpuExec {
+ ) extends GpuUnaryExecNode with GpuExec {
 
   override lazy val additionalMetrics: Map[String, GpuMetric] = Map(
     OP_TIME -> createNanoTimingMetric(MODERATE_LEVEL, DESCRIPTION_OP_TIME))
@@ -182,7 +182,7 @@ object GpuFilter extends Arm {
 }
 
 case class GpuFilterExec(condition: Expression, child: SparkPlan)
-    extends UnaryExecNode with GpuPredicateHelper with GpuExec {
+    extends GpuUnaryExecNode with GpuPredicateHelper with GpuExec {
 
   override lazy val additionalMetrics: Map[String, GpuMetric] = Map(
     OP_TIME -> createNanoTimingMetric(MODERATE_LEVEL, DESCRIPTION_OP_TIME))
@@ -414,7 +414,7 @@ case class GpuUnionExec(children: Seq[SparkPlan]) extends SparkPlan with GpuExec
 }
 
 case class GpuCoalesceExec(numPartitions: Int, child: SparkPlan)
-    extends UnaryExecNode with GpuExec {
+    extends GpuUnaryExecNode with GpuExec {
 
   // This operator does not record any metrics
   override lazy val allMetrics: Map[String, GpuMetric] = Map.empty

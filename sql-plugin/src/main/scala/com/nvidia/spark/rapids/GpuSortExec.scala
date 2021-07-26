@@ -58,7 +58,7 @@ case class GpuSortExec(
     global: Boolean,
     child: SparkPlan,
     sortType: SortExecType)
-  extends UnaryExecNode with GpuExec {
+  extends GpuUnaryExecNode with GpuExec {
 
   override def childrenCoalesceGoal: Seq[CoalesceGoal] = sortType match {
     case FullSortSingleBatch => Seq(RequireSingleBatch)
