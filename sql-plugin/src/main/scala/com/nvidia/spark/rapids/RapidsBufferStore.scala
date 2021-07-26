@@ -350,11 +350,13 @@ abstract class RapidsBufferStore(
             case _ =>
               try {
                 logDebug(s"Unspilling $this $id to $DEVICE")
-                val newBuffer = deviceStorage.copyBuffer(
-                  this, materializeMemoryBuffer, Cuda.DEFAULT_STREAM)
-                if (newBuffer.addReference()) {
-                  withResource(newBuffer) { _ =>
-                    return newBuffer.getDeviceMemoryBuffer
+                withResource(materializeMemoryBuffer) { materializedBuffer =>
+                  val newBuffer = deviceStorage.copyBuffer(
+                    this, materializedBuffer, Cuda.DEFAULT_STREAM)
+                  if (newBuffer.addReference()) {
+                    withResource(newBuffer) { _ =>
+                      return newBuffer.getDeviceMemoryBuffer
+                    }
                   }
                 }
               } catch {
