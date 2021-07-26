@@ -28,6 +28,7 @@ import org.apache.spark.sql.catalyst.errors.attachTree
 import org.apache.spark.sql.catalyst.expressions._
 import org.apache.spark.sql.catalyst.plans.physical.BroadcastMode
 import org.apache.spark.sql.catalyst.trees.TreeNode
+import org.apache.spark.sql.catalyst.util.{DateFormatter, DateTimeUtils}
 import org.apache.spark.sql.connector.read.{InputPartition, PartitionReaderFactory}
 import org.apache.spark.sql.execution._
 import org.apache.spark.sql.execution.adaptive.{BroadcastQueryStageExec, ShuffleQueryStageExec}
@@ -421,5 +422,9 @@ abstract class SparkBaseShims extends PluginShims {
       datetimeRebaseMode: SQLConf.LegacyBehaviorPolicy.Value): ParquetFilters = {
     new ParquetFilters(schema, pushDownDate, pushDownTimestamp, pushDownDecimal, pushDownStartWith,
       pushDownInFilterThreshold, caseSensitive)
+  }
+
+  override def getDateFormatter(): DateFormatter = {
+    DateFormatter(DateTimeUtils.getZoneId(SQLConf.get.sessionLocalTimeZone))
   }
 }

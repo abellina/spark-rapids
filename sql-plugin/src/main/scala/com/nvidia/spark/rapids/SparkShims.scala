@@ -37,6 +37,7 @@ import org.apache.spark.sql.catalyst.expressions.{Alias, Expression, ExprId, Nul
 import org.apache.spark.sql.catalyst.plans.JoinType
 import org.apache.spark.sql.catalyst.plans.physical.{BroadcastMode, Partitioning}
 import org.apache.spark.sql.catalyst.trees.TreeNode
+import org.apache.spark.sql.catalyst.util.DateFormatter
 import org.apache.spark.sql.connector.read.{InputPartition, PartitionReaderFactory, Scan}
 import org.apache.spark.sql.execution.SparkPlan
 import org.apache.spark.sql.execution.adaptive.ShuffleQueryStageExec
@@ -83,6 +84,8 @@ case class EMRShimVersion(major: Int, minor: Int, patch: Int) extends ShimVersio
 }
 
 trait SparkShims {
+  def getDateFormatter(): DateFormatter
+
   def sessionFromPlan(plan: SparkPlan): SparkSession
 
   def createGpuDataSourceRDD(

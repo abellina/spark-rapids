@@ -25,6 +25,7 @@ import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.expressions._
 import org.apache.spark.sql.catalyst.plans.physical.BroadcastMode
+import org.apache.spark.sql.catalyst.util.{DateFormatter, DateTimeUtils}
 import org.apache.spark.sql.connector.read.{InputPartition, PartitionReaderFactory}
 import org.apache.spark.sql.execution._
 import org.apache.spark.sql.execution.adaptive.ShuffleQueryStageExec
@@ -383,5 +384,10 @@ abstract class SparkBaseShims extends PluginShims {
 
   override def sessionFromPlan(plan: SparkPlan): SparkSession = {
     plan.session
+  }
+
+  override def getDateFormatter(): DateFormatter = {
+    // TODO verify
+    DateFormatter()
   }
 }

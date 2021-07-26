@@ -17,7 +17,6 @@
 package com.nvidia.spark.rapids
 
 import java.lang.{Boolean => JBoolean, Byte => JByte, Double => JDouble, Float => JFloat, Long => JLong, Short => JShort}
-import java.util
 import java.util.{List => JList, Objects}
 import javax.xml.bind.DatatypeConverter
 
@@ -26,12 +25,13 @@ import scala.reflect.runtime.universe.TypeTag
 
 import ai.rapids.cudf.{ColumnVector, DType, HostColumnVector, Scalar}
 import com.nvidia.spark.rapids.RapidsPluginImplicits.AutoCloseableProducingArray
+import java.util
 import org.json4s.JsonAST.{JField, JNull, JString}
 
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.expressions.Literal
-import org.apache.spark.sql.catalyst.util.{ArrayData, DateFormatter, DateTimeUtils, MapData, TimestampFormatter}
+import org.apache.spark.sql.catalyst.util.{ArrayData, DateTimeUtils, MapData, TimestampFormatter}
 import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.rapids.execution.TrampolineUtil
 import org.apache.spark.sql.types._
@@ -618,7 +618,7 @@ case class GpuLiteral (value: Any, dataType: DataType) extends GpuLeafExpression
       }
     case (v: Decimal, _: DecimalType) => v + "BD"
     case (v: Int, DateType) =>
-      val formatter = DateFormatter(DateTimeUtils.getZoneId(SQLConf.get.sessionLocalTimeZone))
+      val formatter = ShimLoader.getSparkShims.getDateFormatter()
       s"DATE '${formatter.format(v)}'"
     case (v: Long, TimestampType) =>
       val formatter = TimestampFormatter.getFractionFormatter(
