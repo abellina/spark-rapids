@@ -299,6 +299,19 @@ trait GpuString2TrimExpression extends String2TrimExpression with GpuExpression 
 
   }
 
+  protected def doEval(
+      srcString: org.apache.spark.unsafe.types.UTF8String,
+      trimString: org.apache.spark.unsafe.types.UTF8String
+  ): org.apache.spark.unsafe.types.UTF8String = {
+    throw new UnsupportedOperationException("TODO: Columnar only?")
+  }
+
+  protected def doEval(
+      srcString: org.apache.spark.unsafe.types.UTF8String
+  ): org.apache.spark.unsafe.types.UTF8String = {
+    throw new UnsupportedOperationException("TODO: Columnar only?")
+  }
+
   override def columnarEval(batch: ColumnarBatch): Any = {
     val trim = GpuExpressionsUtils.getTrimString(trimStr)
     withResourceIfAllowed(srcStr.columnarEval(batch)) { shouldBeColumn =>

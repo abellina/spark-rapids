@@ -230,6 +230,8 @@ case class GpuStringTrim(column: Expression, trimParameters: Option[Expression] 
 
   override protected def direction: String = "BOTH"
 
+  val trimMethod = "gpuTrim"
+
   override def strippedColumnVector(column: GpuColumnVector, t: Scalar): GpuColumnVector =
     GpuColumnVector.from(column.getBase.strip(t), dataType)
 }
@@ -249,6 +251,8 @@ case class GpuStringTrimLeft(column: Expression, trimParameters: Option[Expressi
 
   override protected def direction: String = "LEADING"
 
+  val trimMethod = "gpuTrimLeft"
+
   override def strippedColumnVector(column: GpuColumnVector, t: Scalar): GpuColumnVector =
     GpuColumnVector.from(column.getBase.lstrip(t), dataType)
 }
@@ -267,6 +271,8 @@ case class GpuStringTrimRight(column: Expression, trimParameters: Option[Express
   def this(column: Expression) = this(column, None)
 
   override protected def direction: String = "TRAILING"
+
+  val trimMethod = "gpuTrimRight"
 
   override def strippedColumnVector(column:GpuColumnVector, t:Scalar): GpuColumnVector =
     GpuColumnVector.from(column.getBase.rstrip(t), dataType)
