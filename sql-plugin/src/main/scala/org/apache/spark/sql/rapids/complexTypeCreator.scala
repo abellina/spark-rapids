@@ -29,7 +29,8 @@ import org.apache.spark.sql.types.{ArrayType, DataType, Metadata, NullType, Stri
 import org.apache.spark.sql.vectorized.ColumnarBatch
 
 case class GpuCreateArray(children: Seq[Expression], useStringTypeWhenEmpty: Boolean)
-    extends GpuExpression {
+    extends GpuExpression
+    with com.nvidia.spark.rapids.shims.ShimExpression {
 
   def this(children: Seq[Expression]) = {
     this(children, SQLConf.get.getConf(SQLConf.LEGACY_CREATE_EMPTY_COLLECTION_USING_STRING_TYPE))
@@ -82,7 +83,8 @@ case class GpuCreateArray(children: Seq[Expression], useStringTypeWhenEmpty: Boo
   }
 }
 
-case class GpuCreateNamedStruct(children: Seq[Expression]) extends GpuExpression {
+case class GpuCreateNamedStruct(children: Seq[Expression]) extends GpuExpression
+  with com.nvidia.spark.rapids.shims.ShimExpression {
   lazy val (nameExprs, valExprs) = children.grouped(2).map {
     case Seq(name, value) => (name, value)
   }.toList.unzip

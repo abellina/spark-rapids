@@ -46,7 +46,8 @@ import org.apache.spark.util.KnownSizeEstimation
  * @param child Input to broadcast
  */
 case class GpuBroadcastToCpuExec(override val mode: BroadcastMode, child: SparkPlan)
-    extends GpuBroadcastExchangeExecBaseWithFuture(mode, child) {
+    extends GpuBroadcastExchangeExecBaseWithFuture(mode, child)
+    with com.nvidia.spark.rapids.shims.ShimUnaryExecNode {
 
   import GpuMetric._
 
