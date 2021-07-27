@@ -30,7 +30,8 @@ import org.apache.spark.sql.types._
 
 private[udf] object Repr {
 
-  abstract class CompilerInternal(name: String) extends Expression {
+  abstract class CompilerInternal(name: String)
+      extends com.nvidia.spark.rapids.shims.ShimExpression {
     override def dataType: DataType = {
       throw new SparkException(s"Compiler internal representation of " +
           s"${name} cannot be evaluated")

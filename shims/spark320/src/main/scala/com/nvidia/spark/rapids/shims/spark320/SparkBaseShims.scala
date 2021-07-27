@@ -25,18 +25,19 @@ import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.expressions._
 import org.apache.spark.sql.catalyst.plans.physical.BroadcastMode
-import org.apache.spark.sql.catalyst.util.{DateFormatter, DateTimeUtils}
+import org.apache.spark.sql.catalyst.util.DateFormatter
 import org.apache.spark.sql.connector.read.{InputPartition, PartitionReaderFactory}
 import org.apache.spark.sql.execution._
-import org.apache.spark.sql.execution.adaptive.ShuffleQueryStageExec
+import org.apache.spark.sql.execution.adaptive.{AdaptiveSparkPlanExec, AQEShuffleReadExec, QueryStageExec, ShuffleQueryStageExec}
 import org.apache.spark.sql.execution.datasources.{FileIndex, FilePartition, FileScanRDD, HadoopFsRelation, InMemoryFileIndex, PartitionDirectory, PartitionedFile}
 import org.apache.spark.sql.execution.datasources.rapids.GpuPartitioningUtils
-import org.apache.spark.sql.execution.joins.{BroadcastHashJoinExec, ShuffledHashJoinExec, SortMergeJoinExec}
+import org.apache.spark.sql.execution.exchange.BroadcastExchangeExec
+import org.apache.spark.sql.execution.joins.{BroadcastHashJoinExec, BroadcastNestedLoopJoinExec, ShuffledHashJoinExec, SortMergeJoinExec}
 import org.apache.spark.sql.execution.python.{AggregateInPandasExec, ArrowEvalPythonExec, FlatMapGroupsInPandasExec, MapInPandasExec, WindowInPandasExec}
 import org.apache.spark.sql.execution.window.WindowExecBase
 import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.rapids.{GpuFileSourceScanExec, GpuStringReplace}
-import org.apache.spark.sql.rapids.execution.{GpuBroadcastExchangeExecBase, GpuShuffleExchangeExecBase}
+import org.apache.spark.sql.rapids.execution.{GpuBroadcastExchangeExecBase, GpuCustomShuffleReaderExec, GpuShuffleExchangeExecBase}
 import org.apache.spark.sql.rapids.execution.python.{GpuAggregateInPandasExecMeta, GpuArrowEvalPythonExec, GpuFlatMapGroupsInPandasExecMeta, GpuMapInPandasExecMeta, GpuPythonUDF, GpuWindowInPandasExecMetaBase}
 
 /**
@@ -197,7 +198,25 @@ abstract class SparkBaseShims extends PluginShims {
             " the Java process and the Python process. It also supports scheduling GPU resources" +
             " for the Python process when enabled.",
         ExecChecks(TypeSig.commonCudfTypes, TypeSig.all),
-        (aggPy, conf, p, r) => new GpuAggregateInPandasExecMeta(aggPy, conf, p, r))
+        (aggPy, conf, p, r) => new GpuAggregateInPandasExecMeta(aggPy, conf, p, r)),
+      GpuOverrides.exec[AQEShuffleReadExec](
+        "A wrapper of shuffle query stage",
+        ExecChecks((TypeSig.commonCudfTypes + TypeSig.NULL + TypeSig.DECIMAL + TypeSig.ARRAY +
+            TypeSig.STRUCT).nested(), TypeSig.all),
+        (exec, conf, p, r) =>
+          new SparkPlanMeta[AQEShuffleReadExec](exec, conf, p, r) {
+            override def tagPlanForGpu(): Unit = {
+              if (!exec.child.supportsColumnar) {
+                willNotWorkOnGpu(
+                  "Unable to replace CustomShuffleReader due to child not being columnar")
+              }
+            }
+
+            override def convertToGpu(): GpuExec = {
+              GpuCustomShuffleReaderExec(childPlans.head.convertIfNeeded(),
+                exec.partitionSpecs)
+            }
+          })
     ).map(r => (r.getClassFor.asSubclass(classOf[SparkPlan]), r)).toMap
   }
 
@@ -389,5 +408,25 @@ abstract class SparkBaseShims extends PluginShims {
   override def getDateFormatter(): DateFormatter = {
     // TODO verify
     DateFormatter()
+  }
+
+  override def isExchangeOp(plan: SparkPlanMeta[_]): Boolean = {
+    // if the child query stage already executed on GPU then we need to keep the
+    // next operator on GPU in these cases
+    SQLConf.get.adaptiveExecutionEnabled && (plan.wrapped match {
+      case _: AQEShuffleReadExec
+           | _: ShuffledHashJoinExec
+           | _: BroadcastHashJoinExec
+           | _: BroadcastExchangeExec
+           | _: BroadcastNestedLoopJoinExec => true
+      case _ => false
+    })
+  }
+
+  override def isAqePlan(p: SparkPlan): Boolean = p match {
+    case _: AdaptiveSparkPlanExec |
+         _: QueryStageExec |
+         _: AQEShuffleReadExec => true
+    case _ => false
   }
 }

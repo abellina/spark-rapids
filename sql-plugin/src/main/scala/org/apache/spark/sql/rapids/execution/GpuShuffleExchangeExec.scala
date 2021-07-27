@@ -99,7 +99,9 @@ abstract class GpuShuffleExchangeExecBaseWithMetrics(
  */
 abstract class GpuShuffleExchangeExecBase(
     override val outputPartitioning: Partitioning,
-    child: SparkPlan) extends Exchange with GpuExec {
+    child: SparkPlan) extends Exchange
+    with com.nvidia.spark.rapids.shims.ShimUnaryExecNode
+    with GpuExec {
   import GpuMetric._
 
   // Shuffle produces a lot of small output batches that should be coalesced together.

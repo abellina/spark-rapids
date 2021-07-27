@@ -84,6 +84,10 @@ case class EMRShimVersion(major: Int, minor: Int, patch: Int) extends ShimVersio
 }
 
 trait SparkShims {
+  def isAqePlan(p: SparkPlan): Boolean
+
+  def isExchangeOp(plan: SparkPlanMeta[_]): Boolean
+
   def getDateFormatter(): DateFormatter
 
   def sessionFromPlan(plan: SparkPlan): SparkSession
