@@ -37,6 +37,8 @@ case class GpuRand(child: Expression)
 
   override def withNewSeed(seed: Long): GpuRand = GpuRand(GpuLiteral(seed, LongType))
 
+  def seedExpression: Expression = child
+
   /**
    * Record ID within each partition. By being transient, the Random Number Generator is
    * reset every time we serialize and deserialize and initialize it.
