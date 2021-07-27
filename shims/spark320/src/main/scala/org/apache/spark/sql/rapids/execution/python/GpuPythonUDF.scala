@@ -22,6 +22,7 @@ package org.apache.spark.sql.rapids.execution.python
 import ai.rapids.cudf._
 import ai.rapids.cudf.Aggregation.SumAggregation
 import com.nvidia.spark.rapids._
+import com.nvidia.spark.rapids.shims.ShimExpression
 
 import org.apache.spark.api.python._
 import org.apache.spark.sql.catalyst.expressions._
@@ -64,7 +65,7 @@ case class GpuPythonUDF(
     evalType: Int,
     udfDeterministic: Boolean,
     resultId: ExprId = NamedExpression.newExprId)
-    extends Expression with GpuUnevaluable with NonSQLExpression with UserDefinedExpression
+    extends ShimExpression with GpuUnevaluable with NonSQLExpression with UserDefinedExpression
     // The generic parameter is here to enforce at compile time that we are doing something
     // that is allowed, but this is a special case and we might want to rething the type
     // hierarchy here a bit.

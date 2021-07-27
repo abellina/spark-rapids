@@ -476,7 +476,7 @@ case class GpuPmod(left: Expression, right: Expression) extends GpuDivModLike {
   override def dataType: DataType = left.dataType
 }
 
-trait GpuGreatestLeastBase extends ComplexTypeMergingExpression with GpuExpression {
+trait GpuGreatestLeastBase extends GpuComplexTypeMergingExpression with GpuExpression {
   override def nullable: Boolean = children.forall(_.nullable)
   override def foldable: Boolean = children.forall(_.foldable)
 

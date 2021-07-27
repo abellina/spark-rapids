@@ -17,6 +17,7 @@
 package com.nvidia.spark.rapids.shims.spark320
 
 import com.nvidia.spark.rapids._
+import com.nvidia.spark.rapids.shims.ShimBinaryExecNode
 
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.catalyst.InternalRow
@@ -92,7 +93,7 @@ case class GpuBroadcastHashJoinExec(
     buildSide: GpuBuildSide,
     override val condition: Option[Expression],
     left: SparkPlan,
-    right: SparkPlan) extends BinaryExecNode with GpuHashJoin {
+    right: SparkPlan) extends ShimBinaryExecNode with GpuHashJoin {
   import GpuMetric._
 
   override val outputRowsLevel: MetricsLevel = ESSENTIAL_LEVEL

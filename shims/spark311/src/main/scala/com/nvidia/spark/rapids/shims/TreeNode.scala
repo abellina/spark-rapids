@@ -18,12 +18,13 @@ package com.nvidia.spark.rapids.shims
 
 import org.apache.spark.sql.catalyst.expressions.{BinaryExpression, Expression, TernaryExpression, UnaryExpression}
 import org.apache.spark.sql.catalyst.plans.logical.Command
-import org.apache.spark.sql.execution.{SparkPlan, UnaryExecNode}
+import org.apache.spark.sql.execution.{BinaryExecNode, SparkPlan, UnaryExecNode}
 
 trait ShimExpression extends Expression
 trait ShimUnaryExpression extends UnaryExpression
 trait ShimBinaryExpression extends BinaryExpression
 trait ShimSparkPlan extends SparkPlan
 trait ShimUnaryExecNode extends UnaryExecNode
+trait ShimBinaryExecNode extends BinaryExecNode
 trait ShimTernaryExpression extends TernaryExpression
 trait ShimUnaryCommand extends Command

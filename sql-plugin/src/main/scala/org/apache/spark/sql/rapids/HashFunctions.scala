@@ -45,7 +45,8 @@ object GpuMurmur3Hash extends Arm {
   }
 }
 
-case class GpuMurmur3Hash(children: Seq[Expression], seed: Int) extends GpuExpression {
+case class GpuMurmur3Hash(children: Seq[Expression], seed: Int) extends GpuExpression
+  with com.nvidia.spark.rapids.shims.ShimExpression {
   override def dataType: DataType = IntegerType
 
   override def toString: String = s"hash($children)"

@@ -32,7 +32,8 @@ import org.apache.spark.sql.vectorized.ColumnarBatch
 case class GpuScalarSubquery(
     plan: BaseSubqueryExec,
     exprId: ExprId)
-  extends ExecSubqueryExpression with GpuExpression {
+  extends ExecSubqueryExpression with GpuExpression
+  with com.nvidia.spark.rapids.shims.ShimExpression {
 
   override def dataType: DataType = plan.schema.fields.head.dataType
   override def children: Seq[Expression] = Seq.empty
@@ -40,10 +41,11 @@ case class GpuScalarSubquery(
   override def toString: String = plan.simpleString(SQLConf.get.maxToStringFields)
   override def withNewPlan(query: BaseSubqueryExec): GpuScalarSubquery = copy(plan = query)
 
-  override def semanticEquals(other: Expression): Boolean = other match {
-    case s: GpuScalarSubquery => plan.sameResult(s.plan)
-    case _ => false
-  }
+  // TODO SPARK-35742
+//  override def semanticEquals(other: Expression): Boolean = other match {
+//    case s: GpuScalarSubquery => plan.sameResult(s.plan)
+//    case _ => false
+//  }
 
   // the first column in first row from `query`.
   @volatile private var result: Any = _

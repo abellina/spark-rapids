@@ -278,7 +278,8 @@ abstract class GpuBroadcastNestedLoopJoinExecBase(
     right: SparkPlan,
     joinType: JoinType,
     condition: Option[Expression],
-    targetSizeBytes: Long) extends BinaryExecNode with GpuExec {
+    targetSizeBytes: Long)
+    extends com.nvidia.spark.rapids.shims.ShimBinaryExecNode with GpuExec {
 
   import GpuMetric._
 

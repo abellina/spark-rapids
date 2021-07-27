@@ -22,8 +22,9 @@ import ai.rapids.cudf
 import com.nvidia.spark.rapids._
 import com.nvidia.spark.rapids.RapidsPluginImplicits._
 import com.nvidia.spark.rapids.python.PythonWorkerSemaphore
-
+import com.nvidia.spark.rapids.shims.ShimUnaryExecNode
 import org.apache.spark.TaskContext
+
 import org.apache.spark.api.python.{ChainedPythonFunctions, PythonEvalType}
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.catalyst.expressions._
@@ -81,7 +82,7 @@ case class GpuAggregateInPandasExec(
     udfExpressions: Seq[GpuPythonUDF],
     resultExpressions: Seq[NamedExpression],
     child: SparkPlan)
-  extends UnaryExecNode with GpuPythonExecBase {
+  extends ShimUnaryExecNode with GpuPythonExecBase {
 
   override val output: Seq[Attribute] = resultExpressions.map(_.toAttribute)
 

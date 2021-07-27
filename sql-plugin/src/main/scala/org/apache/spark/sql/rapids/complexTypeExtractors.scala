@@ -29,7 +29,8 @@ import org.apache.spark.sql.vectorized.ColumnarBatch
 import org.apache.spark.unsafe.types.UTF8String
 
 case class GpuGetStructField(child: Expression, ordinal: Int, name: Option[String] = None)
-    extends UnaryExpression with GpuExpression with ExtractValue with NullIntolerant {
+    extends com.nvidia.spark.rapids.shims.ShimUnaryExpression
+        with GpuExpression with ExtractValue with NullIntolerant {
 
   lazy val childSchema: StructType = child.dataType.asInstanceOf[StructType]
 

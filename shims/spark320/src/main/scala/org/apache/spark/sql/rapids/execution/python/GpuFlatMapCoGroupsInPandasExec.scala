@@ -18,8 +18,9 @@ package org.apache.spark.sql.rapids.execution.python
 
 import com.nvidia.spark.rapids._
 import com.nvidia.spark.rapids.python.PythonWorkerSemaphore
-
+import com.nvidia.spark.rapids.shims.ShimBinaryExecNode
 import org.apache.spark.TaskContext
+
 import org.apache.spark.api.python.{ChainedPythonFunctions, PythonEvalType}
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.catalyst.InternalRow
@@ -74,7 +75,7 @@ case class GpuFlatMapCoGroupsInPandasExec(
     output: Seq[Attribute],
     left: SparkPlan,
     right: SparkPlan)
-  extends SparkPlan with BinaryExecNode with GpuExec {
+  extends SparkPlan with ShimBinaryExecNode with GpuExec {
 
   override def supportsColumnar = false
   override def doExecuteColumnar(): RDD[ColumnarBatch] = {
