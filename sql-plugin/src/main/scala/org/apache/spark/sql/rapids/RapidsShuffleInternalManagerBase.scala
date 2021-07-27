@@ -40,8 +40,8 @@ class GpuShuffleHandle[K, V](
   override def toString: String = s"GPU SHUFFLE HANDLE $shuffleId"
 }
 
-class GpuShuffleBlockResolver(
-    private val wrapped: ShuffleBlockResolver,
+abstract class GpuShuffleBlockResolverBase(
+    protected val wrapped: ShuffleBlockResolver,
     catalog: ShuffleBufferCatalog)
   extends ShuffleBlockResolver with Logging {
   override def getBlockData(blockId: BlockId, dirs: Option[Array[String]]): ManagedBuffer = {
@@ -189,6 +189,10 @@ class RapidsCachingWriter[K, V](
       nvtxRange.close()
     }
   }
+
+  def getPartitionLengths(): Array[Long] = {
+    throw new UnsupportedOperationException("TODO")
+  }
 }
 
 /**
@@ -246,7 +250,7 @@ abstract class RapidsShuffleInternalManagerBase(conf: SparkConf, val isDriver: B
   // NOTE: this can be null in the driver side.
   private lazy val env = SparkEnv.get
   private lazy val blockManager = env.blockManager
-  private lazy val shouldFallThroughOnEverything = {
+  protected lazy val shouldFallThroughOnEverything = {
     val fallThroughReasons = new ListBuffer[String]()
     if (!GpuShuffleEnv.isRapidsShuffleEnabled) {
       fallThroughReasons += "external shuffle is enabled"
@@ -262,16 +266,12 @@ abstract class RapidsShuffleInternalManagerBase(conf: SparkConf, val isDriver: B
 
   // Code that expects the shuffle catalog to be initialized gets it this way,
   // with error checking in case we are in a bad state.
-  private def getCatalogOrThrow: ShuffleBufferCatalog =
+  protected def getCatalogOrThrow: ShuffleBufferCatalog =
     Option(GpuShuffleEnv.getCatalog).getOrElse(
       throw new IllegalStateException("The ShuffleBufferCatalog is not initialized but the " +
         "RapidsShuffleManager is configured"))
 
-  private lazy val resolver = if (shouldFallThroughOnEverything) {
-    wrapped.shuffleBlockResolver
-  } else {
-    new GpuShuffleBlockResolver(wrapped.shuffleBlockResolver, getCatalogOrThrow)
-  }
+  protected def resolver: ShuffleBlockResolver
 
   private[this] lazy val transport: Option[RapidsShuffleTransport] = {
     if (rapidsConf.shuffleTransportEnabled && !isDriver) {

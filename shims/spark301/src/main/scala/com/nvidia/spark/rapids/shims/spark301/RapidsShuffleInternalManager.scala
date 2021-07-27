@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2020, NVIDIA CORPORATION.
+ * Copyright (c) 2019-2021, NVIDIA CORPORATION.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,9 +16,11 @@
 
 package org.apache.spark.sql.rapids.shims.spark301
 
+import com.nvidia.spark.rapids.ShuffleBufferCatalog
+
 import org.apache.spark.{SparkConf, TaskContext}
 import org.apache.spark.shuffle._
-import org.apache.spark.sql.rapids.RapidsShuffleInternalManagerBase
+import org.apache.spark.sql.rapids.{GpuShuffleBlockResolverBase, RapidsShuffleInternalManagerBase}
 
 /**
  * A shuffle manager optimized for the RAPIDS Plugin For Apache Spark.
@@ -49,4 +51,12 @@ class RapidsShuffleInternalManager(conf: SparkConf, isDriver: Boolean)
     getReaderInternal(handle, 0, Int.MaxValue, startPartition, endPartition, context, metrics)
   }
 
+  override protected lazy val resolver = if (shouldFallThroughOnEverything) {
+    wrapped.shuffleBlockResolver
+  } else {
+    new GpuShuffleBlockResolver(wrapped.shuffleBlockResolver, getCatalogOrThrow)
+  }
 }
+
+class GpuShuffleBlockResolver(resolver: IndexShuffleBlockResolver, catalog: ShuffleBufferCatalog)
+    extends GpuShuffleBlockResolverBase(resolver, catalog)

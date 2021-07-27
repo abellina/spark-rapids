@@ -26,5 +26,12 @@ trait ShimBinaryExpression extends BinaryExpression
 trait ShimSparkPlan extends SparkPlan
 trait ShimUnaryExecNode extends UnaryExecNode
 trait ShimBinaryExecNode extends BinaryExecNode
-trait ShimTernaryExpression extends TernaryExpression
+
+trait ShimTernaryExpression extends TernaryExpression {
+  def first: Expression
+  def second: Expression
+  def third: Expression
+  final def children: Seq[Expression] = IndexedSeq(first, second, third)
+}
+
 trait ShimUnaryCommand extends Command

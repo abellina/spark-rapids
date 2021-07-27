@@ -67,7 +67,6 @@ case class GpuStringLocate(substr: Expression, col: Expression, start: Expressio
   def first = substr
   def second = col
   def third = start
-  override def children: Seq[Expression] = Seq(substr, col, start)
 
   def this(substr: Expression, col: Expression) = {
     this(substr, col, GpuLiteral(1, IntegerType))
@@ -425,8 +424,6 @@ case class GpuSubstring(str: Expression, pos: Expression, len: Expression)
   def second = pos
   def third = len
 
-  override def children: Seq[Expression] = Seq(str, pos, len)
-
   def this(str: Expression, pos: Expression) = {
     this(str, pos, GpuLiteral(Integer.MAX_VALUE, IntegerType))
   }
@@ -510,7 +507,6 @@ case class GpuStringReplace(
   def first: Expression = srcExpr
   def second: Expression = searchExpr
   def third: Expression = replaceExpr
-  override def children: Seq[Expression] = Seq(srcExpr, searchExpr, replaceExpr)
 
   def this(srcExpr: Expression, searchExpr: Expression) = {
     this(srcExpr, searchExpr, GpuLiteral("", StringType))
@@ -744,7 +740,6 @@ case class GpuSubstringIndex(strExpr: Expression,
   def second: Expression = ignoredDelimExpr
   def third: Expression = ignoredCountExpr
 
-  override def children: Seq[Expression] = Seq(strExpr, ignoredDelimExpr, ignoredCountExpr)
   override def prettyName: String = "substring_index"
 
   // This is a bit hacked up at the moment. We are going to use a regular expression to extract
@@ -825,7 +820,6 @@ trait BasePad extends GpuTernaryExpression with ImplicitCastInputTypes with Null
   def second: Expression = len
   def third: Expression = pad
 
-  override def children: Seq[Expression] = str :: len :: pad :: Nil
   override def dataType: DataType = StringType
   override def inputTypes: Seq[DataType] = Seq(StringType, IntegerType, StringType)
 
@@ -947,7 +941,6 @@ case class GpuStringSplit(str: Expression, regex: Expression, limit: Expression)
   def first: Expression = str
   def second: Expression = regex
   def third: Expression = limit
-  override def children: Seq[Expression] = str :: regex :: limit :: Nil
 
   def this(exp: Expression, regex: Expression) = this(exp, regex, GpuLiteral(-1, IntegerType))
 

@@ -16,9 +16,14 @@
 
 package org.apache.spark.sql.rapids.shims.spark320
 
+import com.nvidia.spark.rapids.ShuffleBufferCatalog
 import org.apache.spark.{SparkConf, TaskContext}
+
+import org.apache.spark.network.buffer.ManagedBuffer
+import org.apache.spark.network.shuffle.MergedBlockMeta
 import org.apache.spark.shuffle._
-import org.apache.spark.sql.rapids.RapidsShuffleInternalManagerBase
+import org.apache.spark.sql.rapids.{GpuShuffleBlockResolverBase, RapidsShuffleInternalManagerBase}
+import org.apache.spark.storage.ShuffleBlockId
 
 /**
  * A shuffle manager optimized for the RAPIDS Plugin For Apache Spark.
@@ -39,4 +44,27 @@ class RapidsShuffleInternalManager(conf: SparkConf, isDriver: Boolean)
     getReaderInternal(handle, startMapIndex, endMapIndex, startPartition, endPartition, context,
       metrics)
   }
+
+  override protected lazy val resolver = if (shouldFallThroughOnEverything) {
+    wrapped.shuffleBlockResolver
+  } else {
+    new GpuShuffleBlockResolver(wrapped.shuffleBlockResolver, getCatalogOrThrow)
+  }
 }
+
+class GpuShuffleBlockResolver(resolver: IndexShuffleBlockResolver, catalog: ShuffleBufferCatalog)
+    extends GpuShuffleBlockResolverBase(resolver, catalog) {
+
+  override def getMergedBlockData(
+      blockId: ShuffleBlockId,
+      dirs: Option[Array[String]]): Seq[ManagedBuffer] = {
+    throw new UnsupportedOperationException("TODO after shim is done")
+  }
+
+  override def getMergedBlockMeta(
+      blockId: ShuffleBlockId,
+      dirs: Option[Array[String]]): MergedBlockMeta = {
+    throw new UnsupportedOperationException("TODO after shim is done")
+  }
+}
+
