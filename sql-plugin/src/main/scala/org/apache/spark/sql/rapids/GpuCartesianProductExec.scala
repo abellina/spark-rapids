@@ -210,7 +210,7 @@ case class GpuCartesianProductExec(
     left: SparkPlan,
     right: SparkPlan,
     condition: Option[Expression],
-    targetSizeBytes: Long) extends BinaryExecNode with GpuExec {
+    targetSizeBytes: Long) extends com.nvidia.spark.rapids.shims.ShimBinaryExecNode with GpuExec {
 
   import GpuMetric._
 

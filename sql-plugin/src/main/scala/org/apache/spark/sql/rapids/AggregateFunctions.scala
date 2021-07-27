@@ -28,7 +28,8 @@ import org.apache.spark.sql.catalyst.expressions.aggregate._
 import org.apache.spark.sql.catalyst.util.TypeUtils
 import org.apache.spark.sql.types._
 
-trait GpuAggregateFunction extends GpuExpression with GpuUnevaluable {
+trait GpuAggregateFunction extends GpuExpression with GpuUnevaluable
+  with com.nvidia.spark.rapids.shims.ShimExpression {
   // using the child reference, define the shape of the vectors sent to
   // the update/merge expressions
   val inputProjection: Seq[Expression]
@@ -127,7 +128,8 @@ case class GpuAggregateExpression(origAggregateFunction: GpuAggregateFunction,
                                   isDistinct: Boolean,
                                   filter: Option[Expression],
                                   resultId: ExprId)
-  extends GpuExpression with GpuUnevaluable {
+  extends GpuExpression with GpuUnevaluable
+    with com.nvidia.spark.rapids.shims.ShimExpression {
 
   val aggregateFunction: GpuAggregateFunction = if (filter.isDefined) {
     WrappedAggFunction(origAggregateFunction, filter.get)
@@ -182,7 +184,8 @@ case class GpuAggregateExpression(origAggregateFunction: GpuAggregateFunction,
   override def sql: String = aggregateFunction.sql(isDistinct)
 }
 
-abstract case class CudfAggregate(ref: Expression) extends GpuUnevaluable {
+abstract case class CudfAggregate(ref: Expression) extends GpuUnevaluable
+  with com.nvidia.spark.rapids.shims.ShimExpression {
   // we use this to get the ordinal of the bound reference, s.t. we can ask cudf to perform
   // the aggregate on that column
   def getOrdinal(ref: Expression): Int = ref.asInstanceOf[GpuBoundReference].ordinal

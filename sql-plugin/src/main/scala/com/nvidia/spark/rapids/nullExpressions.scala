@@ -39,8 +39,9 @@ object GpuNvl extends Arm {
   }
 }
 
-case class GpuCoalesce(children: Seq[Expression]) extends GpuExpression with
-  ComplexTypeMergingExpression {
+case class GpuCoalesce(children: Seq[Expression]) extends GpuExpression
+  with com.nvidia.spark.rapids.shims.ShimExpression
+  with ComplexTypeMergingExpression {
 
   override def columnarEval(batch: ColumnarBatch): Any = {
     // runningResult has precedence over runningScalar
@@ -147,6 +148,7 @@ case class GpuAtLeastNNonNulls(
     n: Int,
     exprs: Seq[Expression])
   extends GpuExpression
+  with com.nvidia.spark.rapids.shims.ShimExpression
   with Predicate {
   override def nullable: Boolean = false
   override def foldable: Boolean = exprs.forall(_.foldable)

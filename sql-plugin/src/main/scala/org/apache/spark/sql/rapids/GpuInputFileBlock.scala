@@ -28,7 +28,8 @@ import org.apache.spark.sql.vectorized.ColumnarBatch
  * This is extra difficult because we cannot coalesce batches in between when this
  * is used and the input file or else we could run into problems with returning the wrong thing.
  */
-case class GpuInputFileName() extends GpuLeafExpression {
+case class GpuInputFileName() extends GpuLeafExpression
+    with com.nvidia.spark.rapids.shims.ShimExpression {
   /**
    * We need to recompute this if something fails.
    */
@@ -61,7 +62,8 @@ object InputFileUtils {
  * This is extra difficult because we cannot coalesce batches in between when this
  * is used and the input file or else we could run into problems with returning the wrong thing.
  */
-case class GpuInputFileBlockStart() extends GpuLeafExpression {
+case class GpuInputFileBlockStart() extends GpuLeafExpression
+    with com.nvidia.spark.rapids.shims.ShimExpression {
   /**
    * We need to recompute this if something fails.
    */
@@ -89,7 +91,7 @@ case class GpuInputFileBlockStart() extends GpuLeafExpression {
  * is used and the input file or else we could run into problems with returning the wrong thing.
  */
 case class GpuInputFileBlockLength() extends GpuLeafExpression
-    with com.nvidia.spark.rapids.shims.ShimExpression{
+    with com.nvidia.spark.rapids.shims.ShimExpression {
   /**
    * We need to recompute this if something fails.
    */

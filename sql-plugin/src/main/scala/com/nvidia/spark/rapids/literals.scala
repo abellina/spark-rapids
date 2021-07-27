@@ -546,7 +546,8 @@ object GpuLiteral {
 /**
  * In order to do type conversion and checking, use GpuLiteral.create() instead of constructor.
  */
-case class GpuLiteral (value: Any, dataType: DataType) extends GpuLeafExpression {
+case class GpuLiteral (value: Any, dataType: DataType) extends GpuLeafExpression
+  with com.nvidia.spark.rapids.shims.ShimExpression {
 
   // Assume this came from Spark Literal and no need to call Literal.validateLiteralValue here.
 

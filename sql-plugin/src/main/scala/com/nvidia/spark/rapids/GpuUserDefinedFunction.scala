@@ -26,7 +26,10 @@ import org.apache.spark.sql.rapids.execution.TrampolineUtil
 import org.apache.spark.sql.vectorized.ColumnarBatch
 
 /** Common implementation across all RAPIDS accelerated UDF types */
-trait GpuUserDefinedFunction extends GpuExpression with UserDefinedExpression with Serializable {
+trait GpuUserDefinedFunction extends GpuExpression
+    with com.nvidia.spark.rapids.shims.ShimExpression
+    with UserDefinedExpression
+    with Serializable {
   /** name of the UDF function */
   val name: String
 
