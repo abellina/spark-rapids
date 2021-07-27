@@ -16,6 +16,4 @@
 
 package com.nvidia.spark.rapids
 
-trait GpuUnaryExecNode extends com.nvidia.spark.rapids.shims.ShimUnaryExecNode {
-
-}
+trait GpuUnaryExecNode extends com.nvidia.spark.rapids.shims.ShimUnaryExecNode

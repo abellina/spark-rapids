@@ -377,7 +377,9 @@ case class GpuRangeExec(range: org.apache.spark.sql.catalyst.plans.logical.Range
 }
 
 
-case class GpuUnionExec(children: Seq[SparkPlan]) extends SparkPlan with GpuExec {
+case class GpuUnionExec(children: Seq[SparkPlan])
+    extends com.nvidia.spark.rapids.shims.ShimSparkPlan
+    with GpuExec {
 
   // updating nullability to make all the children consistent
   override def output: Seq[Attribute] = {

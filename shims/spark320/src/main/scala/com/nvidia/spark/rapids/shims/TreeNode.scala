@@ -49,7 +49,7 @@ trait ShimUnaryExecNode extends UnaryExecNode {
 }
 
 trait ShimBinaryExecNode extends BinaryExecNode {
-  override def withNewChildInternal(newLeft: SparkPlan, newRight: SparkPlan): SparkPlan = {
+  override def withNewChildrenInternal(newLeft: SparkPlan, newRight: SparkPlan): SparkPlan = {
     legacyWithNewChildren(Seq(newLeft, newRight))
   }
 }

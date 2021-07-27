@@ -26,6 +26,7 @@ import org.apache.spark.sql.vectorized.ColumnarBatch
  * a Rule).
  */
 case class GpuKnownFloatingPointNormalized(child: Expression) extends TaggingExpression
+    with com.nvidia.spark.rapids.shims.ShimUnaryExpression
     with GpuExpression {
   override def columnarEval(batch: ColumnarBatch): Any = {
     child.columnarEval(batch)
@@ -37,6 +38,7 @@ case class GpuKnownFloatingPointNormalized(child: Expression) extends TaggingExp
  * to tag an expression as known to not be null.
  */
 case class GpuKnownNotNull(child: Expression) extends TaggingExpression
+    with com.nvidia.spark.rapids.shims.ShimUnaryExpression
     with GpuExpression {
   override def nullable: Boolean = false
 

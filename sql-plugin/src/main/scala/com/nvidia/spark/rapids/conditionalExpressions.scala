@@ -23,7 +23,9 @@ import org.apache.spark.sql.catalyst.expressions.{ComplexTypeMergingExpression, 
 import org.apache.spark.sql.types.{BooleanType, DataType}
 import org.apache.spark.sql.vectorized.ColumnarBatch
 
-trait GpuConditionalExpression extends ComplexTypeMergingExpression with GpuExpression {
+trait GpuConditionalExpression extends ComplexTypeMergingExpression
+    with com.nvidia.spark.rapids.shims.ShimExpression
+    with GpuExpression {
 
   protected def computeIfElse(
       batch: ColumnarBatch,

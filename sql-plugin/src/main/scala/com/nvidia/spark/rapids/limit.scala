@@ -121,11 +121,13 @@ trait GpuBaseLimitExec extends LimitExec with GpuExec {
  * Take the first `limit` elements of each child partition, but do not collect or shuffle them.
  */
 case class GpuLocalLimitExec(limit: Int, child: SparkPlan) extends GpuBaseLimitExec
+  with com.nvidia.spark.rapids.shims.ShimUnaryExecNode
 
 /**
  * Take the first `limit` elements of the child's single output partition.
  */
-case class GpuGlobalLimitExec(limit: Int, child: SparkPlan) extends GpuBaseLimitExec {
+case class GpuGlobalLimitExec(limit: Int, child: SparkPlan) extends GpuBaseLimitExec
+    with com.nvidia.spark.rapids.shims.ShimUnaryExecNode {
   override def requiredChildDistribution: List[Distribution] = AllTuples :: Nil
 }
 
@@ -261,7 +263,8 @@ case class GpuTopN(
     limit: Int,
     sortOrder: Seq[SortOrder],
     projectList: Seq[NamedExpression],
-    child: SparkPlan) extends GpuExec with UnaryExecNode {
+    child: SparkPlan) extends GpuExec
+    with com.nvidia.spark.rapids.shims.ShimUnaryExecNode {
 
   override def output: Seq[Attribute] = {
     projectList.map(_.toAttribute)
