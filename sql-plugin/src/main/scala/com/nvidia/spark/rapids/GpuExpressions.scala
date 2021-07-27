@@ -116,7 +116,7 @@ trait GpuExpression extends Expression with Arm {
   final override def eval(input: InternalRow = null): Any =
     throw new UnsupportedOperationException(s"Cannot evaluate expression: $this")
 
-  final override protected def doGenCode(ctx: CodegenContext, ev: ExprCode): ExprCode =
+  final override def doGenCode(ctx: CodegenContext, ev: ExprCode): ExprCode =
     throw new UnsupportedOperationException(s"Cannot generate code for expression: $this")
 
   /**

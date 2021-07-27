@@ -243,7 +243,10 @@ case class GpuHashAggregateExec(
     aggregateExpressions: Seq[GpuAggregateExpression],
     aggregateAttributes: Seq[Attribute],
     resultExpressions: Seq[NamedExpression],
-    child: SparkPlan) extends UnaryExecNode with GpuExec with Arm {
+    child: SparkPlan)
+    extends com.nvidia.spark.rapids.shims.ShimUnaryExecNode
+        with GpuExec
+        with Arm {
 
   override def verboseStringWithOperatorId(): String = {
     s"""

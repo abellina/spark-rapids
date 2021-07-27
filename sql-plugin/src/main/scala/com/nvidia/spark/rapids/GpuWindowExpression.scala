@@ -541,7 +541,8 @@ case class GpuSpecifiedWindowFrame(
 }
 
 case class GpuSpecialFrameBoundary(boundary : SpecialFrameBoundary)
-  extends GpuExpression with GpuUnevaluable {
+  extends GpuExpression with GpuUnevaluable
+  with com.nvidia.spark.rapids.shims.ShimExpression {
   override def children : Seq[Expression] = Nil
   override def dataType: DataType = NullType
   override def foldable: Boolean = false
@@ -732,7 +733,8 @@ class BatchedRunningWindowBinaryFixer(val binOp: BinaryOp, val name: String)
   override def close(): Unit = previousResult.foreach(_.close())
 }
 
-case class GpuRowNumber() extends GpuBatchedRunningWindowFunction[RowNumberAggregation] {
+case class GpuRowNumber() extends GpuBatchedRunningWindowFunction[RowNumberAggregation]
+  with com.nvidia.spark.rapids.shims.ShimExpression {
   override def nullable: Boolean = false
   override def dataType: DataType = IntegerType
 
@@ -818,7 +820,8 @@ trait GpuOffsetWindowFunction[T <: Aggregation with RollingAggregation[T]]
 }
 
 case class GpuLead(input: Expression, offset: Expression, default: Expression)
-    extends GpuOffsetWindowFunction[LeadAggregation] {
+    extends GpuOffsetWindowFunction[LeadAggregation]
+        with com.nvidia.spark.rapids.shims.ShimExpression {
 
   override def windowAggregation(
       inputs: Seq[(ColumnVector, Int)]): AggregationOnColumn[LeadAggregation] = {
@@ -833,7 +836,8 @@ case class GpuLead(input: Expression, offset: Expression, default: Expression)
 }
 
 case class GpuLag(input: Expression, offset: Expression, default: Expression)
-    extends GpuOffsetWindowFunction[LagAggregation] {
+    extends GpuOffsetWindowFunction[LagAggregation]
+        with com.nvidia.spark.rapids.shims.ShimExpression {
 
   override def windowAggregation(
       inputs: Seq[(ColumnVector, Int)]): AggregationOnColumn[LagAggregation] = {
