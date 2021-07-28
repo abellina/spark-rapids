@@ -29,6 +29,14 @@ object ShimLoader extends Logging {
   private var shimProviderClass: String = null
   private var sparkShims: SparkShims = null
   private var shimURL: URL = null
+  val shimMasks = Seq(
+    "spark301",
+    "spark302",
+    "spark303",
+    "spark311",
+    "spark312",
+    "spark320"
+  )
 
   def getRapidsShuffleManagerClass: String = {
     val provider = findShimProvider()
@@ -44,7 +52,7 @@ object ShimLoader extends Logging {
     if (shimURL == null) {
       val providerClassLoader = getClassLoader()
       val rsrcURL = providerClassLoader.getResource(
-        shimProvider.getClass.getName.replace(".", "/") + ".class"
+        findShimProvider().getClass.getName.replace(".", "/") + ".class"
       )
       // jar:file:/path/rapids-4-spark_2.12-<version>.jar
       // !/com/nvidia/spark/rapids/shims/spark301/Class.class
@@ -57,19 +65,7 @@ object ShimLoader extends Logging {
     shimURL
   }
 
-  def getTestObject(): Any = {
-    getClassLoader().loadClass("java.lang.Object").newInstance()
-  }
-
   private def detectShimProvider(): SparkShimServiceProvider = {
-    val shimMasks = Seq(
-      "spark301",
-      "spark302",
-      "spark303",
-      "spark311",
-      "spark312",
-      "spark320"
-    )
 //    val shimClassloaders = shimMasks.map { prefix =>
 //      shimParentClassLoader
 //      new ParallelWorldClassLoader(shimParentClassLoader, s"$prefix/")
