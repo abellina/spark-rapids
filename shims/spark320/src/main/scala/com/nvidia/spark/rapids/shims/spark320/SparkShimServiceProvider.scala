@@ -16,14 +16,14 @@
 
 package com.nvidia.spark.rapids.shims.spark320
 
-import com.nvidia.spark.rapids.{SparkShims, SparkShimVersion}
-
-import org.apache.spark.sql.SparkSession
+import com.nvidia.spark.rapids.{ShimLoader, SparkShims, SparkShimVersion}
+import com.nvidia.spark.rapids.shims.spark320.SparkShimServiceProvider.shimClassName
 
 object SparkShimServiceProvider {
   val VERSION320 = SparkShimVersion(3, 2, 0)
   val VERSIONNAMES: Seq[String] = Seq(VERSION320)
     .flatMap(v => Seq(s"$v", s"$v-SNAPSHOT"))
+  val shimClassName = "com.nvidia.spark.rapids.shims.spark320.Spark320Shims"
 }
 
 class SparkShimServiceProvider extends com.nvidia.spark.rapids.SparkShimServiceProvider {
@@ -33,15 +33,7 @@ class SparkShimServiceProvider extends com.nvidia.spark.rapids.SparkShimServiceP
   }
 
   def buildShim: SparkShims = {
-    // TODO prevent launch class loader
-    SparkSession.getActiveSession.map {
-      _.sharedState.jarClassLoader
-          .loadClass("com.nvidia.spark.rapids.shims.spark320.Spark320Shims")
-          .newInstance()
-          .asInstanceOf[SparkShims]
-    }.getOrElse {
-      sys.error("Failed to create shims for " + SparkShimServiceProvider.VERSION320)
-    }
-//    new Spark320Shims()
+    ShimLoader.getClassLoader()
+        .loadClass(shimClassName).newInstance().asInstanceOf[SparkShims]
   }
 }

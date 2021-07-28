@@ -20,6 +20,7 @@ import com.nvidia.spark.rapids.{SparkShims, SparkShimVersion}
 import com.nvidia.spark.rapids.shims.spark301.SparkShimServiceProvider.shimClassName
 
 import org.apache.spark.sql.SparkSession
+import org.apache.spark.util.MutableURLClassLoader
 
 object SparkShimServiceProvider {
   val VERSION = SparkShimVersion(3, 0, 1)
@@ -34,11 +35,18 @@ class SparkShimServiceProvider extends com.nvidia.spark.rapids.SparkShimServiceP
 
   def buildShim: SparkShims = {
     // TODO hack
-    SparkSession.getActiveSession.map { sparkSession =>
-      sparkSession.sharedState.jarClassLoader
+    val sparkSession = SparkSession.getActiveSession
+    println("Spark Session " + sparkSession)
+    sparkSession.map { sparkSession =>
+      val classLoader = sparkSession.sharedState.jarClassLoader
+      println("Using session classloader: " + classLoader)
+      println("  URLs " + classLoader.asInstanceOf[MutableURLClassLoader].getURLs.mkString("\n"))
+      classLoader
     }.getOrElse {
       // this for non-Spark apps like RapidsConf that don't init Spark sessions
-      classOf[SparkShims].getClassLoader
+      val classLoader = classOf[SparkShims].getClassLoader
+      println("Using caller's classloader: " + classLoader)
+      classLoader
     }.loadClass(shimClassName).newInstance().asInstanceOf[SparkShims]
   }
 }

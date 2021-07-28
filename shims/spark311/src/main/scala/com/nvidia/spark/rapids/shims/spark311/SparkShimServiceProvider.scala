@@ -17,12 +17,15 @@
 package com.nvidia.spark.rapids.shims.spark311
 
 import com.nvidia.spark.rapids.{SparkShims, SparkShimVersion}
+import com.nvidia.spark.rapids.shims.spark311.SparkShimServiceProvider.shimClassName
 
 import org.apache.spark.sql.SparkSession
+import org.apache.spark.util.MutableURLClassLoader
 
 object SparkShimServiceProvider {
   val VERSION = SparkShimVersion(3, 1, 1)
   val VERSIONNAMES = Seq(s"$VERSION")
+  val shimClassName = "com.nvidia.spark.rapids.shims.spark311.Spark311Shims"
 }
 
 class SparkShimServiceProvider extends com.nvidia.spark.rapids.SparkShimServiceProvider {
@@ -32,15 +35,19 @@ class SparkShimServiceProvider extends com.nvidia.spark.rapids.SparkShimServiceP
   }
 
   def buildShim: SparkShims = {
-    // TODO prevent launch class loader
-    SparkSession.getActiveSession.map {
-      _.sharedState.jarClassLoader
-          .loadClass("com.nvidia.spark.rapids.shims.spark311.Spark311Shims")
-          .newInstance()
-          .asInstanceOf[SparkShims]
+    // TODO hack
+    val sparkSession = SparkSession.getActiveSession
+    println("Spark Session " + sparkSession)
+    sparkSession.map { sparkSession =>
+      val classLoader = sparkSession.sharedState.jarClassLoader
+      println("Using session classloader: " + classLoader)
+      println("  URLs " + classLoader.asInstanceOf[MutableURLClassLoader].getURLs.mkString("\n"))
+      classLoader
     }.getOrElse {
-      sys.error("Failed to create shims for " + SparkShimServiceProvider.VERSION)
-    }
-//    new Spark311Shims()
+      // this for non-Spark apps like RapidsConf that don't init Spark sessions
+      val classLoader = classOf[SparkShims].getClassLoader
+      println("Using caller's classloader: " + classLoader)
+      classLoader
+    }.loadClass(shimClassName).newInstance().asInstanceOf[SparkShims]
   }
 }

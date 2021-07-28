@@ -78,7 +78,6 @@
             <id>testShims</id>
             <modules>
                 <module>spark301</module>
-                <module>spark311</module>
                 <module>spark320</module>
             </modules>
         </profile>

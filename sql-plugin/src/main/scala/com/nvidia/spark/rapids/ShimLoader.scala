@@ -18,43 +18,31 @@ package com.nvidia.spark.rapids
 
 import java.net.URL
 
-import scala.io.Source
-import scala.util.{Failure, Try}
-
 import org.apache.spark.{SPARK_BUILD_USER, SPARK_VERSION}
 import org.apache.spark.api.plugin.ExecutorPlugin
 import org.apache.spark.internal.Logging
+import org.apache.spark.sql.SparkSession
 import org.apache.spark.util.{MutableURLClassLoader, ParentClassLoader}
 
 object ShimLoader extends Logging {
-  private val serviceResourceListFile =
-    "META-INF/services/" + classOf[SparkShimServiceProvider].getName
-
   private var shimProvider: SparkShimServiceProvider = null
   private var shimProviderClass: String = null
   private var sparkShims: SparkShims = null
   private var shimURL: URL = null
-
-  private def loadShimProviders(cl: ClassLoader): Iterator[SparkShimServiceProvider] = {
-    logError("GERA_DEBUG: loading " + serviceResourceListFile)
-    Option(cl.getResourceAsStream(serviceResourceListFile))
-        .map(is => Source.fromInputStream(is).getLines())
-        .getOrElse {
-          logError("GERA_DEBUG: no service providers found")
-          Iterator.empty
-        }
-        .map(provideClass => createShimProvider(cl, provideClass))
-  }
 
   def getRapidsShuffleManagerClass: String = {
     val provider = findShimProvider()
     s"${provider.getClass.getPackage.getName}.RapidsShuffleManager"
   }
 
+  def getClassLoader(): ClassLoader = {
+    SparkSession.getActiveSession.map(_.sharedState.jarClassLoader)
+        .getOrElse(getClass.getClassLoader)
+  }
 
   def getShimURL(): URL = {
     if (shimURL == null) {
-      val providerClassLoader = findShimProvider().getClass.getClassLoader
+      val providerClassLoader = getClassLoader()
       val rsrcURL = providerClassLoader.getResource(
         shimProvider.getClass.getName.replace(".", "/") + ".class"
       )
@@ -69,22 +57,7 @@ object ShimLoader extends Logging {
     shimURL
   }
 
-  private def createShimProvider(cl: ClassLoader, providerClass: String) = {
-    System.err.println("GERA_DEBUG: createShimProvider cl=" + cl + "\n" +
-      "    for interface classloader " + classOf[SparkShimServiceProvider].getClassLoader)
-    val res = Try(
-      classOf[SparkShimServiceProvider].cast(cl.loadClass(providerClass).newInstance())
-    ).recoverWith { case e =>
-      e.printStackTrace()
-      Failure(e)
-    }.get
-
-    logError("GERA_DEBUG:  created provider " + res)
-    res
-  }
-
   private def detectShimProvider(): SparkShimServiceProvider = {
-    val shimParentClassLoader = classOf[SparkShimServiceProvider].getClassLoader
     val shimMasks = Seq(
       "spark301",
       "spark302",
@@ -109,7 +82,7 @@ object ShimLoader extends Logging {
 
     val shimLoader = shimMasks.flatMap { mask =>
       try {
-        val shimClass = shimParentClassLoader
+        val shimClass = getClassLoader()
             .loadClass(s"com.nvidia.spark.rapids.shims.$mask.SparkShimServiceProvider")
         Option(shimClass.newInstance().asInstanceOf[SparkShimServiceProvider])
       } catch {
@@ -125,16 +98,18 @@ object ShimLoader extends Logging {
   }
 
   private def findShimProvider(): SparkShimServiceProvider = {
-    if (shimProviderClass == null) {
-      shimProvider = detectShimProvider()
-    } else {
-      logWarning(s"Overriding Spark shims provider to $shimProviderClass. " +
-          "This may be an untested configuration!")
-      val providerClass = Class.forName(shimProviderClass)
-      val constructor = providerClass.getConstructor()
-      shimProvider = constructor.newInstance().asInstanceOf[SparkShimServiceProvider]
+    Option(shimProvider).getOrElse {
+      if (shimProviderClass == null) {
+        shimProvider = detectShimProvider()
+      } else {
+        logWarning(s"Overriding Spark shims provider to $shimProviderClass. " +
+            "This may be an untested configuration!")
+        val providerClass = Class.forName(shimProviderClass)
+        val constructor = providerClass.getConstructor()
+        shimProvider = constructor.newInstance().asInstanceOf[SparkShimServiceProvider]
+      }
+      shimProvider
     }
-    shimProvider
   }
 
   def getSparkShims: SparkShims = {

@@ -126,6 +126,8 @@ Accelerator supports are described below.
 <th>STRUCT</th>
 <th>UDT</th>
 </tr>
+Spark Session None
+Using caller's classloader: sun.misc.Launcher$AppClassLoader@6f2b958e
 <tr>
 <td>CoalesceExec</td>
 <td>The backend for the dataframe coalesce method</td>
