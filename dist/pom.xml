@@ -230,23 +230,33 @@
             <id>create-parallel-world</id>
             <configuration>
               <target>
-                <!-- TODO common code should be taken from the most recent version -->
+
+<!--                unzip task seems to be broken for $$ files, so using exec with jar -->
                 <unzip
                         src="${project.build.directory}/rapids-4-spark_${scala.binary.version}-${project.version}-spark301.jar"
                         dest="${project.build.directory}/parallel-world"
                 >
                   <!--
-                  to obtain unshimmed-classes.txt
-                  put sys.exit(1) into beginning of apply in SQLExecPlugin
-                  and enable verbose:class
-                   grep rapids-4-spark_2.12-21.08.0-SNAPSHOT-spark301.jar /tmp/beforeShimClassLoad.log | cut -d' ' -f 2 | tr '.' '/' | cut -d \$ -f 1 | sort | uniq | xargs -I% -n 1 echo %'*'
+                  TODO generate automatically based on the number of shims in the build
+                  this example works for 3 shims. If we find 3 duplicates of a class then it can
+                  be shared
+
+                  find shims -name \*.class -exec md5sum {} + |
+                    sort -k 1 |
+                    uniq -w32 -c | tr -s ' ' | grep '^ 3 ' | cut -d'/' -f 5- | sort > dist/unshimmed-classes.txt
                   -->
                   <patternset id="sharedWorld">
                     <includesfile name="${project.basedir}/unshimmed-classes.txt"/>
                     <includesfile name="${project.basedir}/unshimmed-extras.txt"/>
                   </patternset>
                 </unzip>
-
+<!--                <mkdir dir="${project.build.directory}/parallel-world"/>-->
+<!--                <exec executable="${java.home}/../bin/jar"-->
+<!--                        dir="${project.build.directory}/parallel-world">-->
+<!--                  <arg value="xvf"/>-->
+<!--                  <arg value="${project.build.directory}/rapids-4-spark_${scala.binary.version}-${project.version}-spark301.jar"/>-->
+<!--                  <arg value="@${project.basedir}/unshimmed-classes.txt"/>-->
+<!--                </exec>-->
                 <unzip
                         src="${project.build.directory}/rapids-4-spark_${scala.binary.version}-${project.version}-common.jar"
                         dest="${project.build.directory}/parallel-world"
@@ -258,10 +268,7 @@
                   <!-- to keep in sync with sharedWorld: inverse it to exclude -->
                   <patternset id="shimPattern">
                     <excludesfile name="${project.basedir}/unshimmed-classes.txt"/>
-                    <!-- TODO move to file once finalized -->
-                    <exclude name="com/google/flatbuffers/**"/>
-                    <exclude name="libjucx.so"/>
-                    <exclude name="org/openucx/**"/>
+                    <excludesfile name="${project.basedir}/unshimmed-extras.txt"/>
                   </patternset>
                 </unzip>
                 <unzip
