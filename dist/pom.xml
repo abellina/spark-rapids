@@ -295,6 +295,9 @@
                 <launcher>
                   <id>update_rapids_config</id>
                   <mainClass>com.nvidia.spark.rapids.RapidsConf</mainClass>
+                  <jvmArgs>
+                    <jvmArg>-agentlib:jdwp=transport=dt_socket,server=y,suspend=y,address=5005</jvmArg>
+                  </jvmArgs>
                   <args>
                     <arg>${project.basedir}/../docs/configs.md</arg>
                   </args>

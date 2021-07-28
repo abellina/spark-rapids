@@ -90,7 +90,8 @@ object ShimLoader extends Logging {
       "spark302",
       "spark303",
       "spark311",
-      "spark312"
+      "spark312",
+      "spark320"
     )
 //    val shimClassloaders = shimMasks.map { prefix =>
 //      shimParentClassLoader
