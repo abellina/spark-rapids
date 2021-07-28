@@ -136,8 +136,6 @@ incompatibilities.
 
 Name | SQL Function(s) | Description | Default Value | Notes
 -----|-----------------|-------------|---------------|------
-Spark Session None
-Using caller's classloader: sun.misc.Launcher$AppClassLoader@6f2b958e
 <a name="sql.expression.Abs"></a>spark.rapids.sql.expression.Abs|`abs`|Absolute value|true|None|
 <a name="sql.expression.Acos"></a>spark.rapids.sql.expression.Acos|`acos`|Inverse cosine|true|None|
 <a name="sql.expression.Acosh"></a>spark.rapids.sql.expression.Acosh|`acosh`|Inverse hyperbolic cosine|true|None|

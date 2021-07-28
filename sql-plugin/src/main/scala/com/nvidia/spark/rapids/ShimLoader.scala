@@ -43,14 +43,32 @@ object ShimLoader extends Logging {
     s"${provider.getClass.getPackage.getName}.RapidsShuffleManager"
   }
 
-  def getClassLoader(): ClassLoader = {
+  def getExecutorContextClassloader(): Option[ClassLoader] = {
+    val pluginClassLoaderURL = ShimLoader.getShimURL()
+    val contextClassLoader = Thread.currentThread().getContextClassLoader
+    Option(contextClassLoader).collect {
+      case mutable: MutableURLClassLoader => mutable
+      case replCL if replCL.getClass.getName == "org.apache.spark.repl.ExecutorClassLoader" =>
+        val parentLoaderField = replCL.getClass.getDeclaredMethod("parentLoader")
+        val parentLoader = parentLoaderField.invoke(replCL).asInstanceOf[ParentClassLoader]
+        parentLoader.getParent.asInstanceOf[MutableURLClassLoader]
+    }.map { mutable =>
+      // MutableURLClassloader dedupes for us
+      mutable.addURL(pluginClassLoaderURL)
+      mutable
+    }
+  }
+
+  def shimClassLoader(): ClassLoader = {
     SparkSession.getActiveSession.map(_.sharedState.jarClassLoader)
+        .orElse(getExecutorContextClassloader())
         .getOrElse(getClass.getClassLoader)
   }
 
   def getShimURL(): URL = {
     if (shimURL == null) {
-      val providerClassLoader = getClassLoader()
+      // base case: we rely on provider classes not being in parallel world
+      val providerClassLoader = getClass.getClassLoader
       val rsrcURL = providerClassLoader.getResource(
         findShimProvider().getClass.getName.replace(".", "/") + ".class"
       )
@@ -66,23 +84,12 @@ object ShimLoader extends Logging {
   }
 
   private def detectShimProvider(): SparkShimServiceProvider = {
-//    val shimClassloaders = shimMasks.map { prefix =>
-//      shimParentClassLoader
-//      new ParallelWorldClassLoader(shimParentClassLoader, s"$prefix/")
-//      new ShimJavaClassLoader(shimParentClassLoader, prefix)
-//    }
-
     val sparkVersion = getSparkVersion
     logInfo(s"Loading shim for Spark version: $sparkVersion")
-    // TODO current fat jar has multiple copies due to being merged from other fat jars
-//    val shimLoader = shimClassloaders
-//        .flatMap { cl =>
-//          loadShimProviders(cl)
-//        }.find(_.matchesVersion(sparkVersion))
-
     val shimLoader = shimMasks.flatMap { mask =>
       try {
-        val shimClass = getClassLoader()
+         // base case: we rely on provider classes not being in parallel world
+         val shimClass = getClass.getClassLoader
             .loadClass(s"com.nvidia.spark.rapids.shims.$mask.SparkShimServiceProvider")
         Option(shimClass.newInstance().asInstanceOf[SparkShimServiceProvider])
       } catch {
@@ -139,19 +146,7 @@ object ShimLoader extends Logging {
   }
 
   def executorPlugin(): ExecutorPlugin = {
-    val pluginClassLoaderURL = ShimLoader.getShimURL()
-    val contextClassLoader = Thread.currentThread().getContextClassLoader
-    val mutableURLClassLoader = contextClassLoader match {
-      case mutable: MutableURLClassLoader => mutable
-      case replCL if replCL.getClass.getName == "org.apache.spark.repl.ExecutorClassLoader" =>
-        val parentLoaderField = replCL.getClass.getDeclaredMethod("parentLoader")
-        val parentLoader = parentLoaderField.invoke(replCL).asInstanceOf[ParentClassLoader]
-        parentLoader.getParent.asInstanceOf[MutableURLClassLoader]
-      case _ =>
-        sys.error(s"Can't fix up executor class loader $contextClassLoader for shimming")
-    }
-    mutableURLClassLoader.addURL(pluginClassLoaderURL)
-    contextClassLoader
+    shimClassLoader()
         .loadClass(getClass.getPackage.getName + ".RapidsExecutorPlugin")
         .newInstance()
         .asInstanceOf[ExecutorPlugin]

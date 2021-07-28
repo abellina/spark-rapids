@@ -44,3 +44,12 @@ com/nvidia/spark/udf/LogicalPlanRules*
 com/nvidia/spark/udf/Plugin*
 org/apache/spark/sql/rapids/GpuShuffleEnv*
 org/apache/spark/sql/rapids/RapidsDiskBlockManager*
+com/nvidia/spark/rapids/format/**
+com/nvidia/spark/rapids/GpuMetric*
+com/nvidia/spark/rapids/MetricRange*
+com/nvidia/spark/rapids/MetricsBatchIterator*
+com/nvidia/spark/rapids/MetricsLevel*
+com/nvidia/spark/rapids/NoopMetric*
+com/nvidia/spark/rapids/NvtxWithMetrics*
+com/nvidia/spark/rapids/RapidsPluginImplicits*
+com/nvidia/spark/rapids/WrappedGpuMetric*
