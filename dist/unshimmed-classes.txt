@@ -56,3 +56,5 @@ org/apache/spark/sql/rapids/RapidsDiskBlockManager*
 org/apache/spark/sql/rapids/ShuffleMetricsUpdater*
 org/apache/spark/sql/rapids/execution/GpuShuffleExchangeExecBaseWithMetrics*
 org/apache/spark/sql/rapids/execution/GpuShuffleExchangeExecBase*
+**/spark3*/**
+com/nvidia/spark/rapids/PluginShims*

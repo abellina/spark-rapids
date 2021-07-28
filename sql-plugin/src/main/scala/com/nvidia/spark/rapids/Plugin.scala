@@ -43,8 +43,8 @@ class PluginException(msg: String) extends RuntimeException(msg)
 case class CudfVersionMismatchException(errorMsg: String) extends PluginException(errorMsg)
 
 case class ColumnarOverrideRules() extends ColumnarRule with Logging {
-  val overrides: Rule[SparkPlan] = GpuOverrides()
-  val overrideTransitions: Rule[SparkPlan] = new GpuTransitionOverrides()
+  lazy val overrides: Rule[SparkPlan] = GpuOverrides()
+  lazy val overrideTransitions: Rule[SparkPlan] = new GpuTransitionOverrides()
 
   override def preColumnarTransitions : Rule[SparkPlan] = overrides
 

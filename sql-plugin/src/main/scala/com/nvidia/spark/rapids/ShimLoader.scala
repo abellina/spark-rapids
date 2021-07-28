@@ -57,6 +57,10 @@ object ShimLoader extends Logging {
     shimURL
   }
 
+  def getTestObject(): Any = {
+    getClassLoader().loadClass("java.lang.Object").newInstance()
+  }
+
   private def detectShimProvider(): SparkShimServiceProvider = {
     val shimMasks = Seq(
       "spark301",

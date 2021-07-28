@@ -442,12 +442,12 @@ object GpuOverrides {
     "\\S", "\\v", "\\V", "\\w", "\\w", "\\p", "$", "\\b", "\\B", "\\A", "\\G", "\\Z", "\\z", "\\R",
     "?", "|", "(", ")", "{", "}", "\\k", "\\Q", "\\E", ":", "!", "<=", ">")
 
-  private[this] val _commonTypes = TypeSig.commonCudfTypes + TypeSig.NULL + TypeSig.DECIMAL
+  private[this] lazy val _commonTypes = TypeSig.commonCudfTypes + TypeSig.NULL + TypeSig.DECIMAL
 
-  private[this] val _notNullCudfTypes = (TypeSig.commonCudfTypes + TypeSig.DECIMAL +
+  private[this] lazy val _notNullCudfTypes = (TypeSig.commonCudfTypes + TypeSig.DECIMAL +
     TypeSig.BINARY + TypeSig.CALENDAR + TypeSig.ARRAY + TypeSig.MAP + TypeSig.STRUCT).nested()
 
-  val pluginSupportedOrderableSig: TypeSig = _commonTypes + TypeSig.STRUCT.nested(_commonTypes)
+  lazy val pluginSupportedOrderableSig: TypeSig = _commonTypes + TypeSig.STRUCT.nested(_commonTypes)
 
   private[this] def isStructType(dataType: DataType) = dataType match {
     case StructType(_) => true
@@ -455,7 +455,8 @@ object GpuOverrides {
   }
 
   // this listener mechanism is global and is intended for use by unit tests only
-  private val listeners: ListBuffer[GpuOverridesListener] = new ListBuffer[GpuOverridesListener]()
+  private lazy val listeners: ListBuffer[GpuOverridesListener] =
+    new ListBuffer[GpuOverridesListener]()
 
   def addListener(listener: GpuOverridesListener): Unit = {
     listeners += listener
@@ -755,7 +756,7 @@ object GpuOverrides {
       .map(r => r.wrap(expr, conf, parent, r).asInstanceOf[BaseExprMeta[INPUT]])
       .getOrElse(new RuleNotFoundExprMeta(expr, conf, parent))
 
-  val fileFormats: Map[FileFormatType, Map[FileFormatOp, FileFormatChecks]] = Map(
+  lazy val fileFormats: Map[FileFormatType, Map[FileFormatOp, FileFormatChecks]] = Map(
     (CsvFormatType, FileFormatChecks(
       cudfRead = TypeSig.commonCudfTypes,
       cudfWrite = TypeSig.none,
@@ -772,7 +773,7 @@ object GpuOverrides {
       sparkSig = (TypeSig.atomics + TypeSig.STRUCT + TypeSig.ARRAY + TypeSig.MAP +
           TypeSig.UDT).nested())))
 
-  val commonExpressions: Map[Class[_ <: Expression], ExprRule[_ <: Expression]] = Seq(
+  lazy val commonExpressions: Map[Class[_ <: Expression], ExprRule[_ <: Expression]] = Seq(
     expr[Literal](
       "Holds a static value from the query",
       ExprChecks.projectNotLambda(
@@ -2690,7 +2691,7 @@ object GpuOverrides {
   ).map(r => (r.getClassFor.asSubclass(classOf[Expression]), r)).toMap
 
   // Shim expressions should be last to allow overrides with shim-specific versions
-  val expressions: Map[Class[_ <: Expression], ExprRule[_ <: Expression]] =
+  lazy val expressions: Map[Class[_ <: Expression], ExprRule[_ <: Expression]] =
     commonExpressions ++ GpuHiveOverrides.exprs ++ ShimLoader.getSparkShims.getExprs ++
       TimeStamp.getExprs
 
@@ -2702,7 +2703,7 @@ object GpuOverrides {
       .map(r => r.wrap(scan, conf, parent, r).asInstanceOf[ScanMeta[INPUT]])
       .getOrElse(new RuleNotFoundScanMeta(scan, conf, parent))
 
-  val commonScans: Map[Class[_ <: Scan], ScanRule[_ <: Scan]] = Seq(
+  lazy val commonScans: Map[Class[_ <: Scan], ScanRule[_ <: Scan]] = Seq(
     GpuOverrides.scan[CSVScan](
       "CSV parsing",
       (a, conf, p, r) => new ScanMeta[CSVScan](a, conf, p, r) {
@@ -2721,7 +2722,7 @@ object GpuOverrides {
             conf.maxReadBatchSizeBytes)
       })).map(r => (r.getClassFor.asSubclass(classOf[Scan]), r)).toMap
 
-  val scans: Map[Class[_ <: Scan], ScanRule[_ <: Scan]] =
+  lazy val scans: Map[Class[_ <: Scan], ScanRule[_ <: Scan]] =
     commonScans ++ ShimLoader.getSparkShims.getScans
 
   def wrapPart[INPUT <: Partitioning](
@@ -2732,7 +2733,7 @@ object GpuOverrides {
       .map(r => r.wrap(part, conf, parent, r).asInstanceOf[PartMeta[INPUT]])
       .getOrElse(new RuleNotFoundPartMeta(part, conf, parent))
 
-  val parts : Map[Class[_ <: Partitioning], PartRule[_ <: Partitioning]] = Seq(
+  lazy val parts : Map[Class[_ <: Partitioning], PartRule[_ <: Partitioning]] = Seq(
     part[HashPartitioning](
       "Hash based partitioning",
       // This needs to match what murmur3 supports.
@@ -2789,7 +2790,7 @@ object GpuOverrides {
       .map(r => r.wrap(writeCmd, conf, parent, r).asInstanceOf[DataWritingCommandMeta[INPUT]])
       .getOrElse(new RuleNotFoundDataWritingCommandMeta(writeCmd, conf, parent))
 
-  val dataWriteCmds: Map[Class[_ <: DataWritingCommand],
+  lazy val dataWriteCmds: Map[Class[_ <: DataWritingCommand],
       DataWritingCommandRule[_ <: DataWritingCommand]] = Seq(
     dataWriteCmd[InsertIntoHadoopFsRelationCommand](
       "Write to Hadoop filesystem",
@@ -2807,7 +2808,7 @@ object GpuOverrides {
       .map(r => r.wrap(plan, conf, parent, r).asInstanceOf[SparkPlanMeta[INPUT]])
       .getOrElse(new RuleNotFoundSparkPlanMeta(plan, conf, parent))
 
-  val commonExecs: Map[Class[_ <: SparkPlan], ExecRule[_ <: SparkPlan]] = Seq(
+  lazy val commonExecs: Map[Class[_ <: SparkPlan], ExecRule[_ <: SparkPlan]] = Seq(
     exec[GenerateExec] (
       "The backend for operations that generate more output rows than input rows like explode",
       ExecChecks(
@@ -3059,7 +3060,7 @@ object GpuOverrides {
     neverReplaceExec[BroadcastQueryStageExec]("Broadcast query stage"),
     neverReplaceExec[ShuffleQueryStageExec]("Shuffle query stage")
   ).map(r => (r.getClassFor.asSubclass(classOf[SparkPlan]), r)).toMap
-  val execs: Map[Class[_ <: SparkPlan], ExecRule[_ <: SparkPlan]] =
+  lazy val execs: Map[Class[_ <: SparkPlan], ExecRule[_ <: SparkPlan]] =
     commonExecs ++ ShimLoader.getSparkShims.getExecs
 
   def getTimeParserPolicy: TimeParserPolicy = {

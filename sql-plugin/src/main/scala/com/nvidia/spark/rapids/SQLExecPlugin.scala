@@ -51,6 +51,7 @@ class SQLExecPlugin extends (SparkSessionExtensions => Unit) with Logging {
     val shimURL = ShimLoader.getShimURL
     logError(s"GERA_DEBUG adding Shim URL $shimURL")
     sparkSession.sharedState.jarClassLoader.addURL(shimURL)
+    ShimLoader.getSparkShims // IMPORTANT: force Shim load before rule injection
     new ColumnarRule // identity
   }
 
