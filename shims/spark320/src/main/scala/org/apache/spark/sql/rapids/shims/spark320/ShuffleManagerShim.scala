@@ -16,7 +16,6 @@
 package org.apache.spark.sql.rapids.shims.spark320
 
 import org.apache.spark.TaskContext
-
 import org.apache.spark.shuffle.{ShuffleHandle, ShuffleManager, ShuffleReader, ShuffleReadMetricsReporter}
 import org.apache.spark.sql.rapids.ShuffleManagerShimBase
 

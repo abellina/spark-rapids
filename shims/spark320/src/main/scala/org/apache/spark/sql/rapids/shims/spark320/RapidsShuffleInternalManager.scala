@@ -17,8 +17,8 @@
 package org.apache.spark.sql.rapids.shims.spark320
 
 import com.nvidia.spark.rapids.ShuffleBufferCatalog
-import org.apache.spark.{SparkConf, TaskContext}
 
+import org.apache.spark.{SparkConf, TaskContext}
 import org.apache.spark.network.buffer.ManagedBuffer
 import org.apache.spark.network.shuffle.MergedBlockMeta
 import org.apache.spark.shuffle._
