@@ -258,10 +258,11 @@
 <!--                  <arg value="${project.build.directory}/rapids-4-spark_${scala.binary.version}-${project.version}-spark301.jar"/>-->
 <!--                  <arg value="@${project.basedir}/unshimmed-classes.txt"/>-->
 <!--                </exec>-->
-                <unzip
-                        src="${project.build.directory}/rapids-4-spark_${scala.binary.version}-${project.version}-common.jar"
-                        dest="${project.build.directory}/parallel-world"
-                />
+<!--                <unzip-->
+<!--                        src="${project.build.directory}/rapids-4-spark_${scala.binary.version}-${project.version}-common.jar"-->
+<!--                        dest="${project.build.directory}/parallel-world"-->
+<!--                >-->
+<!--                </unzip>-->
                 <unzip
                         src="${project.build.directory}/rapids-4-spark_${scala.binary.version}-${project.version}-spark301.jar"
                         dest="${project.build.directory}/parallel-world/spark301"
@@ -319,7 +320,7 @@
         <executions>
           <execution>
             <id>update_config</id>
-            <phase>verify</phase>
+            <phase>none</phase>
             <goals>
               <goal>run</goal>
             </goals>
@@ -328,9 +329,6 @@
                 <launcher>
                   <id>update_rapids_config</id>
                   <mainClass>com.nvidia.spark.rapids.RapidsConf</mainClass>
-<!--                  <jvmArgs>-->
-<!--                    <jvmArg>-agentlib:jdwp=transport=dt_socket,server=y,suspend=y,address=5005</jvmArg>-->
-<!--                  </jvmArgs>-->
                   <args>
                     <arg>${project.basedir}/../docs/configs.md</arg>
                   </args>
@@ -340,7 +338,7 @@
           </execution>
           <execution>
             <id>update_supported</id>
-            <phase>verify</phase>
+            <phase>none</phase>
             <goals>
               <goal>run</goal>
             </goals>

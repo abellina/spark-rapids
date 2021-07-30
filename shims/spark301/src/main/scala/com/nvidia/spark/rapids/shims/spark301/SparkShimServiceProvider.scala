@@ -19,9 +19,6 @@ package com.nvidia.spark.rapids.shims.spark301
 import com.nvidia.spark.rapids.{ShimLoader, SparkShims, SparkShimVersion}
 import com.nvidia.spark.rapids.shims.spark301.SparkShimServiceProvider.shimClassName
 
-import org.apache.spark.sql.SparkSession
-import org.apache.spark.util.MutableURLClassLoader
-
 object SparkShimServiceProvider {
   val VERSION = SparkShimVersion(3, 0, 1)
   val VERSIONNAMES = Seq(s"$VERSION")
@@ -29,12 +26,17 @@ object SparkShimServiceProvider {
 }
 class SparkShimServiceProvider extends com.nvidia.spark.rapids.SparkShimServiceProvider {
 
+  println(s"GERA_DEBUG: spark shim service is loaded using ${getClass.getClassLoader}")
+
   def matchesVersion(version: String): Boolean = {
     SparkShimServiceProvider.VERSIONNAMES.contains(version)
   }
 
   def buildShim: SparkShims = {
-    ShimLoader.shimClassLoader()
+    println(s"GERA_DEBUG: spark shim service is loaded using " +
+        s"${classOf[SparkShims].getClassLoader}")
+
+    ShimLoader.getShimClassLoader()
         .loadClass(shimClassName).newInstance().asInstanceOf[SparkShims]
   }
 }

@@ -16,7 +16,7 @@
 
 package com.nvidia.spark.udf
 
-import com.nvidia.spark.rapids.RapidsConf
+import com.nvidia.spark.rapids.ShimLoader
 
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.{SparkSession, SparkSessionExtensions}
@@ -25,13 +25,14 @@ import org.apache.spark.sql.catalyst.rules.Rule
 
 class Plugin extends (SparkSessionExtensions => Unit) with Logging {
   override def apply(extensions: SparkSessionExtensions): Unit = {
-    logWarning("Installing rapids UDF compiler extensions to Spark. The compiler is disabled" +
-        s" by default. To enable it, set `${RapidsConf.UDF_COMPILER_ENABLED}` to true")
+    // TODO move this into ShimLoader-loade classes
+//    logWarning("Installing rapids UDF compiler extensions to Spark. The compiler is disabled" +
+//        s" by default. To enable it, set `${RapidsConf.UDF_COMPILER_ENABLED}` to true")
+
     extensions.injectResolutionRule(logicalPlanRules)
   }
 
   def logicalPlanRules(sparkSession: SparkSession): Rule[LogicalPlan] = {
-    // classloading
-    LogicalPlanRules()
+    ShimLoader.newInstanceOf("com.nvidia.spark.udf.LogicalPlanRules")
   }
 }

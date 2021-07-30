@@ -265,6 +265,7 @@ class ConfBuilder(val key: String, val register: ConfEntry[_] => Unit) {
   }
 
   def bytesConf(unit: ByteUnit): TypedConfBuilder[Long] = {
+    println(s"GERA_DEBUG: classloader=${this.getClass.getClassLoader}")
     new TypedConfBuilder[Long](this, byteFromString(_, unit))
   }
 

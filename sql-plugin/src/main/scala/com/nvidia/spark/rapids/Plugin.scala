@@ -36,7 +36,6 @@ import org.apache.spark.sql.execution.adaptive.AdaptiveSparkPlanExec
 import org.apache.spark.sql.internal.StaticSQLConf
 import org.apache.spark.sql.rapids.GpuShuffleEnv
 import org.apache.spark.sql.util.QueryExecutionListener
-import org.apache.spark.util.{MutableURLClassLoader, ParentClassLoader}
 
 class PluginException(msg: String) extends RuntimeException(msg)
 
@@ -110,6 +109,18 @@ object RapidsPluginUtils extends Logging {
     val props = new Properties
     props.load(resource)
     props
+  }
+
+  // TODO find a better place
+  {
+    val pluginProps = loadProps(PLUGIN_PROPS_FILENAME)
+    logInfo(s"RAPIDS Accelerator build: $pluginProps")
+    val cudfProps = loadProps(CUDF_PROPS_FILENAME)
+    logInfo(s"cudf build: $cudfProps")
+    val pluginVersion = pluginProps.getProperty("version", "UNKNOWN")
+    val cudfVersion = cudfProps.getProperty("version", "UNKNOWN")
+    logWarning(s"RAPIDS Accelerator $pluginVersion using cudf $cudfVersion." +
+        s" To disable GPU support set `${RapidsConf.SQL_ENABLED}` to false")
   }
 }
 

@@ -33,7 +33,7 @@ class SparkShimServiceProvider extends com.nvidia.spark.rapids.SparkShimServiceP
   }
 
   def buildShim: SparkShims = {
-    ShimLoader.shimClassLoader()
+    ShimLoader.getShimClassLoader()
         .loadClass(shimClassName).newInstance().asInstanceOf[SparkShims]
   }
 }
