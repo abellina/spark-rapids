@@ -16,7 +16,7 @@
 
 package com.nvidia.spark.rapids
 
-import java.net.URL
+import java.net.{URL, URLClassLoader}
 
 import org.apache.spark.{SPARK_BUILD_USER, SPARK_VERSION}
 import org.apache.spark.internal.Logging
@@ -37,7 +37,7 @@ object ShimLoader extends Logging {
     "spark320"
   )
 
-  private var rapidsJarClassLoader: MutableURLClassLoader = _
+  private var rapidsJarClassLoader: URLClassLoader = _
 
   def getRapidsShuffleManagerClass: String = {
     val provider = findShimProvider()
@@ -67,21 +67,22 @@ object ShimLoader extends Logging {
     }
   }
 
-  def getShimClassLoader(): MutableURLClassLoader = {
+  def getShimClassLoader(): URLClassLoader = {
     if (rapidsJarClassLoader == null) {
       // TODO initially it ends up delegating to the parent,
       // in the future we will hide all common classes from parent under a dedicated directory
       //
-      rapidsJarClassLoader = new MutableURLClassLoader(Array.empty,
+      val jarClassLoader = new MutableURLClassLoader(Array.empty,
         Option(Thread.currentThread().getContextClassLoader)
             .getOrElse(classOf[SparkSession].getClassLoader)
       )
       val thisClassFilePath = getClass.getName.replace(".", "/") + ".class"
-      val thisClassURL = rapidsJarClassLoader.getResource(thisClassFilePath)
+      val thisClassURL = jarClassLoader.getResource(thisClassFilePath)
       val thisClassURLStr = thisClassURL.toString
       val rapidsJarURLStr = thisClassURLStr.substring(0,
         thisClassURLStr.length - thisClassFilePath.length)
-      rapidsJarClassLoader.addURL(new java.net.URL(rapidsJarURLStr))
+      jarClassLoader.addURL(new java.net.URL(rapidsJarURLStr))
+      rapidsJarClassLoader = jarClassLoader
       getShimURL()
 //      updateExecutorClassLoader(getShimURL())
     }
@@ -117,8 +118,16 @@ object ShimLoader extends Logging {
     }.find(_.matchesVersion(sparkVersion))
 
     shimServiceProvider.foreach { inst =>
-      rapidsJarClassLoader = inst.getClass.getClassLoader.asInstanceOf[MutableURLClassLoader]
-      shimURL = rapidsJarClassLoader.getURLs.head
+        inst.getClass.getClassLoader match {
+          case mutable: MutableURLClassLoader =>
+            rapidsJarClassLoader = mutable
+            shimURL = rapidsJarClassLoader.getURLs.head
+          case parent: URLClassLoader =>
+            shimURL = rapidsJarClassLoader.getURLs.head
+            rapidsJarClassLoader = parent
+          case unsupported =>
+            sys.error(s"Infeasible unsupported classloader $unsupported")
+        }
     }
 
     shimServiceProvider.getOrElse {

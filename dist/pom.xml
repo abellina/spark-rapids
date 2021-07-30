@@ -230,7 +230,10 @@
             <id>create-parallel-world</id>
             <configuration>
               <target>
-                  <delete dir="${project.build.directory}/parallel-world"/>
+                <delete
+                        dir="${project.build.directory}/parallel-world"
+                        includeemptydirs="true"
+                />
 
 <!--                unzip task seems to be broken for $$ files, so using exec with jar -->
                 <unzip
