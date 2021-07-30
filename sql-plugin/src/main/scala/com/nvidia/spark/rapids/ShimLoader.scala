@@ -46,7 +46,13 @@ object ShimLoader extends Logging {
 
   def getExecutorContextClassloader(): Option[ClassLoader] = {
     val pluginClassLoaderURL = ShimLoader.getShimURL()
+    updateExecutorClassLoader(pluginClassLoaderURL)
+  }
+
+  private def updateExecutorClassLoader(pluginClassLoaderURL: URL) = {
+    require(pluginClassLoaderURL != null, "Couldn't locate shim provider?")
     val contextClassLoader = Thread.currentThread().getContextClassLoader
+
     Option(contextClassLoader).collect {
       case mutable: MutableURLClassLoader => mutable
       case replCL if replCL.getClass.getName == "org.apache.spark.repl.ExecutorClassLoader" =>
@@ -56,6 +62,7 @@ object ShimLoader extends Logging {
     }.map { mutable =>
       // MutableURLClassloader dedupes for us
       mutable.addURL(pluginClassLoaderURL)
+      Thread.currentThread().setContextClassLoader(rapidsJarClassLoader)
       mutable
     }
   }
@@ -76,6 +83,7 @@ object ShimLoader extends Logging {
         thisClassURLStr.length - thisClassFilePath.length)
       rapidsJarClassLoader.addURL(new java.net.URL(rapidsJarURLStr))
       getShimURL()
+//      updateExecutorClassLoader(getShimURL())
     }
     rapidsJarClassLoader
 //    SparkSession.getActiveSession.map(_.sharedState.jarClassLoader)
@@ -110,6 +118,7 @@ object ShimLoader extends Logging {
 
     shimServiceProvider.foreach { inst =>
       rapidsJarClassLoader = inst.getClass.getClassLoader.asInstanceOf[MutableURLClassLoader]
+      shimURL = rapidsJarClassLoader.getURLs.head
     }
 
     shimServiceProvider.getOrElse {

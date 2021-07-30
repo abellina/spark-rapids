@@ -234,7 +234,7 @@
 
 <!--                unzip task seems to be broken for $$ files, so using exec with jar -->
                 <unzip
-                        src="${project.build.directory}/rapids-4-spark_${scala.binary.version}-${project.version}-spark301.jar"
+                        src="${project.build.directory}/rapids-4-spark_${scala.binary.version}-${project.version}-spark311.jar"
                         dest="${project.build.directory}/parallel-world"
                 >
                   <!--
