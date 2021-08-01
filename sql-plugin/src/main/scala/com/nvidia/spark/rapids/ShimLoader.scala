@@ -16,7 +16,7 @@
 
 package com.nvidia.spark.rapids
 
-import java.net.{URL, URLClassLoader}
+import java.net.URL
 
 import org.apache.spark.{SPARK_BUILD_USER, SPARK_VERSION}
 import org.apache.spark.internal.Logging
@@ -24,6 +24,15 @@ import org.apache.spark.sql.SparkSession
 import org.apache.spark.util.{ChildFirstURLClassLoader, MutableURLClassLoader, ParentClassLoader}
 
 object ShimLoader extends Logging {
+
+  val shimRootURL = {
+    val thisClassFile = getClass.getName.replace(".", "/") + ".class"
+    val url = getClass.getClassLoader.getResource(thisClassFile)
+    val urlStr = url.toString
+    val rootUrlStr = urlStr.substring(0, urlStr.length - thisClassFile.length)
+    new URL(rootUrlStr)
+  }
+  private var onExecutor: Boolean = _
   private var shimProvider: SparkShimServiceProvider = _
   private var shimProviderClass: String = _
   private var sparkShims: SparkShims = _
@@ -37,11 +46,17 @@ object ShimLoader extends Logging {
     "spark320"
   )
 
-  private var rapidsJarClassLoader: URLClassLoader = _
+
+  private var rapidsJarClassLoader: ClassLoader = _
 
   def getRapidsShuffleManagerClass: String = {
     val provider = findShimProvider()
     s"${provider.getClass.getPackage.getName}.RapidsShuffleManager"
+  }
+
+  def forExecutor() = {
+    onExecutor = true
+    this
   }
 
   def getExecutorContextClassloader(): Option[ClassLoader] = {
@@ -62,12 +77,11 @@ object ShimLoader extends Logging {
     }.map { mutable =>
       // MutableURLClassloader dedupes for us
       mutable.addURL(pluginClassLoaderURL)
-      Thread.currentThread().setContextClassLoader(rapidsJarClassLoader)
       mutable
     }
   }
 
-  def getShimClassLoader(): URLClassLoader = {
+  def getShimClassLoader(): ClassLoader = {
     if (rapidsJarClassLoader == null) {
       // TODO initially it ends up delegating to the parent,
       // in the future we will hide all common classes from parent under a dedicated directory
@@ -76,12 +90,7 @@ object ShimLoader extends Logging {
         Option(Thread.currentThread().getContextClassLoader)
             .getOrElse(classOf[SparkSession].getClassLoader)
       )
-      val thisClassFilePath = getClass.getName.replace(".", "/") + ".class"
-      val thisClassURL = jarClassLoader.getResource(thisClassFilePath)
-      val thisClassURLStr = thisClassURL.toString
-      val rapidsJarURLStr = thisClassURLStr.substring(0,
-        thisClassURLStr.length - thisClassFilePath.length)
-      jarClassLoader.addURL(new java.net.URL(rapidsJarURLStr))
+      jarClassLoader.addURL(shimRootURL)
       rapidsJarClassLoader = jarClassLoader
       getShimURL()
 //      updateExecutorClassLoader(getShimURL())
@@ -102,35 +111,33 @@ object ShimLoader extends Logging {
   private def detectShimProvider(): SparkShimServiceProvider = {
     val sparkVersion = getSparkVersion
     logInfo(s"Loading shim for Spark version: $sparkVersion")
-    val shimServiceProvider = shimMasks.flatMap { mask =>
+    shimMasks.flatMap { mask =>
       try {
-        val shimURL = new java.net.URL(s"${rapidsJarClassLoader.getURLs.head}$mask/")
+        val shimURL = new java.net.URL(s"${shimRootURL.toString}$mask/")
         val shimClassLoader = new ChildFirstURLClassLoader(Array(shimURL),
           rapidsJarClassLoader)
         val shimClass = shimClassLoader
             .loadClass(s"com.nvidia.spark.rapids.shims.$mask.SparkShimServiceProvider")
-        Option(shimClass.newInstance().asInstanceOf[SparkShimServiceProvider])
+        Option((shimClass.newInstance().asInstanceOf[SparkShimServiceProvider], shimURL))
       } catch {
         case cnf: ClassNotFoundException =>
           logWarning("ignoring " + cnf)
           None
       }
-    }.find(_.matchesVersion(sparkVersion))
-
-    shimServiceProvider.foreach { inst =>
-        inst.getClass.getClassLoader match {
-          case mutable: MutableURLClassLoader =>
-            rapidsJarClassLoader = mutable
-            shimURL = rapidsJarClassLoader.getURLs.head
-          case parent: URLClassLoader =>
-            shimURL = rapidsJarClassLoader.getURLs.head
-            rapidsJarClassLoader = parent
-          case unsupported =>
-            sys.error(s"Infeasible unsupported classloader $unsupported")
-        }
-    }
-
-    shimServiceProvider.getOrElse {
+    }.find { case (shimServiceProvider, _) =>
+      shimServiceProvider.matchesVersion(sparkVersion)
+    }.map { case (inst, url) =>
+      shimURL = url
+      if (onExecutor) {
+        updateExecutorClassLoader(shimURL)
+        rapidsJarClassLoader = Thread.currentThread().getContextClassLoader
+        rapidsJarClassLoader.loadClass(inst.getClass.getName)
+            .newInstance().asInstanceOf[SparkShimServiceProvider]
+      } else {
+        rapidsJarClassLoader = inst.getClass.getClassLoader
+        inst
+      }
+    }.getOrElse {
       throw new IllegalArgumentException(s"Could not find Spark Shim Loader for $sparkVersion")
     }
   }
@@ -176,8 +183,7 @@ object ShimLoader extends Logging {
 
   def newInstanceOf[T](className: String): T = {
     val loader = getShimClassLoader()
-    logDebug(s"Loading $className using\n${loader.getURLs.mkString("\n")} " +
-        s"with the parent loader ${loader.getParent}")
+    logDebug(s"Loading $className using $loader with the parent loader ${loader.getParent}")
     loader.loadClass(className).newInstance().asInstanceOf[T]
   }
 }
