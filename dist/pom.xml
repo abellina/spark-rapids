@@ -68,6 +68,46 @@
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-shade-plugin</artifactId>
+        <configuration>
+          <relocations>
+            <!-- Shade ORC and Hive and their dependencies -->
+            <relocation>
+              <pattern>org.apache.orc.</pattern>
+              <shadedPattern>${rapids.shade.package}.orc.</shadedPattern>
+            </relocation>
+            <relocation>
+              <pattern>org.apache.hadoop.hive.</pattern>
+              <shadedPattern>${rapids.shade.package}.hadoop.hive.</shadedPattern>
+              <excludes>
+                <exclude>org.apache.hadoop.hive.conf.HiveConf</exclude>
+                <exclude>org.apache.hadoop.hive.ql.exec.UDF</exclude>
+                <exclude>org.apache.hadoop.hive.ql.udf.generic.GenericUDF</exclude>
+              </excludes>
+            </relocation>
+            <relocation>
+              <pattern>org.apache.hive.</pattern>
+              <shadedPattern>${rapids.shade.package}.hive.</shadedPattern>
+            </relocation>
+            <relocation>
+              <pattern>io.airlift.compress.</pattern>
+              <shadedPattern>${rapids.shade.package}.io.airlift.compress.</shadedPattern>
+            </relocation>
+            <relocation>
+              <pattern>org.apache.commons.codec.</pattern>
+              <shadedPattern>${rapids.shade.package}.org.apache.commons.codec.</shadedPattern>
+            </relocation>
+            <relocation>
+              <pattern>org.apache.commons.lang.</pattern>
+              <shadedPattern>${rapids.shade.package}.org.apache.commons.lang.</shadedPattern>
+            </relocation>
+
+            <!-- Shade Guava, Flatbuffers, and Protobuf -->
+            <relocation>
+              <pattern>com.google</pattern>
+              <shadedPattern>${rapids.shade.package}.com.google</shadedPattern>
+            </relocation>
+          </relocations>
+        </configuration>
         <!-- number of shims can be reduced to the number of compatibility domain
          Use the most recent version from each compatibilty domain. Typically we expect
          that patch releases are backwards compatible. So we take the shim representing the
@@ -116,8 +156,11 @@
                 <artifactSet>
                     <includes>
                         <include>*:rapids-4-spark-shims-spark301_${scala.binary.version}:*</include>
-                        <include>com.google.flatbuffers:*</include>
-                        <include>org.openucx:*</include>
+                        <include>com.google.*:*</include>
+                        <include>org.apache.orc:*</include>
+                        <include>org.apache.hadoop.hive:*</include>
+                        <include>org.apache.hive:*</include>
+                        <include>org.apache.commons:commons-lang</include>
                     </includes>
                 </artifactSet>
             </configuration>
@@ -135,8 +178,11 @@
                 <artifactSet>
                     <includes>
                         <include>*:rapids-4-spark-shims-spark302_${scala.binary.version}:*</include>
-                        <include>com.google.flatbuffers:*</include>
-                        <include>org.openucx:*</include>
+                        <include>com.google.*:*</include>
+                        <include>org.apache.orc:*</include>
+                        <include>org.apache.hadoop.hive:*</include>
+                        <include>org.apache.hive:*</include>
+                        <include>org.apache.commons:commons-lang</include>
                     </includes>
                 </artifactSet>
             </configuration>
@@ -154,8 +200,11 @@
                 <artifactSet>
                     <includes>
                         <include>*:rapids-4-spark-shims-spark303_${scala.binary.version}:*</include>
-                        <include>com.google.flatbuffers:*</include>
-                        <include>org.openucx:*</include>
+                        <include>com.google.*:*</include>
+                        <include>org.apache.orc:*</include>
+                        <include>org.apache.hadoop.hive:*</include>
+                        <include>org.apache.hive:*</include>
+                        <include>org.apache.commons:commons-lang</include>
                     </includes>
                 </artifactSet>
             </configuration>
@@ -173,8 +222,11 @@
                 <artifactSet>
                     <includes>
                         <include>*:rapids-4-spark-shims-spark311_${scala.binary.version}:*</include>
-                        <include>com.google.flatbuffers:*</include>
-                        <include>org.openucx:*</include>
+                        <include>com.google.*:*</include>
+                        <include>org.apache.orc:*</include>
+                        <include>org.apache.hadoop.hive:*</include>
+                        <include>org.apache.hive:*</include>
+                        <include>org.apache.commons:commons-lang</include>
                     </includes>
                 </artifactSet>
             </configuration>
@@ -191,9 +243,12 @@
                 </transformers>
                 <artifactSet>
                     <includes>
-                        <include>*:rapids-4-spark-shims-spark312_${scala.binary.version}:*</include>
-                        <include>com.google.flatbuffers:*</include>
-                        <include>org.openucx:*</include>
+                      <include>*:rapids-4-spark-shims-spark312_${scala.binary.version}:*</include>
+                      <include>com.google.*:*</include>
+                      <include>org.apache.orc:*</include>
+                      <include>org.apache.hadoop.hive:*</include>
+                      <include>org.apache.hive:*</include>
+                      <include>org.apache.commons:commons-lang</include>
                     </includes>
                 </artifactSet>
             </configuration>
@@ -211,8 +266,11 @@
               <artifactSet>
                 <includes>
                   <include>*:rapids-4-spark-shims-spark320_${scala.binary.version}:*</include>
-                  <include>com.google.flatbuffers:*</include>
-                  <include>org.openucx:*</include>
+                  <include>com.google.*:*</include>
+                  <include>org.apache.orc:*</include>
+                  <include>org.apache.hadoop.hive:*</include>
+                  <include>org.apache.hive:*</include>
+                  <include>org.apache.commons:commons-lang</include>
                 </includes>
               </artifactSet>
             </configuration>
@@ -254,18 +312,7 @@
                     <includesfile name="${project.basedir}/unshimmed-extras.txt"/>
                   </patternset>
                 </unzip>
-<!--                <mkdir dir="${project.build.directory}/parallel-world"/>-->
-<!--                <exec executable="${java.home}/../bin/jar"-->
-<!--                        dir="${project.build.directory}/parallel-world">-->
-<!--                  <arg value="xvf"/>-->
-<!--                  <arg value="${project.build.directory}/rapids-4-spark_${scala.binary.version}-${project.version}-spark301.jar"/>-->
-<!--                  <arg value="@${project.basedir}/unshimmed-classes.txt"/>-->
-<!--                </exec>-->
-<!--                <unzip-->
-<!--                        src="${project.build.directory}/rapids-4-spark_${scala.binary.version}-${project.version}-common.jar"-->
-<!--                        dest="${project.build.directory}/parallel-world"-->
-<!--                >-->
-<!--                </unzip>-->
+
                 <unzip
                         src="${project.build.directory}/rapids-4-spark_${scala.binary.version}-${project.version}-spark301.jar"
                         dest="${project.build.directory}/parallel-world/spark301"
