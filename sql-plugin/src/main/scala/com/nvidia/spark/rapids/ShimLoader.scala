@@ -92,7 +92,6 @@ object ShimLoader extends Logging {
         Option(Thread.currentThread().getContextClassLoader)
             .getOrElse(classOf[SparkSession].getClassLoader)
       )
-      jarClassLoader.addURL(shimRootURL)
       rapidsJarClassLoader = jarClassLoader
       getShimURL()
 //      updateExecutorClassLoader(getShimURL())
@@ -129,12 +128,14 @@ object ShimLoader extends Logging {
       shimURL = url
       if (onExecutor) {
         updateExecutorClassLoader(shimURL)
-        rapidsJarClassLoader.loadClass(inst.getClass.getName)
-            .newInstance().asInstanceOf[SparkShimServiceProvider]
       } else {
-        rapidsJarClassLoader = inst.getClass.getClassLoader
-        inst
+        // TODO cleanup
+        rapidsJarClassLoader
+          .asInstanceOf[MutableURLClassLoader]
+          .addURL(shimURL)
       }
+      rapidsJarClassLoader.loadClass(inst.getClass.getName)
+            .newInstance().asInstanceOf[SparkShimServiceProvider]
     }
 
     shimServiceProviderOpt.getOrElse {
