@@ -816,7 +816,7 @@ object ExpressionContext {
 class DataTypeMeta(
     val wrapped: Option[DataType],
     desired: Option[DataType] = None,
-    reason: Option[String] = None) {
+    var reason: Option[String] = None) {
 
   lazy val dataType: Option[DataType] = desired match {
     case Some(dt) => Some(dt)
@@ -825,6 +825,8 @@ class DataTypeMeta(
 
   // typeConverted will only be true if there exists DataType in wrapped expression
   lazy val typeConverted: Boolean = dataType.nonEmpty && dataType != wrapped
+
+  def setReason(_reason: String) = reason = Some(_reason)
 
   /**
    * Returns the reason for conversion if exists
