@@ -18,7 +18,7 @@ package com.nvidia.spark.rapids
 
 import java.net.URL
 
-import org.apache.spark.{SPARK_BUILD_USER, SPARK_VERSION}
+import org.apache.spark.{SPARK_BUILD_USER, SPARK_VERSION, SparkEnv}
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.util.{ChildFirstURLClassLoader, MutableURLClassLoader, ParentClassLoader}
@@ -55,7 +55,14 @@ object ShimLoader extends Logging {
   }
 
   def forExecutor() = {
-    onExecutor = true
+    if (SparkEnv.get.executorId == "driver") {
+      // TODO smoother integration
+      // in the local mode we have already inited the ShimProvider
+      // just update the executor classloader so it can deserialize
+      updateExecutorClassLoader(shimURL)
+    } else {
+      onExecutor = true
+    }
     this
   }
 
@@ -69,11 +76,11 @@ object ShimLoader extends Logging {
         val parentLoaderField = replCL.getClass.getDeclaredMethod("parentLoader")
         val parentLoader = parentLoaderField.invoke(replCL).asInstanceOf[ParentClassLoader]
         parentLoader.getParent.asInstanceOf[MutableURLClassLoader]
-    }.map { mutable =>
+    }.foreach { mutable =>
       // MutableURLClassloader dedupes for us
       mutable.addURL(pluginClassLoaderURL)
-      mutable
     }
+    rapidsJarClassLoader = Thread.currentThread().getContextClassLoader
   }
 
   def getShimClassLoader(): ClassLoader = {
@@ -122,7 +129,6 @@ object ShimLoader extends Logging {
       shimURL = url
       if (onExecutor) {
         updateExecutorClassLoader(shimURL)
-        rapidsJarClassLoader = Thread.currentThread().getContextClassLoader
         rapidsJarClassLoader.loadClass(inst.getClass.getName)
             .newInstance().asInstanceOf[SparkShimServiceProvider]
       } else {
