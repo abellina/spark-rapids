@@ -1,4 +1,6 @@
 com/nvidia/spark/SQLPlugin*
+com/nvidia/spark/rapids/ExecutionPlanCaptureCallback*
+com/nvidia/spark/rapids/PlanUtils*
 com/nvidia/spark/rapids/SQLExecPlugin*
 com/nvidia/spark/rapids/ShimLoader*
 com/nvidia/spark/rapids/SparkShimServiceProvider*
