@@ -32,6 +32,7 @@ object ShimLoader extends Logging {
     val rootUrlStr = urlStr.substring(0, urlStr.length - thisClassFile.length)
     new URL(rootUrlStr)
   }
+
   private var onExecutor: Boolean = _
   private var shimProvider: SparkShimServiceProvider = _
   private var shimProviderClass: String = _
@@ -46,7 +47,6 @@ object ShimLoader extends Logging {
     "spark320"
   )
 
-
   private var rapidsJarClassLoader: ClassLoader = _
 
   def getRapidsShuffleManagerClass: String = {
@@ -57,11 +57,6 @@ object ShimLoader extends Logging {
   def forExecutor() = {
     onExecutor = true
     this
-  }
-
-  def getExecutorContextClassloader(): Option[ClassLoader] = {
-    val pluginClassLoaderURL = ShimLoader.getShimURL()
-    updateExecutorClassLoader(pluginClassLoaderURL)
   }
 
   private def updateExecutorClassLoader(pluginClassLoaderURL: URL) = {
@@ -96,9 +91,6 @@ object ShimLoader extends Logging {
 //      updateExecutorClassLoader(getShimURL())
     }
     rapidsJarClassLoader
-//    SparkSession.getActiveSession.map(_.sharedState.jarClassLoader)
-//        .orElse(getExecutorContextClassloader())
-//        .getOrElse(getClass.getClassLoader)
   }
 
   def getShimURL(): URL = {
@@ -111,7 +103,7 @@ object ShimLoader extends Logging {
   private def detectShimProvider(): SparkShimServiceProvider = {
     val sparkVersion = getSparkVersion
     logInfo(s"Loading shim for Spark version: $sparkVersion")
-    shimMasks.flatMap { mask =>
+    val shimServiceProviderOpt = shimMasks.flatMap { mask =>
       try {
         val shimURL = new java.net.URL(s"${shimRootURL.toString}$mask/")
         val shimClassLoader = new ChildFirstURLClassLoader(Array(shimURL),
@@ -137,7 +129,9 @@ object ShimLoader extends Logging {
         rapidsJarClassLoader = inst.getClass.getClassLoader
         inst
       }
-    }.getOrElse {
+    }
+
+    shimServiceProviderOpt.getOrElse {
       throw new IllegalArgumentException(s"Could not find Spark Shim Loader for $sparkVersion")
     }
   }
@@ -159,11 +153,6 @@ object ShimLoader extends Logging {
     if (sparkShims == null) {
       val provider = findShimProvider()
       sparkShims = provider.buildShim
-
-      // TODO related to https://stackoverflow.com/questions/28186607/java-lang-classcastexception
-      //  -using-lambda-expressions-in-spark-job-on-remote-ser/28367602#28367602
-      // is there a better way to propagate the classloader to serde
-//      Thread.currentThread().setContextClassLoader(sparkShims.getClass.getClassLoader)
     }
     sparkShims
   }

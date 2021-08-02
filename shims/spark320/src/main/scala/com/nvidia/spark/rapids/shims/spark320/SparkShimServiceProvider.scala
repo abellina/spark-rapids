@@ -22,7 +22,7 @@ import com.nvidia.spark.rapids.shims.spark320.SparkShimServiceProvider.shimClass
 object SparkShimServiceProvider {
   val VERSION320 = SparkShimVersion(3, 2, 0)
   val VERSIONNAMES: Seq[String] = Seq(VERSION320)
-    .flatMap(v => Seq(s"$v", s"$v-SNAPSHOT"))
+    .flatMap(v => Seq(s"$v", s"$v-SNAPSHOT", s"$v-gera"))
   val shimClassName = "com.nvidia.spark.rapids.shims.spark320.Spark320Shims"
 }
 
