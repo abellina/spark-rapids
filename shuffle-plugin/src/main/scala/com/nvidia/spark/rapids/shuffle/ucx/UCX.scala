@@ -775,6 +775,7 @@ class UCX(transport: UCXShuffleTransport, executor: BlockManagerId, rapidsConf: 
       // enables `onError` callback
       .setPeerErrorHandlingMode()
       .setErrorHandler(this)
+      .setClientId(executor.executorId.toLong)
 
     /**
      * Get a `ClientConnection` after optionally connecting to a peer given by `peerExecutorId`,
@@ -820,7 +821,13 @@ class UCX(transport: UCXShuffleTransport, executor: BlockManagerId, rapidsConf: 
     //  given a peer id we already established a connection to:
     //  https://github.com/openucx/ucx/pull/6859
     override def onConnectionRequest(connectionRequest: UcpConnectionRequest): Unit = {
-      logInfo(s"Got UcpListener request from ${connectionRequest.getClientAddress}")
+      logInfo(s"Got UcpListener request from ${connectionRequest.getClientAddress} for " +
+        s"executorId ${connectionRequest.getClientId}")
+      // if we already have an endpoint in our endpoints cache, reject
+      if (endpoints.contains(connectionRequest.getClientId)) {
+        logError(s"SHOULD REJECT ${connectionRequest.getClientId}")
+        return
+      }
 
       // accept it
       val ep = worker.newEndpoint(epParams.setConnectionRequest(connectionRequest))
