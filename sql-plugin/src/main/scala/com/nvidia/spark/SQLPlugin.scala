@@ -28,6 +28,6 @@ class SQLPlugin extends SparkPlugin {
   override def driverPlugin(): DriverPlugin = ShimLoader
       .newInstanceOf("com.nvidia.spark.rapids.RapidsDriverPlugin")
 
-  override def executorPlugin(): ExecutorPlugin = ShimLoader.forExecutor()
+  override def executorPlugin(): ExecutorPlugin = ShimLoader
       .newInstanceOf("com.nvidia.spark.rapids.RapidsExecutorPlugin")
 }

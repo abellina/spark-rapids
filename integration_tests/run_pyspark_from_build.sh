@@ -131,8 +131,10 @@ else
 
     export PYSP_TEST_spark_driver_extraClassPath="${ALL_JARS// /:}"
     export PYSP_TEST_spark_executor_extraClassPath="${ALL_JARS// /:}"
-    export PYSP_TEST_spark_driver_extraJavaOptions="-ea -Duser.timezone=UTC $COVERAGE_SUBMIT_FLAGS"
-    export PYSP_TEST_spark_executor_extraJavaOptions="-ea -Duser.timezone=UTC"
+    export PYSP_TEST_spark_driver_extraJavaOptions="-ea -Duser.timezone=UTC \
+      -Dlog4j.debug=true $COVERAGE_SUBMIT_FLAGS"
+    export PYSP_TEST_spark_executor_extraJavaOptions="-ea -Duser.timezone=UTC \
+      -Dlog4j.debug=true"
     export PYSP_TEST_spark_ui_showConsoleProgress='false'
     export PYSP_TEST_spark_sql_session_timeZone='UTC'
     export PYSP_TEST_spark_sql_shuffle_partitions='12'
@@ -167,6 +169,7 @@ else
     else
         "$SPARK_HOME"/bin/spark-submit --jars "${ALL_JARS// /,}" \
             --driver-java-options "$PYSP_TEST_spark_driver_extraJavaOptions" \
+            --driver-class-path "$PYSP_TEST_spark_driver_extraClassPath" \
             $SPARK_SUBMIT_FLAGS "${RUN_TESTS_COMMAND[@]}" "${TEST_COMMON_OPTS[@]}"
     fi
 fi
