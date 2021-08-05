@@ -151,7 +151,7 @@ class RapidsDriverPlugin extends DriverPlugin with Logging {
     val sparkConf = pluginContext.conf
     RapidsPluginUtils.fixupConfigs(sparkConf)
     val conf = new RapidsConf(sparkConf)
-    if (conf.shimsProviderOverride.isDefined) {
+    if (conf.shimsProviderOverride.isDefined) { // TODO test it, probably not working yet
       ShimLoader.setSparkShimProviderClass(conf.shimsProviderOverride.get)
     }
     if (GpuShuffleEnv.isRapidsShuffleEnabled &&

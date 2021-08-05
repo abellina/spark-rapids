@@ -132,12 +132,44 @@
               <artifactSet>
                 <includes>
                   <include>*:rapids-4-spark-shims-spark3*_${scala.binary.version}:*</include>
+                  <include>com.google.flatbuffers:flatbuffers-java</include>
+                  <include>com.google.guava:guava</include>
+                  <include>com.google.protobuf:protobuf-java</include>
+                  <include>commons-codec:commons-codec</include>
+                  <include>commons-lang:commons-lang</include>
+                  <include>io.airlift:aircompressor</include>
+                  <include>org.apache.hive:hive-storage-api</include>
+                  <include>org.apache.orc:orc-core</include>
+                  <include>org.apache.orc:orc-mapreduce</include>
+                  <include>org.apache.orc:orc-shims</include>
                 </includes>
               </artifactSet>
               <filters>
                 <filter>
                   <artifact>*:*</artifact>
-                  <includes>**/SparkShimServiceProvider*</includes>
+                  <includes>
+                    <include>**/RapidsShuffle*</include>
+                    <include>**/RapidsShuffle*</include>
+                    <include>**/SparkShimServiceProvider*</include>
+                    <include>com/google/**</include>
+                    <include>com/nvidia/shaded/**</include>
+                    <include>com/nvidia/spark/SQLPlugin*</include>
+                    <include>com/nvidia/spark/rapids/ExecutionPlanCaptureCallback*</include>
+                    <include>com/nvidia/spark/rapids/PlanUtils*</include>
+                    <include>com/nvidia/spark/rapids/SQLExecPlugin*</include>
+                    <include>com/nvidia/spark/rapids/ShimLoader*</include>
+                    <include>com/nvidia/spark/rapids/ShimVersion*</include>
+                    <include>com/nvidia/spark/rapids/SparkShimServiceProvider*</include>
+                    <include>com/nvidia/spark/rapids/SparkShimVersion*</include>
+                    <include>com/nvidia/spark/rapids/SparkShims*</include>
+                    <include>com/nvidia/spark/udf/Plugin*</include>
+                    <include>org/apache/commons/**</include>
+                    <include>org/apache/hadoop/hive/**</include>
+                    <include>org/apache/hive/**</include>
+                    <include>org/apache/hive/**</include>
+                    <include>org/apache/orc/**</include>
+                    <include>rapids4spark-version-info.properties</include>
+                  </includes>
                 </filter>
               </filters>
             </configuration>
@@ -155,12 +187,17 @@
                 </transformers>
                 <artifactSet>
                     <includes>
-                        <include>*:rapids-4-spark-shims-spark301_${scala.binary.version}:*</include>
-                        <include>com.google.*:*</include>
-                        <include>org.apache.orc:*</include>
-                        <include>org.apache.hadoop.hive:*</include>
-                        <include>org.apache.hive:*</include>
-                        <include>org.apache.commons:commons-lang</include>
+                      <include>*:rapids-4-spark-shims-spark301_${scala.binary.version}:*</include>
+                      <include>com.google.flatbuffers:flatbuffers-java</include>
+                      <include>com.google.guava:guava</include>
+                      <include>com.google.protobuf:protobuf-java</include>
+                      <include>commons-codec:commons-codec</include>
+                      <include>commons-lang:commons-lang</include>
+                      <include>io.airlift:aircompressor</include>
+                      <include>org.apache.hive:hive-storage-api</include>
+                      <include>org.apache.orc:orc-core</include>
+                      <include>org.apache.orc:orc-mapreduce</include>
+                      <include>org.apache.orc:orc-shims</include>
                     </includes>
                 </artifactSet>
             </configuration>
@@ -177,12 +214,17 @@
                 </transformers>
                 <artifactSet>
                     <includes>
-                        <include>*:rapids-4-spark-shims-spark302_${scala.binary.version}:*</include>
-                        <include>com.google.*:*</include>
-                        <include>org.apache.orc:*</include>
-                        <include>org.apache.hadoop.hive:*</include>
-                        <include>org.apache.hive:*</include>
-                        <include>org.apache.commons:commons-lang</include>
+                      <include>*:rapids-4-spark-shims-spark302_${scala.binary.version}:*</include>
+                      <include>com.google.flatbuffers:flatbuffers-java</include>
+                      <include>com.google.guava:guava</include>
+                      <include>com.google.protobuf:protobuf-java</include>
+                      <include>commons-codec:commons-codec</include>
+                      <include>commons-lang:commons-lang</include>
+                      <include>io.airlift:aircompressor</include>
+                      <include>org.apache.hive:hive-storage-api</include>
+                      <include>org.apache.orc:orc-core</include>
+                      <include>org.apache.orc:orc-mapreduce</include>
+                      <include>org.apache.orc:orc-shims</include>
                     </includes>
                 </artifactSet>
             </configuration>
@@ -199,12 +241,17 @@
                 </transformers>
                 <artifactSet>
                     <includes>
-                        <include>*:rapids-4-spark-shims-spark303_${scala.binary.version}:*</include>
-                        <include>com.google.*:*</include>
-                        <include>org.apache.orc:*</include>
-                        <include>org.apache.hadoop.hive:*</include>
-                        <include>org.apache.hive:*</include>
-                        <include>org.apache.commons:commons-lang</include>
+                      <include>*:rapids-4-spark-shims-spark303_${scala.binary.version}:*</include>
+                      <include>com.google.flatbuffers:flatbuffers-java</include>
+                      <include>com.google.guava:guava</include>
+                      <include>com.google.protobuf:protobuf-java</include>
+                      <include>commons-codec:commons-codec</include>
+                      <include>commons-lang:commons-lang</include>
+                      <include>io.airlift:aircompressor</include>
+                      <include>org.apache.hive:hive-storage-api</include>
+                      <include>org.apache.orc:orc-core</include>
+                      <include>org.apache.orc:orc-mapreduce</include>
+                      <include>org.apache.orc:orc-shims</include>
                     </includes>
                 </artifactSet>
             </configuration>
@@ -221,12 +268,17 @@
                 </transformers>
                 <artifactSet>
                     <includes>
-                        <include>*:rapids-4-spark-shims-spark311_${scala.binary.version}:*</include>
-                        <include>com.google.*:*</include>
-                        <include>org.apache.orc:*</include>
-                        <include>org.apache.hadoop.hive:*</include>
-                        <include>org.apache.hive:*</include>
-                        <include>org.apache.commons:commons-lang</include>
+                      <include>*:rapids-4-spark-shims-spark311_${scala.binary.version}:*</include>
+                      <include>com.google.flatbuffers:flatbuffers-java</include>
+                      <include>com.google.guava:guava</include>
+                      <include>com.google.protobuf:protobuf-java</include>
+                      <include>commons-codec:commons-codec</include>
+                      <include>commons-lang:commons-lang</include>
+                      <include>io.airlift:aircompressor</include>
+                      <include>org.apache.hive:hive-storage-api</include>
+                      <include>org.apache.orc:orc-core</include>
+                      <include>org.apache.orc:orc-mapreduce</include>
+                      <include>org.apache.orc:orc-shims</include>
                     </includes>
                 </artifactSet>
             </configuration>
@@ -244,11 +296,16 @@
                 <artifactSet>
                     <includes>
                       <include>*:rapids-4-spark-shims-spark312_${scala.binary.version}:*</include>
-                      <include>com.google.*:*</include>
-                      <include>org.apache.orc:*</include>
-                      <include>org.apache.hadoop.hive:*</include>
-                      <include>org.apache.hive:*</include>
-                      <include>org.apache.commons:commons-lang</include>
+                      <include>com.google.flatbuffers:flatbuffers-java</include>
+                      <include>com.google.guava:guava</include>
+                      <include>com.google.protobuf:protobuf-java</include>
+                      <include>commons-codec:commons-codec</include>
+                      <include>commons-lang:commons-lang</include>
+                      <include>io.airlift:aircompressor</include>
+                      <include>org.apache.hive:hive-storage-api</include>
+                      <include>org.apache.orc:orc-core</include>
+                      <include>org.apache.orc:orc-mapreduce</include>
+                      <include>org.apache.orc:orc-shims</include>
                     </includes>
                 </artifactSet>
             </configuration>
@@ -266,11 +323,16 @@
               <artifactSet>
                 <includes>
                   <include>*:rapids-4-spark-shims-spark320_${scala.binary.version}:*</include>
-                  <include>com.google.*:*</include>
-                  <include>org.apache.orc:*</include>
-                  <include>org.apache.hadoop.hive:*</include>
-                  <include>org.apache.hive:*</include>
-                  <include>org.apache.commons:commons-lang</include>
+                  <include>com.google.flatbuffers:flatbuffers-java</include>
+                  <include>com.google.guava:guava</include>
+                  <include>com.google.protobuf:protobuf-java</include>
+                  <include>commons-codec:commons-codec</include>
+                  <include>commons-lang:commons-lang</include>
+                  <include>io.airlift:aircompressor</include>
+                  <include>org.apache.hive:hive-storage-api</include>
+                  <include>org.apache.orc:orc-core</include>
+                  <include>org.apache.orc:orc-mapreduce</include>
+                  <include>org.apache.orc:orc-shims</include>
                 </includes>
               </artifactSet>
             </configuration>
@@ -295,7 +357,7 @@
 
 <!--                unzip task seems to be broken for $$ files, so using exec with jar -->
                 <unzip
-                        src="${project.build.directory}/rapids-4-spark_${scala.binary.version}-${project.version}-spark311.jar"
+                        src="${project.build.directory}/rapids-4-spark_${scala.binary.version}-${project.version}-common.jar"
                         dest="${project.build.directory}/parallel-world"
                 >
                   <!--
