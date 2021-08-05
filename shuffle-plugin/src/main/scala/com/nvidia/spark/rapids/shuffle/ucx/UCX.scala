@@ -775,7 +775,6 @@ class UCX(transport: UCXShuffleTransport, executor: BlockManagerId, rapidsConf: 
       // enables `onError` callback
       .setPeerErrorHandlingMode()
       .setErrorHandler(this)
-      .setClientId(executor.executorId.toLong)
 
     /**
      * Get a `ClientConnection` after optionally connecting to a peer given by `peerExecutorId`,
@@ -807,7 +806,10 @@ class UCX(transport: UCXShuffleTransport, executor: BlockManagerId, rapidsConf: 
       onWorkerThreadAsync(() => {
         endpoints.computeIfAbsent(peerExecutorId, _ => {
           val sockAddr = new InetSocketAddress(peerHost, peerPort)
-          val ep = worker.newEndpoint(epParams.setSocketAddress(sockAddr))
+          val ep = worker.newEndpoint(
+            epParams
+              .setClientId(executor.executorId.toLong)
+              setSocketAddress(sockAddr))
           logDebug(s"Initiator: created an endpoint $ep to $peerExecutorId")
           reverseLookupEndpoints.put(ep, peerExecutorId)
           ep
