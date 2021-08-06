@@ -148,8 +148,6 @@
                 <filter>
                   <artifact>*:*</artifact>
                   <includes>
-                    <include>**/RapidsShuffle*</include>
-                    <include>**/RapidsShuffle*</include>
                     <include>**/SparkShimServiceProvider*</include>
                     <include>com/google/**</include>
                     <include>com/nvidia/shaded/**</include>
@@ -169,6 +167,9 @@
                     <include>org/apache/hive/**</include>
                     <include>org/apache/orc/**</include>
                     <include>rapids4spark-version-info.properties</include>
+                    <include>**/ProxyRapidsShuffleInternalManager*</include>
+                    <include>**/RapidsShuffleManager.class</include>
+                    <include>**/VisibleShuffleManager*</include>
                   </includes>
                 </filter>
               </filters>

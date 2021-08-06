@@ -16,9 +16,9 @@
 
 package org.apache.spark.sql.rapids.shims.spark320
 
-import com.nvidia.spark.rapids.ShuffleBufferCatalog
+import com.nvidia.spark.rapids.{ShimLoader, ShuffleBufferCatalog}
 
-import org.apache.spark.{SparkConf, TaskContext}
+import org.apache.spark.{ShuffleDependency, SparkConf, TaskContext}
 import org.apache.spark.network.buffer.ManagedBuffer
 import org.apache.spark.network.shuffle.MergedBlockMeta
 import org.apache.spark.shuffle._
@@ -30,7 +30,7 @@ import org.apache.spark.storage.ShuffleBlockId
  * @note This is an internal class to obtain access to the private
  *       `ShuffleManager` and `SortShuffleManager` classes.
  */
-class RapidsShuffleInternalManager(conf: SparkConf, isDriver: Boolean)
+final class RapidsShuffleInternalManager(conf: SparkConf, isDriver: Boolean)
     extends RapidsShuffleInternalManagerBase(conf, isDriver) {
 
   def getReader[K, C](
@@ -65,6 +65,50 @@ class GpuShuffleBlockResolver(resolver: IndexShuffleBlockResolver, catalog: Shuf
       blockId: ShuffleBlockId,
       dirs: Option[Array[String]]): MergedBlockMeta = {
     throw new UnsupportedOperationException("TODO after shim is done")
+  }
+}
+
+class ProxyRapidsShuffleInternalManager(conf: SparkConf, isDriver: Boolean)
+  extends ShuffleManager {
+
+  val wrapped: ShuffleManager = ShimLoader.newInternalShuffleManager(conf, isDriver)
+
+  override def registerShuffle[K, V, C](
+      shuffleId: Int,
+      dependency: ShuffleDependency[K, V, C]): ShuffleHandle = {
+    wrapped.registerShuffle(shuffleId, dependency)
+  }
+
+  override def getWriter[K, V](
+      handle: ShuffleHandle,
+      mapId: Long,
+      context: TaskContext,
+      metrics: ShuffleWriteMetricsReporter): ShuffleWriter[K, V] = {
+    wrapped.getWriter(handle, mapId, context, metrics)
+  }
+
+  override def getReader[K, C](
+      handle: ShuffleHandle,
+      startMapIndex: Int,
+      endMapIndex: Int,
+      startPartition: Int,
+      endPartition: Int,
+      context: TaskContext,
+      metrics: ShuffleReadMetricsReporter): ShuffleReader[K, C] = {
+    wrapped.getReader(handle, startMapIndex, endMapIndex, startPartition, endPartition, context,
+      metrics)
+  }
+
+  override def unregisterShuffle(shuffleId: Int): Boolean = {
+    wrapped.unregisterShuffle(shuffleId)
+  }
+
+  override def shuffleBlockResolver: ShuffleBlockResolver = {
+    wrapped.shuffleBlockResolver
+  }
+
+  override def stop(): Unit = {
+    wrapped.stop()
   }
 }
 

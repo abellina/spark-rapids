@@ -64,6 +64,7 @@ class GpuShuffleEnv(rapidsConf: RapidsConf) extends Logging {
 
 object GpuShuffleEnv extends Logging {
   val RAPIDS_SHUFFLE_CLASS: String = ShimLoader.getRapidsShuffleManagerClass
+  val RAPIDS_SHUFFLE_INTERNAL: String = ShimLoader.getRapidsShuffleInternal
 
   var mgr: Option[RapidsShuffleInternalManagerBase] = None
 
@@ -83,7 +84,7 @@ object GpuShuffleEnv extends Logging {
     managerOpt: Option[RapidsShuffleInternalManagerBase] = None): Unit = {
     if (managerOpt.isDefined) {
       val manager = managerOpt.get
-      assert(manager.getClass.getCanonicalName == GpuShuffleEnv.RAPIDS_SHUFFLE_CLASS)
+      assert(manager.getClass.getName == GpuShuffleEnv.RAPIDS_SHUFFLE_INTERNAL)
       logInfo("RapidsShuffleManager is initialized")
     }
     mgr = managerOpt

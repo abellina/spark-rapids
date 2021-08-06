@@ -18,8 +18,9 @@ package com.nvidia.spark.rapids
 
 import java.net.URL
 
-import org.apache.spark.{SPARK_BUILD_USER, SPARK_VERSION}
+import org.apache.spark.{SPARK_BUILD_USER, SPARK_VERSION, SparkConf}
 import org.apache.spark.internal.Logging
+import org.apache.spark.sql.rapids.VisibleShuffleManager
 import org.apache.spark.util.{ChildFirstURLClassLoader, MutableURLClassLoader, ParentClassLoader}
 
 object ShimLoader extends Logging {
@@ -49,10 +50,16 @@ object ShimLoader extends Logging {
   // REPL-only logic
   private var tmpClassLoader: MutableURLClassLoader = _
 
+  def shimId: String = shimProviderClass.split('.').takeRight(2).head
+
   def getRapidsShuffleManagerClass: String = {
     findShimProvider()
-    val parts = shimProviderClass.split('.')
-    s"com.nvidia.spark.rapids.${parts(parts.length - 2)}.RapidsShuffleManager"
+    s"com.nvidia.spark.rapids.$shimId.RapidsShuffleManager"
+  }
+
+  def getRapidsShuffleInternal: String = {
+    findShimProvider()
+    s"org.apache.spark.sql.rapids.shims.$shimId.RapidsShuffleInternalManager"
   }
 
   private def updateSparkClassLoader(pluginClassLoaderURL: URL) = {
@@ -148,5 +155,15 @@ object ShimLoader extends Logging {
     val loader = getShimClassLoader()
     logDebug(s"Loading $className using $loader with the parent loader ${loader.getParent}")
     loader.loadClass(className).newInstance().asInstanceOf[T]
+  }
+
+  def newInternalShuffleManager(conf: SparkConf, isDriver: Boolean): VisibleShuffleManager = {
+    val loader = getShimClassLoader()
+    val shuffleClassName =
+      s"org.apache.spark.sql.rapids.shims.${shimId}.RapidsShuffleInternalManager"
+    val shuffleClass = loader.loadClass(shuffleClassName)
+    shuffleClass.getConstructor(classOf[SparkConf], java.lang.Boolean.TYPE)
+        .newInstance(conf, java.lang.Boolean.valueOf(isDriver))
+        .asInstanceOf[VisibleShuffleManager]
   }
 }
