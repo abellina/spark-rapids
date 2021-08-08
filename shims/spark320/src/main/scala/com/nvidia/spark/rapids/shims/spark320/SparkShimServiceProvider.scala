@@ -32,8 +32,8 @@ class SparkShimServiceProvider extends com.nvidia.spark.rapids.SparkShimServiceP
     SparkShimServiceProvider.VERSIONNAMES.contains(version)
   }
 
+  // never call buildShim before checking matchesVersion is true
   def buildShim: SparkShims = {
-    ShimLoader.getShimClassLoader()
-        .loadClass(shimClassName).newInstance().asInstanceOf[SparkShims]
+    ShimLoader.newInstanceOf(shimClassName).asInstanceOf[SparkShims]
   }
 }

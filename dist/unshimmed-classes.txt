@@ -8,6 +8,3 @@ com/nvidia/spark/rapids/SparkShims*
 com/nvidia/spark/rapids/ShimVersion*
 com/nvidia/spark/rapids/SparkShimVersion*
 com/nvidia/spark/udf/Plugin*
-**/ProxyRapidsShuffleInternalManager*
-**/RapidsShuffleManager.class
-**/VisibleShuffleManager*

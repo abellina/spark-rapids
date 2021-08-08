@@ -144,35 +144,6 @@
                   <include>org.apache.orc:orc-shims</include>
                 </includes>
               </artifactSet>
-              <filters>
-                <filter>
-                  <artifact>*:*</artifact>
-                  <includes>
-                    <include>**/SparkShimServiceProvider*</include>
-                    <include>com/google/**</include>
-                    <include>com/nvidia/shaded/**</include>
-                    <include>com/nvidia/spark/SQLPlugin*</include>
-                    <include>com/nvidia/spark/rapids/ExecutionPlanCaptureCallback*</include>
-                    <include>com/nvidia/spark/rapids/PlanUtils*</include>
-                    <include>com/nvidia/spark/rapids/SQLExecPlugin*</include>
-                    <include>com/nvidia/spark/rapids/ShimLoader*</include>
-                    <include>com/nvidia/spark/rapids/ShimVersion*</include>
-                    <include>com/nvidia/spark/rapids/SparkShimServiceProvider*</include>
-                    <include>com/nvidia/spark/rapids/SparkShimVersion*</include>
-                    <include>com/nvidia/spark/rapids/SparkShims*</include>
-                    <include>com/nvidia/spark/udf/Plugin*</include>
-                    <include>org/apache/commons/**</include>
-                    <include>org/apache/hadoop/hive/**</include>
-                    <include>org/apache/hive/**</include>
-                    <include>org/apache/hive/**</include>
-                    <include>org/apache/orc/**</include>
-                    <include>rapids4spark-version-info.properties</include>
-                    <include>**/ProxyRapidsShuffleInternalManager*</include>
-                    <include>**/RapidsShuffleManager.class</include>
-                    <include>**/VisibleShuffleManager*</include>
-                  </includes>
-                </filter>
-              </filters>
             </configuration>
           </execution>
 
@@ -356,10 +327,20 @@
                         includeemptydirs="true"
                 />
 
-<!--                unzip task seems to be broken for $$ files, so using exec with jar -->
                 <unzip
                         src="${project.build.directory}/rapids-4-spark_${scala.binary.version}-${project.version}-common.jar"
                         dest="${project.build.directory}/parallel-world"
+                >
+                  <patternset id="sharedWorld">
+                    <includesfile name="${project.basedir}/unshimmed-classes.txt"/>
+                    <includesfile name="${project.basedir}/unshimmed-extras.txt"/>
+                  </patternset>
+                </unzip>
+
+<!--                unzip task seems to be broken for $$ files, so using exec with jar -->
+                <unzip
+                        src="${project.build.directory}/rapids-4-spark_${scala.binary.version}-${project.version}-common.jar"
+                        dest="${project.build.directory}/parallel-world/spark3xx-common"
                 >
                   <!--
                   TODO generate automatically based on the number of shims in the build
@@ -371,8 +352,7 @@
                     uniq -w32 -c | tr -s ' ' | grep '^ 3 ' | cut -d'/' -f 5- | sort > dist/unshimmed-classes.txt
                   -->
                   <patternset id="sharedWorld">
-                    <includesfile name="${project.basedir}/unshimmed-classes.txt"/>
-                    <includesfile name="${project.basedir}/unshimmed-extras.txt"/>
+                    <excludesfile name="${project.basedir}/shimmed-classes.txt"/>
                   </patternset>
                 </unzip>
 
@@ -382,8 +362,7 @@
                 >
                   <!-- to keep in sync with sharedWorld: inverse it to exclude -->
                   <patternset id="shimPattern">
-                    <excludesfile name="${project.basedir}/unshimmed-classes.txt"/>
-                    <excludesfile name="${project.basedir}/unshimmed-extras.txt"/>
+                    <includesfile name="${project.basedir}/shimmed-classes.txt"/>
                   </patternset>
                 </unzip>
                 <unzip

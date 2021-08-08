@@ -21,7 +21,7 @@ import java.net.URL
 import org.apache.spark.{SPARK_BUILD_USER, SPARK_VERSION, SparkConf}
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.rapids.VisibleShuffleManager
-import org.apache.spark.util.{ChildFirstURLClassLoader, MutableURLClassLoader, ParentClassLoader}
+import org.apache.spark.util.{MutableURLClassLoader, ParentClassLoader}
 
 object ShimLoader extends Logging {
 
@@ -32,6 +32,8 @@ object ShimLoader extends Logging {
     val rootUrlStr = urlStr.substring(0, urlStr.length - thisClassFile.length)
     new URL(rootUrlStr)
   }
+
+  val shimCommonURL = new URL(s"${shimRootURL.toString}spark3xx-common/")
 
   private var shimProviderClass: String = _
   private var sparkShims: SparkShims = _
@@ -62,7 +64,7 @@ object ShimLoader extends Logging {
     s"org.apache.spark.sql.rapids.shims.$shimId.RapidsShuffleInternalManager"
   }
 
-  private def updateSparkClassLoader(pluginClassLoaderURL: URL) = {
+  private def updateSparkClassLoader(): Unit = {
     val contextClassLoader = Thread.currentThread().getContextClassLoader
     Option(contextClassLoader).collect {
       case mutable: MutableURLClassLoader => mutable
@@ -73,7 +75,8 @@ object ShimLoader extends Logging {
     }.foreach { mutable =>
       // MutableURLClassloader dedupes for us
       rapidsJarClassLoader = contextClassLoader
-      mutable.addURL(pluginClassLoaderURL)
+      mutable.addURL(shimURL)
+      mutable.addURL(shimCommonURL)
     }
   }
 
@@ -82,11 +85,12 @@ object ShimLoader extends Logging {
       findShimProvider()
     }
     if (rapidsJarClassLoader == null) {
-      updateSparkClassLoader(shimURL)
+      updateSparkClassLoader()
     }
     if (rapidsJarClassLoader == null) {
       if (tmpClassLoader == null) {
-        tmpClassLoader = new MutableURLClassLoader(Array(shimURL), getClass.getClassLoader)
+        tmpClassLoader = new MutableURLClassLoader(Array(shimURL, shimCommonURL),
+          getClass.getClassLoader)
       }
       tmpClassLoader
     } else {
@@ -101,11 +105,11 @@ object ShimLoader extends Logging {
     val shimServiceProviderOpt = shimMasks.flatMap { mask =>
       try {
         val shimURL = new java.net.URL(s"${shimRootURL.toString}$mask/")
-        val shimClassLoader = new ChildFirstURLClassLoader(Array(shimURL),
+        val shimClassLoader = new MutableURLClassLoader(Array(shimURL, shimCommonURL),
           getClass.getClassLoader)
         val shimClass = shimClassLoader
             .loadClass(s"com.nvidia.spark.rapids.shims.$mask.SparkShimServiceProvider")
-        Option((shimClass.newInstance().asInstanceOf[SparkShimServiceProvider], shimURL))
+        Option((instantiateClass(shimClass).asInstanceOf[SparkShimServiceProvider], shimURL))
       } catch {
         case cnf: ClassNotFoundException =>
           logWarning("ignoring " + cnf)
@@ -154,7 +158,7 @@ object ShimLoader extends Logging {
   def newInstanceOf[T](className: String): T = {
     val loader = getShimClassLoader()
     logDebug(s"Loading $className using $loader with the parent loader ${loader.getParent}")
-    loader.loadClass(className).newInstance().asInstanceOf[T]
+    instantiateClass(loader.loadClass(className)).asInstanceOf[T]
   }
 
   def newInternalShuffleManager(conf: SparkConf, isDriver: Boolean): VisibleShuffleManager = {
@@ -165,5 +169,16 @@ object ShimLoader extends Logging {
     shuffleClass.getConstructor(classOf[SparkConf], java.lang.Boolean.TYPE)
         .newInstance(conf, java.lang.Boolean.valueOf(isDriver))
         .asInstanceOf[VisibleShuffleManager]
+  }
+
+  // avoid cached constructors
+  private def instantiateClass[T](cls: Class[T]): T = {
+    logDebug(s"GERA_DEBUG instantiate ${cls.getName} using classloader " + cls.getClassLoader)
+    cls.getClassLoader match {
+      case m: MutableURLClassLoader => logDebug("GERA_DEBUG urls " + m.getURLs.mkString("\n"))
+      case _ =>
+    }
+    val constructor = cls.getConstructor()
+    constructor.newInstance()
   }
 }
