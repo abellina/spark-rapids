@@ -22,6 +22,7 @@ import com.nvidia.spark.rapids._
 
 import org.apache.spark.SparkEnv
 import org.apache.spark.internal.Logging
+import org.apache.spark.shuffle.ShuffleManager
 
 class GpuShuffleEnv(rapidsConf: RapidsConf) extends Logging {
   private var shuffleCatalog: ShuffleBufferCatalog = _
@@ -63,11 +64,11 @@ class GpuShuffleEnv(rapidsConf: RapidsConf) extends Logging {
 }
 
 object GpuShuffleEnv extends Logging {
-  println("GPU SHUFFLE ENV loaded by " + getClass.getClassLoader)
+  println(s"GERA_DEBUG: $this loaded by ${this.getClass.getClassLoader}")
   val RAPIDS_SHUFFLE_CLASS: String = ShimLoader.getRapidsShuffleManagerClass
   val RAPIDS_SHUFFLE_INTERNAL: String = ShimLoader.getRapidsShuffleInternal
 
-  var mgr: Option[RapidsShuffleInternalManagerBase] = None
+  var mgr: Option[ShuffleManager] = None
 
   @volatile private var env: GpuShuffleEnv = _
 
@@ -82,7 +83,7 @@ object GpuShuffleEnv extends Logging {
   }
 
   def setRapidsShuffleManager(
-    managerOpt: Option[RapidsShuffleInternalManagerBase] = None): Unit = {
+    managerOpt: Option[ShuffleManager] = None): Unit = {
     if (managerOpt.isDefined) {
       val manager = managerOpt.get
       assert(manager.getClass.getName == GpuShuffleEnv.RAPIDS_SHUFFLE_INTERNAL)
@@ -91,10 +92,13 @@ object GpuShuffleEnv extends Logging {
     mgr = managerOpt
   }
 
-  def getCatalog: ShuffleBufferCatalog = if (env == null) {
-    null
-  } else {
-    env.getCatalog
+  def getCatalog: ShuffleBufferCatalog = {
+    println(s"GERA_DEBUG: getCatalog on $this loaded by ${this.getClass.getClassLoader}")
+    if (env == null) {
+      null
+    } else {
+      env.getCatalog
+    }
   }
 
   //
@@ -102,9 +106,11 @@ object GpuShuffleEnv extends Logging {
   //
 
   def init(conf: RapidsConf): Unit = {
+    println(s"GERA_DEBUG: $this loaded by ${this.getClass.getClassLoader}")
     val shuffleEnv = new GpuShuffleEnv(conf)
     shuffleEnv.init()
     env = shuffleEnv
+    println(s"GERA_DEBUG: stored env loaded by ${shuffleEnv.getClass.getClassLoader}")
   }
 
   def getReceivedCatalog: ShuffleReceivedBufferCatalog = env.getReceivedCatalog

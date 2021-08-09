@@ -163,7 +163,7 @@ class RapidsShuffleHeartbeatEndpoint(pluginContext: PluginContext, conf: RapidsC
     }
   }
 
-  GpuShuffleEnv.mgr.foreach { mgr =>
+  GpuShuffleEnv.mgr.map(_.asInstanceOf[RapidsShuffleInternalManagerBase]).foreach { mgr =>
     if (mgr.isDriver) {
       logDebug("Local mode detected. Skipping shuffle heartbeat registration.")
     } else {

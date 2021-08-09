@@ -317,9 +317,9 @@
         <artifactId>maven-antrun-plugin</artifactId>
         <executions>
           <execution>
-            <phase>package</phase>
+            <phase>prepare-package</phase>
             <goals><goal>run</goal></goals>
-            <id>create-parallel-world</id>
+            <id>delete-shim-clases</id>
             <configuration>
               <target>
                 <delete
@@ -327,6 +327,21 @@
                         includeemptydirs="true"
                 />
 
+                <delete>
+                  <fileset
+                          dir="${project.build.directory}"
+                          includes="*.jar"
+                  />
+                </delete>
+              </target>
+            </configuration>
+          </execution>
+          <execution>
+            <phase>package</phase>
+            <goals><goal>run</goal></goals>
+            <id>create-parallel-world</id>
+            <configuration>
+              <target>
                 <unzip
                         src="${project.build.directory}/rapids-4-spark_${scala.binary.version}-${project.version}-common.jar"
                         dest="${project.build.directory}/parallel-world"
@@ -353,6 +368,7 @@
                   -->
                   <patternset id="sharedWorld">
                     <excludesfile name="${project.basedir}/shimmed-classes.txt"/>
+                    <excludesfile name="${project.basedir}/unshimmed-classes.txt"/>
                   </patternset>
                 </unzip>
 

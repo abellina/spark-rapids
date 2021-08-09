@@ -19,7 +19,7 @@ package org.apache.spark.sql.rapids
 import java.io.File
 
 import org.apache.spark.SparkConf
-import org.apache.spark.storage.{BlockId, DiskBlockManager, TempLocalBlockId}
+import org.apache.spark.storage.{BlockId, DiskBlockManager}
 
 /** Maps logical blocks to local disk locations. */
 class RapidsDiskBlockManager(conf: SparkConf) {

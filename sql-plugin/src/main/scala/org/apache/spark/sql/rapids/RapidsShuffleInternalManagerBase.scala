@@ -411,4 +411,6 @@ abstract class RapidsShuffleInternalManagerBase(conf: SparkConf, val isDriver: B
   }
 }
 
-trait VisibleShuffleManager extends ShuffleManager
+trait VisibleShuffleManager extends ShuffleManager {
+  def isDriver: Boolean
+}
