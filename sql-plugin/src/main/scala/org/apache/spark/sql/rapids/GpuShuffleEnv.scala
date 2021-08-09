@@ -63,6 +63,7 @@ class GpuShuffleEnv(rapidsConf: RapidsConf) extends Logging {
 }
 
 object GpuShuffleEnv extends Logging {
+  println("GPU SHUFFLE ENV loaded by " + getClass.getClassLoader)
   val RAPIDS_SHUFFLE_CLASS: String = ShimLoader.getRapidsShuffleManagerClass
   val RAPIDS_SHUFFLE_INTERNAL: String = ShimLoader.getRapidsShuffleInternal
 

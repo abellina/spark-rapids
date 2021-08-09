@@ -25,19 +25,16 @@ import org.apache.spark.util.{MutableURLClassLoader, ParentClassLoader}
 
 object ShimLoader extends Logging {
 
-  val shimRootURL = {
+  println(s"GERA_DEBUG: ${this} loaded by ${getClass.getClassLoader}")
+
+  private val shimRootURL = {
     val thisClassFile = getClass.getName.replace(".", "/") + ".class"
     val url = getClass.getClassLoader.getResource(thisClassFile)
     val urlStr = url.toString
     val rootUrlStr = urlStr.substring(0, urlStr.length - thisClassFile.length)
     new URL(rootUrlStr)
   }
-
-  val shimCommonURL = new URL(s"${shimRootURL.toString}spark3xx-common/")
-
-  private var shimProviderClass: String = _
-  private var sparkShims: SparkShims = _
-  private var shimURL: URL = _
+  private val shimCommonURL = new URL(s"${shimRootURL.toString}spark3xx-common/")
   private val shimMasks = Seq(
     "spark301",
     "spark302",
@@ -47,10 +44,12 @@ object ShimLoader extends Logging {
     "spark320"
   )
 
-  private var rapidsJarClassLoader: ClassLoader = _
-
+  @volatile private var shimProviderClass: String = _
+  @volatile private var sparkShims: SparkShims = _
+  @volatile private var shimURL: URL = _
+  @volatile private var rapidsJarClassLoader: ClassLoader = _
   // REPL-only logic
-  private var tmpClassLoader: MutableURLClassLoader = _
+  @volatile private var tmpClassLoader: MutableURLClassLoader = _
 
   def shimId: String = shimProviderClass.split('.').takeRight(2).head
 
@@ -94,7 +93,6 @@ object ShimLoader extends Logging {
       }
       tmpClassLoader
     } else {
-      tmpClassLoader = null
       rapidsJarClassLoader
     }
   }
@@ -162,10 +160,10 @@ object ShimLoader extends Logging {
   }
 
   def newInternalShuffleManager(conf: SparkConf, isDriver: Boolean): VisibleShuffleManager = {
-    val loader = getShimClassLoader()
+    getShimClassLoader()
     val shuffleClassName =
       s"org.apache.spark.sql.rapids.shims.${shimId}.RapidsShuffleInternalManager"
-    val shuffleClass = loader.loadClass(shuffleClassName)
+    val shuffleClass = tmpClassLoader.loadClass(shuffleClassName)
     shuffleClass.getConstructor(classOf[SparkConf], java.lang.Boolean.TYPE)
         .newInstance(conf, java.lang.Boolean.valueOf(isDriver))
         .asInstanceOf[VisibleShuffleManager]
