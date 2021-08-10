@@ -24,7 +24,7 @@ import scala.collection.mutable.ArrayBuffer
 
 import ai.rapids.cudf.{DeviceMemoryBuffer, HostMemoryBuffer, MemoryBuffer}
 import com.google.common.util.concurrent.ThreadFactoryBuilder
-import com.nvidia.spark.rapids.{GpuDeviceManager, HashedPriorityQueue, RapidsConf}
+import com.nvidia.spark.rapids.{GpuDeviceManager, HashedPriorityQueue, RapidsConf, ShuffleReceivedBufferCatalog}
 import com.nvidia.spark.rapids.shuffle._
 import com.nvidia.spark.rapids.shuffle.{BounceBufferManager, BufferReceiveState, ClientConnection, PendingTransferRequest, RapidsShuffleClient, RapidsShuffleRequestHandler, RapidsShuffleServer, RapidsShuffleTransport, RefCountedDirectByteBuffer}
 
@@ -44,7 +44,8 @@ import org.apache.spark.storage.BlockManagerId
  * @param shuffleServerId `BlockManagerId` for this executor
  * @param rapidsConf      plugin configuration
  */
-class UCXShuffleTransport(shuffleServerId: BlockManagerId, rapidsConf: RapidsConf)
+class UCXShuffleTransport(shuffleServerId: BlockManagerId, rapidsConf: RapidsConf,
+    receiveCatalog: ShuffleReceivedBufferCatalog)
   extends RapidsShuffleTransport
     with Logging {
 
@@ -261,7 +262,8 @@ class UCXShuffleTransport(shuffleServerId: BlockManagerId, rapidsConf: RapidsCon
         clientConnection,
         this,
         clientExecutor,
-        clientCopyExecutor)
+        clientCopyExecutor,
+        receiveCatalog)
     })
   }
 

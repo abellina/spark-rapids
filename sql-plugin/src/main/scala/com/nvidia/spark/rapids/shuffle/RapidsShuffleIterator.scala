@@ -53,7 +53,7 @@ class RapidsShuffleIterator(
     blocksByAddress: Array[(BlockManagerId, Seq[(BlockId, Long, Int)])],
     metricsUpdater: ShuffleMetricsUpdater,
     sparkTypes: Array[DataType],
-    catalog: ShuffleReceivedBufferCatalog = GpuShuffleEnv.getReceivedCatalog,
+    catalog: ShuffleReceivedBufferCatalog,
     timeoutSeconds: Long = GpuShuffleEnv.shuffleFetchTimeoutSeconds)
   extends Iterator[ColumnarBatch]
     with Logging with Arm {
@@ -281,7 +281,7 @@ class RapidsShuffleIterator(
           s"but it is not done. Closing ${resolvedBatches.size()} resolved batches!!")
       resolvedBatches.forEach {
         case BufferReceived(bufferId) =>
-          GpuShuffleEnv.getReceivedCatalog.removeBuffer(bufferId)
+          catalog.removeBuffer(bufferId)
         case _ =>
       }
       // tell the client to cancel pending requests

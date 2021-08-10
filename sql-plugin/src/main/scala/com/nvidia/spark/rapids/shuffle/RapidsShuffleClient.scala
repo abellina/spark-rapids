@@ -99,8 +99,8 @@ class RapidsShuffleClient(
     transport: RapidsShuffleTransport,
     exec: Executor,
     clientCopyExecutor: Executor,
-    devStorage: RapidsDeviceMemoryStore = RapidsBufferCatalog.getDeviceStorage,
-    catalog: ShuffleReceivedBufferCatalog = GpuShuffleEnv.getReceivedCatalog)
+    catalog: ShuffleReceivedBufferCatalog,
+    devStorage: RapidsDeviceMemoryStore = RapidsBufferCatalog.getDeviceStorage)
       extends Logging with Arm {
 
   object ShuffleClientOps {

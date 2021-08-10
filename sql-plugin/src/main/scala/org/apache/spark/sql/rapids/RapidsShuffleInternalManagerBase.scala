@@ -264,18 +264,17 @@ abstract class RapidsShuffleInternalManagerBase(conf: SparkConf, val isDriver: B
 
   private lazy val localBlockManagerId = blockManager.blockManagerId
 
-  // Code that expects the shuffle catalog to be initialized gets it this way,
-  // with error checking in case we are in a bad state.
-  protected def getCatalogOrThrow: ShuffleBufferCatalog =
-    Option(GpuShuffleEnv.getCatalog).getOrElse(
-      throw new IllegalStateException("The ShuffleBufferCatalog is not initialized but the " +
-        "RapidsShuffleManager is configured"))
-
+  private lazy val diskBlockManager = new RapidsDiskBlockManager(conf)
+  protected  lazy val shuffleCatalog =
+      new ShuffleBufferCatalog(RapidsBufferCatalog.singleton, diskBlockManager)
+  private lazy val shuffleReceivedBufferCatalog =
+      new ShuffleReceivedBufferCatalog(RapidsBufferCatalog.singleton)
   protected def resolver: ShuffleBlockResolver
 
   private[this] lazy val transport: Option[RapidsShuffleTransport] = {
     if (rapidsConf.shuffleTransportEnabled && !isDriver) {
-      Some(RapidsShuffleTransport.makeTransport(blockManager.shuffleServerId, rapidsConf))
+      Some(RapidsShuffleTransport.makeTransport(blockManager.shuffleServerId, rapidsConf,
+        shuffleReceivedBufferCatalog))
     } else {
       None
     }
@@ -283,16 +282,15 @@ abstract class RapidsShuffleInternalManagerBase(conf: SparkConf, val isDriver: B
 
   private[this] lazy val server: Option[RapidsShuffleServer] = {
     if (rapidsConf.shuffleTransportEnabled && !isDriver) {
-      val catalog = getCatalogOrThrow
       val requestHandler = new RapidsShuffleRequestHandler() {
         override def acquireShuffleBuffer(tableId: Int): RapidsBuffer = {
-          val shuffleBufferId = catalog.getShuffleBufferId(tableId)
-          catalog.acquireBuffer(shuffleBufferId)
+          val shuffleBufferId = shuffleCatalog.getShuffleBufferId(tableId)
+          shuffleCatalog.acquireBuffer(shuffleBufferId)
         }
 
         override def getShuffleBufferMetas(sbbId: ShuffleBlockBatchId): Seq[TableMeta] = {
           (sbbId.startReduceId to sbbId.endReduceId).flatMap(rid => {
-            catalog.blockIdToMetas(ShuffleBlockId(sbbId.shuffleId, sbbId.mapId, rid))
+            shuffleCatalog.blockIdToMetas(ShuffleBlockId(sbbId.shuffleId, sbbId.mapId, rid))
           })
         }
       }
@@ -331,7 +329,7 @@ abstract class RapidsShuffleInternalManagerBase(conf: SparkConf, val isDriver: B
           gpu.asInstanceOf[GpuShuffleHandle[K, V]],
           mapId,
           metricsReporter,
-          getCatalogOrThrow,
+          shuffleCatalog,
           RapidsBufferCatalog.getDeviceStorage,
           server,
           gpu.dependency.metrics)
@@ -371,7 +369,8 @@ abstract class RapidsShuffleInternalManagerBase(conf: SparkConf, val isDriver: B
           context,
           metrics,
           transport,
-          getCatalogOrThrow,
+          shuffleCatalog,
+          shuffleReceivedBufferCatalog,
           gpu.dependency.sparkTypes)
       case other => {
         val shuffleHandle = RapidsShuffleInternalManagerBase.unwrapHandle(other)
@@ -381,7 +380,7 @@ abstract class RapidsShuffleInternalManagerBase(conf: SparkConf, val isDriver: B
   }
 
   def registerGpuShuffle(shuffleId: Int): Unit = {
-    val catalog = GpuShuffleEnv.getCatalog
+    val catalog = shuffleCatalog
     if (catalog != null) {
       // Note that in local mode this can be called multiple times.
       logInfo(s"Registering shuffle $shuffleId")
@@ -390,7 +389,7 @@ abstract class RapidsShuffleInternalManagerBase(conf: SparkConf, val isDriver: B
   }
 
   def unregisterGpuShuffle(shuffleId: Int): Unit = {
-    val catalog = GpuShuffleEnv.getCatalog
+    val catalog = shuffleCatalog
     if (catalog != null) {
       logInfo(s"Unregistering shuffle $shuffleId")
       catalog.unregisterShuffle(shuffleId)

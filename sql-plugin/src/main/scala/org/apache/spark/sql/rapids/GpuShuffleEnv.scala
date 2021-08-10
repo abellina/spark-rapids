@@ -92,15 +92,6 @@ object GpuShuffleEnv extends Logging {
     mgr = managerOpt
   }
 
-  def getCatalog: ShuffleBufferCatalog = {
-    println(s"GERA_DEBUG: getCatalog on $this loaded by ${this.getClass.getClassLoader}")
-    if (env == null) {
-      null
-    } else {
-      env.getCatalog
-    }
-  }
-
   //
   // Functions below only get called from the executor
   //
@@ -112,8 +103,6 @@ object GpuShuffleEnv extends Logging {
     env = shuffleEnv
     println(s"GERA_DEBUG: stored env loaded by ${shuffleEnv.getClass.getClassLoader}")
   }
-
-  def getReceivedCatalog: ShuffleReceivedBufferCatalog = env.getReceivedCatalog
 
   def rapidsShuffleCodec: Option[TableCompressionCodec] = env.rapidsShuffleCodec
 

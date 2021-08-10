@@ -54,6 +54,7 @@ class RapidsCachingReader[K, C](
     metrics: ShuffleReadMetricsReporter,
     transport: Option[RapidsShuffleTransport],
     catalog: ShuffleBufferCatalog,
+    shuffleReceivedBufferCatalog: ShuffleReceivedBufferCatalog,
     sparkTypes: Array[DataType])
   extends ShuffleReader[K, C]  with Arm with Logging {
 
@@ -153,7 +154,8 @@ class RapidsCachingReader[K, C](
 
         val cbArrayFromUcx: Iterator[(K, C)] = if (blocksForRapidsTransport.nonEmpty) {
           val rapidsShuffleIterator = new RapidsShuffleIterator(localId, rapidsConf, transport.get,
-            blocksForRapidsTransport.toArray, metricsUpdater, sparkTypes)
+            blocksForRapidsTransport.toArray, metricsUpdater, sparkTypes,
+            shuffleReceivedBufferCatalog)
           rapidsShuffleIterator.map(cb => {
             (0, cb)
           }).asInstanceOf[Iterator[(K, C)]]

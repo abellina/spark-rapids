@@ -54,7 +54,7 @@ class RapidsShuffleInternalManager(conf: SparkConf, isDriver: Boolean)
   override protected lazy val resolver = if (shouldFallThroughOnEverything) {
     wrapped.shuffleBlockResolver
   } else {
-    new GpuShuffleBlockResolver(wrapped.shuffleBlockResolver, getCatalogOrThrow)
+    new GpuShuffleBlockResolver(wrapped.shuffleBlockResolver, shuffleCatalog)
   }
 }
 
