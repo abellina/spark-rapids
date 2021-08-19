@@ -19,17 +19,15 @@ package com.nvidia.spark.rapids
 import java.util
 
 import scala.collection.mutable
-
 import ai.rapids.cudf
 import ai.rapids.cudf.{DType, NvtxColor, Scalar}
 import com.nvidia.spark.rapids.GpuMetric._
 import com.nvidia.spark.rapids.RapidsPluginImplicits._
-
 import org.apache.spark.TaskContext
 import org.apache.spark.internal.Logging
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.catalyst.InternalRow
-import org.apache.spark.sql.catalyst.expressions.{Alias, Ascending, Attribute, AttributeReference, AttributeSeq, AttributeSet, Expression, ExprId, If, NamedExpression, NullsFirst}
+import org.apache.spark.sql.catalyst.expressions.{Alias, Ascending, Attribute, AttributeReference, AttributeSeq, AttributeSet, ExprId, Expression, If, NamedExpression, NullsFirst}
 import org.apache.spark.sql.catalyst.expressions.aggregate._
 import org.apache.spark.sql.catalyst.expressions.codegen.LazilyGeneratedOrdering
 import org.apache.spark.sql.catalyst.plans.logical.LogicalPlan
@@ -38,10 +36,12 @@ import org.apache.spark.sql.catalyst.trees.TreeNodeTag
 import org.apache.spark.sql.catalyst.util.truncatedString
 import org.apache.spark.sql.execution.{ExplainUtils, SortExec, SparkPlan, UnaryExecNode}
 import org.apache.spark.sql.execution.aggregate.{BaseAggregateExec, HashAggregateExec, ObjectHashAggregateExec, SortAggregateExec}
-import org.apache.spark.sql.rapids.{CudfAggregate, GpuAggregateExpression}
+import org.apache.spark.sql.rapids.{CudfAggregate, GpuAggregateExpression, GpuCollectBase}
 import org.apache.spark.sql.rapids.execution.TrampolineUtil
 import org.apache.spark.sql.types.{ArrayType, DataType, LongType, MapType, StructType}
-import org.apache.spark.sql.vectorized.{ColumnarBatch, ColumnVector}
+import org.apache.spark.sql.vectorized.{ColumnVector, ColumnarBatch}
+
+import scala.collection.mutable.ArrayBuffer
 
 object AggregateUtils {
 
@@ -208,6 +208,7 @@ object AggregateModeInfo {
  */
 class GpuHashAggregateIterator(
     cbIter: Iterator[ColumnarBatch],
+    inputAttributes: Seq[Attribute],
     groupingExpressions: Seq[Expression],
     aggregateExpressions: Seq[GpuAggregateExpression],
     aggregateAttributes: Seq[Attribute],
@@ -434,7 +435,7 @@ class GpuHashAggregateIterator(
 
   /** Build an iterator that uses a sort-based approach to merge aggregated batches together. */
   private def buildSortFallbackIterator(): Iterator[ColumnarBatch] = {
-    logInfo("Falling back to sort-based aggregation with ${aggregatedBatches.size()} batches")
+    logInfo(s"Falling back to sort-based aggregation with ${aggregatedBatches.size()} batches")
     metrics.numTasksFallBacked += 1
     val aggregatedBatchIter = new Iterator[ColumnarBatch] {
       override def hasNext: Boolean = !aggregatedBatches.isEmpty
@@ -568,6 +569,7 @@ class GpuHashAggregateIterator(
   private def processIncomingBatch(batch: ColumnarBatch): Seq[GpuColumnVector] = {
     val aggTime = metrics.computeAggTime
     withResource(new NvtxWithMetrics("prep agg batch", NvtxColor.CYAN, aggTime)) { _ =>
+      println(s"processing batch ${batch} with ir ${boundExpressions.boundInputReferences}")
       boundExpressions.boundInputReferences.safeMap { ref =>
         val childCv = GpuExpressionsUtils.columnarEvalToColumn(ref, batch)
         if (childCv.dataType == ref.dataType) {
@@ -625,98 +627,20 @@ class GpuHashAggregateIterator(
     val aggModeCudfAggregates =
       AggregateUtils.computeAggModeCudfAggregates(aggregateExpressions, aggBufferAttributes)
 
-    // boundInputReferences is used to pick out of the input batch the appropriate columns
-    // for aggregation.
-    //
-    // - DistinctAggExpressions with nonDistinctAggExpressions in other mode: we switch the
-    //   position of distinctAttributes and nonDistinctAttributes in childAttr. And we use the
-    //   inputProjections for nonDistinctAggExpressions.
-    // - Final mode, PartialMerge-only mode or no AggExpressions: we pick the columns in the order
-    //   as handed to us.
-    // - Partial mode or Complete mode: we use the inputProjections.
-    val boundInputReferences =
-    if (modeInfo.uniqueModes.length > 1 && aggregateExpressions.exists(_.isDistinct)) {
-      // This block takes care of AggregateExec which contains nonDistinctAggExpressions and
-      // distinctAggExpressions with different AggregateModes. All nonDistinctAggExpressions share
-      // one mode and all distinctAggExpressions are in another mode. The specific mode varies in
-      // different Spark runtimes, so this block applies a general condition to adapt different
-      // runtimes:
-      //
-      // 1. Apache Spark: The 3rd stage of AggWithOneDistinct
-      // The 3rd stage of AggWithOneDistinct, which consists of for nonDistinctAggExpressions in
-      // PartialMerge mode and distinctAggExpressions in Partial mode. For this stage, we need to
-      // switch the position of distinctAttributes and nonDistinctAttributes if there exists at
-      // least one nonDistinctAggExpression. Because the positions of distinctAttributes are ahead
-      // of nonDistinctAttributes in the output of previous stage, since distinctAttributes are
-      // included in groupExpressions.
-      // To be specific, the schema of the 2nd stage's outputs is:
-      // (groupingAttributes ++ distinctAttributes) ++ nonDistinctAggBufferAttributes
-      // The schema of the 3rd stage's expressions is:
-      // groupingAttributes ++ nonDistinctAggExpressions(PartialMerge) ++
-      // distinctAggExpressions(Partial)
-      //
-      // 2. Databricks runtime: The final stage of AggWithOneDistinct
-      // Databricks runtime squeezes the 4-stage AggWithOneDistinct into 2 stages. Basically, it
-      // combines the 1st and 2nd stage into a "Partial" stage; and it combines the 3nd and 4th
-      // stage into a "Merge" stage. Similarly, nonDistinctAggExpressions are ahead of distinct
-      // ones in the layout of "Merge" stage's expressions:
-      // groupingAttributes ++ nonDistinctAggExpressions(Final) ++ DistinctAggExpressions(Complete)
-      // Meanwhile, as Apache Spark, distinctAttributes are ahead of nonDistinctAggBufferAttributes
-      // in the output schema of the "Partial" stage.
-      // Therefore, this block also works on the final stage of AggWithOneDistinct under Databricks
-      // runtime.
-
-      val (distinctAggExpressions, nonDistinctAggExpressions) = aggregateExpressions.partition(
-        _.isDistinct)
-
-      // The schema of childAttr: [groupAttr, distinctAttr, nonDistinctAttr].
-      // With the size of nonDistinctAttr, we can easily extract distinctAttr and nonDistinctAttr
-      // from childAttr.
-      val sizeOfNonDistAttr = nonDistinctAggExpressions
-          .map(_.aggregateFunction.aggBufferAttributes.length).sum
-      val nonDistinctAttributes = childAttr.attrs.takeRight(sizeOfNonDistAttr)
-      val distinctAttributes = childAttr.attrs.slice(
-        groupingAttributes.length, childAttr.attrs.length - sizeOfNonDistAttr)
-
-      // For nonDistinctExpressions, they are in either PartialMerge or Final modes. With either
-      // mode, we just need to pass through childAttr.
-      val nonDistinctExpressions = nonDistinctAttributes.asInstanceOf[Seq[Expression]]
-      // For nonDistinctExpressions, they are in either Final or Complete modes. With either mode,
-      // we need to apply the input projections on these AggExpressions.
-      val distinctExpressions = distinctAggExpressions.flatMap(_.aggregateFunction.inputProjection)
-
-      // Align the expressions of input projections and input attributes
-      val inputProjections = groupingExpressions ++ nonDistinctExpressions ++ distinctExpressions
-      val inputAttributes = groupingAttributes ++ distinctAttributes ++ nonDistinctAttributes
-      GpuBindReferences.bindGpuReferences(inputProjections, inputAttributes)
-    } else if (modeInfo.hasFinalMode ||
-        (modeInfo.hasPartialMergeMode && modeInfo.uniqueModes.length == 1)) {
-      // This block takes care of two possible conditions:
-      // 1. The Final stage, including the 2nd stage of NoDistinctAgg and 4th stage of
-      // AggWithOneDistinct, which needs no input projections. Because the child outputs are
-      // internal aggregation buffers, which are aligned for the final stage.
-      // 2. The 2nd stage (PartialMerge) of AggWithOneDistinct, which works like the final stage
-      // taking the child outputs as inputs without any projections.
-      GpuBindReferences.bindGpuReferences(childAttr.attrs.asInstanceOf[Seq[Expression]], childAttr)
-    } else if (modeInfo.hasPartialMode || modeInfo.hasCompleteMode ||
-        modeInfo.uniqueModes.isEmpty) {
-      // The first aggregation stage which contains AggExpressions (in either Partial or Complete
-      // mode). In this case, the input projections are essential.
-      // To be specific, there are four conditions matching this case:
-      // 1. The Partial (1st) stage of NoDistinctAgg
-      // 2. The Partial (1st) stage of AggWithOneDistinct
-      // 3. In Databricks runtime, the "Final" (2nd) stage of AggWithOneDistinct which only contains
-      // DistinctAggExpressions (without any nonDistinctAggExpressions)
-      //
-      // In addition, this block also fits for aggregation stages without any AggExpressions.
-      val inputProjections: Seq[Expression] = groupingExpressions ++ aggregateExpressions
-          .flatMap(_.aggregateFunction.inputProjection)
-      GpuBindReferences.bindGpuReferences(inputProjections, childAttr)
-    } else {
-      // This branch should NOT be reached.
-      throw new IllegalStateException(
-        s"Unable to handle aggregate with modes: ${modeInfo.uniqueModes}")
+    val aggBound = aggregateExpressions.flatMap { agg =>
+      agg.mode match {
+        case Partial | Complete =>
+          agg.aggregateFunction.inputProjection
+        case PartialMerge | Final =>
+          agg.aggregateFunction.inputAggBufferAttributes
+        case mode =>
+          throw new NotImplementedError(s"can't translate ${mode}")
+      }
     }
+
+    val boundInputReferences = GpuBindReferences.bindGpuReferences(
+      groupingExpressions ++ aggBound,
+      inputAttributes)
 
     val boundFinalProjections = if (modeInfo.hasFinalMode || modeInfo.hasCompleteMode) {
       val finalProjections = groupingExpressions ++
@@ -1278,6 +1202,7 @@ case class GpuHashAggregateExec(
     rdd.mapPartitions { cbIter =>
       new GpuHashAggregateIterator(
         cbIter,
+        inputAttributes,
         groupingExprs,
         aggregateExprs,
         aggregateAttrs,
@@ -1326,6 +1251,34 @@ case class GpuHashAggregateExec(
     }
   }
 
+  def inputAttributes: Seq[Attribute] = {
+    val modes = aggregateExpressions.map(_.mode).distinct
+    if (modes.contains(Final) || modes.contains(PartialMerge)) {
+      // SPARK-31620: when planning aggregates, the partial aggregate uses aggregate function's
+      // `inputAggBufferAttributes` as its output. And Final and PartialMerge aggregate rely on the
+      // output to bind references for `DeclarativeAggregate.mergeExpressions`. But if we copy the
+      // aggregate function somehow after aggregate planning, like `PlanSubqueries`, the
+      // `DeclarativeAggregate` will be replaced by a new instance with new
+      // `inputAggBufferAttributes` and `mergeExpressions`. Then Final and PartialMerge aggregate
+      // can't bind the `mergeExpressions` with the output of the partial aggregate, as they use
+      // the `inputAggBufferAttributes` of the original `DeclarativeAggregate` before copy. Instead,
+      // we shall use `inputAggBufferAttributes` after copy to match the new `mergeExpressions`.
+      val aggAttrs = inputAggBufferAttributes
+      child.output.dropRight(aggAttrs.length) ++ aggAttrs
+    } else {
+      child.output
+    }
+  }
+
+  private val inputAggBufferAttributes: Seq[Attribute] = {
+    aggregateExpressions
+      // there're exactly four cases needs `inputAggBufferAttributes` from child according to the
+      // agg planning in `AggUtils`: Partial -> Final, PartialMerge -> Final,
+      // Partial -> PartialMerge, PartialMerge -> PartialMerge.
+      .filter(a => a.mode == Final || a.mode == PartialMerge)
+      .flatMap(_.aggregateFunction.inputAggBufferAttributes)
+  }
+
   // Used in de-duping and optimizer rules
   override def producedAttributes: AttributeSet =
     AttributeSet(aggregateAttributes) ++
@@ -1354,6 +1307,7 @@ case class GpuHashAggregateExec(
   override lazy val allAttributes: AttributeSeq =
     child.output ++ aggregateBufferAttributes ++ aggregateAttributes ++
       aggregateExpressions.flatMap(_.aggregateFunction.inputAggBufferAttributes)
+
 
   override def verboseString(maxFields: Int): String = toString(verbose = true, maxFields)
 

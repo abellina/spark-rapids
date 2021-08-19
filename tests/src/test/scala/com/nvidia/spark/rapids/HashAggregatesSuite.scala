@@ -1579,6 +1579,23 @@ class HashAggregatesSuite extends SparkQueryCompareTestSuite {
            |""".stripMargin)
   }
 
+  IGNORE_ORDER_testSparkResultsAreEqual(
+    "collect_* aggregates",
+    longsFromCSVDf,
+    conf = floatAggConf) {
+    frame => frame.createOrReplaceTempView("testTable")
+      frame.sparkSession.sql(
+        s"""
+           | SELECT
+           |   sort_array(collect_list(distinct longs)),
+           |   sort_array(collect_set(longs)),
+           |   count(distinct longs)
+           | FROM testTable
+           |   group by more_longs
+           |""".stripMargin)
+  }
+
+
   testSparkResultsAreEqual("Count with filter", longsFromCSVDf, conf = floatAggConf) {
     frame => val res = frame.selectExpr("count(longs) filter (where longs < 5)")
       res

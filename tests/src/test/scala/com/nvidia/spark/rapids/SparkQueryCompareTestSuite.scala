@@ -22,15 +22,15 @@ import java.util.{Locale, TimeZone}
 
 import scala.reflect.ClassTag
 import scala.util.{Failure, Try}
-
 import org.scalatest.FunSuite
-
 import org.apache.spark.SparkConf
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.{DataFrame, Row, SparkSession}
 import org.apache.spark.sql.execution.SparkPlan
 import org.apache.spark.sql.rapids.execution.TrampolineUtil
 import org.apache.spark.sql.types._
+
+import scala.collection.mutable
 
 object TestResourceFinder {
   private [this] var resourcePrefix: String = _
@@ -663,6 +663,8 @@ trait SparkQueryCompareTestSuite extends FunSuite with Arm {
             } else if (cmp > 0) {
               return false
             } // else equal go on
+          case (s1: mutable.WrappedArray[Any], s2: mutable.WrappedArray[Any]) =>
+            return seqLt(s1, s2)
           case (o1, _) =>
             throw new UnsupportedOperationException(o1.getClass + " is not supported yet")
         }
