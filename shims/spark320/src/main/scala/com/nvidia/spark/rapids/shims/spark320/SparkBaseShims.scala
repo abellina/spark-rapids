@@ -20,9 +20,11 @@ import java.net.URI
 import java.nio.ByteBuffer
 
 import com.nvidia.spark.rapids._
+import com.nvidia.spark.rapids.spark320.RapidsShuffleManager
 import org.apache.arrow.memory.ReferenceManager
 import org.apache.arrow.vector.ValueVector
 import org.apache.hadoop.fs.Path
+import org.apache.parquet.schema.MessageType
 import org.apache.spark.SparkEnv
 
 import org.apache.spark.sql.SparkSession
@@ -40,6 +42,7 @@ import org.apache.spark.sql.execution.adaptive.{BroadcastQueryStageExec, Shuffle
 import org.apache.spark.sql.execution.columnar.InMemoryTableScanExec
 import org.apache.spark.sql.execution.command.{RepairTableCommand, RunnableCommand}
 import org.apache.spark.sql.execution.datasources.{FileIndex, HadoopFsRelation, InMemoryFileIndex}
+import org.apache.spark.sql.execution.datasources.parquet.ParquetFilters
 import org.apache.spark.sql.execution.datasources.rapids.GpuPartitioningUtils
 import org.apache.spark.sql.execution.datasources.v2.orc.OrcScan
 import org.apache.spark.sql.execution.datasources.v2.parquet.ParquetScan
@@ -48,6 +51,7 @@ import org.apache.spark.sql.execution.joins.{BroadcastHashJoinExec, BroadcastNes
 import org.apache.spark.sql.internal.{SQLConf, StaticSQLConf}
 import org.apache.spark.sql.rapids.{GpuElementAt, GpuFileSourceScanExec, GpuGetArrayItem, GpuGetArrayItemMeta, GpuGetMapValue, GpuGetMapValueMeta, GpuStringReplace, ShuffleManagerShimBase}
 import org.apache.spark.sql.rapids.execution.{GpuBroadcastNestedLoopJoinExecBase, GpuShuffleExchangeExecBase}
+import org.apache.spark.sql.rapids.shims.spark320.{GpuInMemoryTableScanExec, GpuSchemaUtils, HadoopFSUtilsShim, ShuffleManagerShim}
 import org.apache.spark.sql.sources.BaseRelation
 import org.apache.spark.sql.types._
 import org.apache.spark.storage.{BlockId, BlockManagerId}
@@ -589,7 +593,7 @@ class SparkBaseShims extends SparkShims {
     val serName = plan.conf.getConf(StaticSQLConf.SPARK_CACHE_SERIALIZER)
     val serClass = Class.forName(serName)
     if (serClass == classOf[ParquetCachedBatchSerializer]) {
-      org.apache.spark.sql.rapids.shims.spark311.GpuColumnarToRowTransitionExec(plan)
+      org.apache.spark.sql.rapids.shims.spark320.GpuColumnarToRowTransitionExec(plan)
     } else {
       GpuColumnarToRowExec(plan)
     }

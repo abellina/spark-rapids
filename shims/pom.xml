@@ -63,7 +63,6 @@
             </modules>
         </profile>
         <profile>
-<<<<<<< HEAD
             <id>release303</id>
             <modules>
                 <module>spark303</module>
