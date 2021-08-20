@@ -19,8 +19,8 @@ package com.nvidia.spark.rapids.shims.spark320
 import com.nvidia.spark.rapids.{SparkShims, SparkShimVersion}
 
 object SparkShimServiceProvider {
-  val VERSION320 = SparkShimVersion(3, 2, 0)
-  val VERSIONNAMES: Seq[String] = Seq(VERSION320)
+  val VERSION = SparkShimVersion(3, 2, 0)
+  val VERSIONNAMES: Seq[String] = Seq(VERSION)
     .flatMap(v => Seq(s"$v", s"$v-SNAPSHOT"))
 }
 
