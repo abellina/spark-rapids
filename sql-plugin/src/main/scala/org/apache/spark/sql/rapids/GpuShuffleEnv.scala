@@ -17,9 +17,10 @@
 package org.apache.spark.sql.rapids
 
 import java.util.Locale
+import java.util.concurrent.Executors
 
+import ai.rapids.cudf.Rmm
 import com.nvidia.spark.rapids._
-
 import org.apache.spark.SparkEnv
 import org.apache.spark.internal.Logging
 
@@ -50,6 +51,16 @@ class GpuShuffleEnv(rapidsConf: RapidsConf) extends Logging {
           new ShuffleBufferCatalog(RapidsBufferCatalog.singleton, diskBlockManager)
       shuffleReceivedBufferCatalog =
           new ShuffleReceivedBufferCatalog(RapidsBufferCatalog.singleton)
+    }
+
+    if (rapidsConf.rmmPool == "ARENA") {
+      val rmmMonitor = Executors.newSingleThreadExecutor()
+      rmmMonitor.execute(() => {
+        while (true) {
+          Rmm.dumpArena()
+          Thread.sleep(5000)
+        }
+      })
     }
   }
 
