@@ -34,7 +34,7 @@ import org.apache.spark.sql.catalyst.rules.Rule
 import org.apache.spark.sql.connector.read.Scan
 import org.apache.spark.sql.execution._
 import org.apache.spark.sql.execution.ScalarSubquery
-import org.apache.spark.sql.execution.adaptive.{AdaptiveSparkPlanExec, BroadcastQueryStageExec, CustomShuffleReaderExec, ShuffleQueryStageExec}
+import org.apache.spark.sql.execution.adaptive.{AdaptiveSparkPlanExec, BroadcastQueryStageExec, ShuffleQueryStageExec}
 import org.apache.spark.sql.execution.aggregate.{HashAggregateExec, ObjectHashAggregateExec, SortAggregateExec}
 import org.apache.spark.sql.execution.command.{CreateDataSourceTableAsSelectCommand, DataWritingCommand, DataWritingCommandExec, ExecutedCommandExec}
 import org.apache.spark.sql.execution.datasources.{FileFormat, InsertIntoHadoopFsRelationCommand}
@@ -3160,24 +3160,24 @@ object GpuOverrides {
       (windowOp, conf, p, r) =>
         new GpuWindowExecMeta(windowOp, conf, p, r)
     ),
-    exec[CustomShuffleReaderExec](
-      "A wrapper of shuffle query stage",
-      ExecChecks((TypeSig.commonCudfTypes + TypeSig.NULL + TypeSig.DECIMAL_64 + TypeSig.ARRAY +
-        TypeSig.STRUCT + TypeSig.MAP).nested(), TypeSig.all),
-      (exec, conf, p, r) =>
-      new SparkPlanMeta[CustomShuffleReaderExec](exec, conf, p, r) {
-        override def tagPlanForGpu(): Unit = {
-          if (!exec.child.supportsColumnar) {
-            willNotWorkOnGpu(
-              "Unable to replace CustomShuffleReader due to child not being columnar")
-          }
-        }
+    //exec[CustomShuffleReaderExec](
+    //  "A wrapper of shuffle query stage",
+    //  ExecChecks((TypeSig.commonCudfTypes + TypeSig.NULL + TypeSig.DECIMAL_64 + TypeSig.ARRAY +
+    //    TypeSig.STRUCT + TypeSig.MAP).nested(), TypeSig.all),
+    //  (exec, conf, p, r) =>
+    //  new SparkPlanMeta[CustomShuffleReaderExec](exec, conf, p, r) {
+    //    override def tagPlanForGpu(): Unit = {
+    //      if (!exec.child.supportsColumnar) {
+    //        willNotWorkOnGpu(
+    //          "Unable to replace CustomShuffleReader due to child not being columnar")
+    //      }
+    //    }
 
-        override def convertToGpu(): GpuExec = {
-          GpuCustomShuffleReaderExec(childPlans.head.convertIfNeeded(),
-            exec.partitionSpecs)
-        }
-      }),
+    //    override def convertToGpu(): GpuExec = {
+    //      GpuCustomShuffleReaderExec(childPlans.head.convertIfNeeded(),
+    //        exec.partitionSpecs)
+    //    }
+    //  }),
     exec[FlatMapCoGroupsInPandasExec](
       "The backend for CoGrouped Aggregation Pandas UDF, it runs on CPU itself now but supports" +
         " scheduling GPU resources for the Python process when enabled",

@@ -165,6 +165,10 @@ trait GpuExpression extends Expression with Arm {
 
 abstract class GpuLeafExpression extends GpuExpression {
   override final def children: Seq[Expression] = Nil
+
+  override def withNewChildrenInternal(newChildren: IndexedSeq[Expression]): Expression = {
+    super.legacyWithNewChildren(newChildren)
+  }
 }
 
 trait GpuUnevaluable extends GpuExpression {
@@ -196,6 +200,10 @@ abstract class GpuUnaryExpression extends UnaryExpression with GpuExpression {
     withResource(GpuExpressionsUtils.columnarEvalToColumn(child, batch)) { col =>
       doItColumnar(col)
     }
+  }
+
+  override def withNewChildInternal(newChild: Expression): Expression = {
+    makeCopy(Array(newChild))
   }
 }
 
@@ -235,7 +243,9 @@ trait CudfUnaryExpression extends GpuUnaryExpression {
   }
 }
 
-trait GpuBinaryExpression extends BinaryExpression with GpuExpression {
+trait GpuBinaryExpression
+  extends BinaryExpression
+    with GpuExpression {
 
   def doColumnar(lhs: GpuColumnVector, rhs: GpuColumnVector): ColumnVector
   def doColumnar(lhs: GpuScalar, rhs: GpuColumnVector): ColumnVector
@@ -260,6 +270,12 @@ trait GpuBinaryExpression extends BinaryExpression with GpuExpression {
         }
       }
     }
+  }
+
+  override def withNewChildrenInternal(
+      newLeft:  Expression,
+      newRight: Expression): Expression = {
+    super.legacyWithNewChildren(Seq(newLeft, newRight))
   }
 }
 

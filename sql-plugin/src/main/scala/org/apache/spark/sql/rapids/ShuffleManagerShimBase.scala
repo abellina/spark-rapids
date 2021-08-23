@@ -16,10 +16,16 @@
 
 package org.apache.spark.sql.rapids
 
-import org.apache.spark.TaskContext
-import org.apache.spark.shuffle.{ShuffleHandle, ShuffleManager, ShuffleReader, ShuffleReadMetricsReporter}
+import org.apache.spark.{Partition, ShuffleDependency, SparkContext, TaskContext}
+import org.apache.spark.shuffle.{ShuffleHandle, ShuffleManager, ShuffleReadMetricsReporter, ShuffleReader}
+import org.apache.spark.sql.execution.metric.{SQLMetric, SQLShuffleReadMetricsReporter}
+import org.apache.spark.sql.rapids.execution.ShuffledBatchRDDPartition
+import org.apache.spark.sql.vectorized.ColumnarBatch
 
 trait ShuffleManagerShimBase {
+  def getPreferredLocations(
+      dependency: ShuffleDependency[Int, ColumnarBatch, ColumnarBatch],
+      partition: Partition): Seq[String]
 
   def getReader[K, C](
       shuffleManager: ShuffleManager,
@@ -30,4 +36,10 @@ trait ShuffleManagerShimBase {
       endPartition: Int,
       context: TaskContext,
       metrics: ShuffleReadMetricsReporter): ShuffleReader[K, C]
+
+  def getReaderAndPartitionSizeForSpec[K, C](
+      context: TaskContext,
+      dependency: ShuffleDependency[Int, ColumnarBatch, ColumnarBatch],
+      shuffledBatchRDDPartition: ShuffledBatchRDDPartition,
+      sqlMetricsReporter: SQLShuffleReadMetricsReporter): (ShuffleReader[K, C], Long)
 }

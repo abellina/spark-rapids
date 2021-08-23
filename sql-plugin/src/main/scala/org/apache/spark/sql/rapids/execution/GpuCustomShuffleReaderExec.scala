@@ -59,17 +59,8 @@ case class GpuCustomShuffleReaderExec(
     if (partitionSpecs.forall(_.isInstanceOf[PartialMapperPartitionSpec]) &&
         partitionSpecs.map(_.asInstanceOf[PartialMapperPartitionSpec].mapIndex).toSet.size ==
             partitionSpecs.length) {
-      child match {
-        case ShuffleQueryStageExec(_, s: ShuffleExchangeLike) =>
-          s.child.outputPartitioning
-        case ShuffleQueryStageExec(_, r @ ReusedExchangeExec(_, s: ShuffleExchangeLike)) =>
-          s.child.outputPartitioning match {
-            case e: Expression => r.updateAttr(e).asInstanceOf[Partitioning]
-            case other => other
-          }
-        case _ =>
-          throw new IllegalStateException("operating on canonicalization plan")
-      }
+      ShimLoader.getSparkShims.getOutputPartitioningFromChild(child)
+
     } else {
       UnknownPartitioning(partitionSpecs.length)
     }

@@ -24,7 +24,6 @@ import org.apache.arrow.memory.ReferenceManager
 import org.apache.arrow.vector.ValueVector
 import org.apache.hadoop.fs.Path
 import org.apache.parquet.schema.MessageType
-
 import org.apache.spark.SparkEnv
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.SparkSession
@@ -39,7 +38,7 @@ import org.apache.spark.sql.catalyst.plans.physical.{BroadcastMode, Partitioning
 import org.apache.spark.sql.catalyst.trees.TreeNode
 import org.apache.spark.sql.connector.read.Scan
 import org.apache.spark.sql.execution._
-import org.apache.spark.sql.execution.adaptive.{BroadcastQueryStageExec, ShuffleQueryStageExec}
+import org.apache.spark.sql.execution.adaptive.{BroadcastQueryStageExec, CustomShuffleReaderExec, ShuffleQueryStageExec}
 import org.apache.spark.sql.execution.command.{AlterTableRecoverPartitionsCommand, RunnableCommand}
 import org.apache.spark.sql.execution.datasources.{FileIndex, FilePartition, FileScanRDD, HadoopFsRelation, InMemoryFileIndex, PartitionDirectory, PartitionedFile}
 import org.apache.spark.sql.execution.datasources.parquet.ParquetFilters
@@ -52,7 +51,7 @@ import org.apache.spark.sql.execution.python.{AggregateInPandasExec, ArrowEvalPy
 import org.apache.spark.sql.execution.window.WindowExecBase
 import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.rapids.{GpuFileSourceScanExec, GpuStringReplace, GpuTimeSub, ShuffleManagerShimBase}
-import org.apache.spark.sql.rapids.execution.{GpuBroadcastExchangeExecBase, GpuBroadcastNestedLoopJoinExecBase, GpuShuffleExchangeExecBase}
+import org.apache.spark.sql.rapids.execution.{GpuBroadcastExchangeExecBase, GpuBroadcastNestedLoopJoinExecBase, GpuCustomShuffleReaderExec, GpuShuffleExchangeExecBase}
 import org.apache.spark.sql.rapids.execution.python.{GpuAggregateInPandasExecMeta, GpuArrowEvalPythonExec, GpuFlatMapGroupsInPandasExecMeta, GpuMapInPandasExecMeta, GpuPythonUDF, GpuWindowInPandasExecMetaBase}
 import org.apache.spark.sql.rapids.shims.spark303.{GpuSchemaUtils, ShuffleManagerShim}
 import org.apache.spark.sql.sources.BaseRelation
@@ -168,6 +167,24 @@ abstract class SparkBaseShims extends SparkShims {
 
   override def getExecs: Map[Class[_ <: SparkPlan], ExecRule[_ <: SparkPlan]] = {
     Seq(
+      GpuOverrides.exec[CustomShuffleReaderExec](
+        "A wrapper of shuffle query stage",
+        ExecChecks((TypeSig.commonCudfTypes + TypeSig.NULL + TypeSig.DECIMAL_64 + TypeSig.ARRAY +
+          TypeSig.STRUCT + TypeSig.MAP).nested(), TypeSig.all),
+        (exec, conf, p, r) =>
+        new SparkPlanMeta[CustomShuffleReaderExec](exec, conf, p, r) {
+          override def tagPlanForGpu(): Unit = {
+            if (!exec.child.supportsColumnar) {
+              willNotWorkOnGpu(
+                "Unable to replace CustomShuffleReader due to child not being columnar")
+            }
+          }
+
+          override def convertToGpu(): GpuExec = {
+            GpuCustomShuffleReaderExec(childPlans.head.convertIfNeeded(),
+              exec.partitionSpecs)
+          }
+        }),
       GpuOverrides.exec[WindowInPandasExec](
         "The backend for Window Aggregation Pandas UDF, Accelerates the data transfer between" +
           " the Java process and the Python process. It also supports scheduling GPU resources" +

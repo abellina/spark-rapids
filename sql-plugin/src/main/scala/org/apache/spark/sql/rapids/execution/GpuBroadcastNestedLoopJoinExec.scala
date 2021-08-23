@@ -406,13 +406,8 @@ abstract class GpuBroadcastNestedLoopJoinExecBase(
     case GpuBuildLeft => (right, left)
   }
 
-  def broadcastExchange: GpuBroadcastExchangeExecBase = broadcast match {
-    case BroadcastQueryStageExec(_, gpu: GpuBroadcastExchangeExecBase) => gpu
-    case BroadcastQueryStageExec(_, reused: ReusedExchangeExec) =>
-      reused.child.asInstanceOf[GpuBroadcastExchangeExecBase]
-    case gpu: GpuBroadcastExchangeExecBase => gpu
-    case reused: ReusedExchangeExec => reused.child.asInstanceOf[GpuBroadcastExchangeExecBase]
-  }
+  def broadcastExchange: GpuBroadcastExchangeExecBase =
+    ShimLoader.getSparkShims.getGpuBroadcastExchangeExecFromPlan(broadcast)
 
   override def requiredChildDistribution: Seq[Distribution] = getGpuBuildSide match {
     case GpuBuildLeft =>

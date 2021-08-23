@@ -19,6 +19,7 @@ package com.nvidia.spark.rapids.shims.spark320
 import java.net.URI
 import java.nio.ByteBuffer
 
+import com.nvidia.spark.rapids.GpuOverrides.exec
 import com.nvidia.spark.rapids._
 import com.nvidia.spark.rapids.spark320.RapidsShuffleManager
 import org.apache.arrow.memory.ReferenceManager
@@ -37,7 +38,7 @@ import org.apache.spark.sql.catalyst.trees.TreeNode
 import org.apache.spark.sql.catalyst.TableIdentifier
 import org.apache.spark.sql.connector.read.Scan
 import org.apache.spark.sql.execution._
-import org.apache.spark.sql.execution.adaptive.{BroadcastQueryStageExec, ShuffleQueryStageExec}
+import org.apache.spark.sql.execution.adaptive.{AQEShuffleReadExec, BroadcastQueryStageExec, ShuffleQueryStageExec}
 import org.apache.spark.sql.execution.columnar.InMemoryTableScanExec
 import org.apache.spark.sql.execution.command.{RepairTableCommand, RunnableCommand}
 import org.apache.spark.sql.execution.datasources.{FileIndex, HadoopFsRelation, InMemoryFileIndex}
@@ -45,14 +46,14 @@ import org.apache.spark.sql.execution.datasources.parquet.ParquetFilters
 import org.apache.spark.sql.execution.datasources.rapids.GpuPartitioningUtils
 import org.apache.spark.sql.execution.datasources.v2.orc.OrcScan
 import org.apache.spark.sql.execution.datasources.v2.parquet.ParquetScan
-import org.apache.spark.sql.execution.exchange.{ENSURE_REQUIREMENTS, ReusedExchangeExec, ShuffleExchangeExec}
+import org.apache.spark.sql.execution.exchange.{ENSURE_REQUIREMENTS, ReusedExchangeExec, ShuffleExchangeExec, ShuffleExchangeLike}
 import org.apache.spark.sql.execution.joins.{BroadcastHashJoinExec, BroadcastNestedLoopJoinExec, HashJoin, ShuffledHashJoinExec, SortMergeJoinExec}
 import org.apache.spark.sql.execution.window.WindowExecBase
 import org.apache.spark.sql.internal.SQLConf.LegacyBehaviorPolicy
 import org.apache.spark.sql.internal.{SQLConf, StaticSQLConf}
 import org.apache.spark.sql.rapids.{GpuElementAt, GpuFileSourceScanExec, GpuGetArrayItem, GpuGetArrayItemMeta, GpuGetMapValue, GpuGetMapValueMeta, GpuStringReplace, ShuffleManagerShimBase}
-import org.apache.spark.sql.rapids.execution.{GpuBroadcastExchangeExecBase, GpuBroadcastNestedLoopJoinExecBase, GpuShuffleExchangeExecBase}
-import org.apache.spark.sql.rapids.shims.spark320.{GpuInMemoryTableScanExec, GpuSchemaUtils, HadoopFSUtilsShim, ShuffleManagerShim}
+import org.apache.spark.sql.rapids.execution.{GpuBroadcastExchangeExecBase, GpuBroadcastNestedLoopJoinExecBase, GpuCustomShuffleReaderExec, GpuShuffleExchangeExecBase}
+import org.apache.spark.sql.rapids.shims.spark320.{GpuInMemoryTableScanExec, GpuSchemaUtils, HadoopFSUtilsShim, ReusedExchangeShim, ShuffleManagerShim}
 import org.apache.spark.sql.sources.BaseRelation
 import org.apache.spark.sql.types._
 import org.apache.spark.storage.{BlockId, BlockManagerId}
@@ -61,6 +62,62 @@ import org.apache.spark.storage.{BlockId, BlockManagerId}
  * Base Shim for Spark 3.1.1 that can be used by other 3.1.x versions and to easily diff
  */
 abstract class SparkBaseShims extends SparkShims {
+  def getOutputPartitioningFromChild(child: SparkPlan): Partitioning = child match {
+    case ShuffleQueryStageExec(_, s: ShuffleExchangeLike, _) =>
+      s.child.outputPartitioning
+    case ShuffleQueryStageExec(_, r @ ReusedExchangeExec(_, s: ShuffleExchangeLike), _) =>
+      s.child.outputPartitioning match {
+        case e: Expression =>
+          ReusedExchangeShim.updateAttr(e, r).asInstanceOf[Partitioning]
+        case other => other
+      }
+    case _ =>
+      throw new IllegalStateException("operating on canonicalization plan")
+  }
+
+  override def getGpuBroadcastExchangeExecFromPlan(
+      broadcast: SparkPlan): GpuBroadcastExchangeExecBase = broadcast match {
+      case BroadcastQueryStageExec(_, gpu: GpuBroadcastExchangeExecBase, _) => gpu
+      case BroadcastQueryStageExec(_, reused: ReusedExchangeExec, _) =>
+        reused.child.asInstanceOf[GpuBroadcastExchangeExecBase]
+      case gpu: GpuBroadcastExchangeExecBase => gpu
+      case reused: ReusedExchangeExec => reused.child.asInstanceOf[GpuBroadcastExchangeExecBase]
+    }
+
+  def canBuildSideBeReplaced(buildSide: SparkPlanMeta[_]): Boolean = {
+    buildSide.wrapped match {
+      case BroadcastQueryStageExec(_, _: GpuBroadcastExchangeExecBase, _) => true
+      case BroadcastQueryStageExec(_, reused: ReusedExchangeExec, _) =>
+        reused.child.isInstanceOf[GpuBroadcastExchangeExecBase]
+      case reused: ReusedExchangeExec => reused.child.isInstanceOf[GpuBroadcastExchangeExecBase]
+      case _: GpuBroadcastExchangeExecBase => true
+      case _ => buildSide.canThisBeReplaced
+    }
+  }
+
+  def verifyBuildSideWasReplaced(buildSide: SparkPlan): Unit = {
+    val buildSideOnGpu = buildSide match {
+      case BroadcastQueryStageExec(_, _: GpuBroadcastExchangeExecBase, _) => true
+      case BroadcastQueryStageExec(_, reused: ReusedExchangeExec, _) =>
+        reused.child.isInstanceOf[GpuBroadcastExchangeExecBase]
+      case reused: ReusedExchangeExec => reused.child.isInstanceOf[GpuBroadcastExchangeExecBase]
+      case _: GpuBroadcastExchangeExecBase => true
+      case _ => false
+    }
+    if (!buildSideOnGpu) {
+      throw new IllegalStateException(s"the broadcast must be on the GPU too")
+    }
+  }
+  override def getNonQueryStagePlan(plan: SparkPlan): SparkPlan = {
+    plan match {
+      case BroadcastQueryStageExec(_, ReusedExchangeExec(_, plan),_) => plan
+      case BroadcastQueryStageExec(_, plan,_) => plan
+      case ShuffleQueryStageExec(_, ReusedExchangeExec(_, plan),_) => plan
+      case ShuffleQueryStageExec(_, plan,_) => plan
+      case _ => plan
+    }
+  }
+
   override def getSparkShimVersion: ShimVersion = SparkShimServiceProvider.VERSION
 
   override def getScalaUDFAsExpression(
@@ -436,6 +493,25 @@ abstract class SparkBaseShims extends SparkShims {
 
   override def getExecs: Map[Class[_ <: SparkPlan], ExecRule[_ <: SparkPlan]] = {
     Seq(
+      //TODO: AB (used to be CustomShuffleReaderExec)
+      GpuOverrides.exec[AQEShuffleReadExec](
+        "A wrapper of shuffle query stage",
+        ExecChecks((TypeSig.commonCudfTypes + TypeSig.NULL + TypeSig.DECIMAL_64 + TypeSig.ARRAY +
+          TypeSig.STRUCT + TypeSig.MAP).nested(), TypeSig.all),
+        (exec, conf, p, r) =>
+          new SparkPlanMeta[AQEShuffleReadExec](exec, conf, p, r) {
+            override def tagPlanForGpu(): Unit = {
+              if (!exec.child.supportsColumnar) {
+                willNotWorkOnGpu(
+                  "Unable to replace CustomShuffleReader due to child not being columnar")
+              }
+            }
+
+            override def convertToGpu(): GpuExec = {
+              GpuCustomShuffleReaderExec(childPlans.head.convertIfNeeded(),
+                exec.partitionSpecs)
+            }
+          }),
       GpuOverrides.exec[FileSourceScanExec](
         "Reading data from files, often from Hive tables",
         ExecChecks((TypeSig.commonCudfTypes + TypeSig.NULL + TypeSig.STRUCT + TypeSig.MAP +

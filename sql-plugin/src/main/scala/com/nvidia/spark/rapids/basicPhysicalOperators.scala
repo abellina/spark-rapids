@@ -398,7 +398,7 @@ case class GpuRangeExec(range: org.apache.spark.sql.catalyst.plans.logical.Range
     if (isEmptyRange) {
       sparkContext.emptyRDD[ColumnarBatch]
     } else {
-      sqlContext
+      sparkSession
           .sparkContext
           .parallelize(0 until numSlices, numSlices)
           .mapPartitionsWithIndex { (i, _) =>

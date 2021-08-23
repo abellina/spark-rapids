@@ -79,6 +79,10 @@ trait GpuAggregateFunction extends GpuExpression with GpuUnevaluable {
   // These attributes are created automatically by cloning the [[aggBufferAttributes]].
   final lazy val inputAggBufferAttributes: Seq[AttributeReference] =
     aggBufferAttributes.map(_.newInstance())
+
+  override def withNewChildrenInternal(newChildren: IndexedSeq[Expression]): Expression = {
+    super.legacyWithNewChildren(newChildren) // TODO: AB: does this need to be in each specific type
+  }
 }
 
 case class WrappedAggFunction(aggregateFunction: GpuAggregateFunction, filter: Expression)

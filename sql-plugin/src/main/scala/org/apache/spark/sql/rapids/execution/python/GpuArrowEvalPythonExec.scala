@@ -263,8 +263,17 @@ trait GpuPythonArrowOutput extends Arm { self: GpuArrowPythonRunner =>
       worker: Socket,
       releasedOrClosed: AtomicBoolean,
       context: TaskContext): Iterator[ColumnarBatch] = {
-
-    new ReaderIterator(stream, writerThread, startTime, env, worker, releasedOrClosed, context) {
+    //TODO: AB shim it (pid new in 3.2.0)
+    val pid = None  // Option[Int]
+    new ReaderIterator(
+      stream,
+      writerThread,
+      startTime,
+      env,
+      worker,
+      pid,
+      releasedOrClosed,
+      context) {
 
       private[this] var arrowReader: StreamedTableReader = _
 

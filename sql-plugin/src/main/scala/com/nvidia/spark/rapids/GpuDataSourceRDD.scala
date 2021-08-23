@@ -34,7 +34,9 @@ class GpuDataSourceRDD(
     sc: SparkContext,
     @transient private val inputPartitions: Seq[InputPartition],
     partitionReaderFactory: PartitionReaderFactory)
-    extends DataSourceRDD(sc, inputPartitions, partitionReaderFactory, columnarReads = true) {
+// TODO: shim customMetrics (last Map)
+    extends DataSourceRDD(sc, inputPartitions, partitionReaderFactory,
+      columnarReads = true, Map.empty) {
 
   private def castPartition(split: Partition): DataSourceRDDPartition = split match {
     case p: DataSourceRDDPartition => p

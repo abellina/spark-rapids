@@ -23,7 +23,7 @@ import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.expressions.{Ascending, Attribute, AttributeReference, Expression, InputFileBlockLength, InputFileBlockStart, InputFileName, SortOrder}
 import org.apache.spark.sql.catalyst.rules.Rule
 import org.apache.spark.sql.execution._
-import org.apache.spark.sql.execution.adaptive.{AdaptiveSparkPlanExec, BroadcastQueryStageExec, CustomShuffleReaderExec, QueryStageExec, ShuffleQueryStageExec}
+import org.apache.spark.sql.execution.adaptive.{AdaptiveSparkPlanExec, BroadcastQueryStageExec, QueryStageExec, ShuffleQueryStageExec}
 import org.apache.spark.sql.execution.columnar.InMemoryTableScanExec
 import org.apache.spark.sql.execution.command.ExecutedCommandExec
 import org.apache.spark.sql.execution.datasources.v2.DataSourceV2ScanExecBase
@@ -114,7 +114,7 @@ class GpuTransitionOverrides extends Rule[SparkPlan] {
       val plan = GpuTransitionOverrides.getNonQueryStagePlan(s)
       if (plan.supportsColumnar && plan.isInstanceOf[GpuExec]) {
         parent match {
-          case Some(_: GpuCustomShuffleReaderExec | _: CustomShuffleReaderExec) =>
+          case Some(_: GpuCustomShuffleReaderExec) => //TODO: AB | _: CustomShuffleReaderExec) =>
             // We can't insert a coalesce batches operator between a custom shuffle reader
             // and a shuffle query stage, so we instead insert it around the custom shuffle
             // reader later on, in the next top-level case clause.
@@ -420,7 +420,7 @@ class GpuTransitionOverrides extends Rule[SparkPlan] {
       case _: BroadcastHashJoinExec | _: BroadcastNestedLoopJoinExec
           if isAdaptiveEnabled =>
         // broadcasts are left on CPU for now when AQE is enabled
-      case _: AdaptiveSparkPlanExec | _: QueryStageExec | _: CustomShuffleReaderExec =>
+      case _: AdaptiveSparkPlanExec | _: QueryStageExec => //TODO | _: CustomShuffleReaderExec =>
         // we do not yet fully support GPU-acceleration when AQE is enabled, so we skip checking
         // the plan in this case - https://github.com/NVIDIA/spark-rapids/issues/5
       case lts: LocalTableScanExec =>
@@ -527,13 +527,8 @@ object GpuTransitionOverrides {
    * a GpuExec or not, and this gets hidden by the query stage wrapper.
    */
   def getNonQueryStagePlan(plan: SparkPlan): SparkPlan = {
-    plan match {
-      case BroadcastQueryStageExec(_, ReusedExchangeExec(_, plan)) => plan
-      case BroadcastQueryStageExec(_, plan) => plan
-      case ShuffleQueryStageExec(_, ReusedExchangeExec(_, plan)) => plan
-      case ShuffleQueryStageExec(_, plan) => plan
-      case _ => plan
-    }
+    ShimLoader.getSparkShims.getNonQueryStagePlan(plan)
+
   }
 }
 
@@ -591,5 +586,10 @@ case class AvoidAdaptiveTransitionToRow(child: SparkPlan) extends UnaryExecNode 
     val m = classOf[AdaptiveSparkPlanExec].getDeclaredMethod(name)
     m.setAccessible(true)
     m
+  }
+
+  override protected def withNewChildInternal(
+      newChild: SparkPlan): AvoidAdaptiveTransitionToRow = {
+    copy(child = newChild)
   }
 }

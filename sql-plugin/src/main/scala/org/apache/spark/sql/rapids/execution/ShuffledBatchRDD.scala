@@ -137,78 +137,20 @@ class ShuffledBatchRDD(
   }
 
   override def getPreferredLocations(partition: Partition): Seq[String] = {
-    val tracker = SparkEnv.get.mapOutputTracker.asInstanceOf[MapOutputTrackerMaster]
-    partition.asInstanceOf[ShuffledBatchRDDPartition].spec match {
-      case CoalescedPartitionSpec(startReducerIndex, endReducerIndex) =>
-        // TODO order by partition size.
-        startReducerIndex.until(endReducerIndex).flatMap { reducerIndex =>
-          tracker.getPreferredLocationsForShuffle(dependency, reducerIndex)
-        }
-
-      case prps: PartialReducerPartitionSpec =>
-        tracker.getMapLocation(dependency, prps.startMapIndex, prps.endMapIndex)
-
-      case PartialMapperPartitionSpec(mapIndex, _, _) =>
-        tracker.getMapLocation(dependency, mapIndex, mapIndex + 1)
-    }
+    ShimLoader.getSparkShims.getShuffleManagerShims()
+      .getPreferredLocations(dependency, partition)
   }
 
   override def compute(split: Partition, context: TaskContext): Iterator[ColumnarBatch] = {
     val shuffledBatchPartition = split.asInstanceOf[ShuffledBatchRDDPartition]
-    val tempMetrics = context.taskMetrics().createTempShuffleReadMetrics()
     // `SQLShuffleReadMetricsReporter` will update its own metrics for SQL exchange operator,
     // as well as the `tempMetrics` for basic shuffle metrics.
+    val shuffleManagerShims = ShimLoader.getSparkShims.getShuffleManagerShims()
+    val tempMetrics = context.taskMetrics().createTempShuffleReadMetrics()
     val sqlMetricsReporter = new SQLShuffleReadMetricsReporter(tempMetrics, metrics)
-    val shim = ShimLoader.getSparkShims
-    val shuffleManagerShims = shim.getShuffleManagerShims()
-    val (reader, partitionSize) = shuffledBatchPartition.spec match {
-      case CoalescedPartitionSpec(startReducerIndex, endReducerIndex) =>
-        val reader = SparkEnv.get.shuffleManager.getReader(
-          dependency.shuffleHandle,
-          startReducerIndex,
-          endReducerIndex,
-          context,
-          sqlMetricsReporter)
-        val blocksByAddress = shim.getMapSizesByExecutorId(
-          dependency.shuffleHandle.shuffleId, 0, Int.MaxValue, startReducerIndex, endReducerIndex)
-        val partitionSize = blocksByAddress.flatMap(_._2).map(_._2).sum
-        (reader, partitionSize)
-
-      case prps: PartialReducerPartitionSpec =>
-        val reader = shuffleManagerShims.getReader(
-          SparkEnv.get.shuffleManager,
-          dependency.shuffleHandle,
-          prps.startMapIndex,
-          prps.endMapIndex,
-          prps.reducerIndex,
-          prps.reducerIndex + 1,
-          context,
-          sqlMetricsReporter)
-        val blocksByAddress = shim.getMapSizesByExecutorId(
-          dependency.shuffleHandle.shuffleId, 0, Int.MaxValue, prps.reducerIndex,
-          prps.reducerIndex + 1)
-        val partitionSize = blocksByAddress.flatMap(_._2)
-            .filter(tuple => tuple._3 >= prps.startMapIndex && tuple._3 < prps.endMapIndex)
-            .map(_._2).sum
-        (reader, partitionSize)
-
-      case PartialMapperPartitionSpec(mapIndex, startReducerIndex, endReducerIndex) =>
-        val reader = shuffleManagerShims.getReader(
-          SparkEnv.get.shuffleManager,
-          dependency.shuffleHandle,
-          mapIndex,
-          mapIndex + 1,
-          startReducerIndex,
-          endReducerIndex,
-          context,
-          sqlMetricsReporter)
-        val blocksByAddress = shim.getMapSizesByExecutorId(
-          dependency.shuffleHandle.shuffleId, 0, Int.MaxValue, startReducerIndex, endReducerIndex)
-        val partitionSize = blocksByAddress.flatMap(_._2)
-            .filter(_._3 == mapIndex)
-            .map(_._2).sum
-        (reader, partitionSize)
-    }
+    val (reader, partitionSize) =
+      shuffleManagerShims.getReaderAndPartitionSizeForSpec(
+        context, dependency, shuffledBatchPartition, sqlMetricsReporter)
     metrics(GpuMetric.NUM_PARTITIONS).add(1)
     metrics(GpuMetric.PARTITION_SIZE).add(partitionSize)
     reader.read().asInstanceOf[Iterator[Product2[Int, ColumnarBatch]]].map(_._2)

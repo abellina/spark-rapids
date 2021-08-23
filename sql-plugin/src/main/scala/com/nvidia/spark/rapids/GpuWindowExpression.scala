@@ -72,7 +72,8 @@ class GpuWindowExpressionMeta(
             val lower = getAndCheckRowBoundaryValue(spec.lower)
             val upper = getAndCheckRowBoundaryValue(spec.upper)
             windowFunction match {
-              case Lead(_, _, _) | Lag(_, _, _) => // ignored we are good
+              //TODO AB: case Lead(_, _, _) | Lag(_, _, _) => // ignored we are good
+              case wf if wf.isInstanceOf[Lead] || wf.isInstanceOf[Lag] =>
               case _ =>
                 // need to be sure that the lower/upper are acceptable
                 if (lower > 0) {
@@ -234,6 +235,11 @@ case class GpuWindowExpression(windowFunction: Expression, windowSpec: GpuWindow
       wrappedWindowFunc.asInstanceOf[GpuAggregateWindowFunction].windowInputProjection
     }
   }
+
+  override protected def withNewChildrenInternal(
+    newChildren: IndexedSeq[Expression]): Expression = {
+    super.legacyWithNewChildren(newChildren)
+  }
 }
 
 class GpuWindowSpecDefinitionMeta(
@@ -333,6 +339,11 @@ case class GpuWindowSpecDefinition(
     case (DateType, IntegerType) => true
     case (TimestampType, CalendarIntervalType) => true
     case (a, b) => a == b
+  }
+
+  override protected def withNewChildrenInternal(
+      newChildren: IndexedSeq[Expression]): Expression = {
+    super.legacyWithNewChildren(newChildren)
   }
 }
 
@@ -466,7 +477,12 @@ trait GpuWindowFrame extends GpuExpression with GpuUnevaluable {
   override def nullable: Boolean = false
 }
 
-case object GpuUnspecifiedFrame extends GpuWindowFrame // Placeholder, to handle UnspecifiedFrame
+case object GpuUnspecifiedFrame extends GpuWindowFrame {
+  override protected def withNewChildrenInternal(
+    newChildren: IndexedSeq[Expression]): Expression = {
+    super.legacyWithNewChildren(newChildren)
+  }
+} // Placeholder, to handle UnspecifiedFrame
 
 // This class closely follows what's done in SpecifiedWindowFrame.
 case class GpuSpecifiedWindowFrame(
@@ -571,6 +587,11 @@ case class GpuSpecifiedWindowFrame(
       case _ => true
     }
   }
+
+  override protected def withNewChildrenInternal(
+    newChildren: IndexedSeq[Expression]): Expression = {
+    super.legacyWithNewChildren(newChildren)
+  }
 }
 
 case class GpuSpecialFrameBoundary(boundary : SpecialFrameBoundary)
@@ -603,6 +624,11 @@ case class GpuSpecialFrameBoundary(boundary : SpecialFrameBoundary)
       case UnboundedPreceding | UnboundedFollowing => true
       case _ => false
     }
+  }
+
+  override protected def withNewChildrenInternal(
+    newChildren: IndexedSeq[Expression]): Expression = {
+    super.legacyWithNewChildren(newChildren)
   }
 }
 
@@ -1237,6 +1263,11 @@ case class GpuRank(children: Seq[Expression]) extends GpuRunningWindowFunction
   }
 
   override def newFixer(): BatchedRunningWindowFixer = new RankFixer()
+
+  override protected def withNewChildrenInternal(
+    newChildren: IndexedSeq[Expression]): Expression = {
+    super.legacyWithNewChildren(newChildren)
+  }
 }
 
 /**
@@ -1278,6 +1309,11 @@ case class GpuDenseRank(children: Seq[Expression]) extends GpuRunningWindowFunct
     Seq(AggAndReplace(ScanAggregation.denseRank(), None))
 
   override def newFixer(): BatchedRunningWindowFixer = new DenseRankFixer()
+
+  override protected def withNewChildrenInternal(
+      newChildren: IndexedSeq[Expression]): Expression = {
+    super.legacyWithNewChildren(newChildren)
+  }
 }
 
 /**
@@ -1310,6 +1346,11 @@ case object GpuRowNumber extends GpuRunningWindowFunction
     groupByScanInputProjection(isRunningBatched)
   override def scanAggregation(isRunningBatched: Boolean): Seq[AggAndReplace[ScanAggregation]] =
     Seq(AggAndReplace(ScanAggregation.sum(), None))
+
+  override protected def withNewChildrenInternal(
+      newChildren: IndexedSeq[Expression]): Expression = {
+    super.legacyWithNewChildren(newChildren)
+  }
 }
 
 abstract class OffsetWindowFunctionMeta[INPUT <: OffsetWindowFunction] (
@@ -1321,8 +1362,10 @@ abstract class OffsetWindowFunctionMeta[INPUT <: OffsetWindowFunction] (
   lazy val input: BaseExprMeta[_] = GpuOverrides.wrapExpr(expr.input, conf, Some(this))
   lazy val offset: BaseExprMeta[_] = {
     expr match {
-      case Lead(_,_,_) => // Supported.
-      case Lag(_,_,_) =>  // Supported.
+      //TODO: AB case Lead(_,_,_) => // Supported.
+      case lead if lead.isInstanceOf[Lead] =>
+      //TODO: AB case Lag(_,_,_) =>  // Supported.
+      case lag if lag.isInstanceOf[Lag] =>
       case other =>
         throw new IllegalStateException(
           s"Only LEAD/LAG offset window functions are supported. Found: $other")
@@ -1344,8 +1387,10 @@ abstract class OffsetWindowFunctionMeta[INPUT <: OffsetWindowFunction] (
 
   override def tagExprForGpu(): Unit = {
     expr match {
-      case Lead(_,_,_) => // Supported.
-      case Lag(_,_,_) =>  // Supported.
+      //TODO: AB case Lead(_,_,_) => // Supported.
+      case lead if lead.isInstanceOf[Lead] =>
+      //TODO: AB case Lag(_,_,_) =>  // Supported.
+      case lag if lag.isInstanceOf[Lag] =>
       case other =>
         willNotWorkOnGpu( s"Only LEAD/LAG offset window functions are supported. Found: $other")
     }
@@ -1391,6 +1436,12 @@ case class GpuLead(input: Expression, offset: Expression, default: Expression)
       RollingAggregation.lead(parsedOffset).onColumn(in.head._2)
     }
   }
+
+  //TODO: AB when is it NOT ok to do this!
+  override protected def withNewChildrenInternal(
+      newChildren: IndexedSeq[Expression]): Expression = {
+    super.legacyWithNewChildren(newChildren)
+  }
 }
 
 case class GpuLag(input: Expression, offset: Expression, default: Expression)
@@ -1405,5 +1456,9 @@ case class GpuLag(input: Expression, offset: Expression, default: Expression)
     } else {
       RollingAggregation.lag(parsedOffset).onColumn(in.head._2)
     }
+  }
+  override protected def withNewChildrenInternal(
+      newChildren: IndexedSeq[Expression]): Expression = {
+    super.legacyWithNewChildren(newChildren)
   }
 }
