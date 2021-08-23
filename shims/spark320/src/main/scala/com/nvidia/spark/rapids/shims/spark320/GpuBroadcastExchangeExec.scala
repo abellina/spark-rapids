@@ -41,4 +41,7 @@ case class GpuBroadcastExchangeExec(
   override def doCanonicalize(): SparkPlan = {
     GpuBroadcastExchangeExec(mode.canonicalized, child.canonicalized)
   }
+
+  override protected def withNewChildInternal(newChild: SparkPlan): GpuBroadcastExchangeExec =
+    copy(child = newChild)
 }

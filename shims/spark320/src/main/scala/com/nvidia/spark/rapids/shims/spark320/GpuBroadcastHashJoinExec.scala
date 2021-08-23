@@ -164,4 +164,12 @@ case class GpuBroadcastHashJoinExec(
         totalTime)
     }
   }
+
+  override protected def withNewChildrenInternal(
+      newLeft: SparkPlan, newRight: SparkPlan): GpuBroadcastHashJoinExec =
+    copy(left = newLeft, right = newRight)
+
+  override lazy val treePatternBits: BitSet = {
+    throw new IllegalStateException("treePatternBits")
+  }
 }

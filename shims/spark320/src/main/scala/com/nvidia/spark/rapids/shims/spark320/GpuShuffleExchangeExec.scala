@@ -47,4 +47,8 @@ case class GpuShuffleExchangeExec(
       rowCount = Some(metrics("numOutputRows").value)
     )
   }
+
+  override def withNewChildInternal(newChild: SparkPlan): GpuShuffleExchangeExec = {
+    copy(child = newChild)
+  }
 }

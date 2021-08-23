@@ -39,4 +39,8 @@ case class GpuWindowInPandasExec(
 
   // Return the join batch directly per Apache Spark's expectation.
   override def projectResult(joinedBatch: ColumnarBatch): ColumnarBatch = joinedBatch
+
+  override def withNewChildInternal(newChild: SparkPlan): GpuWindowInPandasExec = {
+    copy(child = newChild)
+  }
 }

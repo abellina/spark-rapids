@@ -91,4 +91,9 @@ case class GpuShuffledHashJoinExec(
     rightKeys,
     buildSide,
     condition,
-    isSkewJoin = isSkewJoin)
+    isSkewJoin = isSkewJoin) {
+  override def withNewChildrenInternal(
+      newLeft: SparkPlan, newRight: SparkPlan): GpuShuffledHashJoinExec = {
+    copy(left = newLeft, right = newRight)
+  }
+}

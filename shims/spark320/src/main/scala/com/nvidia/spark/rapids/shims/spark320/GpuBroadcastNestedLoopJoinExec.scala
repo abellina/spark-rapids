@@ -40,4 +40,8 @@ case class GpuBroadcastNestedLoopJoinExec(
   def getGpuBuildSide: GpuBuildSide = {
     GpuJoinUtils.getGpuBuildSide(join.buildSide)
   }
+
+  override protected def withNewChildrenInternal(
+     newLeft: SparkPlan, newRight: SparkPlan): GpuBroadcastNestedLoopJoinExec =
+    copy(left = newLeft, right = newRight)
 }
