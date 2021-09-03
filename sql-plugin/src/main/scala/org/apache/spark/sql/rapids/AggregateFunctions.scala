@@ -19,10 +19,9 @@ package org.apache.spark.sql.rapids
 import ai.rapids.cudf
 import ai.rapids.cudf.{BinaryOp, ColumnVector, DType, GroupByAggregation, GroupByScanAggregation, NullPolicy, ReductionAggregation, ReplacePolicy, RollingAggregation, RollingAggregationOnColumn, ScanAggregation}
 import com.nvidia.spark.rapids._
-
 import org.apache.spark.sql.catalyst.analysis.TypeCheckResult
 import org.apache.spark.sql.catalyst.analysis.TypeCheckResult.TypeCheckSuccess
-import org.apache.spark.sql.catalyst.expressions.{AttributeReference, AttributeSet, Expression, ExprId, ImplicitCastInputTypes}
+import org.apache.spark.sql.catalyst.expressions.{AttributeReference, AttributeSet, ExprId, Expression, ImplicitCastInputTypes, Literal}
 import org.apache.spark.sql.catalyst.expressions.aggregate._
 import org.apache.spark.sql.catalyst.util.TypeUtils
 import org.apache.spark.sql.types._
@@ -41,12 +40,6 @@ trait GpuAggregateFunction extends GpuExpression with GpuUnevaluable {
   /** Attributes of fields in aggBufferSchema. */
   def aggBufferAttributes: Seq[AttributeReference]
 
-  /**
-   * Result of the aggregate function when the input is empty. This is currently only used for the
-   * proper rewriting of distinct aggregate functions.
-   */
-  def defaultResult: Option[GpuLiteral] = None
-
   def sql(isDistinct: Boolean): String = {
     val distinct = if (isDistinct) "DISTINCT " else ""
     s"$prettyName($distinct${children.map(_.sql).mkString(", ")})"
@@ -58,31 +51,66 @@ trait GpuAggregateFunction extends GpuExpression with GpuUnevaluable {
     prettyName + flatArguments.mkString(start, ", ", ")")
   }
 
-  // these are values that spark calls initial because it uses
-  // them to initialize the aggregation buffer, and returns them in case
-  // of an empty aggregate when there are no expressions,
-  // here we copy them but with the gpu equivalent
-  val initialValues: Seq[GpuExpression]
-
-  // update: first half of the aggregation (count = count)
-  val updateExpressions: Seq[Expression]
-
-  // merge: second half of the aggregation (count = sum). Also use to merge multiple batches.
-  val mergeExpressions: Seq[GpuExpression]
-
-  // mostly likely a pass through (count => sum we merged above).
-  // average has a more interesting expression to compute the division of sum/count
-  val evaluateExpression: Expression
-
   // Attributes of fields in input aggregation buffers (immutable aggregation buffers that are
   // merged with mutable aggregation buffers in the merge() function or merge expressions).
   // These attributes are created automatically by cloning the [[aggBufferAttributes]].
   final lazy val inputAggBufferAttributes: Seq[AttributeReference] =
     aggBufferAttributes.map(_.newInstance())
+
+  // TODO: AB LOGICAL plan unused  (AQE?)
+  /**
+   * Result of the aggregate function when the input is empty. This is currently only used for the
+   * proper rewriting of distinct aggregate functions.
+   */
+  def defaultResult: Option[GpuLiteral] = None
+
+  // TODO: AB move these to declarative only?
+
+  // update: first half of the aggregation (count = count)
+  val updateExpressions: Seq[Expression]
+
+  // merge: second half of the aggregation (count = sum). Also use to merge multiple batches.
+  val mergeExpressions: Seq[Expression]
+
+  // mostly likely a pass through (count => sum we merged above).
+  // average has a more interesting expression to compute the division of sum/count
+  val evaluateExpression: Expression
+
+  // these are values that spark calls initial because it uses
+  // them to initialize the aggregation buffer, and returns them in case
+  // of an empty aggregate when there are no expressions,
+  // here we copy them but with the gpu equivalent
+  val initialValues: Seq[Expression]
 }
 
+abstract class GpuDeclarativeAggregate extends GpuAggregateFunction {
+}
+
+abstract class GpuImperativeAggregate extends GpuAggregateFunction {
+  protected val mutableAggBufferOffset: Int
+
+  /**
+   * Returns a copy of this ImperativeAggregate with an updated mutableAggBufferOffset.
+   * This new copy's attributes may have different ids than the original.
+   */
+  def withNewMutableAggBufferOffset(newMutableAggBufferOffset: Int): GpuImperativeAggregate
+
+  protected val inputAggBufferOffset: Int
+
+  /**
+   * Returns a copy of this ImperativeAggregate with an updated mutableAggBufferOffset.
+   * This new copy's attributes may have different ids than the original.
+   */
+  def withNewInputAggBufferOffset(newInputAggBufferOffset: Int): GpuImperativeAggregate
+
+  //def initialize(mutableAggBuffer: InternalRow): Unit
+  //def update(mutableAggBuffer: InternalRow, inputRow: InternalRow): Unit
+  //def merge(mutableAggBuffer: InternalRow, inputAggBuffer: InternalRow): Unit
+}
+
+// TODO: AB move to databricks shim?
 case class WrappedAggFunction(aggregateFunction: GpuAggregateFunction, filter: Expression)
-    extends GpuAggregateFunction {
+    extends GpuDeclarativeAggregate {
   override val inputProjection: Seq[GpuExpression] = {
     val caseWhenExpressions = aggregateFunction.inputProjection.map { ip =>
       // special case average with null result from the filter as expected values should be
@@ -109,11 +137,11 @@ case class WrappedAggFunction(aggregateFunction: GpuAggregateFunction, filter: E
 
   override def children: Seq[Expression] = Seq(aggregateFunction, filter)
 
-  override val initialValues: Seq[GpuExpression] =
+  override val initialValues: Seq[Expression] =
     aggregateFunction.initialValues
   override val updateExpressions: Seq[Expression] =
     aggregateFunction.updateExpressions
-  override val mergeExpressions: Seq[GpuExpression] =
+  override val mergeExpressions: Seq[Expression] =
     aggregateFunction.mergeExpressions
   override val evaluateExpression: Expression =
     aggregateFunction.evaluateExpression
@@ -331,7 +359,7 @@ class CudfLastExcludeNulls(ref: Expression) extends CudfFirstLastBase(ref) {
   override val offset: Int = -1
 }
 
-case class GpuMin(child: Expression) extends GpuAggregateFunction
+case class GpuMin(child: Expression) extends GpuDeclarativeAggregate
     with GpuBatchedRunningWindowWithFixer
     with GpuAggregateWindowFunction
     with GpuRunningWindowFunction {
@@ -386,7 +414,7 @@ case class GpuMin(child: Expression) extends GpuAggregateFunction
 
 }
 
-case class GpuMax(child: Expression) extends GpuAggregateFunction
+case class GpuMax(child: Expression) extends GpuDeclarativeAggregate
     with GpuBatchedRunningWindowWithFixer
     with GpuAggregateWindowFunction
     with GpuRunningWindowFunction {
@@ -441,10 +469,11 @@ case class GpuMax(child: Expression) extends GpuAggregateFunction
 }
 
 case class GpuSum(child: Expression, resultType: DataType)
-  extends GpuAggregateFunction with ImplicitCastInputTypes
-      with GpuBatchedRunningWindowWithFixer
-      with GpuAggregateWindowFunction
-      with GpuRunningWindowFunction {
+  extends GpuDeclarativeAggregate
+    with ImplicitCastInputTypes
+    with GpuBatchedRunningWindowWithFixer
+    with GpuAggregateWindowFunction
+    with GpuRunningWindowFunction {
 
   private lazy val cudfSum = AttributeReference("sum", resultType)()
 
@@ -530,7 +559,10 @@ case class GpuSum(child: Expression, resultType: DataType)
 case class GpuPivotFirst(
   pivotColumn: Expression,
   valueColumn: Expression,
-  pivotColumnValues: Seq[Any]) extends GpuAggregateFunction {
+  pivotColumnValues: Seq[Any],
+  mutableAggBufferOffset: Int = 0,
+  inputAggBufferOffset: Int = 0)
+  extends GpuImperativeAggregate {
 
   val valueDataType = valueColumn.dataType
 
@@ -569,15 +601,35 @@ case class GpuPivotFirst(
   override lazy val evaluateExpression: Expression = {
     GpuCreateArray(pivotColAttr, false)
   }
+
   override lazy val aggBufferAttributes: Seq[AttributeReference] = pivotColAttr
 
   override lazy val initialValues: Seq[GpuLiteral] =
     Seq.fill(pivotColumnValues.length)(GpuLiteral(null, valueDataType))
 
   override def children: Seq[Expression] = pivotColumn :: valueColumn :: Nil
+
+  /**
+   * Returns a copy of this ImperativeAggregate with an updated mutableAggBufferOffset.
+   * This new copy's attributes may have different ids than the original.
+   */
+  override def withNewMutableAggBufferOffset(
+      newMutableAggBufferOffset: Int): GpuImperativeAggregate = {
+    copy(mutableAggBufferOffset = mutableAggBufferOffset)
+  }
+
+  /**
+   * Returns a copy of this ImperativeAggregate with an updated mutableAggBufferOffset.
+   * This new copy's attributes may have different ids than the original.
+   */
+  override def withNewInputAggBufferOffset(
+      newInputAggBufferOffset: Int): GpuImperativeAggregate = {
+    copy(inputAggBufferOffset = newInputAggBufferOffset)
+  }
 }
 
-case class GpuCount(children: Seq[Expression]) extends GpuAggregateFunction
+case class GpuCount(children: Seq[Expression])
+  extends GpuDeclarativeAggregate
     with GpuBatchedRunningWindowWithFixer
     with GpuAggregateWindowFunction
     with GpuRunningWindowFunction {
@@ -634,7 +686,8 @@ case class GpuCount(children: Seq[Expression]) extends GpuAggregateFunction
     Seq(AggAndReplace(ScanAggregation.sum(), None))
 }
 
-case class GpuAverage(child: Expression) extends GpuAggregateFunction
+case class GpuAverage(child: Expression)
+  extends GpuDeclarativeAggregate
     with GpuAggregateWindowFunction {
   // averages are either Decimal or Double. We don't support decimal yet, so making this double.
   private lazy val cudfSum = AttributeReference("sum", DoubleType)()
@@ -715,7 +768,8 @@ case class GpuAverage(child: Expression) extends GpuAggregateFunction
  * here).
  */
 case class GpuFirst(child: Expression, ignoreNulls: Boolean)
-  extends GpuAggregateFunction with ImplicitCastInputTypes with Serializable {
+  extends GpuDeclarativeAggregate
+    with ImplicitCastInputTypes with Serializable {
 
   private lazy val cudfFirst = AttributeReference("first", child.dataType)()
   private lazy val valueSet = AttributeReference("valueSet", BooleanType)()
@@ -760,7 +814,8 @@ case class GpuFirst(child: Expression, ignoreNulls: Boolean)
 }
 
 case class GpuLast(child: Expression, ignoreNulls: Boolean)
-  extends GpuAggregateFunction with ImplicitCastInputTypes with Serializable {
+  extends GpuDeclarativeAggregate
+    with ImplicitCastInputTypes with Serializable {
 
   private lazy val cudfLast = AttributeReference("last", child.dataType)()
   private lazy val valueSet = AttributeReference("valueSet", BooleanType)()
@@ -803,7 +858,9 @@ case class GpuLast(child: Expression, ignoreNulls: Boolean)
   }
 }
 
-trait GpuCollectBase extends GpuAggregateFunction with GpuAggregateWindowFunction {
+trait GpuCollectBase
+  extends GpuImperativeAggregate
+  with GpuAggregateWindowFunction {
 
   def child: Expression
 
@@ -820,22 +877,21 @@ trait GpuCollectBase extends GpuAggregateFunction with GpuAggregateWindowFunctio
   // WINDOW FUNCTION
   override val windowInputProjection: Seq[Expression] = Seq(child)
 
-  // Make them lazy to avoid being initialized when creating a GpuCollectOp.
-  override lazy val initialValues: Seq[GpuExpression] = throw new UnsupportedOperationException
-
   override val inputProjection: Seq[Expression] = Seq(child)
 
-  // Unlike other GpuAggregateFunction, GpuCollectFunction will change the type of input data in
+  // Unlike other GpuAggregateFunction, GpuCollectBase will change the type of input data in
   // update stage (childType => Array[childType]). And the input type of merge expression is not
   // same as update expression. Meanwhile, they still share the same ordinal in terms of cuDF
   // table.
   // Therefore, we create two separate buffers for update and merge. And they are pointed to
   // the same ordinal since they share the same exprId.
   protected final lazy val inputBuf: AttributeReference =
-  AttributeReference("inputBuf", child.dataType)()
+    AttributeReference("inputBuf", child.dataType)()
 
   protected final lazy val outputBuf: AttributeReference =
     inputBuf.copy("outputBuf", dataType)(inputBuf.exprId, inputBuf.qualifier)
+
+  override val initialValues: Seq[Expression] = throw new NotImplementedError()
 }
 
 /**
@@ -849,6 +905,13 @@ case class GpuCollectList(
     mutableAggBufferOffset: Int = 0,
     inputAggBufferOffset: Int = 0)
     extends GpuCollectBase {
+
+  override def withNewInputAggBufferOffset(newInputAggBufferOffset: Int): GpuImperativeAggregate =
+    copy(inputAggBufferOffset = newInputAggBufferOffset)
+
+  override def withNewMutableAggBufferOffset(
+      newMutableAggBufferOffset: Int): GpuImperativeAggregate=
+    copy(mutableAggBufferOffset = newMutableAggBufferOffset)
 
   override lazy val updateExpressions: Seq[GpuExpression] = new CudfCollectList(inputBuf) :: Nil
 
@@ -876,6 +939,14 @@ case class GpuCollectSet(
     mutableAggBufferOffset: Int = 0,
     inputAggBufferOffset: Int = 0)
     extends GpuCollectBase {
+
+  override def withNewInputAggBufferOffset(
+      newInputAggBufferOffset: Int): GpuImperativeAggregate =
+    copy(inputAggBufferOffset = newInputAggBufferOffset)
+
+  override def withNewMutableAggBufferOffset(
+      newMutableAggBufferOffset: Int): GpuImperativeAggregate =
+    copy(mutableAggBufferOffset = newMutableAggBufferOffset)
 
   override lazy val updateExpressions: Seq[GpuExpression] = new CudfCollectSet(inputBuf) :: Nil
 

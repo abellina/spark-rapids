@@ -17,7 +17,6 @@
 package com.nvidia.spark.rapids
 
 import java.util
-
 import scala.collection.mutable
 import ai.rapids.cudf
 import ai.rapids.cudf.{DType, NvtxColor, Scalar}
@@ -36,7 +35,7 @@ import org.apache.spark.sql.catalyst.trees.TreeNodeTag
 import org.apache.spark.sql.catalyst.util.truncatedString
 import org.apache.spark.sql.execution.{ExplainUtils, SortExec, SparkPlan, UnaryExecNode}
 import org.apache.spark.sql.execution.aggregate.{BaseAggregateExec, HashAggregateExec, ObjectHashAggregateExec, SortAggregateExec}
-import org.apache.spark.sql.rapids.{CudfAggregate, GpuAggregateExpression, GpuCollectBase}
+import org.apache.spark.sql.rapids.{CudfAggregate, GpuAggregateExpression, GpuAggregateFunction, GpuCollectBase, GpuDeclarativeAggregate, GpuImperativeAggregate}
 import org.apache.spark.sql.rapids.execution.TrampolineUtil
 import org.apache.spark.sql.types.{ArrayType, DataType, LongType, MapType, StructType}
 import org.apache.spark.sql.vectorized.{ColumnVector, ColumnarBatch}
@@ -212,6 +211,7 @@ class GpuHashAggregateIterator(
     groupingExpressions: Seq[Expression],
     aggregateExpressions: Seq[GpuAggregateExpression],
     aggregateAttributes: Seq[Attribute],
+    initialInputBufferOffset: Int,
     resultExpressions: Seq[NamedExpression],
     childOutput: Seq[Attribute],
     modeInfo: AggregateModeInfo,
@@ -237,7 +237,7 @@ class GpuHashAggregateIterator(
   //  3. boundMergeAgg: (if needed) perform a merge of partial aggregates (CudfCount => CudfSum)
   //  4. boundResultReferences: project the result expressions Spark expects in the output.
   private case class BoundExpressionsModeAggregates(
-      boundInputReferences: Seq[GpuExpression],
+      boundInputReferences: Seq[GpuAggregateFunction],
       boundFinalProjections: Option[Seq[GpuExpression]],
       boundResultReferences: Seq[Expression],
       aggModeCudfAggregates: Seq[(AggregateMode, Seq[CudfAggregate])])
@@ -514,7 +514,7 @@ class GpuHashAggregateIterator(
    */
   private def generateEmptyReductionBatch(): ColumnarBatch = {
     val aggregateFunctions = aggregateExpressions.map(_.aggregateFunction)
-    val defaultValues =
+    val defaultValues: Seq[Expression] =
       aggregateFunctions.flatMap(_.initialValues)
     val vecs = defaultValues.safeMap { ref =>
       withResource(GpuScalar.from(ref.asInstanceOf[GpuLiteral].value, ref.dataType)) {
@@ -605,6 +605,43 @@ class GpuHashAggregateIterator(
     }
   }
 
+  def initializeAggregateFunctions(startingInputBufferOffset: Int): Array[GpuAggregateFunction] = {
+    var mutableBufferOffset = 0
+    var inputBufferOffset: Int = startingInputBufferOffset
+    val functions = new Array[GpuAggregateFunction](aggregateExpressions.length)
+    var i = 0
+    for (expression <- aggregateExpressions) {
+      val func = expression.aggregateFunction
+      val funcWithBoundReferences = expression.mode match {
+        case Partial | Complete if func.isInstanceOf[GpuImperativeAggregate] =>
+          GpuBindReferences.bindReference(func, inputAttributes)
+        case _ =>
+          val updatedFunc = func match {
+            case function: GpuImperativeAggregate =>
+              function.withNewInputAggBufferOffset(inputBufferOffset)
+            case function => function
+          }
+          inputBufferOffset += func.aggBufferSchema.length
+          updatedFunc
+      }
+      val funcWithUpdatedAggBufferOffset = funcWithBoundReferences match {
+        case function: GpuImperativeAggregate =>
+          // Set mutableBufferOffset for this function. It is important that setting
+          // mutableBufferOffset happens after all potential bindReference operations
+          // because bindReference will create a new instance of the function.
+          function.withNewMutableAggBufferOffset(mutableBufferOffset)
+        case function => function
+      }
+      mutableBufferOffset += funcWithUpdatedAggBufferOffset.aggBufferSchema.length
+      functions(i) = funcWithUpdatedAggBufferOffset
+      i += 1
+    }
+    functions
+  }
+
+  val aggregateFunctions: Array[GpuAggregateFunction] =
+    initializeAggregateFunctions(initialInputBufferOffset)
+
   /**
    * getCudfAggregates returns a sequence of `cudf.Aggregate`, given the current mode
    * `AggregateMode`, and a sequence of all expressions for this [[GpuHashAggregateExec]]
@@ -625,22 +662,8 @@ class GpuHashAggregateIterator(
         aggregateExpressions.flatMap(_.aggregateFunction.aggBufferAttributes)
 
     val aggModeCudfAggregates =
-      AggregateUtils.computeAggModeCudfAggregates(aggregateExpressions, aggBufferAttributes)
-
-    val aggBound = aggregateExpressions.flatMap { agg =>
-      agg.mode match {
-        case Partial | Complete =>
-          agg.aggregateFunction.inputProjection
-        case PartialMerge | Final =>
-          agg.aggregateFunction.inputAggBufferAttributes
-        case mode =>
-          throw new NotImplementedError(s"can't translate ${mode}")
-      }
-    }
-
-    val boundInputReferences = GpuBindReferences.bindGpuReferences(
-      groupingExpressions ++ aggBound,
-      inputAttributes)
+      AggregateUtils.computeAggModeCudfAggregates(
+        aggregateExpressions, aggBufferAttributes)
 
     val boundFinalProjections = if (modeInfo.hasFinalMode || modeInfo.hasCompleteMode) {
       val finalProjections = groupingExpressions ++
@@ -673,8 +696,142 @@ class GpuHashAggregateIterator(
         resultExpressions,
         groupingAttributes)
     }
-    BoundExpressionsModeAggregates(boundInputReferences, boundFinalProjections,
-      boundResultReferences, aggModeCudfAggregates)
+    BoundExpressionsModeAggregates(
+      aggregateFunctions,
+      boundFinalProjections,
+      boundResultReferences,
+      aggModeCudfAggregates)
+  }
+
+  type BatchProcessor = (ColumnarBatch, Boolean, Boolean) => ColumnarBatch
+
+  // much like generateProcessRow but our function takes in a batch and outputs a batch
+  // and it also takes a boolean for the `merge` variety of this, where we pick merge aggregates
+  // inc aes where we are building a bigger batch within a task, and another boolean to hint for
+  // sorted input to cuDF
+  def generateProcessBatch(expressions: Seq[GpuAggregateExpression]): BatchProcessor = {
+    val aggModeCudfAggregates = boundExpressions.aggModeCudfAggregates
+    if (expressions.nonEmpty) {
+      // This is a place where we differ from Spark CPU aggregate:
+      // - The imperative aggregates coming into this function are already bound
+      //   in our case. In this cases two passes happen: one for the
+      //   declarative aggregates using `updateProjection.target`, and the other
+      //   for imperatives using `updateFunctions(i).apply(..)`.
+      // - Why can we get away with this?
+      val mergeExpressions =
+        boundExpressions.boundInputReferences.zip(expressions).flatMap {
+          case (ae: GpuDeclarativeAggregate, expression) =>
+            expression.mode match {
+              case Partial | Complete => ae.updateExpressions
+              case PartialMerge | Final => ae.mergeExpressions
+            }
+          case (ae: GpuAggregateFunction, expression) =>
+            // for clarity, the CPU does:
+            //   Seq.fill(agg.aggBufferAttributes.length)(NoOp)
+            // to create blank slots in the agg buffer for those aggregates
+            // that are imperative, we do exactly the same as the declarative
+            // aggregates here, since everything is bound.
+            expression.mode match {
+              case Partial | Complete => ae.updateExpressions
+              case PartialMerge | Final => ae.mergeExpressions
+            }
+        }
+
+      // the CPU has `updateFunctions` that would be specific to imperative aggs
+      // and they are applied iteratively. cuDF does not support anything like this
+      // and we have to generate aggregate functions that cuDF will be able to
+      // apply per grouping key
+      /*
+      val updateFunctions = functions.zipWithIndex.collect {
+        case (ae: ImperativeAggregate, i) =>
+          expressions(i).mode match {
+            case Partial | Complete =>
+              (buffer: InternalRow, row: InternalRow) => ae.update(buffer, row)
+            case PartialMerge | Final =>
+              (buffer: InternalRow, row: InternalRow) => ae.merge(buffer, row)
+          }
+      }.toArray
+      */
+
+      val aggregationBufferSchema =
+        boundExpressions.boundInputReferences.flatMap(_.aggBufferAttributes)
+
+      // TODO: AB, this is unnecessary... since we are binding everything
+      //   before this, or do you even need to bind?
+      //   this is the same as `computeAggModeCudfAggregates`
+      val updateProjection =
+        GpuBindReferences.bindReferences(
+          mergeExpressions, aggregationBufferSchema ++ inputAttributes)
+
+      (in: ColumnarBatch, merge: Boolean, isSorted: Boolean) => {
+        val computeAggTime = metrics.computeAggTime
+        withResource(new NvtxWithMetrics("computeAggregate", NvtxColor.CYAN, computeAggTime)) { _ =>
+          withResource(GpuColumnVector.from(in)) { table =>
+            // Perform group by aggregation
+            // Create a cudf Table, which we use as the base of aggregations.
+            // At this point we are getting the cudf aggregate's merge or update version
+            //
+            // For example: GpuAverage has an update version of: (CudfSum, CudfCount)
+            // and CudfCount has an update version of AggregateOp.COUNT and a
+            // merge version of AggregateOp.COUNT.
+            val aggregates = aggModeCudfAggregates.flatMap(_._2)
+            val cudfAggregates = aggModeCudfAggregates.flatMap { case (mode, aggregates) =>
+              if ((mode == Partial || mode == Complete) && !merge) {
+                aggregates.map(a => a.updateAggregate.onColumn(a.getOrdinal(a.ref)))
+              } else {
+                aggregates.map(a => a.mergeAggregate.onColumn(a.getOrdinal(a.ref)))
+              }
+            }
+            val groupOptions = cudf.GroupByOptions.builder()
+              .withIgnoreNullKeys(false)
+              .withKeysSorted(isSorted)
+              .build()
+
+            val dataTypes = groupingExpressions.map(_.dataType) ++ aggregates.map(_.dataType)
+            GpuColumnVector.from(
+              table
+                .groupBy(groupOptions, groupingExpressions.indices: _*)
+                .aggregate(cudfAggregates: _*),
+              dataTypes.toArray)
+          }
+        }
+      }
+    } else {
+      (in: ColumnarBatch, merge: Boolean, _) => {
+        // Reduction aggregate
+        // we ask the appropriate merge or update CudfAggregates, what their
+        // reduction merge or update aggregates functions are
+        val cvs = mutable.ArrayBuffer[GpuColumnVector]()
+        aggModeCudfAggregates.foreach { case (mode, aggs) =>
+          aggs.foreach { agg =>
+            val aggFn = if ((mode == Partial || mode == Complete) && !merge) {
+              agg.updateReductionAggregate
+            } else {
+              agg.mergeReductionAggregate
+            }
+            withResource(aggFn(in.column(agg.getOrdinal(agg.ref))
+                  .asInstanceOf[GpuColumnVector].getBase)) { res =>
+              val rapidsType = GpuColumnVector.getNonNestedRapidsType(agg.dataType)
+              withResource(cudf.ColumnVector.fromScalar(res, 1)) { cv =>
+                cvs += GpuColumnVector.from(cv.castTo(rapidsType), agg.dataType)
+              }
+            }
+          }
+        }
+        // If cvs is empty, we add a single row with zero value. The value in the row is
+        // meaningless as it doesn't matter what we put in it. The projection will add a zero
+        // column to the result set in case of a parameter-less count.
+        // This is to fix a bug in the plugin where a paramater-less count wasn't returning the
+        // desired result compared to Spark-CPU.
+        // For more details go to https://github.com/NVIDIA/spark-rapids/issues/1737
+        if (cvs.isEmpty) {
+          withResource(Scalar.fromLong(0L)) { ZERO =>
+            cvs += GpuColumnVector.from(cudf.ColumnVector.fromScalar(ZERO, 1), LongType)
+          }
+        }
+        new ColumnarBatch(cvs.toArray, cvs.head.getBase.getRowCount.toInt)
+      }
+    }
   }
 
   /**
@@ -689,6 +846,14 @@ class GpuHashAggregateIterator(
       merge: Boolean,
       isSorted: Boolean = false): ColumnarBatch  = {
     val aggModeCudfAggregates = boundExpressions.aggModeCudfAggregates
+    val aggregates = aggModeCudfAggregates.flatMap(_._2)
+    val dataTypes = groupingExpressions.map(_.dataType) ++ aggregates.map(_.dataType)
+    val batchProcessor = generateProcessBatch(aggregateExpressions)
+    batchProcessor(
+      GpuColumnVector.from(toAggregateCvs, dataTypes.toArray),
+      merge,
+      isSorted)
+
     val computeAggTime = metrics.computeAggTime
     withResource(new NvtxWithMetrics("computeAggregate", NvtxColor.CYAN, computeAggTime)) { _ =>
       if (groupingExpressions.nonEmpty) {
@@ -735,6 +900,10 @@ class GpuHashAggregateIterator(
               val rapidsType = dataTypes(i) match {
                 case dt if GpuColumnVector.isNonNestedSupportedType(dt) =>
                   GpuColumnVector.getNonNestedRapidsType(dataTypes(i))
+
+                // TODO: AB why do we need to cast to list and struct?
+                //  1) should we cast list<long> for count?
+                //  2) should cuDF support an "out type" for aggregates? Push this down to cuDF?
                 case dt: ArrayType if GpuColumnVector.typeConversionAllowed(column, dt) =>
                   DType.LIST
                 case dt: MapType if GpuColumnVector.typeConversionAllowed(column, dt) =>
@@ -792,6 +961,7 @@ class GpuHashAggregateIterator(
 
 abstract class GpuBaseAggregateMeta[INPUT <: SparkPlan](
     plan: INPUT,
+    initialInputBufferOffset: Int,
     aggRequiredChildDistributionExpressions: Option[Seq[Expression]],
     conf: RapidsConf,
     parent: Option[RapidsMeta[_, _, _]],
@@ -891,6 +1061,7 @@ abstract class GpuBaseAggregateMeta[INPUT <: SparkPlan](
       groupingExpressions.map(_.convertToGpu()),
       aggregateExpressions.map(_.convertToGpu()).asInstanceOf[Seq[GpuAggregateExpression]],
       aggregateAttributes.map(_.convertToGpu()).asInstanceOf[Seq[Attribute]],
+      initialInputBufferOffset,
       resultExpressions.map(_.convertToGpu()).asInstanceOf[Seq[NamedExpression]],
       childPlans.head.convertIfNeeded(),
       conf.gpuTargetBatchSizeBytes)
@@ -903,10 +1074,12 @@ abstract class GpuBaseAggregateMeta[INPUT <: SparkPlan](
  */
 abstract class GpuTypedImperativeSupportedAggregateExecMeta[INPUT <: SparkPlan](
     plan: INPUT,
+    initialInputBufferOffset: Int,
     aggRequiredChildDistributionExpressions: Option[Seq[Expression]],
     conf: RapidsConf,
     parent: Option[RapidsMeta[_, _, _]],
     rule: DataFromReplacementRule) extends GpuBaseAggregateMeta[INPUT](plan,
+  initialInputBufferOffset,
   aggRequiredChildDistributionExpressions, conf, parent, rule) {
 
   private val mayNeedAggBufferConversion: Boolean =
@@ -971,6 +1144,7 @@ abstract class GpuTypedImperativeSupportedAggregateExecMeta[INPUT <: SparkPlan](
         groupingExpressions.map(_.convertToGpu()),
         aggregateExpressions.map(_.convertToGpu()).asInstanceOf[Seq[GpuAggregateExpression]],
         aggAttributes.map(_.convertToGpu()).asInstanceOf[Seq[Attribute]],
+        initialInputBufferOffset,
         retExpressions.map(_.convertToGpu()).asInstanceOf[Seq[NamedExpression]],
         childPlans.head.convertIfNeeded(),
         conf.gpuTargetBatchSizeBytes)
@@ -1087,7 +1261,9 @@ class GpuHashAggregateMeta(
     conf: RapidsConf,
     parent: Option[RapidsMeta[_, _, _]],
     rule: DataFromReplacementRule)
-    extends GpuBaseAggregateMeta(agg, agg.requiredChildDistributionExpressions,
+    extends GpuBaseAggregateMeta(agg,
+      agg.initialInputBufferOffset,
+      agg.requiredChildDistributionExpressions,
       conf, parent, rule)
 
 class GpuSortAggregateExecMeta(
@@ -1096,7 +1272,10 @@ class GpuSortAggregateExecMeta(
     parent: Option[RapidsMeta[_, _, _]],
     rule: DataFromReplacementRule)
     extends GpuTypedImperativeSupportedAggregateExecMeta(agg,
-      agg.requiredChildDistributionExpressions, conf, parent, rule) {
+      agg.initialInputBufferOffset,
+      agg.requiredChildDistributionExpressions,
+      conf, parent, rule) {
+
   override def tagPlanForGpu(): Unit = {
     super.tagPlanForGpu()
 
@@ -1133,7 +1312,9 @@ class GpuObjectHashAggregateExecMeta(
     parent: Option[RapidsMeta[_, _, _]],
     rule: DataFromReplacementRule)
     extends GpuTypedImperativeSupportedAggregateExecMeta(agg,
-      agg.requiredChildDistributionExpressions, conf, parent, rule)
+      agg.initialInputBufferOffset,
+      agg.requiredChildDistributionExpressions,
+      conf, parent, rule)
 
 /**
  * The GPU version of HashAggregateExec
@@ -1154,6 +1335,7 @@ case class GpuHashAggregateExec(
     groupingExpressions: Seq[Expression],
     aggregateExpressions: Seq[GpuAggregateExpression],
     aggregateAttributes: Seq[Attribute],
+    initialInputBufferOffset: Int,
     resultExpressions: Seq[NamedExpression],
     child: SparkPlan,
     configuredTargetBatchSize: Long) extends UnaryExecNode with GpuExec with Arm {
@@ -1206,6 +1388,7 @@ case class GpuHashAggregateExec(
         groupingExprs,
         aggregateExprs,
         aggregateAttrs,
+        initialInputBufferOffset,
         resultExprs,
         childOutput,
         modeInfo,
