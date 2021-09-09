@@ -2974,6 +2974,14 @@ object GpuOverrides extends Logging {
 
         override val supportBufferConversion: Boolean = true
       }),
+    expr[StddevPop](
+      "Aggregation computing population standard deviation.",
+      ExprChecks.aggNotReduction(
+        TypeSig.DOUBLE, TypeSig.DOUBLE,
+        Seq(ParamCheck("input", TypeSig.gpuNumeric, TypeSig.numeric))),
+      (c, conf, p, r) => new AggExprMeta[StddevPop](c, conf, p, r) {
+        override def convertToGpu(child: Expression): GpuExpression = GpuStddevPop(child)
+      }),
     expr[GetJsonObject](
       "Extracts a json object from path",
       ExprChecks.projectOnly(
