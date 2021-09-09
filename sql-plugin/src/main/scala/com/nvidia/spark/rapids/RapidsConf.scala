@@ -411,9 +411,11 @@ object RapidsConf {
     .createWithDefault(true)
 
   val RMM_POOL = conf("spark.rapids.memory.gpu.pool")
-    .doc("Select the RMM pooling allocator to use. Valid values are \"DEFAULT\", \"ARENA\", and " +
-      "\"NONE\". With \"DEFAULT\", `rmm::mr::pool_memory_resource` is used; with \"ARENA\", " +
-      "`rmm::mr::arena_memory_resource` is used. If set to \"NONE\", pooling is disabled and RMM " +
+    .doc("Select the RMM pooling allocator to use. Valid values are \"DEFAULT\", \"ARENA\", " +
+      "\"ASYNC\", and \"NONE\". With \"DEFAULT\", `rmm::mr::pool_memory_resource` is used; " +
+      "with \"ARENA\", `rmm::mr::arena_memory_resource` is used; " +
+      "with \"ASYNC\", `rmm::mr::cuda_async_memory_resource` is used. " +
+      "If set to \"NONE\", pooling is disabled and RMM " +
       "just passes through to CUDA memory allocation directly. Note: \"ARENA\" is the " +
       "recommended pool allocator if CUDF is built with Per-Thread Default Stream (PTDS), " +
       "as \"DEFAULT\" is known to be unstable (https://github.com/NVIDIA/spark-rapids/issues/1141)")

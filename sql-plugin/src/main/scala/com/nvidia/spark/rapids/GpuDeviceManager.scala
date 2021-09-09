@@ -233,6 +233,9 @@ object GpuDeviceManager extends Logging {
           case c if "arena".equalsIgnoreCase(c) =>
             features += "ARENA"
             init | RmmAllocationMode.ARENA
+          case c if "async".equalsIgnoreCase(c) =>
+            features += "ASYNC"
+            init | RmmAllocationMode.ASYNC
           case c if "none".equalsIgnoreCase(c) =>
             // Pooling is disabled.
             init
