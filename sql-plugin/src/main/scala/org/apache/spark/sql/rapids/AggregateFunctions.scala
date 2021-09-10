@@ -20,11 +20,10 @@ import ai.rapids.cudf
 import ai.rapids.cudf.{BinaryOp, ColumnVector, DType, GroupByAggregation, GroupByAggregationOnColumn, GroupByScanAggregation, NullPolicy, ReductionAggregation, ReplacePolicy, RollingAggregation, RollingAggregationOnColumn, ScanAggregation}
 import com.nvidia.spark.rapids._
 import com.nvidia.spark.rapids.shims.v2._
-
 import org.apache.spark.sql.catalyst.InternalRow
-import org.apache.spark.sql.catalyst.analysis.TypeCheckResult
+import org.apache.spark.sql.catalyst.analysis.{TypeCheckResult, UnresolvedAttribute}
 import org.apache.spark.sql.catalyst.analysis.TypeCheckResult.TypeCheckSuccess
-import org.apache.spark.sql.catalyst.expressions.{AttributeReference, AttributeSet, Expression, ExprId, ImplicitCastInputTypes, UnsafeProjection, UnsafeRow}
+import org.apache.spark.sql.catalyst.expressions.{Attribute, AttributeReference, AttributeSet, ExprId, Expression, ImplicitCastInputTypes, NamedExpression, UnsafeProjection, UnsafeRow}
 import org.apache.spark.sql.catalyst.expressions.aggregate._
 import org.apache.spark.sql.catalyst.expressions.codegen.CodegenFallback
 import org.apache.spark.sql.catalyst.util.{ArrayData, TypeUtils}
@@ -77,21 +76,19 @@ trait GpuAggregateFunction extends GpuExpression
 
   // expression to use to modify pre and post a cuDF update aggregate
   // preUpdate: modify an incoming batch to match the shape/type cuDF expects
-  // postUpdate and postUpdateAttr: take the output of a cuDF update aggregate and return
+  // postUpdate: take the output of a cuDF update aggregate and return
   //   what spark expects
-  lazy val preUpdate: Seq[Expression] = aggBufferAttributes
-  lazy val postUpdate: Seq[Expression] = aggBufferAttributes
-  lazy val postUpdateAttr: Seq[AttributeReference] = aggBufferAttributes
+  lazy val preUpdate: Seq[NamedExpression] = aggBufferAttributes
+  lazy val postUpdate: Seq[NamedExpression] = aggBufferAttributes
 
   // merge: second half of the aggregation (count = sum). Also use to merge multiple batches.
   val mergeExpressions: Seq[Expression]
 
   // expression to use to modify pre and post a cudf merge aggregate
   // preMerge: modify a partial batch to match the input required by a merge aggregate
-  // postMerge and postMergeAttr: used to put the result of the merge aggregate, in Spark terms.
-  lazy val preMerge: Seq[Expression] = aggBufferAttributes
-  lazy val postMerge: Seq[Expression] = aggBufferAttributes
-  lazy val postMergeAttr: Seq[AttributeReference] = aggBufferAttributes
+  // postMerge: used to put the result of the merge aggregate, in Spark terms.
+  lazy val preMerge: Seq[NamedExpression] = aggBufferAttributes
+  lazy val postMerge: Seq[NamedExpression] = aggBufferAttributes
 
   // mostly likely a pass through (count => sum we merged above).
   // average has a more interesting expression to compute the division of sum/count
@@ -141,13 +138,11 @@ case class WrappedAggFunction(aggregateFunction: GpuAggregateFunction, filter: E
   override val evaluateExpression: Expression =
     aggregateFunction.evaluateExpression
 
-  override lazy val preUpdate: Seq[Expression] = aggregateFunction.preUpdate
-  override lazy val postUpdate: Seq[Expression] = aggregateFunction.postUpdate
-  override lazy val postUpdateAttr: Seq[AttributeReference] = aggregateFunction.postUpdateAttr
+  override lazy val preUpdate: Seq[NamedExpression] = aggregateFunction.preUpdate
+  override lazy val postUpdate: Seq[NamedExpression] = aggregateFunction.postUpdate
 
-  override lazy val preMerge: Seq[Expression] = aggregateFunction.preMerge
-  override lazy val postMerge: Seq[Expression] = aggregateFunction.postMerge
-  override lazy val postMergeAttr: Seq[AttributeReference] = aggregateFunction.postMergeAttr
+  override lazy val preMerge: Seq[NamedExpression] = aggregateFunction.preMerge
+  override lazy val postMerge: Seq[NamedExpression] = aggregateFunction.postMerge
 }
 
 case class GpuAggregateExpression(origAggregateFunction: GpuAggregateFunction,
@@ -212,7 +207,8 @@ case class GpuAggregateExpression(origAggregateFunction: GpuAggregateFunction,
   override def sql: String = aggregateFunction.sql(isDistinct)
 }
 
-abstract case class CudfAggregate(ref: Expression) extends GpuUnevaluable with ShimExpression {
+abstract case class CudfAggregate(ref: Expression)
+  extends GpuUnevaluable with ShimExpression with NamedExpression {
   // we use this to get the ordinal of the bound reference, s.t. we can ask cudf to perform
   // the aggregate on that column
   protected def getOrdinal(ref: Expression): Int =
@@ -236,9 +232,21 @@ abstract case class CudfAggregate(ref: Expression) extends GpuUnevaluable with S
   def updateDataType: DataType = dataType
   def nullable: Boolean = ref.nullable
   def children: Seq[Expression] = Seq(ref)
+
+  override def toAttribute: Attribute = {
+    if (resolved) {
+      AttributeReference(name, dataType, nullable, metadata)(exprId, qualifier)
+    } else {
+      UnresolvedAttribute(name)
+    }
+  }
 }
 
-class CudfCount(ref: Expression) extends CudfAggregate(ref) {
+case class CudfCount(override val ref: Expression)(
+  val exprId: ExprId = NamedExpression.newExprId,
+  val qualifier: Seq[String] = Seq.empty,
+  val explicitMetadata: Option[Metadata] = None)
+    extends CudfAggregate(ref) {
   override val updateReductionAggregateInternal: cudf.ColumnVector => cudf.Scalar =
     (col: cudf.ColumnVector) => cudf.Scalar.fromLong(col.getRowCount - col.getNullCount)
   override val mergeReductionAggregateInternal: cudf.ColumnVector => cudf.Scalar =
@@ -252,10 +260,18 @@ class CudfCount(ref: Expression) extends CudfAggregate(ref) {
 
   // the partial count outputs an int
   override def updateDataType: DataType = IntegerType
-  override def toString(): String = "CudfCount"
+
+  override def name: String = "CudfCount"
+
+  override def newInstance(): NamedExpression =
+    CudfSum(ref)(qualifier = qualifier, explicitMetadata = explicitMetadata)
 }
 
-class CudfSum(ref: Expression) extends CudfAggregate(ref) {
+case class CudfSum(override val ref: Expression)(
+  val exprId: ExprId = NamedExpression.newExprId,
+  val qualifier: Seq[String] = Seq.empty,
+  val explicitMetadata: Option[Metadata] = None)
+    extends CudfAggregate(ref) {
   // Up to 3.1.1, analyzed plan widened the input column type before applying
   // aggregation. Thus even though we did not explicitly pass the output column type
   // we did not run into integer overflow issues:
@@ -286,11 +302,17 @@ class CudfSum(ref: Expression) extends CudfAggregate(ref) {
   override lazy val mergeAggregate: GroupByAggregationOnColumn =
     GroupByAggregation.sum()
       .onColumn(getOrdinal(ref))
-  override def toString(): String = "CudfSum"
 
+  override def name: String = "CudfSum"
+  override def newInstance(): NamedExpression =
+    CudfSum(ref)(qualifier = qualifier, explicitMetadata = explicitMetadata)
 }
 
-class CudfMax(ref: Expression) extends CudfAggregate(ref) {
+case class CudfMax(override val ref: Expression)(
+  val exprId: ExprId = NamedExpression.newExprId,
+  val qualifier: Seq[String] = Seq.empty,
+  val explicitMetadata: Option[Metadata] = None)
+    extends CudfAggregate(ref) {
   override val updateReductionAggregateInternal: cudf.ColumnVector => cudf.Scalar =
     (col: cudf.ColumnVector) => col.max
   override val mergeReductionAggregateInternal: cudf.ColumnVector => cudf.Scalar =
@@ -301,10 +323,17 @@ class CudfMax(ref: Expression) extends CudfAggregate(ref) {
   override lazy val mergeAggregate: GroupByAggregationOnColumn =
     GroupByAggregation.max()
       .onColumn(getOrdinal(ref))
-  override def toString(): String = "CudfMax"
+
+  override def name: String = "CudfMax"
+  override def newInstance(): NamedExpression =
+    CudfMax(ref)(qualifier = qualifier, explicitMetadata = explicitMetadata)
 }
 
-class CudfMin(ref: Expression) extends CudfAggregate(ref) {
+case class CudfMin(override val ref: Expression)(
+  val exprId: ExprId = NamedExpression.newExprId,
+  val qualifier: Seq[String] = Seq.empty,
+  val explicitMetadata: Option[Metadata] = None)
+    extends CudfAggregate(ref) {
   override val updateReductionAggregateInternal: cudf.ColumnVector => cudf.Scalar =
     (col: cudf.ColumnVector) => col.min
   override val mergeReductionAggregateInternal: cudf.ColumnVector => cudf.Scalar =
@@ -315,10 +344,17 @@ class CudfMin(ref: Expression) extends CudfAggregate(ref) {
   override lazy val mergeAggregate: GroupByAggregationOnColumn =
     GroupByAggregation.min()
       .onColumn(getOrdinal(ref))
-  override def toString(): String = "CudfMin"
+
+  override def name: String = "CudfMin"
+  override def newInstance(): NamedExpression =
+    CudfMin(ref)(qualifier = qualifier, explicitMetadata = explicitMetadata)
 }
 
-class CudfCollectList(ref: Expression) extends CudfAggregate(ref) {
+case class CudfCollectList(override val ref: Expression)(
+  val exprId: ExprId = NamedExpression.newExprId,
+  val qualifier: Seq[String] = Seq.empty,
+  val explicitMetadata: Option[Metadata] = None)
+    extends CudfAggregate(ref) {
   override lazy val updateReductionAggregateInternal: cudf.ColumnVector => cudf.Scalar =
     throw new UnsupportedOperationException("CollectList is not yet supported in reduction")
   override lazy val mergeReductionAggregateInternal: cudf.ColumnVector => cudf.Scalar =
@@ -329,12 +365,18 @@ class CudfCollectList(ref: Expression) extends CudfAggregate(ref) {
   override lazy val mergeAggregate: GroupByAggregationOnColumn =
     GroupByAggregation.mergeLists()
       .onColumn(getOrdinal(ref))
-  override def toString(): String = "CudfCollectList"
+  override def name: String = "CudfCollectList"
   override def dataType: DataType = ArrayType(ref.dataType, containsNull = false)
   override def nullable: Boolean = false
+  override def newInstance(): NamedExpression =
+    CudfCollectList(ref)(qualifier = qualifier, explicitMetadata = explicitMetadata)
 }
 
-class CudfMergeLists(ref: Expression) extends CudfAggregate(ref) {
+case class CudfMergeLists(override val ref: Expression)(
+  val exprId: ExprId = NamedExpression.newExprId,
+  val qualifier: Seq[String] = Seq.empty,
+  val explicitMetadata: Option[Metadata] = None)
+    extends CudfAggregate(ref) {
   override lazy val updateReductionAggregateInternal: cudf.ColumnVector => cudf.Scalar =
     throw new UnsupportedOperationException("MergeLists is not yet supported in reduction")
   override lazy val mergeReductionAggregateInternal: cudf.ColumnVector => cudf.Scalar =
@@ -345,11 +387,17 @@ class CudfMergeLists(ref: Expression) extends CudfAggregate(ref) {
   override lazy val mergeAggregate: GroupByAggregationOnColumn =
     GroupByAggregation.mergeLists()
       .onColumn(getOrdinal(ref))
-  override def toString(): String = "CudfMergeLists"
+  override def name: String = "CudfMergeLists"
   override def nullable: Boolean = false
+  override def newInstance(): NamedExpression =
+    CudfMergeLists(ref)(qualifier = qualifier, explicitMetadata = explicitMetadata)
 }
 
-class CudfCollectSet(ref: Expression) extends CudfAggregate(ref) {
+case class CudfCollectSet(override val ref: Expression)(
+  val exprId: ExprId = NamedExpression.newExprId,
+  val qualifier: Seq[String] = Seq.empty,
+  val explicitMetadata: Option[Metadata] = None)
+    extends CudfAggregate(ref) {
   override lazy val updateReductionAggregateInternal: cudf.ColumnVector => cudf.Scalar =
     throw new UnsupportedOperationException("CollectSet is not yet supported in reduction")
   override lazy val mergeReductionAggregateInternal: cudf.ColumnVector => cudf.Scalar =
@@ -360,12 +408,18 @@ class CudfCollectSet(ref: Expression) extends CudfAggregate(ref) {
   override lazy val mergeAggregate: GroupByAggregationOnColumn =
     GroupByAggregation.mergeSets()
       .onColumn(getOrdinal(ref))
-  override def toString(): String = "CudfCollectSet"
+  override def name: String = "CudfCollectSet"
   override def dataType: DataType = ArrayType(ref.dataType, containsNull = false)
   override def nullable: Boolean = false
+  override def newInstance(): NamedExpression =
+    CudfCollectSet(ref)(qualifier = qualifier, explicitMetadata = explicitMetadata)
 }
 
-class CudfMergeSets(ref: Expression) extends CudfAggregate(ref) {
+case class CudfMergeSets(override val ref: Expression)(
+  val exprId: ExprId = NamedExpression.newExprId,
+  val qualifier: Seq[String] = Seq.empty,
+  val explicitMetadata: Option[Metadata] = None)
+    extends CudfAggregate(ref) {
   override lazy val updateReductionAggregateInternal: cudf.ColumnVector => cudf.Scalar =
     throw new UnsupportedOperationException("CudfMergeSets is not yet supported in reduction")
   override lazy val mergeReductionAggregateInternal: cudf.ColumnVector => cudf.Scalar =
@@ -376,12 +430,15 @@ class CudfMergeSets(ref: Expression) extends CudfAggregate(ref) {
   override lazy val mergeAggregate: GroupByAggregationOnColumn=
     GroupByAggregation.mergeSets()
       .onColumn(getOrdinal(ref))
-  override def toString(): String = "CudfMergeSets"
+  override def name: String = "CudfMergeSets"
   override def dataType: DataType = ref.dataType
   override def nullable: Boolean = false
+  override def newInstance(): NamedExpression =
+    CudfMergeSets(ref)(qualifier = qualifier, explicitMetadata = explicitMetadata)
 }
 
-abstract class CudfFirstLastBase(ref: Expression) extends CudfAggregate(ref) {
+abstract class CudfFirstLastBase(ref: Expression)
+    extends CudfAggregate(ref) {
   val includeNulls: NullPolicy
   val offset: Int
 
@@ -397,28 +454,60 @@ abstract class CudfFirstLastBase(ref: Expression) extends CudfAggregate(ref) {
       .onColumn(getOrdinal(ref))
 }
 
-class CudfFirstIncludeNulls(ref: Expression) extends CudfFirstLastBase(ref) {
+case class CudfFirstIncludeNulls(override val ref: Expression)(
+  val exprId: ExprId = NamedExpression.newExprId,
+  val qualifier: Seq[String] = Seq.empty,
+  val explicitMetadata: Option[Metadata] = None)
+    extends CudfFirstLastBase(ref) {
   override val includeNulls: NullPolicy = NullPolicy.INCLUDE
   override val offset: Int = 0
+  override def name: String = "CudfFirstIncludeNulls"
+  override def newInstance(): NamedExpression =
+    CudfFirstIncludeNulls(ref)(qualifier = qualifier, explicitMetadata = explicitMetadata)
 }
 
-class CudfFirstExcludeNulls(ref: Expression) extends CudfFirstLastBase(ref) {
+case class CudfFirstExcludeNulls(override val ref: Expression)(
+  val exprId: ExprId = NamedExpression.newExprId,
+  val qualifier: Seq[String] = Seq.empty,
+  val explicitMetadata: Option[Metadata] = None)
+    extends CudfFirstLastBase(ref) {
   override val includeNulls: NullPolicy = NullPolicy.EXCLUDE
   override val offset: Int = 0
+  override def name: String = "CudfFirstExcludeNulls"
+  override def newInstance(): NamedExpression =
+    CudfFirstExcludeNulls(ref)(qualifier = qualifier, explicitMetadata = explicitMetadata)
 }
 
-class CudfLastIncludeNulls(ref: Expression) extends CudfFirstLastBase(ref) {
+case class CudfLastIncludeNulls(override val ref: Expression)(
+  val exprId: ExprId = NamedExpression.newExprId,
+  val qualifier: Seq[String] = Seq.empty,
+  val explicitMetadata: Option[Metadata] = None)
+    extends CudfFirstLastBase(ref) {
   override val includeNulls: NullPolicy = NullPolicy.INCLUDE
   override val offset: Int = -1
+  override def name: String = "CudfLastIncludeNulls"
+  override def newInstance(): NamedExpression =
+    CudfLastIncludeNulls(ref)(qualifier = qualifier, explicitMetadata = explicitMetadata)
 }
 
-class CudfLastExcludeNulls(ref: Expression) extends CudfFirstLastBase(ref) {
+case class CudfLastExcludeNulls(override val ref: Expression)(
+  val exprId: ExprId = NamedExpression.newExprId,
+  val qualifier: Seq[String] = Seq.empty,
+  val explicitMetadata: Option[Metadata] = None)
+    extends CudfFirstLastBase(ref) {
   override val includeNulls: NullPolicy = NullPolicy.EXCLUDE
   override val offset: Int = -1
+  override def name: String = "CudfLastExcludeNulls"
+  override def newInstance(): NamedExpression =
+    CudfLastExcludeNulls(ref)(qualifier = qualifier, explicitMetadata = explicitMetadata)
 }
 
 /** This is only used by the M2 class aggregates, do not confuse this with GpuAverage */
-class CudfMean(ref: Expression) extends CudfAggregate(ref) {
+case class CudfMean(override val ref: Expression)(
+  val exprId: ExprId = NamedExpression.newExprId,
+  val qualifier: Seq[String] = Seq.empty,
+  val explicitMetadata: Option[Metadata] = None)
+    extends CudfAggregate(ref) {
   @transient val rapidsAvgType: DType = GpuColumnVector.getNonNestedRapidsType(dataType)
 
   override lazy val updateReductionAggregateInternal: cudf.ColumnVector => cudf.Scalar =
@@ -435,7 +524,9 @@ class CudfMean(ref: Expression) extends CudfAggregate(ref) {
     GroupByAggregation.mean()
       .onColumn(getOrdinal(ref))
 
-  override def toString(): String = "CudfMeanForM2"
+  override def name: String = "CudfMeanForM2"
+  override def newInstance(): NamedExpression =
+    CudfMean(ref)(qualifier = qualifier, explicitMetadata = explicitMetadata)
 }
 
 class CudfMergeM2(ref: Expression)
@@ -486,8 +577,8 @@ case class GpuMin(child: Expression) extends GpuAggregateFunction
   private lazy val cudfMin = AttributeReference("min", child.dataType)()
 
   override lazy val inputProjection: Seq[Expression] = Seq(child)
-  override lazy val updateExpressions: Seq[Expression] = Seq(new CudfMin(cudfMin))
-  override lazy val mergeExpressions: Seq[Expression] = Seq(new CudfMin(cudfMin))
+  override lazy val updateExpressions: Seq[Expression] = Seq(CudfMin(cudfMin))
+  override lazy val mergeExpressions: Seq[Expression] = Seq(CudfMin(cudfMin))
   override lazy val evaluateExpression: Expression = cudfMin
 
   override lazy val aggBufferAttributes: Seq[AttributeReference] = cudfMin :: Nil
@@ -541,8 +632,8 @@ case class GpuMax(child: Expression) extends GpuAggregateFunction
   private lazy val cudfMax = AttributeReference("max", child.dataType)()
 
   override lazy val inputProjection: Seq[Expression] = Seq(child)
-  override lazy val updateExpressions: Seq[Expression] = Seq(new CudfMax(cudfMax))
-  override lazy val mergeExpressions: Seq[Expression] = Seq(new CudfMax(cudfMax))
+  override lazy val updateExpressions: Seq[Expression] = Seq(CudfMax(cudfMax)())
+  override lazy val mergeExpressions: Seq[Expression] = Seq(CudfMax(cudfMax)())
   override lazy val evaluateExpression: Expression = cudfMax
 
   override lazy val aggBufferAttributes: Seq[AttributeReference] = cudfMax :: Nil
@@ -597,8 +688,8 @@ case class GpuSum(child: Expression, resultType: DataType)
   private lazy val cudfSum = AttributeReference("sum", resultType)()
 
   override lazy val inputProjection: Seq[Expression] = Seq(child)
-  override lazy val updateExpressions: Seq[Expression] = Seq(new CudfSum(cudfSum))
-  override lazy val mergeExpressions: Seq[Expression] = Seq(new CudfSum(cudfSum))
+  override lazy val updateExpressions: Seq[Expression] = Seq(CudfSum(cudfSum)())
+  override lazy val mergeExpressions: Seq[Expression] = Seq(CudfSum(cudfSum)())
   override lazy val evaluateExpression: Expression = cudfSum
 
   override lazy val aggBufferAttributes: Seq[AttributeReference] = cudfSum :: Nil
@@ -733,13 +824,11 @@ case class GpuCount(children: Seq[Expression]) extends GpuAggregateFunction
   private lazy val cudfCount = AttributeReference("count", LongType)()
 
   override lazy val inputProjection: Seq[Expression] = Seq(children.head)
-  override lazy val updateExpressions: Seq[Expression] = Seq(new CudfCount(cudfCount))
+  override lazy val updateExpressions: Seq[Expression] = Seq(CudfCount(cudfCount)())
 
-  override lazy val postUpdate: Seq[Expression] = Seq(GpuCast(cudfCount, dataType))
-  override lazy val postUpdateAttr: Seq[AttributeReference] = Seq(cudfCount)
+  override lazy val postUpdate: Seq[NamedExpression] = Seq(GpuCast(cudfCount, dataType))
 
-  override lazy val mergeExpressions: Seq[Expression] = Seq(new CudfSum(cudfCount))
-  override lazy val evaluateExpression: Expression = cudfCount
+  override lazy val mergeExpressions: Seq[NamedExpression] = Seq(CudfSum(cudfCount)())
 
   override lazy val aggBufferAttributes: Seq[AttributeReference] = cudfCount :: Nil
 

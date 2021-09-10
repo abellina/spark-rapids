@@ -216,7 +216,7 @@ object AggregateModeInfo {
  */
 class GpuHashAggregateIterator(
     cbIter: Iterator[ColumnarBatch],
-    groupingExpressions: Seq[Expression],
+    groupingExpressions: Seq[NamedExpression],
     aggregateExpressions: Seq[GpuAggregateExpression],
     aggregateAttributes: Seq[Attribute],
     resultExpressions: Seq[NamedExpression],
@@ -779,7 +779,7 @@ class GpuHashAggregateIterator(
       toAggregateBatch: ColumnarBatch,
       merge: Boolean,
       isSorted: Boolean = false): ColumnarBatch  = {
-    val groupingAttributes = groupingExpressions.map(_.asInstanceOf[NamedExpression].toAttribute)
+    val groupingAttributes = groupingExpressions.map(_.toAttribute)
 
     val aggBufferAttributes = groupingAttributes ++
       aggregateExpressions.flatMap(_.aggregateFunction.aggBufferAttributes)
@@ -825,7 +825,7 @@ class GpuHashAggregateIterator(
             postStepAttr ++= aggFn.postMergeAttr
           }
 
-          aggregates.map { a =>
+          aggregates.map { a: CudfAggregate =>
             if ((aggExp.mode == Partial || aggExp.mode == Complete) && !merge) {
               cudfAggregates += a.updateAggregate
               dataTypes += a.updateDataType
