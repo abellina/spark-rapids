@@ -529,8 +529,11 @@ case class CudfMean(override val ref: Expression)(
     CudfMean(ref)(qualifier = qualifier, explicitMetadata = explicitMetadata)
 }
 
-class CudfMergeM2(ref: Expression)
-  extends CudfAggregate(ref) {
+case class CudfMergeM2(override val ref: Expression)(
+  val exprId: ExprId = NamedExpression.newExprId,
+  val qualifier: Seq[String] = Seq.empty,
+  val explicitMetadata: Option[Metadata] = None)
+    extends CudfAggregate(ref) {
   override lazy val updateReductionAggregateInternal: cudf.ColumnVector => cudf.Scalar =
     throw new UnsupportedOperationException("M2 aggregation is not yet supported in reduction")
   override lazy val mergeReductionAggregateInternal: cudf.ColumnVector => cudf.Scalar =
@@ -542,7 +545,9 @@ class CudfMergeM2(ref: Expression)
     GroupByAggregation.mergeM2()
       .onColumn(getOrdinal(ref))
 
-  override def toString(): String = "CudfMergeM2"
+  override def name: String = "CudfMergeM2"
+  override def newInstance(): NamedExpression =
+    CudfMergeM2(ref)(qualifier = qualifier, explicitMetadata = explicitMetadata)
 
   override def dataType: DataType =
     StructType(
@@ -553,7 +558,11 @@ class CudfMergeM2(ref: Expression)
   override def nullable: Boolean = true
 }
 
-class CudfM2(ref: Expression) extends CudfAggregate(ref) {
+case class CudfM2(override val ref: Expression)(
+  val exprId: ExprId = NamedExpression.newExprId,
+  val qualifier: Seq[String] = Seq.empty,
+  val explicitMetadata: Option[Metadata] = None)
+    extends CudfAggregate(ref) {
   override lazy val updateReductionAggregateInternal: cudf.ColumnVector => cudf.Scalar =
     throw new UnsupportedOperationException("M2 aggregation is not yet supported in reduction")
   override lazy val mergeReductionAggregateInternal: cudf.ColumnVector => cudf.Scalar =
@@ -564,7 +573,9 @@ class CudfM2(ref: Expression) extends CudfAggregate(ref) {
   override lazy val mergeAggregate: GroupByAggregationOnColumn =
     GroupByAggregation.mergeM2()
       .onColumn(getOrdinal(ref))
-  override def toString(): String = "CudfM2"
+  override def name: String = "CudfM2"
+  override def newInstance(): NamedExpression =
+    CudfM2(ref)(qualifier = qualifier, explicitMetadata = explicitMetadata)
 
   override def dataType: DataType = DoubleType
   override def nullable: Boolean = true
@@ -577,8 +588,8 @@ case class GpuMin(child: Expression) extends GpuAggregateFunction
   private lazy val cudfMin = AttributeReference("min", child.dataType)()
 
   override lazy val inputProjection: Seq[Expression] = Seq(child)
-  override lazy val updateExpressions: Seq[Expression] = Seq(CudfMin(cudfMin))
-  override lazy val mergeExpressions: Seq[Expression] = Seq(CudfMin(cudfMin))
+  override lazy val updateExpressions: Seq[Expression] = Seq(CudfMin(cudfMin)())
+  override lazy val mergeExpressions: Seq[Expression] = Seq(CudfMin(cudfMin)())
   override lazy val evaluateExpression: Expression = cudfMin
 
   override lazy val aggBufferAttributes: Seq[AttributeReference] = cudfMin :: Nil
@@ -798,11 +809,11 @@ case class GpuPivotFirst(
   }
 
   override lazy val updateExpressions: Seq[Expression] = {
-    pivotColAttr.map(pivotColumnValue => new CudfLastExcludeNulls(pivotColumnValue))
+    pivotColAttr.map(pivotColumnValue => CudfLastExcludeNulls(pivotColumnValue)())
   }
 
   override lazy val mergeExpressions: Seq[Expression] = {
-    pivotColAttr.map(pivotColumnValue => new CudfLastExcludeNulls(pivotColumnValue))
+    pivotColAttr.map(pivotColumnValue => CudfLastExcludeNulls(pivotColumnValue)())
   }
 
   override lazy val evaluateExpression: Expression = {
@@ -907,15 +918,15 @@ case class GpuAverage(child: Expression) extends GpuAggregateFunction
         // a sum of this == the count
         GpuCast(GpuIsNotNull(child), LongType)
     })
-  override lazy val mergeExpressions: Seq[Expression] = Seq(new CudfSum(cudfSum),
-    new CudfSum(cudfCount))
+  override lazy val mergeExpressions: Seq[Expression] = Seq(CudfSum(cudfSum)(),
+    CudfSum(cudfCount)())
   // The count input projection will need to be collected as a sum (of counts) instead of
   // counts (of counts) as the GpuIsNotNull o/p is casted to count=0 for null and 1 otherwise, and
   // the total count can be correctly evaluated only by summing them. eg. avg(col(null, 27))
   // should be 27, with count column projection as (0, 1) and total count for dividing the
   // average = (0 + 1) and not 2 which is the rowcount of the projected column.
-  override lazy val updateExpressions: Seq[Expression] = Seq(new CudfSum(cudfSum),
-    new CudfSum(cudfCount))
+  override lazy val updateExpressions: Seq[Expression] = Seq(CudfSum(cudfSum)(),
+    CudfSum(cudfCount)())
 
   // NOTE: this sets `failOnErrorOverride=false` in `GpuDivide` to force it not to throw
   // divide-by-zero exceptions, even when ansi mode is enabled in Spark.
@@ -965,9 +976,9 @@ case class GpuFirst(child: Expression, ignoreNulls: Boolean)
     Seq(child, GpuLiteral(ignoreNulls, BooleanType))
 
   private lazy val commonExpressions: Seq[CudfAggregate] = if (ignoreNulls) {
-    Seq(new CudfFirstExcludeNulls(cudfFirst), new CudfFirstExcludeNulls(valueSet))
+    Seq(CudfFirstExcludeNulls(cudfFirst)(), CudfFirstExcludeNulls(valueSet)())
   } else {
-    Seq(new CudfFirstIncludeNulls(cudfFirst), new CudfFirstIncludeNulls(valueSet))
+    Seq(CudfFirstIncludeNulls(cudfFirst)(), CudfFirstIncludeNulls(valueSet)())
   }
 
   override lazy val updateExpressions: Seq[Expression] = commonExpressions
@@ -1010,9 +1021,9 @@ case class GpuLast(child: Expression, ignoreNulls: Boolean)
     Seq(child, GpuLiteral(!ignoreNulls, BooleanType))
 
   private lazy val commonExpressions: Seq[CudfAggregate] = if (ignoreNulls) {
-    Seq(new CudfLastExcludeNulls(cudfLast), new CudfLastExcludeNulls(valueSet))
+    Seq(CudfLastExcludeNulls(cudfLast)(), CudfLastExcludeNulls(valueSet)())
   } else {
-    Seq(new CudfLastIncludeNulls(cudfLast), new CudfLastIncludeNulls(valueSet))
+    Seq(CudfLastIncludeNulls(cudfLast)(), CudfLastIncludeNulls(valueSet)())
   }
 
   override lazy val updateExpressions: Seq[Expression] = commonExpressions
@@ -1091,9 +1102,9 @@ case class GpuCollectList(
     inputAggBufferOffset: Int = 0)
     extends GpuCollectBase {
 
-  override lazy val updateExpressions: Seq[Expression] = new CudfCollectList(inputBuf) :: Nil
+  override lazy val updateExpressions: Seq[Expression] = CudfCollectList(inputBuf)() :: Nil
 
-  override lazy val mergeExpressions: Seq[Expression] = new CudfMergeLists(outputBuf) :: Nil
+  override lazy val mergeExpressions: Seq[Expression] = CudfMergeLists(outputBuf)() :: Nil
 
   override lazy val evaluateExpression: Expression = outputBuf
 
@@ -1118,9 +1129,9 @@ case class GpuCollectSet(
     inputAggBufferOffset: Int = 0)
     extends GpuCollectBase {
 
-  override lazy val updateExpressions: Seq[Expression] = new CudfCollectSet(inputBuf) :: Nil
+  override lazy val updateExpressions: Seq[Expression] = CudfCollectSet(inputBuf)() :: Nil
 
-  override lazy val mergeExpressions: Seq[Expression] = new CudfMergeSets(outputBuf) :: Nil
+  override lazy val mergeExpressions: Seq[Expression] = CudfMergeSets(outputBuf)() :: Nil
 
   override lazy val evaluateExpression: Expression = outputBuf
 
@@ -1224,11 +1235,11 @@ abstract class GpuM2(child: Expression)
 
   // For local update, we need to compute all 3 aggregates: count, sum, and M2.
   override lazy val updateExpressions: Seq[Expression] =
-    new CudfCount(bufferN) ::
-      new CudfMean(bufferAvg) ::
-      new CudfM2(bufferM2) :: Nil
+    CudfCount(bufferN)() ::
+      CudfMean(bufferAvg)() ::
+      CudfM2(bufferM2)() :: Nil
 
-  override lazy val postUpdate: Seq[Expression] = {
+  override lazy val postUpdate: Seq[NamedExpression] = {
     // we copy the `bufferN` attribute and stomp on the type as Integer here,
     // because we really do have an int, and the `DoubleType` is what we want to output
     // to match Spark. So this expression says we are going from the aggregated count,
@@ -1247,7 +1258,7 @@ abstract class GpuM2(child: Expression)
   //
   // We cast `n` to be an Integer, as that's what MERGE_M2 expects, note that Spark
   // keeps `n` as a Double.
-  override lazy val preMerge: Seq[Expression] = {
+  override lazy val preMerge: Seq[NamedExpression] = {
     val childrenWithNames =
       GpuLiteral("n", StringType) :: GpuCast(bufferN, IntegerType) ::
         GpuLiteral("avg", StringType) :: bufferAvg ::
@@ -1266,7 +1277,7 @@ abstract class GpuM2(child: Expression)
   private val m2Struct =
     AttributeReference("m2struct", mergeM2DataType, nullable = true)()
 
-  override lazy val mergeExpressions: Seq[Expression] = new CudfMergeM2(m2Struct) :: Nil
+  override lazy val mergeExpressions: Seq[Expression] = CudfMergeM2(m2Struct)() :: Nil
 
   // after a MERGE_M2 call in cudf, our result is 1 struct column
   // we create this attribute to represent this result column
@@ -1275,7 +1286,7 @@ abstract class GpuM2(child: Expression)
   // we will bind this expression against the attribute above in post-merge,
   // and then project. The result will be 3 columns, where the first one is
   // casted to Double to match Spark.
-  override lazy val postMerge: Seq[Expression] = Seq(
+  override lazy val postMerge: Seq[NamedExpression] = Seq(
     GpuCast(GpuGetStructField(m2Struct, 0), DoubleType),
     GpuCast(GpuGetStructField(m2Struct, 1), DoubleType),
     GpuCast(GpuGetStructField(m2Struct, 2), DoubleType))
