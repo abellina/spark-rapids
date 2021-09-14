@@ -169,6 +169,8 @@ else
     else
         "$SPARK_HOME"/bin/spark-submit --jars "${ALL_JARS// /,}" \
             --driver-java-options "$PYSP_TEST_spark_driver_extraJavaOptions" \
+	    --conf spark.shuffle.manager=com.nvidia.spark.rapids.spark301db.RapidsShuffleManager \
+	    --conf spark.executorEnv.UCX_ERROR_SIGNALS= \
             $SPARK_SUBMIT_FLAGS "${RUN_TESTS_COMMAND[@]}" "${TEST_COMMON_OPTS[@]}"
     fi
 fi
