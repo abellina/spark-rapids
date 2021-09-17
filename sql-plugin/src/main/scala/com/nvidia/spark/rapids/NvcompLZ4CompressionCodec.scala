@@ -130,10 +130,13 @@ class BatchedNvcompLZ4Compressor(maxBatchMemorySize: Long, stream: Cuda.Stream)
       tables: Array[ContiguousTable],
       stream: Cuda.Stream): Array[CompressedTable] = {
     val uuid = UUID.randomUUID()
+
     tables.zipWithIndex.foreach { case (ct, ix) => {
       withResource(HostMemoryBuffer.allocate(ct.getBuffer.getLength)) { hostBuff =>
         hostBuff.copyFromDeviceBuffer(ct.getBuffer)
         val bb = hostBuff.asByteBuffer
+        val path = new File(s"/tmp/nvcomp/${uuid}")
+        path.mkdirs()
         val file = new File(s"/tmp/nvcomp/${uuid}/$ix")
         val channel = new FileOutputStream(file, false).getChannel()
         channel.write(bb)
@@ -145,7 +148,26 @@ class BatchedNvcompLZ4Compressor(maxBatchMemorySize: Long, stream: Cuda.Stream)
       NvcompLZ4CompressionCodec.LZ4_CHUNK_SIZE, stream)
     val compressedTables = try {
       val buffers = compressionResult.getCompressedBuffers
-      val compressedSizes = compressionResult.getCompressedSizes
+      val compressedSizes: Seq[Long] = compressionResult.getCompressedSizes.toSeq
+      val inputs: Seq[Long] = inputBuffers.map(_.getLength)
+      val ratios: Seq[Double] = inputBuffers.zip(compressedSizes).map {
+        case (buff, sz) => buff.getLength.toDouble/sz
+      }.toSeq
+      val ratiosMean = ratios.sum / ratios.length
+      val ratiosMax = ratios.max
+      val ratiosMin = ratios.min
+
+      val origMean = inputs.sum / inputs.length
+      val origMax = inputs.max
+      val origMin = inputs.min
+
+      val compressedMean = compressedSizes.sum / compressedSizes.length
+      val compressedMax = compressedSizes.max
+      val compressedMin = compressedSizes.min
+
+      logInfo(s"Wrote to $uuid ${tables.length} partitions. Orig sizs: [$origMin, $origMean, $origMax], " +
+        s"compressed sizes: [$compressedMin, $compressedMean, $compressedMax], " +
+          s"Ratios: [$ratiosMin, $ratiosMean, $ratiosMax]")
       buffers.zipWithIndex.map { case (buffer, i) =>
         val contigTable = tables(i)
         val compressedSize = compressedSizes(i)
