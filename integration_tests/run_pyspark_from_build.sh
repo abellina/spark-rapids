@@ -138,6 +138,7 @@ else
     export PYSP_TEST_spark_ui_showConsoleProgress='false'
     export PYSP_TEST_spark_sql_session_timeZone='UTC'
     export PYSP_TEST_spark_sql_shuffle_partitions='12'
+    export PYSP_TEST_spark_rapids_sql_explain='ALL'
     # prevent cluster shape to change
     export PYSP_TEST_spark_dynamicAllocation_enabled='false'
 
