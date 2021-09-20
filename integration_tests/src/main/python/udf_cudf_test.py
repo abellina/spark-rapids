@@ -115,12 +115,12 @@ def test_sql(enable_cudf_udf):
 
     def cpu_run(spark):
         _ = spark.udf.register("add_one_cpu", _plus_one_cpu_func)
-        _create_df(spark).createOrReplaceTempView("test_table_cpu")
+        temp_view(_create_df(spark), "test_table_cpu"))
         return spark.sql("SELECT add_one_cpu(id) FROM test_table_cpu").collect()
 
     def gpu_run(spark):
         _ = spark.udf.register("add_one_gpu", _plus_one_gpu_func)
-        _create_df(spark).createOrReplaceTempView("test_table_gpu")
+        temp_view(_create_df(spark), "test_table_gpu")
         return spark.sql("SELECT add_one_gpu(id) FROM test_table_gpu").collect()
 
     _assert_cpu_gpu(cpu_run, gpu_run, gpu_conf=_conf)
