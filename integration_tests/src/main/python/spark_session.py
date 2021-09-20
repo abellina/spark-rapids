@@ -46,11 +46,16 @@ def _set_all_confs(conf):
         if _spark.conf.get(key, None) != value:
             _spark.conf.set(key, value)
 
-def reset_spark_session_conf():
+def reset_spark_session():
     """Reset all of the configs for a given spark session."""
     _set_all_confs(_orig_conf)
-    #We should clear the cache
+    # Clear the cache
     _spark.catalog.clearCache()
+    # Drop temporary views
+    temp_views = filter(lambda x: x.isTemporary, _spark.catalog.listTables())
+    for tv in temp_views:
+        print("clearing %s" % (tv))
+        _spark.catalog.dropTempView(tv)
     # Have to reach into a private member to get access to the API we need
     current_keys = _from_scala_map(_spark.conf._jconf.getAll()).keys()
     for key in current_keys:
@@ -64,7 +69,7 @@ def _check_for_proper_return_values(something):
 
 def with_spark_session(func, conf={}):
     """Run func that takes a spark session as input with the given configs set."""
-    reset_spark_session_conf()
+    reset_spark_session()
     _add_job_description(conf)
     _set_all_confs(conf)
     ret = func(_spark)
