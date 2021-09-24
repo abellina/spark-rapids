@@ -498,7 +498,7 @@ class GpuHashAggregateIterator(
         aggregateExpressions.flatMap(_.aggregateFunction.aggBufferAttributes)
     val sorter = new GpuSorter(ordering, aggBufferAttributes)
     val aggregates = boundExpressions.boundCudfAggregates.flatMap(_.boundCudfAggregate)
-    val aggBatchTypes = groupingExpressions.map(_.dataType) ++ aggregates.map(_.dataType)
+    val aggBatchTypes = aggBufferAttributes.map(_.dataType)
 
     // Use the out of core sort iterator to sort the batches by grouping key
     outOfCoreIter = Some(GpuOutOfCoreSortIterator(

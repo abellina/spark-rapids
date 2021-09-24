@@ -1230,7 +1230,11 @@ def test_groupby_std_variance_nulls(data_gen, conf, ansi_enabled):
         conf=local_conf)
 
 
-@allow_non_gpu('ObjectHashAggregateExec', 'SortAggregateExec',
+@ignore_order(local=True)
+@approximate_float
+@allow_non_gpu('KnownFloatingPointNormalized', 'NormalizeNaNAndZero',
+               'ObjectHashAggregateExec', 'HashAggregateExec', 'SortAggregateExec',
+               'Cast', 
                'ShuffleExchangeExec', 'HashPartitioning', 'SortExec',
                'StddevPop', 'StddevSamp', 'VariancePop', 'VarianceSamp',
                'SortArray', 'Alias', 'Literal', 'Count', 'CollectList', 'CollectSet',
@@ -1250,7 +1254,7 @@ def test_groupby_std_variance_partial_replace_fallback(data_gen,
             'spark.sql.adaptive.enabled': aqe_enabled,
             'spark.sql.execution.useObjectHashAggregateExec': use_obj_hash_agg})
 
-    cpu_clz, gpu_clz = ['StddevPop', 'StddevSamp', 'VariancePop', 'VarianceSamp'], ['GpuStddevPop', 'GpuStddevSamp', 'GpuVariancePop', 'GpuVarianceSamp']
+    cpu_clz, gpu_clz = ['StddevSamp'], ['GpuStddevSamp']
     exist_clz, non_exist_clz = [], []
     # For aggregations without distinct, Databricks runtime removes the partial Aggregate stage (
     # map-side combine). There only exists an AggregateExec in Databricks runtimes. So, we need to
@@ -1262,6 +1266,8 @@ def test_groupby_std_variance_partial_replace_fallback(data_gen,
             exist_clz, non_exist_clz = gpu_clz, cpu_clz
     else:
         exist_clz = cpu_clz + gpu_clz
+
+    print(exist_clz)
 
     assert_cpu_and_gpu_are_equal_collect_with_capture(
         lambda spark: gen_df(spark, data_gen, length=100)
