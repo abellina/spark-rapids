@@ -102,7 +102,7 @@ object SamplingUtils extends Arm {
             runningCb = SpillableColumnarBatch(
               GpuColumnVector.from(selected, GpuColumnVector.extractTypes(cb)),
               SpillPriorities.ACTIVE_ON_DECK_PRIORITY,
-              RapidsBuffer.defaultSpillCallback)
+              RapidsBuffer.defaultSpillCallback, "random")
           } else {
             val concat = withResource(runningCb) { spb =>
               runningCb = null
@@ -116,7 +116,7 @@ object SamplingUtils extends Arm {
               runningCb = SpillableColumnarBatch(
                 GpuColumnVector.from(concat, GpuColumnVector.extractTypes(cb)),
                 SpillPriorities.ACTIVE_ON_DECK_PRIORITY,
-                RapidsBuffer.defaultSpillCallback)
+                RapidsBuffer.defaultSpillCallback, "random")
             }
           }
         }
@@ -192,7 +192,7 @@ object SamplingUtils extends Arm {
             runningCb = SpillableColumnarBatch(
               GpuColumnVector.from(selected, GpuColumnVector.extractTypes(cb)),
               SpillPriorities.ACTIVE_ON_DECK_PRIORITY,
-              RapidsBuffer.defaultSpillCallback)
+              RapidsBuffer.defaultSpillCallback, "random")
           } else {
             withResource(runningCb) { spb =>
               runningCb = null
@@ -210,7 +210,7 @@ object SamplingUtils extends Arm {
                   runningCb = SpillableColumnarBatch(
                     GpuColumnVector.from(concat, GpuColumnVector.extractTypes(cb)),
                     SpillPriorities.ACTIVE_ON_DECK_PRIORITY,
-                    RapidsBuffer.defaultSpillCallback)
+                    RapidsBuffer.defaultSpillCallback, "random")
                 }
               }
             }

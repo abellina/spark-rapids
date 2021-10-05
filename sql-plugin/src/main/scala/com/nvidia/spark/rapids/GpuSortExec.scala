@@ -17,13 +17,10 @@
 package com.nvidia.spark.rapids
 
 import java.util.{Comparator, LinkedList, PriorityQueue}
-
 import scala.collection.mutable.ArrayBuffer
-
 import ai.rapids.cudf.{ColumnVector, ContiguousTable, NvtxColor, NvtxRange, Table}
 import com.nvidia.spark.rapids.GpuMetric._
 import com.nvidia.spark.rapids.shims.v2.ShimUnaryExecNode
-
 import org.apache.spark.TaskContext
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.catalyst.InternalRow
@@ -31,6 +28,7 @@ import org.apache.spark.sql.catalyst.expressions.{Attribute, SortOrder, UnsafePr
 import org.apache.spark.sql.catalyst.expressions.codegen.LazilyGeneratedOrdering
 import org.apache.spark.sql.catalyst.plans.physical.{Distribution, OrderedDistribution, Partitioning, UnspecifiedDistribution}
 import org.apache.spark.sql.execution.{SortExec, SparkPlan}
+import org.apache.spark.sql.rapids.BatchNames
 import org.apache.spark.sql.rapids.execution.TrampolineUtil
 import org.apache.spark.sql.vectorized.ColumnarBatch
 
@@ -133,7 +131,7 @@ case class GpuSortExec(
           // To avoid divide by zero errors, underflow and overflow issues in tests
           // that want the targetSize to be 0, we set it to something more reasonable
           math.max(16 * 1024, targetSize), totalTime, sortTime, outputBatch, outputRows,
-          peakDevMemory, spillCallback)
+          peakDevMemory, spillCallback, BatchNames.SORT)
         TaskContext.get().addTaskCompletionListener(_ -> iter.close())
         iter
       } else {
@@ -241,7 +239,8 @@ case class GpuOutOfCoreSortIterator(
     outputBatches: GpuMetric,
     outputRows: GpuMetric,
     peakDevMemory: GpuMetric,
-    spillCallback: RapidsBuffer.SpillCallback) extends Iterator[ColumnarBatch]
+    spillCallback: RapidsBuffer.SpillCallback,
+    batchName: String) extends Iterator[ColumnarBatch]
     with Arm with AutoCloseable {
 
   // There are so many places where we might hit a new peak that it gets kind of complex
@@ -312,7 +311,7 @@ case class GpuOutOfCoreSortIterator(
         val ct = splits.head
         memUsed += ct.getBuffer.getLength
         val sp = SpillableColumnarBatch(ct, sorter.projectedBatchTypes,
-          SpillPriorities.ACTIVE_ON_DECK_PRIORITY, spillCallback)
+          SpillPriorities.ACTIVE_ON_DECK_PRIORITY, spillCallback, batchName)
         sortedSize += sp.sizeInBytes
         sorted.add(sp)
       }
@@ -347,7 +346,7 @@ case class GpuOutOfCoreSortIterator(
         memUsed += splits.map(_.getBuffer.getLength).sum
         val stillPending = if (hasFullySortedData) {
           val sp = SpillableColumnarBatch(splits.head, sorter.projectedBatchTypes,
-            SpillPriorities.ACTIVE_ON_DECK_PRIORITY, spillCallback)
+            SpillPriorities.ACTIVE_ON_DECK_PRIORITY, spillCallback, batchName)
           sortedSize += sp.sizeInBytes
           sorted.add(sp)
           splits.slice(1, splits.length)
@@ -360,7 +359,7 @@ case class GpuOutOfCoreSortIterator(
           case (ct: ContiguousTable, lower: UnsafeRow) =>
             if (ct.getRowCount > 0) {
               val sp = SpillableColumnarBatch(ct, sorter.projectedBatchTypes,
-                SpillPriorities.ACTIVE_ON_DECK_PRIORITY, spillCallback)
+                SpillPriorities.ACTIVE_ON_DECK_PRIORITY, spillCallback, batchName)
               pending.add(sp, lower)
             } else {
               ct.close()

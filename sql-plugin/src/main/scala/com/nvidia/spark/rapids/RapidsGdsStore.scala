@@ -165,7 +165,7 @@ class RapidsGdsStore(
     private[this] val spilledBuffers = new ConcurrentHashMap[File, Set[RapidsBufferId]]
     private[this] val pendingBuffers = ArrayBuffer.empty[RapidsGdsBatchedBuffer]
     private[this] val batchWriteBuffer = CuFileBuffer.allocate(batchWriteBufferSize, true)
-    private[this] var currentFile = TempSpillBufferId().getDiskPath(diskBlockManager)
+    private[this] var currentFile = TempSpillBufferId("gds").getDiskPath(diskBlockManager)
     private[this] var currentOffset = 0L
 
     def spill(other: RapidsBuffer, deviceBuffer: DeviceMemoryBuffer): RapidsBufferBase =
@@ -179,7 +179,7 @@ class RapidsGdsStore(
           }
           pendingBuffers.foreach(_.unsetPending())
           pendingBuffers.clear
-          currentFile = TempSpillBufferId().getDiskPath(diskBlockManager)
+          currentFile = TempSpillBufferId("gds").getDiskPath(diskBlockManager)
           currentOffset = 0
         }
 

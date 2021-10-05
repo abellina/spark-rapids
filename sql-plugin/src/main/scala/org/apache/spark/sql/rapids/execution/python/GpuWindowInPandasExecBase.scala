@@ -149,7 +149,7 @@ class GroupingIterator(
                   GpuColumnVectorFromBuffer.from(table, GpuColumnVector.extractTypes(batch)))
                 groupBatches.enqueue(splitBatches.tail.map(sb =>
                   SpillableColumnarBatch(sb, SpillPriorities.ACTIVE_ON_DECK_PRIORITY,
-                    spillCallback)): _*)
+                    spillCallback, "python")): _*)
                 splitBatches.head
               }
             }

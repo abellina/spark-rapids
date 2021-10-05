@@ -17,13 +17,12 @@
 package com.nvidia.spark.rapids
 
 import scala.collection.mutable
-
 import ai.rapids.cudf.{GatherMap, NvtxColor}
 import com.nvidia.spark.rapids.RapidsBuffer.SpillCallback
-
 import org.apache.spark.TaskContext
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.catalyst.expressions.Attribute
+import org.apache.spark.sql.rapids.BatchNames
 import org.apache.spark.sql.vectorized.ColumnarBatch
 
 /**
@@ -257,7 +256,8 @@ abstract class SplittableJoinIterator(
       val schema = GpuColumnVector.extractTypes(cb)
       pendingSplits ++= splits.map { ct =>
         SpillableColumnarBatch(ct, schema,
-          SpillPriorities.ACTIVE_ON_DECK_PRIORITY, spillCallback)
+          SpillPriorities.ACTIVE_ON_DECK_PRIORITY, spillCallback,
+          BatchNames.JOIN_SPLIT)
       }
     }
   }

@@ -240,7 +240,7 @@ object GpuTopN extends Arm {
             }
             pending =
                 Some(SpillableColumnarBatch(runningResult, SpillPriorities.ACTIVE_ON_DECK_PRIORITY,
-                  spillCallback))
+                  spillCallback, "limit"))
           }
         }
         val ret = pending.get.getColumnarBatch()

@@ -309,7 +309,7 @@ private[python] class BatchGroupedIterator private(
             SpillableColumnarBatch(
               GpuColumnVectorFromBuffer.from(t, inputTypes),
               SpillPriorities.ACTIVE_ON_DECK_PRIORITY,
-              spillCallback)
+              spillCallback, "batch group")
           )
         }
         batchesQueue.enqueue(groupBatches: _*)

@@ -292,7 +292,8 @@ class LazySpillableColumnarBatchImpl(
         // First time we need to allow for spilling
         spill = Some(SpillableColumnarBatch(cached.get,
           SpillPriorities.ACTIVE_ON_DECK_PRIORITY,
-          spillCallback))
+          spillCallback,
+          "join " + name))
         // Putting data in a SpillableColumnarBatch takes ownership of it.
         cached = None
       }
@@ -368,7 +369,7 @@ class LazySpillableGatherMapImpl(
         // First time we need to allow for spilling
         spill = Some(SpillableBuffer(cached.get,
           SpillPriorities.ACTIVE_ON_DECK_PRIORITY,
-          spillCallback))
+          spillCallback, "join " + name))
         // Putting data in a SpillableBuffer takes ownership of it.
         cached = None
       }

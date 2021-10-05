@@ -138,7 +138,8 @@ object SpillableColumnarBatch extends Arm {
    */
   def apply(batch: ColumnarBatch,
       priority: Long,
-      spillCallback: RapidsBuffer.SpillCallback): SpillableColumnarBatch = {
+      spillCallback: RapidsBuffer.SpillCallback,
+      batchName: String): SpillableColumnarBatch = {
     val numRows = batch.numRows()
     if (batch.numCols() <= 0) {
       // We consumed it
@@ -146,7 +147,7 @@ object SpillableColumnarBatch extends Arm {
       new JustRowsColumnarBatch(numRows)
     } else {
       val types =  GpuColumnVector.extractTypes(batch)
-      val id = TempSpillBufferId()
+      val id = TempSpillBufferId(batchName)
       addBatch(id, batch, priority, spillCallback)
       new SpillableColumnarBatchImpl(id, numRows, types)
     }
@@ -165,8 +166,9 @@ object SpillableColumnarBatch extends Arm {
       ct: ContiguousTable,
       sparkTypes: Array[DataType],
       priority: Long,
-      spillCallback: RapidsBuffer.SpillCallback): SpillableColumnarBatch = {
-    val id = TempSpillBufferId()
+      spillCallback: RapidsBuffer.SpillCallback,
+      name: String): SpillableColumnarBatch = {
+    val id = TempSpillBufferId(name)
     RapidsBufferCatalog.addContiguousTable(id, ct, priority, spillCallback)
     new SpillableColumnarBatchImpl(id, ct.getRowCount.toInt, sparkTypes)
   }
@@ -271,8 +273,9 @@ object SpillableBuffer extends Arm {
    */
   def apply(buffer: DeviceMemoryBuffer,
       priority: Long,
-      spillCallback: RapidsBuffer.SpillCallback): SpillableBuffer = {
-    val id = TempSpillBufferId()
+      spillCallback: RapidsBuffer.SpillCallback,
+      batchName: String): SpillableBuffer = {
+    val id = TempSpillBufferId(batchName)
     val meta = MetaUtils.getTableMetaNoTable(buffer)
     RapidsBufferCatalog.addBuffer(id, buffer, meta, priority, spillCallback)
     new SpillableBuffer(id)

@@ -97,7 +97,7 @@ class RebatchingRoundoffIterator(
       inputRows += got.numRows()
       rowsSoFar += got.numRows()
       batches.append(SpillableColumnarBatch(got, SpillPriorities.ACTIVE_BATCHING_PRIORITY,
-        spillCallback))
+        spillCallback, "python"))
     }
     val toConcat = batches.safeMap(_.getColumnarBatch()).toArray
     ConcatAndConsumeAll.buildNonEmptyBatch(toConcat, schema)
@@ -133,7 +133,7 @@ class RebatchingRoundoffIterator(
             batches.append(localPending)
             pending = None
             batches.append(SpillableColumnarBatch(cb, SpillPriorities.ACTIVE_BATCHING_PRIORITY,
-              spillCallback))
+              spillCallback, "python"))
             fillAndConcat(batches)
           } finally {
             batches.safeClose()
@@ -150,7 +150,7 @@ class RebatchingRoundoffIterator(
         val batches: ArrayBuffer[SpillableColumnarBatch] = ArrayBuffer.empty
         try {
           batches.append(SpillableColumnarBatch(cb, SpillPriorities.ACTIVE_BATCHING_PRIORITY,
-            spillCallback))
+            spillCallback, "python"))
           fillAndConcat(batches)
         } finally {
           batches.safeClose()
@@ -176,7 +176,7 @@ class RebatchingRoundoffIterator(
           Some(SpillableColumnarBatch(GpuColumnVectorFromBuffer.from(split.last,
             GpuColumnVector.extractTypes(schema)),
             SpillPriorities.ACTIVE_ON_DECK_PRIORITY,
-            spillCallback))
+            spillCallback, "python"))
       GpuColumnVectorFromBuffer.from(split.head, GpuColumnVector.extractTypes(schema))
     }
   }
@@ -193,7 +193,7 @@ class BatchQueue extends AutoCloseable with Arm {
 
   def add(batch: ColumnarBatch, spillCallback: RapidsBuffer.SpillCallback): Unit = synchronized {
     queue.enqueue(SpillableColumnarBatch(batch, SpillPriorities.ACTIVE_ON_DECK_PRIORITY,
-      spillCallback))
+      spillCallback, "python"))
     if (!isSet) {
       // Wake up anyone waiting for the first batch.
       isSet = true

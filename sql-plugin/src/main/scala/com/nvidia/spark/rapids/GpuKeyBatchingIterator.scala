@@ -45,7 +45,8 @@ class GpuKeyBatchingIterator(
     concatTime: GpuMetric,
     totalTime: GpuMetric,
     peakDevMemory: GpuMetric,
-    spillCallback: SpillCallback)
+    spillCallback: SpillCallback,
+    batchName: String)
     extends Iterator[ColumnarBatch] with Arm {
   private val pending = mutable.Queue[SpillableColumnarBatch]()
   private var pendingSize: Long = 0
@@ -187,7 +188,7 @@ class GpuKeyBatchingIterator(
               // Everything is for a single key, so save it away and try the next batch...
               pending +=
                   SpillableColumnarBatch(GpuColumnVector.incRefCounts(cb),
-                    SpillPriorities.ACTIVE_ON_DECK_PRIORITY, spillCallback)
+                    SpillPriorities.ACTIVE_ON_DECK_PRIORITY, spillCallback, batchName)
               pendingSize += cbSize
             } else {
               var peak = GpuColumnVector.getTotalDeviceMemoryUsed(cb)
@@ -199,8 +200,11 @@ class GpuKeyBatchingIterator(
                   val savedSize = tables(1).getBuffer.getLength
                   peak += savedSize
                   pending +=
-                      SpillableColumnarBatch(tables(1), types,
-                        SpillPriorities.ACTIVE_ON_DECK_PRIORITY, spillCallback)
+                      SpillableColumnarBatch(tables(1),
+                        types,
+                        SpillPriorities.ACTIVE_ON_DECK_PRIORITY,
+                        spillCallback,
+                        batchName)
                   pendingSize += savedSize
                   numOutputRows += ret.numRows()
                   numOutputBatches += 1
@@ -237,13 +241,14 @@ object GpuKeyBatchingIterator {
       concatTime: GpuMetric,
       totalTime: GpuMetric,
       peakDevMemory: GpuMetric,
-      spillCallback: SpillCallback): Iterator[ColumnarBatch] => GpuKeyBatchingIterator = {
+      spillCallback: SpillCallback,
+      batchName: String): Iterator[ColumnarBatch] => GpuKeyBatchingIterator = {
     val sorter = new GpuSorter(unboundOrderSpec, schema)
     val types = schema.map(_.dataType)
     def makeIter(iter: Iterator[ColumnarBatch]): GpuKeyBatchingIterator = {
       new GpuKeyBatchingIterator(iter, sorter, types, targetSizeBytes,
         numInputRows, numInputBatches, numOutputRows, numOutputBatches,
-        collectTime, concatTime, totalTime, peakDevMemory, spillCallback)
+        collectTime, concatTime, totalTime, peakDevMemory, spillCallback, batchName)
     }
     makeIter
   }

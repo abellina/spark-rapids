@@ -17,21 +17,18 @@
 package com.nvidia.spark.rapids
 
 import java.util
-
 import scala.annotation.tailrec
 import scala.collection.mutable
-
 import ai.rapids.cudf
 import ai.rapids.cudf.{GroupByAggregationOnColumn, NvtxColor, Scalar}
 import com.nvidia.spark.rapids.GpuMetric._
 import com.nvidia.spark.rapids.RapidsPluginImplicits._
 import com.nvidia.spark.rapids.shims.v2.ShimUnaryExecNode
-
 import org.apache.spark.TaskContext
 import org.apache.spark.internal.Logging
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.catalyst.InternalRow
-import org.apache.spark.sql.catalyst.expressions.{Alias, Ascending, Attribute, AttributeReference, AttributeSeq, AttributeSet, Expression, ExprId, If, NamedExpression, NullsFirst}
+import org.apache.spark.sql.catalyst.expressions.{Alias, Ascending, Attribute, AttributeReference, AttributeSeq, AttributeSet, ExprId, Expression, If, NamedExpression, NullsFirst}
 import org.apache.spark.sql.catalyst.expressions.aggregate._
 import org.apache.spark.sql.catalyst.expressions.codegen.LazilyGeneratedOrdering
 import org.apache.spark.sql.catalyst.plans.logical.LogicalPlan
@@ -40,7 +37,7 @@ import org.apache.spark.sql.catalyst.trees.TreeNodeTag
 import org.apache.spark.sql.catalyst.util.truncatedString
 import org.apache.spark.sql.execution.{ExplainUtils, SortExec, SparkPlan}
 import org.apache.spark.sql.execution.aggregate.{BaseAggregateExec, HashAggregateExec, ObjectHashAggregateExec, SortAggregateExec}
-import org.apache.spark.sql.rapids.{CpuToGpuAggregateBufferConverter, CudfAggregate, GpuAggregateExpression, GpuToCpuAggregateBufferConverter}
+import org.apache.spark.sql.rapids.{BatchNames, CpuToGpuAggregateBufferConverter, CudfAggregate, GpuAggregateExpression, GpuToCpuAggregateBufferConverter}
 import org.apache.spark.sql.rapids.execution.{GpuShuffleMeta, TrampolineUtil}
 import org.apache.spark.sql.types.{ArrayType, DataType, LongType, MapType}
 import org.apache.spark.sql.vectorized.ColumnarBatch
@@ -510,7 +507,7 @@ class GpuHashAggregateIterator(
       outputBatches = NoopMetric,
       outputRows = NoopMetric,
       peakDevMemory = NoopMetric,
-      spillCallback = metrics.spillCallback))
+      spillCallback = metrics.spillCallback, BatchNames.AGGREGATE_OOC))
 
     // The out of core sort iterator does not guarantee that a batch contains all of the values
     // for a particular key, so add a key batching iterator to enforce this. That allows each batch
@@ -529,7 +526,8 @@ class GpuHashAggregateIterator(
       concatTime = metrics.concatTime,
       totalTime = NoopMetric,
       peakDevMemory = NoopMetric,
-      spillCallback = metrics.spillCallback)
+      spillCallback = metrics.spillCallback,
+      BatchNames.AGGREGATE)
 
     // Finally wrap the key batching iterator with a merge aggregation on the output batches.
     new Iterator[ColumnarBatch] {

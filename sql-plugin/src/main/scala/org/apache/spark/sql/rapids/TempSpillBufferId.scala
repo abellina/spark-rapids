@@ -25,6 +25,20 @@ import com.nvidia.spark.rapids.RapidsBufferId
 
 import org.apache.spark.storage.TempLocalBlockId
 
+object BatchNames  {
+  val AGGREGATE_OOC: String = "AggregateOOC"
+
+  val CONCAT: String = "Concat"
+
+  val JOIN_SPLIT: String = "Join Split"
+
+  val SORT: String = "Sort"
+
+  val AGGREGATE: String = "Aggregates"
+
+  val COALESCE: String = "Coalesce"
+}
+
 object TempSpillBufferId {
   private val MAX_TABLE_ID = Integer.MAX_VALUE
   private val TABLE_ID_UPDATER = new IntUnaryOperator {
@@ -34,16 +48,17 @@ object TempSpillBufferId {
   /** Tracks the next table identifier */
   private[this] val tableIdCounter = new AtomicInteger(0)
 
-  def apply(): TempSpillBufferId = {
+  def apply(name: String): TempSpillBufferId = {
     val tableId = tableIdCounter.getAndUpdate(TABLE_ID_UPDATER)
     val tempBlockId = TempLocalBlockId(UUID.randomUUID())
-    new TempSpillBufferId(tableId, tempBlockId)
+    new TempSpillBufferId(tableId, tempBlockId, name)
   }
 }
 
 case class TempSpillBufferId private(
     override val tableId: Int,
-    bufferId: TempLocalBlockId) extends RapidsBufferId {
+    bufferId: TempLocalBlockId,
+    name: String) extends RapidsBufferId {
 
   override def getDiskPath(diskBlockManager: RapidsDiskBlockManager): File =
     diskBlockManager.getFile(bufferId)

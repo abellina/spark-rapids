@@ -30,7 +30,7 @@ import org.apache.spark.storage.TempLocalBlockId
 
 class SpillableColumnarBatchSuite extends FunSuite with Arm {
   test("close updates catalog") {
-    val id = TempSpillBufferId(0, TempLocalBlockId(new UUID(1, 2)))
+    val id = TempSpillBufferId(0, TempLocalBlockId(new UUID(1, 2)), "test")
     val mockBuffer = new MockBuffer(id)
     val catalog = RapidsBufferCatalog.singleton
     val oldBufferCount = catalog.numBuffers
