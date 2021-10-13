@@ -96,7 +96,8 @@ class GpuBroadcastNestedLoopJoinMeta(
       case _: InnerLike =>
         // It appears to be faster to manifest the full cross join and post-filter than
         // evaluate the AST during the join.
-        false
+        //false
+        conditionMeta.forall(_.canThisBeAst)
       case _ => conditionMeta.forall(_.canThisBeAst)
     }
     join.joinType match {
