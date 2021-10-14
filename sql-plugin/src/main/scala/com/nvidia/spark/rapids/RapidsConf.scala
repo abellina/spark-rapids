@@ -950,6 +950,12 @@ object RapidsConf {
 
   // INTERNAL TEST AND DEBUG CONFIGS
 
+  val ENABLE_AST_FOR_BROADCAST_NESTED_LOOP_JOIN =
+    conf("spark.rapids.sql.enableAstForBroadcastNestedLoopJoin")
+      .internal()
+      .booleanConf
+      .createWithDefault(true)
+
   val TEST_CONF = conf("spark.rapids.sql.test.enabled")
     .doc("Intended to be used by unit tests, if enabled all operations must run on the " +
       "GPU or an error happens.")
@@ -1412,6 +1418,7 @@ object RapidsConf {
 
 class RapidsConf(conf: Map[String, String]) extends Logging {
 
+
   import RapidsConf._
   import ConfHelper._
 
@@ -1714,6 +1721,10 @@ class RapidsConf(conf: Map[String, String]) extends Logging {
   lazy val isRangeWindowIntEnabled: Boolean = get(ENABLE_RANGE_WINDOW_INT)
 
   lazy val isRangeWindowLongEnabled: Boolean = get(ENABLE_RANGE_WINDOW_LONG)
+
+  lazy val enableAstForBroadcastNestedLoopJoin: Boolean =
+    get(ENABLE_AST_FOR_BROADCAST_NESTED_LOOP_JOIN)
+
 
   private val optimizerDefaults = Map(
     // this is not accurate because CPU projections do have a cost due to appending values

@@ -96,8 +96,7 @@ class GpuBroadcastNestedLoopJoinMeta(
       case _: InnerLike =>
         // It appears to be faster to manifest the full cross join and post-filter than
         // evaluate the AST during the join.
-        //false
-        conditionMeta.forall(_.canThisBeAst)
+        conf.enableAstForBroadcastNestedLoopJoin && conditionMeta.forall(_.canThisBeAst)
       case _ => conditionMeta.forall(_.canThisBeAst)
     }
     join.joinType match {
@@ -218,6 +217,8 @@ class ConditionalNestedLoopJoinIterator(
     }
   }
 
+  var numCalls = 0L
+  var aggTimeSpent = 0L
   override def computeNumJoinRows(cb: ColumnarBatch): Long = {
     withResource(GpuColumnVector.from(builtBatch.getBatch)) { builtTable =>
       withResource(GpuColumnVector.from(cb)) { streamTable =>
@@ -225,14 +226,27 @@ class ConditionalNestedLoopJoinIterator(
           case GpuBuildLeft => (builtTable, streamTable)
           case GpuBuildRight => (streamTable, builtTable)
         }
-        joinType match {
-          case _: InnerLike =>left.conditionalInnerJoinRowCount(right, condition)
+        val start = System.currentTimeMillis()
+        val res = joinType match {
+          case _: InnerLike => left.conditionalInnerJoinRowCount(right, condition)
+          //case _: InnerLike => right.conditionalInnerJoinRowCount(left, condition)
+
           case LeftOuter => left.conditionalLeftJoinRowCount(right, condition)
           case RightOuter => right.conditionalLeftJoinRowCount(left, condition)
           case LeftSemi => left.conditionalLeftSemiJoinRowCount(right, condition)
           case LeftAnti => left.conditionalLeftAntiJoinRowCount(right, condition)
           case _ => throw new IllegalStateException(s"Unsupported join type $joinType")
         }
+        val end = System.currentTimeMillis() - start
+        numCalls += 1
+        aggTimeSpent += end
+        println(s"[$numCalls, agg $aggTimeSpent ms, " +
+          s"partId ${TaskContext.get().partitionId()} " +
+          s"taskId ${TaskContext.get().taskAttemptId()}] " +
+          s"conditionalInnerJoinRowCount " +
+          s"${end} ms, " +
+          s"left: ${left.getRowCount}, right: ${right.getRowCount}")
+        res
       }
     }
   }
