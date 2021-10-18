@@ -188,8 +188,12 @@ class GpuCartesianRDD(
       }
 
       GpuBroadcastNestedLoopJoinExecBase.nestedLoopJoin(
-        Cross, GpuBuildLeft, numFirstTableColumns, batch, streamIterator, streamAttributes,
-        targetSize, boundCondition, spillCallback,
+        Cross, GpuBuildLeft,
+        numFirstTableColumns, numFirstTableColumns,
+        batch, streamIterator, streamAttributes,
+        targetSize,
+        boundCondition, None,
+        spillCallback,
         numOutputRows = numOutputRows,
         joinOutputRows = joinOutputRows,
         numOutputBatches = numOutputBatches,
