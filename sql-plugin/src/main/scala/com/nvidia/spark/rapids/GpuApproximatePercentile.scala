@@ -70,16 +70,12 @@ case class GpuApproximatePercentile (
     "approx_percentile does not support reduction")
 
   // the update expression will create a t-digest (List[Struct[Double, Double])
-  override lazy val updateExpressions: Seq[Expression] =
-    new CudfTDigest(inputBuf,
-      percentageExpression,
-      accuracyExpression) :: Nil
+  override lazy val updateExpressions: Seq[CudfAggregate] =
+    new CudfTDigest(percentageExpression, accuracyExpression) :: Nil
 
   // the merge expression will merge t-digests
-  override lazy val mergeExpressions: Seq[Expression] =
-    new CudfTDigest(outputBuf,
-      percentageExpression,
-      accuracyExpression) :: Nil
+  override lazy val mergeExpressions: Seq[CudfAggregate] =
+    new CudfTDigest(percentageExpression, accuracyExpression) :: Nil
 
   // the evaluate expression will compute percentiles based on a t-digest
   override lazy val evaluateExpression: Expression = {
@@ -182,10 +178,9 @@ case class ApproxPercentileFromTDigestExpr(
 }
 
 class CudfTDigest(
-    ref: Expression,
     percentileExpr: GpuLiteral,
     accuracyExpression: GpuLiteral)
-  extends CudfAggregate(ref) {
+  extends CudfAggregate {
 
   // Map Spark delta to cuDF delta
   private lazy val accuracy = accuracyExpression.value match {
@@ -197,16 +192,12 @@ class CudfTDigest(
     throw new UnsupportedOperationException("TDigest is not yet supported in reduction")
   override lazy val mergeReductionAggregateInternal: cudf.ColumnVector => cudf.Scalar =
     throw new UnsupportedOperationException("TDigest is not yet supported in reduction")
-  override lazy val updateAggregate: GroupByAggregationOnColumn =
+  override lazy val updateAggregate: GroupByAggregation =
     GroupByAggregation.createTDigest(accuracy)
-      .onColumn(getOrdinal(ref))
-  override lazy val mergeAggregate: GroupByAggregationOnColumn =
+  override lazy val mergeAggregate: GroupByAggregation =
     GroupByAggregation.mergeTDigest(accuracy)
-      .onColumn(getOrdinal(ref))
   override def toString(): String = "CudfTDigest"
   override def dataType: DataType = CudfTDigest.dataType
-  override def nullable: Boolean = false
-  override protected def otherCopyArgs: Seq[AnyRef] = Seq(percentileExpr, accuracyExpression)
 }
 
 object CudfTDigest {

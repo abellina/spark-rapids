@@ -20,18 +20,16 @@ import java.util
 
 import scala.annotation.tailrec
 import scala.collection.mutable
-
 import ai.rapids.cudf
-import ai.rapids.cudf.{GroupByAggregationOnColumn, NvtxColor, Scalar}
+import ai.rapids.cudf.{GroupByAggregation, GroupByAggregationOnColumn, NvtxColor, Scalar}
 import com.nvidia.spark.rapids.GpuMetric._
 import com.nvidia.spark.rapids.RapidsPluginImplicits._
 import com.nvidia.spark.rapids.shims.v2.ShimUnaryExecNode
-
 import org.apache.spark.TaskContext
 import org.apache.spark.internal.Logging
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.catalyst.InternalRow
-import org.apache.spark.sql.catalyst.expressions.{Alias, Ascending, Attribute, AttributeReference, AttributeSeq, AttributeSet, Expression, ExprId, If, NamedExpression, NullsFirst}
+import org.apache.spark.sql.catalyst.expressions.{Alias, Ascending, Attribute, AttributeReference, AttributeSeq, AttributeSet, ExprId, Expression, If, NamedExpression, NullsFirst}
 import org.apache.spark.sql.catalyst.expressions.aggregate._
 import org.apache.spark.sql.catalyst.expressions.codegen.LazilyGeneratedOrdering
 import org.apache.spark.sql.catalyst.plans.logical.LogicalPlan
@@ -44,6 +42,8 @@ import org.apache.spark.sql.rapids.{CpuToGpuAggregateBufferConverter, CudfAggreg
 import org.apache.spark.sql.rapids.execution.{GpuShuffleMeta, TrampolineUtil}
 import org.apache.spark.sql.types.{ArrayType, DataType, LongType, MapType}
 import org.apache.spark.sql.vectorized.ColumnarBatch
+
+import scala.collection.mutable.ArrayBuffer
 
 object AggregateUtils {
 
@@ -132,32 +132,33 @@ object AggregateUtils {
    * @param aggBufferAttributes attributes to be bound to the aggregate expressions
    * @param mergeBufferAttributes merge attributes to be bound to the merge expressions
    */
-  def computeBoundCudfAggregates(
-      aggExpressions: Seq[GpuAggregateExpression],
-      aggBufferAttributes: Seq[Attribute],
-      mergeBufferAttributes: Seq[Attribute]): Seq[BoundCudfAggregate] = {
-    //
-    // update expressions are those performed on the raw input data
-    // e.g. for count it's count, and for average it's sum and count.
-    //
-    val updateExpressionsSeq = aggExpressions.map(_.aggregateFunction.updateExpressions)
+  //TODO: remove
+  //def computeBoundCudfAggregates(
+  //    aggExpressions: Seq[GpuAggregateExpression],
+  //    aggBufferAttributes: Seq[Attribute],
+  //    mergeBufferAttributes: Seq[Attribute]): Seq[BoundCudfAggregate] = {
+  //  //
+  //  // update expressions are those performed on the raw input data
+  //  // e.g. for count it's count, and for average it's sum and count.
+  //  //
+  //  val updateExpressionsSeq = aggExpressions.map(_.aggregateFunction.updateExpressions)
 
-    //
-    // merge expressions are used while merging multiple batches, or while on final mode
-    // e.g. for count it's sum, and for average it's sum and sum.
-    //
-    val mergeExpressionsSeq = aggExpressions.map(_.aggregateFunction.mergeExpressions)
+  //  //
+  //  // merge expressions are used while merging multiple batches, or while on final mode
+  //  // e.g. for count it's sum, and for average it's sum and sum.
+  //  //
+  //  val mergeExpressionsSeq = aggExpressions.map(_.aggregateFunction.mergeExpressions)
 
-    aggExpressions.zipWithIndex.map { case (expr, modeIndex) =>
-      val updateAggs =
-        GpuBindReferences.bindGpuReferences(updateExpressionsSeq(modeIndex), aggBufferAttributes)
-            .asInstanceOf[Seq[CudfAggregate]]
-      val mergeAggs =
-        GpuBindReferences.bindGpuReferences(mergeExpressionsSeq(modeIndex), mergeBufferAttributes)
-            .asInstanceOf[Seq[CudfAggregate]]
-      BoundCudfAggregate(expr, updateAggs, mergeAggs)
-    }
-  }
+  //  aggExpressions.zipWithIndex.map { case (expr, modeIndex) =>
+  //    val updateAggs =
+  //      GpuBindReferences.bindGpuReferences(updateExpressionsSeq(modeIndex), aggBufferAttributes)
+  //          .asInstanceOf[Seq[CudfAggregate]]
+  //    val mergeAggs =
+  //      GpuBindReferences.bindGpuReferences(mergeExpressionsSeq(modeIndex), mergeBufferAttributes)
+  //          .asInstanceOf[Seq[CudfAggregate]]
+  //    BoundCudfAggregate(expr, updateAggs, mergeAggs)
+  //  }
+  //}
 }
 
 /**
@@ -277,8 +278,8 @@ class GpuHashAggregateIterator(
   private case class BoundExpressionsModeAggregates(
       boundInputReferences: Seq[GpuExpression],
       boundFinalProjections: Option[Seq[GpuExpression]],
-      boundResultReferences: Seq[Expression],
-      boundCudfAggregates: Seq[BoundCudfAggregate])
+      boundResultReferences: Seq[Expression])
+      //boundCudfAggregates: Seq[BoundCudfAggregate])
 
   Option(TaskContext.get()).foreach(_.addTaskCompletionListener[Unit](_ => close()))
 
@@ -342,8 +343,9 @@ class GpuHashAggregateIterator(
   }
 
   private def computeTargetMergeBatchSize(confTargetSize: Long): Long = {
-    val aggregates = boundExpressions.boundCudfAggregates.flatMap(_.boundUpdateAggregates)
-    val mergedTypes = groupingExpressions.map(_.dataType) ++ aggregates.map(_.dataType)
+    //TODO: fixme
+    //val aggregates = boundExpressions.boundCudfAggregates.flatMap(_.boundUpdateAggregates)
+    val mergedTypes = groupingExpressions.map(_.dataType) ++ aggregateExpressions.map(_.dataType)
     AggregateUtils.computeTargetBatchSize(confTargetSize, mergedTypes, mergedTypes,isReductionOnly)
   }
 
@@ -669,12 +671,12 @@ class GpuHashAggregateIterator(
     val groupingAttributes = groupingExpressions.map(_.toAttribute)
     val aggBufferAttributes = groupingAttributes ++
         aggregateExpressions.flatMap(_.aggregateFunction.aggBufferAttributes)
-    val mergeBufferAttributes = groupingAttributes ++
-      aggregateExpressions.flatMap(_.aggregateFunction.mergeBufferAttributes)
+    //val mergeBufferAttributes = groupingAttributes ++
+    //  aggregateExpressions.flatMap(_.aggregateFunction.mergeBufferAttributes)
 
-    val boundCudfAggregates =
-      AggregateUtils.computeBoundCudfAggregates(
-        aggregateExpressions, aggBufferAttributes, mergeBufferAttributes)
+    //val boundCudfAggregates =
+    //  AggregateUtils.computeBoundCudfAggregates(
+    //    aggregateExpressions, aggBufferAttributes, mergeBufferAttributes)
 
     // boundInputReferences is used to pick out of the input batch the appropriate columns
     // for aggregation.
@@ -801,7 +803,7 @@ class GpuHashAggregateIterator(
         groupingAttributes)
     }
     BoundExpressionsModeAggregates(boundInputReferences, boundFinalProjections,
-      boundResultReferences, boundCudfAggregates)
+      boundResultReferences) //, boundCudfAggregates)
   }
 
   /**
@@ -820,7 +822,7 @@ class GpuHashAggregateIterator(
     val aggBufferAttributes = groupingAttributes ++
       aggregateExpressions.flatMap(_.aggregateFunction.aggBufferAttributes)
 
-    val boundCudfAggregates = boundExpressions.boundCudfAggregates
+    // TODO: remove val boundCudfAggregates = boundExpressions.boundCudfAggregates
     val computeAggTime = metrics.computeAggTime
     withResource(new NvtxWithMetrics("computeAggregate", NvtxColor.CYAN, computeAggTime)) { _ =>
       // Perform group by aggregation
@@ -831,8 +833,8 @@ class GpuHashAggregateIterator(
       // and CudfCount has an update version of AggregateOp.COUNT and a
       // merge version of AggregateOp.COUNT.
       val dataTypes = new mutable.ArrayBuffer[DataType]()
-      val cudfAggregates = new mutable.ArrayBuffer[GroupByAggregationOnColumn]()
-      val reductionAggregates = new mutable.ArrayBuffer[Seq[GpuColumnVector] => cudf.Scalar]()
+      val cudfAggregates = new mutable.ArrayBuffer[GroupByAggregation]()
+      val reductionAggregates = new mutable.ArrayBuffer[GpuColumnVector => cudf.Scalar]()
 
       // `GpuAggregateFunction` can add a pre and post step for update
       // and merge aggregates.
@@ -849,22 +851,43 @@ class GpuHashAggregateIterator(
       dataTypes ++=
         groupingExpressions.map(_.dataType)
 
-      for (BoundCudfAggregate(aggExp, updateAggs, mergeAggs) <- boundCudfAggregates) {
+      val updateAttrSeq: AttributeSeq =
+        ((groupingAttributes ++
+          aggregateExpressions
+            .flatMap(_.aggregateFunction.aggBufferAttributes))
+              .map(_.toAttribute))
+
+      val mergeAttrSeq: AttributeSeq =
+        ((groupingAttributes ++
+          aggregateExpressions
+            .flatMap(_.aggregateFunction.mergeBufferAttributes))
+              .map(_.toAttribute))
+
+      val aggOrdinals = new ArrayBuffer[Int]
+      for (aggExp <- aggregateExpressions) {
         val aggFn = aggExp.aggregateFunction
         if ((aggExp.mode == Partial || aggExp.mode == Complete) && !merge) {
+          val bound =
+            GpuBindReferences.bindGpuReferences(aggFn.aggBufferAttributes, updateAttrSeq)
+          aggOrdinals ++= bound.map(_.asInstanceOf[GpuBoundReference].ordinal)
+          val updateAggs = aggFn.updateExpressions
           cudfAggregates ++= updateAggs.map(_.updateAggregate)
           dataTypes ++= updateAggs.map(_.updateDataType)
+          reductionAggregates ++= updateAggs.map(_.updateReductionAggregate)
           preStep ++= aggFn.preUpdate
           postStep ++= aggFn.postUpdate
           postStepAttr ++= aggFn.postUpdateAttr
-          reductionAggregates ++= updateAggs.map(_.updateReductionAggregate)
         } else {
+          val bound =
+            GpuBindReferences.bindGpuReferences(aggFn.mergeBufferAttributes, mergeAttrSeq)
+          aggOrdinals ++= bound.map(_.asInstanceOf[GpuBoundReference].ordinal)
+          val mergeAggs = aggFn.mergeExpressions
           cudfAggregates ++= mergeAggs.map(_.mergeAggregate)
           dataTypes ++= mergeAggs.map(_.dataType)
+          reductionAggregates ++= mergeAggs.map(_.mergeReductionAggregate)
           preStep ++= aggFn.preMerge
           postStep ++= aggFn.postMerge
           postStepAttr ++= aggFn.postMergeAttr
-          reductionAggregates ++= mergeAggs.map(_.mergeReductionAggregate)
         }
       }
 
@@ -882,12 +905,17 @@ class GpuHashAggregateIterator(
             // perform the aggregate
             preProcessedTbl
               .groupBy(groupOptions, groupingExpressions.indices: _*)
-              .aggregate(cudfAggregates: _*)
+              .aggregate(
+                cudfAggregates.zip(aggOrdinals).map {
+                  case (cudfAgg, ord) => cudfAgg.onColumn(ord)
+                }:_*)
           }
         } else {
           val cvs = mutable.ArrayBuffer[GpuColumnVector]()
-          reductionAggregates.zip(dataTypes).foreach { case (aggFn, dataType) =>
-            withResource(aggFn(GpuColumnVector.extractColumns(preProcessed))) { res =>
+          reductionAggregates.zip(dataTypes).zipWithIndex.foreach { case ((aggFn, dataType), ix) =>
+            val cols = GpuColumnVector.extractColumns(preProcessed)
+            val reductionCol = cols(aggOrdinals(ix))
+            withResource(aggFn(reductionCol)) { res =>
               cvs += GpuColumnVector.from(
                 cudf.ColumnVector.fromScalar(res, 1), dataType)
             }
