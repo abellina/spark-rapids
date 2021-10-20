@@ -285,7 +285,7 @@ class CudfMin(override val dataType: DataType) extends CudfAggregate {
 }
 
 class CudfCollectList(override val dataType: DataType) extends CudfAggregate {
-  override lazy val reductionAggregate: cudf.ColumnVector => cudf.Scalar =
+  override lazy val reductionAggregate: cudf.ColumnVector => cudf.Scalar = _ =>
     throw new UnsupportedOperationException("CollectList is not yet supported in reduction")
   override lazy val groupByAggregate: GroupByAggregation =
     GroupByAggregation.collectList()
@@ -293,7 +293,7 @@ class CudfCollectList(override val dataType: DataType) extends CudfAggregate {
 }
 
 class CudfMergeLists(override val dataType: DataType) extends CudfAggregate {
-  override lazy val reductionAggregate: cudf.ColumnVector => cudf.Scalar =
+  override lazy val reductionAggregate: cudf.ColumnVector => cudf.Scalar = _ =>
     throw new UnsupportedOperationException("MergeLists is not yet supported in reduction")
   override lazy val groupByAggregate: GroupByAggregation =
     GroupByAggregation.mergeLists()
@@ -301,7 +301,7 @@ class CudfMergeLists(override val dataType: DataType) extends CudfAggregate {
 }
 
 class CudfCollectSet(override val dataType: DataType) extends CudfAggregate {
-  override lazy val reductionAggregate: cudf.ColumnVector => cudf.Scalar =
+  override lazy val reductionAggregate: cudf.ColumnVector => cudf.Scalar = _ =>
     throw new UnsupportedOperationException("CollectSet is not yet supported in reduction")
   override lazy val groupByAggregate: GroupByAggregation =
     GroupByAggregation.collectSet()
@@ -309,7 +309,7 @@ class CudfCollectSet(override val dataType: DataType) extends CudfAggregate {
 }
 
 class CudfMergeSets(override val dataType: DataType) extends CudfAggregate {
-  override lazy val reductionAggregate: cudf.ColumnVector => cudf.Scalar =
+  override lazy val reductionAggregate: cudf.ColumnVector => cudf.Scalar = _ =>
     throw new UnsupportedOperationException("CudfMergeSets is not yet supported in reduction")
   override lazy val groupByAggregate: GroupByAggregation =
     GroupByAggregation.mergeSets()
@@ -351,7 +351,7 @@ class CudfLastExcludeNulls(override val dataType: DataType) extends CudfFirstLas
  * generated in the output of libcudf's M2 aggregate.
  */
 class CudfMean(override val dataType: DataType) extends CudfAggregate {
-  override lazy val reductionAggregate: cudf.ColumnVector => cudf.Scalar =
+  override lazy val reductionAggregate: cudf.ColumnVector => cudf.Scalar = _ =>
     throw new UnsupportedOperationException("CudfMean is not supported in reduction")
 
   override lazy val groupByAggregate: GroupByAggregation =
@@ -361,7 +361,7 @@ class CudfMean(override val dataType: DataType) extends CudfAggregate {
 }
 
 class CudfM2 extends CudfAggregate {
-  override lazy val reductionAggregate: cudf.ColumnVector => cudf.Scalar =
+  override lazy val reductionAggregate: cudf.ColumnVector => cudf.Scalar = _ =>
     throw new UnsupportedOperationException("CudfM2 aggregation is not supported in reduction")
 
   override lazy val groupByAggregate: GroupByAggregation =
@@ -372,7 +372,7 @@ class CudfM2 extends CudfAggregate {
 }
 
 class CudfMergeM2 extends CudfAggregate {
-  override lazy val reductionAggregate: cudf.ColumnVector => cudf.Scalar =
+  override lazy val reductionAggregate: cudf.ColumnVector => cudf.Scalar = _ =>
     throw new UnsupportedOperationException("CudfMergeM2 aggregation is not supported in reduction")
 
   override lazy val groupByAggregate: GroupByAggregation =

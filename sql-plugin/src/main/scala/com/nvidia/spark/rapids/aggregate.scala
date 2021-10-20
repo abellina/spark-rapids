@@ -119,76 +119,7 @@ object AggregateUtils {
     // Finally compute the input target batching size taking into account the cudf row limits
     Math.min(inputRowSize * maxRows, Int.MaxValue)
   }
-
-  /**
-   * Bind cuDF aggregate expressions depending on the aggregate expression mode.
-   * This binds `CudfAggregate` instances that are needed to realize each `GpuAggregateExpression`,
-   * where the shape the `CudfAggregate` expect is different for update vs merge.
-   *
-   * The only difference right now is in `CudfMergeM2`, in all other cases aggBufferAttributes
-   * and mergeBufferAttributes are the same. `CudfMergeM2` wants a struct to be passed to cuDF
-   * `MERGE_M2`, hence we handle it differently.
-   * @param aggExpressions the aggregate expressions
-   * @param aggBufferAttributes attributes to be bound to the aggregate expressions
-   * @param mergeBufferAttributes merge attributes to be bound to the merge expressions
-   */
-  //TODO: remove
-  //def computeBoundCudfAggregates(
-  //    aggExpressions: Seq[GpuAggregateExpression],
-  //    aggBufferAttributes: Seq[Attribute],
-  //    mergeBufferAttributes: Seq[Attribute]): Seq[BoundCudfAggregate] = {
-  //  //
-  //  // update expressions are those performed on the raw input data
-  //  // e.g. for count it's count, and for average it's sum and count.
-  //  //
-  //  val updateExpressionsSeq = aggExpressions.map(_.aggregateFunction.updateExpressions)
-
-  //  //
-  //  // merge expressions are used while merging multiple batches, or while on final mode
-  //  // e.g. for count it's sum, and for average it's sum and sum.
-  //  //
-  //  val mergeExpressionsSeq = aggExpressions.map(_.aggregateFunction.mergeExpressions)
-
-  //  aggExpressions.zipWithIndex.map { case (expr, modeIndex) =>
-  //    val updateAggs =
-  //      GpuBindReferences.bindGpuReferences(updateExpressionsSeq(modeIndex), aggBufferAttributes)
-  //          .asInstanceOf[Seq[CudfAggregate]]
-  //    val mergeAggs =
-  //      GpuBindReferences.bindGpuReferences(mergeExpressionsSeq(modeIndex), mergeBufferAttributes)
-  //          .asInstanceOf[Seq[CudfAggregate]]
-  //    BoundCudfAggregate(expr, updateAggs, mergeAggs)
-  //  }
-  //}
 }
-
-/**
- * Structure containing the original expressions, and an object of `CudfAggregate`
- * that is an instance of `GpuAggregateExpression`. We may have multiple `CudfAggregate`
- * objects for a complete aggregation.
- * For example, in `GpuAverage` aggregate we have two `CudfAggregate` instances, one
- * for the count (in the update stage) and one for the sum (of count, in the merge stage).
- *
- * The `boundUpdateAggregates` and `boundMergeAggregates` items are used to hold references
- * that are bound to the update and merge buffer attributes, respectively. We store these
- * attributes of different stages separately because they can be incompatible when moving
- * from stage to stage.
- * For example, the `GpuM2` aggregate can have either a `CudfM2` or a `CudfMergeM2`
- * `CudfAggregate`. The reference used for `CudfM2` bounds to three columns of Double type
- * (n, mean, m2), while the reference used for `CudfMergeM2` bounds to one column of STRUCT type
- * (m2struct).
- *
- * In the update case, `boundUpdateAggregates` shape follows Spark, for the aggregates we have
- * currently implemented. The update case must match the shape outputted by the preUpdate
- * step.
- *
- * In the merge case, `boundMergeAggregates` shape needs to be the result of the preMerge
- * step. In the case of `CudfMergeM2`, preMerge takes three columns and turns them into the
- * desired struct column, which is required by `CudfMergeM2`.
- */
-case class BoundCudfAggregate(
-    aggExpression: GpuAggregateExpression,
-    boundUpdateAggregates: Seq[CudfAggregate],
-    boundMergeAggregates: Seq[CudfAggregate])
 
 /** Utility class to hold all of the metrics related to hash aggregation */
 case class GpuHashAggregateMetrics(
@@ -279,7 +210,6 @@ class GpuHashAggregateIterator(
       boundInputReferences: Seq[GpuExpression],
       boundFinalProjections: Option[Seq[GpuExpression]],
       boundResultReferences: Seq[Expression])
-      //boundCudfAggregates: Seq[BoundCudfAggregate])
 
   Option(TaskContext.get()).foreach(_.addTaskCompletionListener[Unit](_ => close()))
 
@@ -343,8 +273,6 @@ class GpuHashAggregateIterator(
   }
 
   private def computeTargetMergeBatchSize(confTargetSize: Long): Long = {
-    //TODO: fixme
-    //val aggregates = boundExpressions.boundCudfAggregates.flatMap(_.boundUpdateAggregates)
     val mergedTypes = groupingExpressions.map(_.dataType) ++ aggregateExpressions.map(_.dataType)
     AggregateUtils.computeTargetBatchSize(confTargetSize, mergedTypes, mergedTypes,isReductionOnly)
   }
@@ -671,12 +599,6 @@ class GpuHashAggregateIterator(
     val groupingAttributes = groupingExpressions.map(_.toAttribute)
     val aggBufferAttributes = groupingAttributes ++
         aggregateExpressions.flatMap(_.aggregateFunction.aggBufferAttributes)
-    //val mergeBufferAttributes = groupingAttributes ++
-    //  aggregateExpressions.flatMap(_.aggregateFunction.mergeBufferAttributes)
-
-    //val boundCudfAggregates =
-    //  AggregateUtils.computeBoundCudfAggregates(
-    //    aggregateExpressions, aggBufferAttributes, mergeBufferAttributes)
 
     // boundInputReferences is used to pick out of the input batch the appropriate columns
     // for aggregation.
@@ -822,7 +744,6 @@ class GpuHashAggregateIterator(
     val aggBufferAttributes = groupingAttributes ++
       aggregateExpressions.flatMap(_.aggregateFunction.aggBufferAttributes)
 
-    // TODO: remove val boundCudfAggregates = boundExpressions.boundCudfAggregates
     val computeAggTime = metrics.computeAggTime
     withResource(new NvtxWithMetrics("computeAggregate", NvtxColor.CYAN, computeAggTime)) { _ =>
       // Perform group by aggregation

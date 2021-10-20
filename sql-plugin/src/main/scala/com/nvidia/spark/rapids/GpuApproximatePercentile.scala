@@ -179,7 +179,7 @@ case class ApproxPercentileFromTDigestExpr(
 
 class CudfTDigestUpdate(accuracyExpression: GpuLiteral)
   extends CudfAggregate {
-  override lazy val reductionAggregate: cudf.ColumnVector => cudf.Scalar =
+  override lazy val reductionAggregate: cudf.ColumnVector => cudf.Scalar = _ =>
     throw new UnsupportedOperationException("TDigest is not yet supported in reduction")
   override lazy val groupByAggregate: GroupByAggregation =
     GroupByAggregation.createTDigest(CudfTDigest.accuracy(accuracyExpression))
@@ -190,7 +190,7 @@ class CudfTDigestUpdate(accuracyExpression: GpuLiteral)
 class CudfTDigestMerge(accuracyExpression: GpuLiteral)
   extends CudfAggregate {
 
-  override lazy val reductionAggregate: cudf.ColumnVector => cudf.Scalar =
+  override lazy val reductionAggregate: cudf.ColumnVector => cudf.Scalar = _ =>
     throw new UnsupportedOperationException("TDigest is not yet supported in reduction")
   override lazy val groupByAggregate: GroupByAggregation =
     GroupByAggregation.mergeTDigest(CudfTDigest.accuracy(accuracyExpression))
