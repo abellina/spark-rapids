@@ -134,9 +134,9 @@ case class WrappedAggFunction(aggregateFunction: GpuAggregateFunction, filter: E
 
   override val initialValues: Seq[Expression] =
     aggregateFunction.initialValues
-  override val updateExpressions: Seq[CudfAggregate] =
+  override lazy val updateExpressions: Seq[CudfAggregate] =
     aggregateFunction.updateExpressions
-  override val mergeExpressions: Seq[CudfAggregate] =
+  override lazy val mergeExpressions: Seq[CudfAggregate] =
     aggregateFunction.mergeExpressions
   override val evaluateExpression: Expression =
     aggregateFunction.evaluateExpression
@@ -286,9 +286,9 @@ class CudfSum(override val dataType: DataType) extends CudfAggregate {
 }
 
 class CudfMax(override val dataType: DataType) extends CudfAggregate {
-  override val updateReductionAggregateInternal: cudf.ColumnVector => cudf.Scalar =
+  override lazy val updateReductionAggregateInternal: cudf.ColumnVector => cudf.Scalar =
     (col: cudf.ColumnVector) => col.max
-  override val mergeReductionAggregateInternal: cudf.ColumnVector => cudf.Scalar =
+  override lazy val mergeReductionAggregateInternal: cudf.ColumnVector => cudf.Scalar =
     (col: cudf.ColumnVector) => col.max
   override lazy val updateAggregate: GroupByAggregation =
     GroupByAggregation.max()
@@ -298,9 +298,9 @@ class CudfMax(override val dataType: DataType) extends CudfAggregate {
 }
 
 class CudfMin(override val dataType: DataType) extends CudfAggregate {
-  override val updateReductionAggregateInternal: cudf.ColumnVector => cudf.Scalar =
+  override lazy val updateReductionAggregateInternal: cudf.ColumnVector => cudf.Scalar =
     (col: cudf.ColumnVector) => col.min
-  override val mergeReductionAggregateInternal: cudf.ColumnVector => cudf.Scalar =
+  override lazy val mergeReductionAggregateInternal: cudf.ColumnVector => cudf.Scalar =
     (col: cudf.ColumnVector) => col.min
   override lazy val updateAggregate: GroupByAggregation =
     GroupByAggregation.min()
@@ -361,9 +361,9 @@ abstract class CudfFirstLastBase extends CudfAggregate {
   val includeNulls: NullPolicy
   val offset: Int
 
-  override val updateReductionAggregateInternal: cudf.ColumnVector => cudf.Scalar =
+  override lazy val updateReductionAggregateInternal: cudf.ColumnVector => cudf.Scalar =
     (col: cudf.ColumnVector) => col.reduce(ReductionAggregation.nth(offset, includeNulls))
-  override val mergeReductionAggregateInternal: cudf.ColumnVector => cudf.Scalar =
+  override lazy val mergeReductionAggregateInternal: cudf.ColumnVector => cudf.Scalar =
     (col: cudf.ColumnVector) => col.reduce(ReductionAggregation.nth(offset, includeNulls))
   override lazy val updateAggregate: GroupByAggregation =
     GroupByAggregation.nth(offset, includeNulls)
