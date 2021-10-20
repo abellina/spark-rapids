@@ -70,11 +70,11 @@ case class GpuApproximatePercentile (
     "approx_percentile does not support reduction")
 
   // the update expression will create a t-digest (List[Struct[Double, Double])
-  override lazy val updateExpressions: Seq[CudfAggregate] =
+  override lazy val updateAggregates: Seq[CudfAggregate] =
     new CudfTDigest(percentageExpression, accuracyExpression) :: Nil
 
   // the merge expression will merge t-digests
-  override lazy val mergeExpressions: Seq[CudfAggregate] =
+  override lazy val mergeAggregates: Seq[CudfAggregate] =
     new CudfTDigest(percentageExpression, accuracyExpression) :: Nil
 
   // the evaluate expression will compute percentiles based on a t-digest

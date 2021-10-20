@@ -870,18 +870,18 @@ class GpuHashAggregateIterator(
           val bound =
             GpuBindReferences.bindGpuReferences(aggFn.aggBufferAttributes, updateAttrSeq)
           aggOrdinals ++= bound.map(_.asInstanceOf[GpuBoundReference].ordinal)
-          val updateAggs = aggFn.updateExpressions
+          val updateAggs = aggFn.updateAggregates
           cudfAggregates ++= updateAggs.map(_.updateAggregate)
           dataTypes ++= updateAggs.map(_.updateDataType)
           reductionAggregates ++= updateAggs.map(_.updateReductionAggregate)
-          preStep ++= aggFn.preUpdate
+          preStep ++= aggFn.aggBufferAttributes
           postStep ++= aggFn.postUpdate
           postStepAttr ++= aggFn.postUpdateAttr
         } else {
           val bound =
             GpuBindReferences.bindGpuReferences(aggFn.mergeBufferAttributes, mergeAttrSeq)
           aggOrdinals ++= bound.map(_.asInstanceOf[GpuBoundReference].ordinal)
-          val mergeAggs = aggFn.mergeExpressions
+          val mergeAggs = aggFn.mergeAggregates
           cudfAggregates ++= mergeAggs.map(_.mergeAggregate)
           dataTypes ++= mergeAggs.map(_.dataType)
           reductionAggregates ++= mergeAggs.map(_.mergeReductionAggregate)
