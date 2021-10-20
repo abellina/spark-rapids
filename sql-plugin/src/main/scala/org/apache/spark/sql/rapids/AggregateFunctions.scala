@@ -50,8 +50,8 @@ trait GpuAggregateFunction extends GpuExpression
   // preUpdate: modify an incoming batch to match the shape/type cuDF expects
   // postUpdate and postUpdateAttr: take the output of a cuDF update aggregate and return
   //   what spark expects
-  lazy val postUpdate: Seq[Expression] = aggBufferAttributes
   lazy val postUpdateAttr: Seq[AttributeReference] = aggBufferAttributes
+  lazy val postUpdate: Seq[Expression] = aggBufferAttributes
 
   // merge: second half of the aggregation (count = sum). Also use to merge multiple batches.
   val mergeAggregates: Seq[CudfAggregate]
@@ -558,20 +558,20 @@ case class GpuSum(child: Expression, resultType: DataType)
       with GpuBatchedRunningWindowWithFixer
       with GpuAggregateWindowFunction
       with GpuRunningWindowFunction {
+  override lazy val initialValues: Seq[GpuLiteral] = Seq(GpuLiteral(null, resultType))
 
-  private lazy val cudfSum = AttributeReference("sum", resultType)()
+  // output of GpuSum
+  private lazy val sum = AttributeReference("sum", resultType)()
 
   // we need to cast to `resultType` here, since Spark is not widening types
   // as done before Spark 3.2.0. See CudfSum for more info.
-  override lazy val inputProjection: Seq[Expression] = Seq(GpuCast(child, resultType))
-  override lazy val updateAggregates: Seq[CudfAggregate] = Seq(new CudfSum(resultType))
+  override lazy val inputProjection: Seq[Expression] = Seq(GpuCast(child, sum.dataType))
+  override lazy val updateAggregates: Seq[CudfAggregate] = Seq(new CudfSum(sum.dataType))
 
-  override lazy val mergeAggregates: Seq[CudfAggregate] = Seq(new CudfSum(resultType))
-  override lazy val evaluateExpression: Expression = cudfSum
+  override lazy val mergeAggregates: Seq[CudfAggregate] = Seq(new CudfSum(sum.dataType))
 
-  override lazy val aggBufferAttributes: Seq[AttributeReference] = cudfSum :: Nil
-
-  override lazy val initialValues: Seq[GpuLiteral] = Seq(GpuLiteral(null, resultType))
+  override lazy val evaluateExpression: Expression = sum
+  override lazy val aggBufferAttributes: Seq[AttributeReference] = sum :: Nil
 
   // Copied from Sum
   override def nullable: Boolean = true
@@ -662,17 +662,8 @@ case class GpuPivotFirst(
 
   val valueDataType = valueColumn.dataType
 
-  override val dataType: DataType = valueDataType
-  override val nullable: Boolean = false
-
-  val pivotColAttr = pivotColumnValues.map(pivotColumnValue => {
-    // If `pivotColumnValue` is null, then create an AttributeReference for null column.
-    if (pivotColumnValue == null) {
-      AttributeReference(GpuLiteral(null, valueDataType).toString, valueDataType)()
-    } else {
-      AttributeReference(pivotColumnValue.toString, valueDataType)()
-    }
-  })
+  override lazy val initialValues: Seq[GpuLiteral] =
+    Seq.fill(pivotColumnValues.length)(GpuLiteral(null, valueDataType))
 
   override lazy val inputProjection: Seq[Expression] = {
     val expr = pivotColumnValues.map(pivotColumnValue => {
@@ -686,22 +677,28 @@ case class GpuPivotFirst(
     expr
   }
 
-  override lazy val updateAggregates: Seq[CudfAggregate] = {
-    pivotColAttr.map(c => new CudfLastExcludeNulls(c.dataType))
-  }
+  private lazy val pivotColAttr = pivotColumnValues.map(pivotColumnValue => {
+    // If `pivotColumnValue` is null, then create an AttributeReference for null column.
+    if (pivotColumnValue == null) {
+      AttributeReference(GpuLiteral(null, valueDataType).toString, valueDataType)()
+    } else {
+      AttributeReference(pivotColumnValue.toString, valueDataType)()
+    }
+  })
 
-  override lazy val mergeAggregates: Seq[CudfAggregate] = {
+  override lazy val updateAggregates: Seq[CudfAggregate] =
     pivotColAttr.map(c => new CudfLastExcludeNulls(c.dataType))
-  }
 
-  override lazy val evaluateExpression: Expression = {
+  override lazy val mergeAggregates: Seq[CudfAggregate] =
+    pivotColAttr.map(c => new CudfLastExcludeNulls(c.dataType))
+
+  override lazy val evaluateExpression: Expression =
     GpuCreateArray(pivotColAttr, false)
-  }
+
   override lazy val aggBufferAttributes: Seq[AttributeReference] = pivotColAttr
 
-  override lazy val initialValues: Seq[GpuLiteral] =
-    Seq.fill(pivotColumnValues.length)(GpuLiteral(null, valueDataType))
-
+  override val dataType: DataType = valueDataType
+  override val nullable: Boolean = false
   override def children: Seq[Expression] = pivotColumn :: valueColumn :: Nil
 }
 
@@ -711,7 +708,7 @@ case class GpuCount(children: Seq[Expression]) extends GpuAggregateFunction
     with GpuRunningWindowFunction {
   override lazy val initialValues: Seq[GpuLiteral] = Seq(GpuLiteral(0L, LongType))
 
-  // output of the GpuCount
+  // output of GpuCount
   private lazy val count = AttributeReference("count", dataType)()
 
   // interim result of an update count as performed by cuDF
@@ -803,8 +800,10 @@ case class GpuAverage(child: Expression) extends GpuAggregateFunction
         // a sum of this == the count
         GpuCast(GpuIsNotNull(child), LongType)
     })
-  override lazy val mergeAggregates: Seq[CudfAggregate] =
-    Seq(new CudfSum(inputProjection.head.dataType), new CudfSum(LongType))
+  override lazy val initialValues: Seq[GpuLiteral] = Seq(
+    GpuLiteral(0.0, DoubleType),
+    GpuLiteral(0L, LongType))
+
   // The count input projection will need to be collected as a sum (of counts) instead of
   // counts (of counts) as the GpuIsNotNull o/p is casted to count=0 for null and 1 otherwise, and
   // the total count can be correctly evaluated only by summing them. eg. avg(col(null, 27))
@@ -813,16 +812,15 @@ case class GpuAverage(child: Expression) extends GpuAggregateFunction
   override lazy val updateAggregates: Seq[CudfAggregate] =
     Seq(new CudfSum(inputProjection.head.dataType), new CudfSum(LongType))
 
+  override lazy val mergeAggregates: Seq[CudfAggregate] =
+    Seq(new CudfSum(inputProjection.head.dataType), new CudfSum(LongType))
+
   // NOTE: this sets `failOnErrorOverride=false` in `GpuDivide` to force it not to throw
   // divide-by-zero exceptions, even when ansi mode is enabled in Spark.
   // This is to conform with Spark's behavior in the Average aggregate function.
   override lazy val evaluateExpression: Expression = GpuDivide(
     GpuCast(cudfSum, DoubleType),
     GpuCast(cudfCount, DoubleType), failOnErrorOverride = false)
-
-  override lazy val initialValues: Seq[GpuLiteral] = Seq(
-    GpuLiteral(0.0, DoubleType),
-    GpuLiteral(0L, LongType))
 
   override lazy val aggBufferAttributes: Seq[AttributeReference] = cudfSum :: cudfCount :: Nil
 
@@ -1106,8 +1104,11 @@ abstract class GpuM2(child: Expression, nullOnDivideByZero: Boolean)
   extends GpuAggregateFunction with ImplicitCastInputTypes with Serializable {
 
   override def children: Seq[Expression] = Seq(child)
+
   override def dataType: DataType = DoubleType
+
   override def nullable: Boolean = true
+
   override def inputTypes: Seq[AbstractDataType] = Seq(NumericType)
 
   protected def divideByZeroEvalResult: Expression =
@@ -1118,6 +1119,8 @@ abstract class GpuM2(child: Expression, nullOnDivideByZero: Boolean)
     Seq(GpuLiteral(0.0), GpuLiteral(0.0), GpuLiteral(0.0))
 
   // Buffers for the update stage.
+  protected lazy val bufferNCudfOutput: AttributeReference =
+    AttributeReference("n", IntegerType, nullable = false)()
   protected lazy val bufferN: AttributeReference =
     AttributeReference("n", DoubleType, nullable = false)()
   protected lazy val bufferAvg: AttributeReference =
@@ -1142,11 +1145,13 @@ abstract class GpuM2(child: Expression, nullOnDivideByZero: Boolean)
   // corresponding buffers require them to be non-nullable.
   // As such, we need to convert those nulls into Double(0.0) in the postUpdate step.
   // This will not affect the outcome of the merge step.
+  override lazy val postUpdateAttr: Seq[AttributeReference] =
+    bufferNCudfOutput :: bufferAvg :: bufferM2 :: Nil
+
   override lazy val postUpdate: Seq[Expression] = {
-    val bufferCountAsInt = bufferN.copy(dataType = IntegerType)(bufferN.exprId, bufferN.qualifier)
     val bufferAvgNoNulls = GpuCoalesce(Seq(bufferAvg, GpuLiteral(0.0, DoubleType)))
-    val bufferM2NoNulls  = GpuCoalesce(Seq(bufferM2, GpuLiteral(0.0, DoubleType)))
-    GpuCast(bufferCountAsInt, DoubleType) :: bufferAvgNoNulls :: bufferM2NoNulls :: Nil
+    val bufferM2NoNulls = GpuCoalesce(Seq(bufferM2, GpuLiteral(0.0, DoubleType)))
+    GpuCast(bufferNCudfOutput, DoubleType) :: bufferAvgNoNulls :: bufferM2NoNulls :: Nil
   }
 
   // Before merging we have 3 columns and we need to combine them into a structs column.
