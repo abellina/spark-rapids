@@ -834,7 +834,7 @@ class GpuHashAggregateIterator(
       // merge version of AggregateOp.COUNT.
       val dataTypes = new mutable.ArrayBuffer[DataType]()
       val cudfAggregates = new mutable.ArrayBuffer[GroupByAggregation]()
-      val reductionAggregates = new mutable.ArrayBuffer[GpuColumnVector => cudf.Scalar]()
+      val reductionAggregates = new mutable.ArrayBuffer[cudf.ColumnVector => cudf.Scalar]()
 
       // `GpuAggregateFunction` can add a pre and post step for update
       // and merge aggregates.
@@ -871,9 +871,9 @@ class GpuHashAggregateIterator(
             GpuBindReferences.bindGpuReferences(aggFn.aggBufferAttributes, updateAttrSeq)
           aggOrdinals ++= bound.map(_.asInstanceOf[GpuBoundReference].ordinal)
           val updateAggs = aggFn.updateAggregates
-          cudfAggregates ++= updateAggs.map(_.updateAggregate)
-          dataTypes ++= updateAggs.map(_.updateDataType)
-          reductionAggregates ++= updateAggs.map(_.updateReductionAggregate)
+          cudfAggregates ++= updateAggs.map(_.groupByAggregate)
+          dataTypes ++= updateAggs.map(_.dataType)
+          reductionAggregates ++= updateAggs.map(_.reductionAggregate)
           preStep ++= aggFn.aggBufferAttributes
           postStep ++= aggFn.postUpdate
           postStepAttr ++= aggFn.postUpdateAttr
@@ -882,9 +882,9 @@ class GpuHashAggregateIterator(
             GpuBindReferences.bindGpuReferences(aggFn.mergeBufferAttributes, mergeAttrSeq)
           aggOrdinals ++= bound.map(_.asInstanceOf[GpuBoundReference].ordinal)
           val mergeAggs = aggFn.mergeAggregates
-          cudfAggregates ++= mergeAggs.map(_.mergeAggregate)
+          cudfAggregates ++= mergeAggs.map(_.groupByAggregate)
           dataTypes ++= mergeAggs.map(_.dataType)
-          reductionAggregates ++= mergeAggs.map(_.mergeReductionAggregate)
+          reductionAggregates ++= mergeAggs.map(_.reductionAggregate)
           preStep ++= aggFn.preMerge
           postStep ++= aggFn.postMerge
           postStepAttr ++= aggFn.postMergeAttr
@@ -915,7 +915,7 @@ class GpuHashAggregateIterator(
           reductionAggregates.zip(dataTypes).zipWithIndex.foreach { case ((aggFn, dataType), ix) =>
             val cols = GpuColumnVector.extractColumns(preProcessed)
             val reductionCol = cols(aggOrdinals(ix))
-            withResource(aggFn(reductionCol)) { res =>
+            withResource(aggFn(reductionCol.getBase)) { res =>
               cvs += GpuColumnVector.from(
                 cudf.ColumnVector.fromScalar(res, 1), dataType)
             }

@@ -33,38 +33,53 @@ import org.apache.spark.sql.types._
 trait GpuAggregateFunction extends GpuExpression
     with ShimExpression
     with GpuUnevaluable {
-  // these are values that spark calls initial because it uses
-  // them to initialize the aggregation buffer, and returns them in case
-  // of an empty aggregate when there are no expressions,
-  // here we copy them but with the gpu equivalent
+  /**
+   * These are values that spark calls initial because it uses
+   * them to initialize the aggregation buffer, and returns them in case
+   * of an empty aggregate when there are no expressions,
+   * here we copy them but with the gpu equivalent
+   **/
   val initialValues: Seq[Expression]
 
-  // using the child reference, define the shape of the vectors sent to
-  // the update/merge expressions
+  /**
+   * Using the child reference, define the shape of input batches sent to
+   * the update expressions
+   */
   val inputProjection: Seq[Expression]
 
-  // update: first half of the aggregation (count = count)
+  /** update: first half of the aggregation **/
   val updateAggregates: Seq[CudfAggregate]
 
-  // expression to use to modify pre and post a cuDF update aggregate
-  // preUpdate: modify an incoming batch to match the shape/type cuDF expects
-  // postUpdate and postUpdateAttr: take the output of a cuDF update aggregate and return
-  //   what spark expects
+  /**
+   * Expression to use to modify post a cuDF update aggregate
+   * postUpdateAttr: matches the order (and types) of `updateAggregates`
+   * postUpdate: binds to `postUpdateAttr` and defines an expression that results
+   *             in what Spark expects from the update
+   */
   lazy val postUpdateAttr: Seq[AttributeReference] = aggBufferAttributes
   lazy val postUpdate: Seq[Expression] = aggBufferAttributes
 
-  // merge: second half of the aggregation (count = sum). Also use to merge multiple batches.
+  /** preMerge: modify a partial batch to match the input required by a merge aggregate */
+  lazy val preMerge: Seq[Expression] = aggBufferAttributes
+
+  /**
+   * merge: second half of the aggregation. Also use to merge multiple batches in the
+   * update or merge stages
+   */
   val mergeAggregates: Seq[CudfAggregate]
 
-  // expression to use to modify pre and post a cudf merge aggregate
-  // preMerge: modify a partial batch to match the input required by a merge aggregate
-  // postMerge and postMergeAttr: used to put the result of the merge aggregate, in Spark terms.
-  lazy val preMerge: Seq[Expression] = aggBufferAttributes
+  /**
+   * postMergeAttr: matches the order (and types) of `updateAggregates`
+   * postMergeAttr: binds to `postMergeAttr` and defines an expression that results
+   *                in what Spark expects from the merge
+   */
   lazy val postMerge: Seq[Expression] = aggBufferAttributes
   lazy val postMergeAttr: Seq[AttributeReference] = aggBufferAttributes
 
-  // mostly likely a pass through (count => sum we merged above).
-  // average has a more interesting expression to compute the division of sum/count
+  /**
+   * mostly likely a pass through (count => sum we merged above).
+   * average has a more interesting expression to compute the division of sum/count
+   */
   val evaluateExpression: Expression
 
   /** Attributes of fields in aggBufferSchema. */
@@ -90,9 +105,11 @@ trait GpuAggregateFunction extends GpuExpression
     prettyName + flatArguments.mkString(start, ", ", ")")
   }
 
-  // Attributes of fields in input aggregation buffers (immutable aggregation buffers that are
-  // merged with mutable aggregation buffers in the merge() function or merge expressions).
-  // These attributes are created automatically by cloning the [[aggBufferAttributes]].
+  /**
+   * Attributes of fields in input aggregation buffers (immutable aggregation buffers that are
+   * merged with mutable aggregation buffers in the merge() function or merge expressions).
+   * These attributes are created automatically by cloning the [[aggBufferAttributes]].
+   */
   final lazy val inputAggBufferAttributes: Seq[AttributeReference] =
     aggBufferAttributes.map(_.newInstance())
 
@@ -131,14 +148,10 @@ case class WrappedAggFunction(aggregateFunction: GpuAggregateFunction, filter: E
 
   override def children: Seq[Expression] = Seq(aggregateFunction, filter)
 
-  override val initialValues: Seq[Expression] =
-    aggregateFunction.initialValues
-  override lazy val updateAggregates: Seq[CudfAggregate] =
-    aggregateFunction.updateAggregates
-  override lazy val mergeAggregates: Seq[CudfAggregate] =
-    aggregateFunction.mergeAggregates
-  override val evaluateExpression: Expression =
-    aggregateFunction.evaluateExpression
+  override val initialValues: Seq[Expression] = aggregateFunction.initialValues
+  override lazy val updateAggregates: Seq[CudfAggregate] = aggregateFunction.updateAggregates
+  override lazy val mergeAggregates: Seq[CudfAggregate] = aggregateFunction.mergeAggregates
+  override val evaluateExpression: Expression = aggregateFunction.evaluateExpression
 
   override lazy val postUpdate: Seq[Expression] = aggregateFunction.postUpdate
   override lazy val postUpdateAttr: Seq[AttributeReference] = aggregateFunction.postUpdateAttr
@@ -211,40 +224,19 @@ case class GpuAggregateExpression(origAggregateFunction: GpuAggregateFunction,
   override def sql: String = aggregateFunction.sql(isDistinct)
 }
 
-abstract class CudfAggregate {
+trait CudfAggregate {
   // we use this to get the ordinal of the bound reference, s.t. we can ask cudf to perform
   // the aggregate on that column
-  lazy val updateReductionAggregate: GpuColumnVector => cudf.Scalar =
-    (cv: GpuColumnVector) => {
-      updateReductionAggregateInternal(cv.getBase)
-    }
-
-  lazy val mergeReductionAggregate: GpuColumnVector => cudf.Scalar =
-    (cv: GpuColumnVector) => {
-      mergeReductionAggregateInternal(cv.getBase)
-    }
-
-  val updateReductionAggregateInternal: cudf.ColumnVector => cudf.Scalar
-  val mergeReductionAggregateInternal: cudf.ColumnVector => cudf.Scalar
-  val updateAggregate: GroupByAggregation
-  val mergeAggregate: GroupByAggregation
-
+  val reductionAggregate: cudf.ColumnVector => cudf.Scalar
+  val groupByAggregate: GroupByAggregation
   def dataType: DataType
-  def updateDataType: DataType = dataType
 }
 
 class CudfCount(override val dataType: DataType) extends CudfAggregate {
-  override val updateReductionAggregateInternal: cudf.ColumnVector => cudf.Scalar =
+  override val reductionAggregate: cudf.ColumnVector => cudf.Scalar =
     (col: cudf.ColumnVector) => cudf.Scalar.fromInt((col.getRowCount - col.getNullCount).toInt)
-  override val mergeReductionAggregateInternal: cudf.ColumnVector => cudf.Scalar =
-    (col: cudf.ColumnVector) => col.sum
-  override lazy val updateAggregate: GroupByAggregation =
+  override lazy val groupByAggregate: GroupByAggregation =
     GroupByAggregation.count(NullPolicy.EXCLUDE)
-  override lazy val mergeAggregate: GroupByAggregation =
-    GroupByAggregation.sum()
-
-  // the partial count outputs an int
-  override def updateDataType: DataType = IntegerType
   override def toString(): String = "CudfCount"
 }
 
@@ -267,90 +259,59 @@ class CudfSum(override val dataType: DataType) extends CudfAggregate {
   //
   @transient val rapidsSumType: DType = GpuColumnVector.getNonNestedRapidsType(dataType)
 
-  override val updateReductionAggregateInternal: cudf.ColumnVector => cudf.Scalar =
+  override val reductionAggregate: cudf.ColumnVector => cudf.Scalar =
     (col: cudf.ColumnVector) => col.sum(rapidsSumType)
 
-  override val mergeReductionAggregateInternal: cudf.ColumnVector => cudf.Scalar =
-    updateReductionAggregateInternal
-
-  override lazy val updateAggregate: GroupByAggregation =
-    GroupByAggregation.sum()
-
-  override lazy val mergeAggregate: GroupByAggregation =
+  override lazy val groupByAggregate: GroupByAggregation =
     GroupByAggregation.sum()
 
   override def toString(): String = "CudfSum"
-
 }
 
 class CudfMax(override val dataType: DataType) extends CudfAggregate {
-  override lazy val updateReductionAggregateInternal: cudf.ColumnVector => cudf.Scalar =
+  override lazy val reductionAggregate: cudf.ColumnVector => cudf.Scalar =
     (col: cudf.ColumnVector) => col.max
-  override lazy val mergeReductionAggregateInternal: cudf.ColumnVector => cudf.Scalar =
-    (col: cudf.ColumnVector) => col.max
-  override lazy val updateAggregate: GroupByAggregation =
-    GroupByAggregation.max()
-  override lazy val mergeAggregate: GroupByAggregation =
+  override lazy val groupByAggregate: GroupByAggregation =
     GroupByAggregation.max()
   override def toString(): String = "CudfMax"
 }
 
 class CudfMin(override val dataType: DataType) extends CudfAggregate {
-  override lazy val updateReductionAggregateInternal: cudf.ColumnVector => cudf.Scalar =
+  override lazy val reductionAggregate: cudf.ColumnVector => cudf.Scalar =
     (col: cudf.ColumnVector) => col.min
-  override lazy val mergeReductionAggregateInternal: cudf.ColumnVector => cudf.Scalar =
-    (col: cudf.ColumnVector) => col.min
-  override lazy val updateAggregate: GroupByAggregation =
-    GroupByAggregation.min()
-  override lazy val mergeAggregate: GroupByAggregation =
+  override lazy val groupByAggregate: GroupByAggregation =
     GroupByAggregation.min()
   override def toString(): String = "CudfMin"
 }
 
 class CudfCollectList(override val dataType: DataType) extends CudfAggregate {
-  override lazy val updateReductionAggregateInternal: cudf.ColumnVector => cudf.Scalar =
+  override lazy val reductionAggregate: cudf.ColumnVector => cudf.Scalar =
     throw new UnsupportedOperationException("CollectList is not yet supported in reduction")
-  override lazy val mergeReductionAggregateInternal: cudf.ColumnVector => cudf.Scalar =
-    throw new UnsupportedOperationException("CollectList is not yet supported in reduction")
-  override lazy val updateAggregate: GroupByAggregation =
+  override lazy val groupByAggregate: GroupByAggregation =
     GroupByAggregation.collectList()
-  override lazy val mergeAggregate: GroupByAggregation =
-    GroupByAggregation.mergeLists()
   override def toString(): String = "CudfCollectList"
 }
 
 class CudfMergeLists(override val dataType: DataType) extends CudfAggregate {
-  override lazy val updateReductionAggregateInternal: cudf.ColumnVector => cudf.Scalar =
+  override lazy val reductionAggregate: cudf.ColumnVector => cudf.Scalar =
     throw new UnsupportedOperationException("MergeLists is not yet supported in reduction")
-  override lazy val mergeReductionAggregateInternal: cudf.ColumnVector => cudf.Scalar =
-    throw new UnsupportedOperationException("MergeLists is not yet supported in reduction")
-  override lazy val updateAggregate: GroupByAggregation =
-    GroupByAggregation.mergeLists()
-  override lazy val mergeAggregate: GroupByAggregation =
+  override lazy val groupByAggregate: GroupByAggregation =
     GroupByAggregation.mergeLists()
   override def toString(): String = "CudfMergeLists"
 }
 
 class CudfCollectSet(override val dataType: DataType) extends CudfAggregate {
-  override lazy val updateReductionAggregateInternal: cudf.ColumnVector => cudf.Scalar =
+  override lazy val reductionAggregate: cudf.ColumnVector => cudf.Scalar =
     throw new UnsupportedOperationException("CollectSet is not yet supported in reduction")
-  override lazy val mergeReductionAggregateInternal: cudf.ColumnVector => cudf.Scalar =
-    throw new UnsupportedOperationException("CollectSet is not yet supported in reduction")
-  override lazy val updateAggregate: GroupByAggregation =
+  override lazy val groupByAggregate: GroupByAggregation =
     GroupByAggregation.collectSet()
-  override lazy val mergeAggregate: GroupByAggregation =
-    GroupByAggregation.mergeSets()
   override def toString(): String = "CudfCollectSet"
 }
 
 class CudfMergeSets(override val dataType: DataType) extends CudfAggregate {
-  override lazy val updateReductionAggregateInternal: cudf.ColumnVector => cudf.Scalar =
+  override lazy val reductionAggregate: cudf.ColumnVector => cudf.Scalar =
     throw new UnsupportedOperationException("CudfMergeSets is not yet supported in reduction")
-  override lazy val mergeReductionAggregateInternal: cudf.ColumnVector => cudf.Scalar =
-    throw new UnsupportedOperationException("CudfMergeSets is not yet supported in reduction")
-  override lazy val updateAggregate: GroupByAggregation =
-    GroupByAggregation.mergeSets()
-  override lazy val mergeAggregate: GroupByAggregation =
+  override lazy val groupByAggregate: GroupByAggregation =
     GroupByAggregation.mergeSets()
   override def toString(): String = "CudfMergeSets"
 }
@@ -358,14 +319,9 @@ class CudfMergeSets(override val dataType: DataType) extends CudfAggregate {
 abstract class CudfFirstLastBase extends CudfAggregate {
   val includeNulls: NullPolicy
   val offset: Int
-
-  override lazy val updateReductionAggregateInternal: cudf.ColumnVector => cudf.Scalar =
+  override lazy val reductionAggregate: cudf.ColumnVector => cudf.Scalar =
     (col: cudf.ColumnVector) => col.reduce(ReductionAggregation.nth(offset, includeNulls))
-  override lazy val mergeReductionAggregateInternal: cudf.ColumnVector => cudf.Scalar =
-    (col: cudf.ColumnVector) => col.reduce(ReductionAggregation.nth(offset, includeNulls))
-  override lazy val updateAggregate: GroupByAggregation =
-    GroupByAggregation.nth(offset, includeNulls)
-  override lazy val mergeAggregate: GroupByAggregation =
+  override lazy val groupByAggregate: GroupByAggregation =
     GroupByAggregation.nth(offset, includeNulls)
 }
 
@@ -395,47 +351,35 @@ class CudfLastExcludeNulls(override val dataType: DataType) extends CudfFirstLas
  * generated in the output of libcudf's M2 aggregate.
  */
 class CudfMean(override val dataType: DataType) extends CudfAggregate {
-  override lazy val updateReductionAggregateInternal: cudf.ColumnVector => cudf.Scalar =
-    throw new UnsupportedOperationException("CudfMean is not supported in reduction")
-  override lazy val mergeReductionAggregateInternal: cudf.ColumnVector => cudf.Scalar =
+  override lazy val reductionAggregate: cudf.ColumnVector => cudf.Scalar =
     throw new UnsupportedOperationException("CudfMean is not supported in reduction")
 
-  override lazy val updateAggregate: GroupByAggregation =
-    GroupByAggregation.mean()
-  override lazy val mergeAggregate: GroupByAggregation =
+  override lazy val groupByAggregate: GroupByAggregation =
     GroupByAggregation.mean()
 
   override def toString(): String = "CudfMeanForM2"
 }
 
 class CudfM2 extends CudfAggregate {
-  override lazy val updateReductionAggregateInternal: cudf.ColumnVector => cudf.Scalar =
-    throw new UnsupportedOperationException("CudfM2 aggregation is not supported in reduction")
-  override lazy val mergeReductionAggregateInternal: cudf.ColumnVector => cudf.Scalar =
+  override lazy val reductionAggregate: cudf.ColumnVector => cudf.Scalar =
     throw new UnsupportedOperationException("CudfM2 aggregation is not supported in reduction")
 
-  override lazy val updateAggregate: GroupByAggregation =
+  override lazy val groupByAggregate: GroupByAggregation =
     GroupByAggregation.M2()
-  override lazy val mergeAggregate: GroupByAggregation =
-    GroupByAggregation.mergeM2()
 
   override def toString(): String = "CudfM2"
   override def dataType: DataType = DoubleType
 }
 
 class CudfMergeM2 extends CudfAggregate {
-  override lazy val updateReductionAggregateInternal: cudf.ColumnVector => cudf.Scalar =
-    throw new UnsupportedOperationException("CudfMergeM2 aggregation is not supported in reduction")
-  override lazy val mergeReductionAggregateInternal: cudf.ColumnVector => cudf.Scalar =
+  override lazy val reductionAggregate: cudf.ColumnVector => cudf.Scalar =
     throw new UnsupportedOperationException("CudfMergeM2 aggregation is not supported in reduction")
 
-  override lazy val updateAggregate: GroupByAggregation =
-    throw new UnsupportedOperationException("CudfMergeM2 only supports mergeAggregate")
-  override lazy val mergeAggregate: GroupByAggregation =
+  override lazy val groupByAggregate: GroupByAggregation =
     GroupByAggregation.mergeM2()
 
   override def toString(): String = "CudfMergeM2"
-  override def dataType: DataType =
+  override val dataType: DataType =
     StructType(
       StructField("n", IntegerType, nullable = false) ::
         StructField("avg", DoubleType, nullable = true) ::
@@ -448,16 +392,12 @@ case class GpuMin(child: Expression) extends GpuAggregateFunction
     with GpuRunningWindowFunction {
   private lazy val cudfMin = AttributeReference("min", child.dataType)()
 
+  override lazy val initialValues: Seq[GpuLiteral] = Seq(GpuLiteral(null, child.dataType))
   override lazy val inputProjection: Seq[Expression] = Seq(child)
   override lazy val updateAggregates: Seq[CudfAggregate] = Seq(new CudfMin(child.dataType))
-
   override lazy val mergeAggregates: Seq[CudfAggregate] = Seq(new CudfMin(child.dataType))
-
   override lazy val evaluateExpression: Expression = cudfMin
-
   override lazy val aggBufferAttributes: Seq[AttributeReference] = cudfMin :: Nil
-
-  override lazy val initialValues: Seq[GpuLiteral] = Seq(GpuLiteral(null, child.dataType))
 
   // Copied from Min
   override def nullable: Boolean = true
@@ -496,7 +436,6 @@ case class GpuMin(child: Expression) extends GpuAggregateFunction
     case TimestampType | DateType => false
     case _ => true
   }
-
 }
 
 case class GpuMax(child: Expression) extends GpuAggregateFunction
@@ -505,14 +444,13 @@ case class GpuMax(child: Expression) extends GpuAggregateFunction
     with GpuRunningWindowFunction {
   private lazy val cudfMax = AttributeReference("max", child.dataType)()
 
+  override lazy val initialValues: Seq[GpuLiteral] = Seq(GpuLiteral(null, child.dataType))
   override lazy val inputProjection: Seq[Expression] = Seq(child)
   override lazy val updateAggregates: Seq[CudfAggregate] = Seq(new CudfMax(dataType))
   override lazy val mergeAggregates: Seq[CudfAggregate] = Seq(new CudfMax(dataType))
   override lazy val evaluateExpression: Expression = cudfMax
-
   override lazy val aggBufferAttributes: Seq[AttributeReference] = cudfMax :: Nil
 
-  override lazy val initialValues: Seq[GpuLiteral] = Seq(GpuLiteral(null, child.dataType))
 
   // Copied from Max
   override def nullable: Boolean = true
@@ -567,9 +505,7 @@ case class GpuSum(child: Expression, resultType: DataType)
   // as done before Spark 3.2.0. See CudfSum for more info.
   override lazy val inputProjection: Seq[Expression] = Seq(GpuCast(child, sum.dataType))
   override lazy val updateAggregates: Seq[CudfAggregate] = Seq(new CudfSum(sum.dataType))
-
   override lazy val mergeAggregates: Seq[CudfAggregate] = Seq(new CudfSum(sum.dataType))
-
   override lazy val evaluateExpression: Expression = sum
   override lazy val aggBufferAttributes: Seq[AttributeReference] = sum :: Nil
 
@@ -866,18 +802,16 @@ case class GpuFirst(child: Expression, ignoreNulls: Boolean)
         new CudfFirstIncludeNulls(valueSet.dataType))
   }
 
-  override lazy val updateAggregates: Seq[CudfAggregate] = commonExpressions
-  override lazy val mergeAggregates: Seq[CudfAggregate] = commonExpressions
-  override lazy val evaluateExpression: Expression = cudfFirst
-
-  override lazy val aggBufferAttributes: Seq[AttributeReference] = cudfFirst :: valueSet :: Nil
-
+  // Expected input data type.
   override lazy val initialValues: Seq[GpuLiteral] = Seq(
     GpuLiteral(null, child.dataType),
     GpuLiteral(false, BooleanType))
+  override lazy val updateAggregates: Seq[CudfAggregate] = commonExpressions
+  override lazy val mergeAggregates: Seq[CudfAggregate] = commonExpressions
+  override lazy val evaluateExpression: Expression = cudfFirst
+  override lazy val aggBufferAttributes: Seq[AttributeReference] = cudfFirst :: valueSet :: Nil
 
   // Copied from First
-  // Expected input data type.
   override def inputTypes: Seq[AbstractDataType] = Seq(AnyDataType, BooleanType)
   override def children: Seq[Expression] = child :: Nil
   override def nullable: Boolean = true
@@ -913,15 +847,13 @@ case class GpuLast(child: Expression, ignoreNulls: Boolean)
         new CudfLastIncludeNulls(valueSet.dataType))
   }
 
-  override lazy val updateAggregates: Seq[CudfAggregate] = commonExpressions
-  override lazy val mergeAggregates: Seq[CudfAggregate] = commonExpressions
-  override lazy val evaluateExpression: Expression = cudfLast
-
-  override lazy val aggBufferAttributes: Seq[AttributeReference] = cudfLast :: valueSet :: Nil
-
   override lazy val initialValues: Seq[GpuLiteral] = Seq(
     GpuLiteral(null, child.dataType),
     GpuLiteral(false, BooleanType))
+  override lazy val updateAggregates: Seq[CudfAggregate] = commonExpressions
+  override lazy val mergeAggregates: Seq[CudfAggregate] = commonExpressions
+  override lazy val evaluateExpression: Expression = cudfLast
+  override lazy val aggBufferAttributes: Seq[AttributeReference] = cudfLast :: valueSet :: Nil
 
   // Copied from Last
   override def inputTypes: Seq[AbstractDataType] = Seq(AnyDataType, BooleanType)
@@ -990,11 +922,8 @@ case class GpuCollectList(
     extends GpuCollectBase {
 
   override lazy val updateAggregates: Seq[CudfAggregate] = Seq(new CudfCollectList(dataType))
-
   override lazy val mergeAggregates: Seq[CudfAggregate] = Seq(new CudfMergeLists(dataType))
-
   override lazy val evaluateExpression: Expression = outputBuf
-
   override def aggBufferAttributes: Seq[AttributeReference] = outputBuf :: Nil
 
   override def prettyName: String = "collect_list"
@@ -1017,11 +946,8 @@ case class GpuCollectSet(
     extends GpuCollectBase {
 
   override lazy val updateAggregates: Seq[CudfAggregate] = Seq(new CudfCollectSet(dataType))
-
   override lazy val mergeAggregates: Seq[CudfAggregate] = Seq(new CudfMergeSets(dataType))
-
   override lazy val evaluateExpression: Expression = outputBuf
-
   override def aggBufferAttributes: Seq[AttributeReference] = outputBuf :: Nil
 
   override def prettyName: String = "collect_set"

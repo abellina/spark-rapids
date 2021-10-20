@@ -71,11 +71,11 @@ case class GpuApproximatePercentile (
 
   // the update expression will create a t-digest (List[Struct[Double, Double])
   override lazy val updateAggregates: Seq[CudfAggregate] =
-    new CudfTDigest(percentageExpression, accuracyExpression) :: Nil
+    new CudfTDigestUpdate(accuracyExpression) :: Nil
 
   // the merge expression will merge t-digests
   override lazy val mergeAggregates: Seq[CudfAggregate] =
-    new CudfTDigest(percentageExpression, accuracyExpression) :: Nil
+    new CudfTDigestMerge(accuracyExpression) :: Nil
 
   // the evaluate expression will compute percentiles based on a t-digest
   override lazy val evaluateExpression: Expression = {
@@ -177,26 +177,24 @@ case class ApproxPercentileFromTDigestExpr(
   override def children: Seq[Expression] = Seq(child)
 }
 
-class CudfTDigest(
-    percentileExpr: GpuLiteral,
-    accuracyExpression: GpuLiteral)
+class CudfTDigestUpdate(accuracyExpression: GpuLiteral)
+  extends CudfAggregate {
+  override lazy val reductionAggregate: cudf.ColumnVector => cudf.Scalar =
+    throw new UnsupportedOperationException("TDigest is not yet supported in reduction")
+  override lazy val groupByAggregate: GroupByAggregation =
+    GroupByAggregation.createTDigest(CudfTDigest.accuracy(accuracyExpression))
+  override def toString(): String = "CudfTDigestUpdate"
+  override def dataType: DataType = CudfTDigest.dataType
+}
+
+class CudfTDigestMerge(accuracyExpression: GpuLiteral)
   extends CudfAggregate {
 
-  // Map Spark delta to cuDF delta
-  private lazy val accuracy = accuracyExpression.value match {
-    case delta: Int => delta.max(1000)
-    case _ => 1000
-  }
-
-  override lazy val updateReductionAggregateInternal: cudf.ColumnVector => cudf.Scalar =
+  override lazy val reductionAggregate: cudf.ColumnVector => cudf.Scalar =
     throw new UnsupportedOperationException("TDigest is not yet supported in reduction")
-  override lazy val mergeReductionAggregateInternal: cudf.ColumnVector => cudf.Scalar =
-    throw new UnsupportedOperationException("TDigest is not yet supported in reduction")
-  override lazy val updateAggregate: GroupByAggregation =
-    GroupByAggregation.createTDigest(accuracy)
-  override lazy val mergeAggregate: GroupByAggregation =
-    GroupByAggregation.mergeTDigest(accuracy)
-  override def toString(): String = "CudfTDigest"
+  override lazy val groupByAggregate: GroupByAggregation =
+    GroupByAggregation.mergeTDigest(CudfTDigest.accuracy(accuracyExpression))
+  override def toString(): String = "CudfTDigestMerge"
   override def dataType: DataType = CudfTDigest.dataType
 }
 
@@ -209,4 +207,10 @@ object CudfTDigest {
     StructField("min", DataTypes.DoubleType, nullable = false),
     StructField("max", DataTypes.DoubleType, nullable = false)
   ))
+
+  // Map Spark delta to cuDF delta
+  def accuracy(accuracyExpression: GpuLiteral): Int = accuracyExpression.value match {
+    case delta: Int => delta.max(1000)
+    case _ => 1000
+  }
 }
