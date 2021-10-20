@@ -295,7 +295,7 @@ class ConditionalNestedLoopJoinIterator(
           (left, conditionFirst, right)
         } else {
           println(s"Picking right, it has ${right.getRowCount}")
-          (left, conditionSecond, left)
+          (right, conditionSecond, left)
         }
         numJoinRows.map { rowCount =>
           bigger.conditionalInnerJoinGatherMaps(smaller, condition, rowCount)
