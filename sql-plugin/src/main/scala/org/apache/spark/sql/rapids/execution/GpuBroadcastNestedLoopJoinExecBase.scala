@@ -251,12 +251,12 @@ class ConditionalNestedLoopJoinIterator(
         val end = System.currentTimeMillis() - start
         numCalls += 1
         aggTimeSpent += end
-        println(s"[$numCalls, agg $aggTimeSpent ms, " +
-          s"partId ${TaskContext.get().partitionId()} " +
-          s"taskId ${TaskContext.get().taskAttemptId()}] " +
-          s"conditionalInnerJoinRowCount " +
-          s"${end} ms, " +
-          s"left: ${left.getRowCount}, right: ${right.getRowCount}")
+        //println(s"[$numCalls, agg $aggTimeSpent ms, " +
+        //  s"partId ${TaskContext.get().partitionId()} " +
+        //  s"taskId ${TaskContext.get().taskAttemptId()}] " +
+        //  s"conditionalInnerJoinRowCount " +
+        //  s"${end} ms, " +
+        //  s"left: ${left.getRowCount}, right: ${right.getRowCount}")
         res
       }
     }
@@ -291,10 +291,10 @@ class ConditionalNestedLoopJoinIterator(
     joinType match {
       case _: InnerLike =>
         val (bigger, condition, smaller) = if (left.getRowCount > right.getRowCount) {
-          println(s"Picking left, it has ${left.getRowCount}")
+          //println(s"Picking left, it has ${left.getRowCount}")
           (left, conditionFirst, right)
         } else {
-          println(s"Picking right, it has ${right.getRowCount}")
+          //println(s"Picking right, it has ${right.getRowCount}")
           (right, conditionSecond, left)
         }
         numJoinRows.map { rowCount =>
