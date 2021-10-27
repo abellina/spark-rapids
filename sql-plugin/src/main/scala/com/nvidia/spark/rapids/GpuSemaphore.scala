@@ -102,6 +102,7 @@ private final class GpuSemaphore(tasksPerGpu: Int) extends Logging with Arm {
   private val semaphore = new Semaphore(tasksPerGpu)
   // Map to track which tasks have acquired the semaphore.
   private val activeTasks = new ConcurrentHashMap[Long, MutableInt]
+  private val activeRanges = new ConcurrentHashMap[Long, NvtxRange]
 
   def acquireIfNecessary(context: TaskContext, waitMetric: GpuMetric): Unit = {
     withResource(new NvtxWithMetrics("Acquire GPU", NvtxColor.RED, waitMetric)) { _ =>
@@ -115,6 +116,8 @@ private final class GpuSemaphore(tasksPerGpu: Int) extends Logging with Arm {
         } else {
           // first time this task has been seen
           activeTasks.put(taskAttemptId, new MutableInt(1))
+          activeRanges.put(taskAttemptId,
+            new NvtxRange(s"task on cpu", NvtxColor.GREEN, NvtxType.STARTEND))
           context.addTaskCompletionListener[Unit](completeTask)
         }
         GpuDeviceManager.initializeFromTask()
@@ -130,6 +133,7 @@ private final class GpuSemaphore(tasksPerGpu: Int) extends Logging with Arm {
       if (refs != null && refs.getValue > 0) {
         if (refs.decrementAndGet() == 0) {
           logDebug(s"Task $taskAttemptId releasing GPU")
+          activeRanges.remove(taskAttemptId).close()
           semaphore.release()
         }
       }
@@ -146,6 +150,7 @@ private final class GpuSemaphore(tasksPerGpu: Int) extends Logging with Arm {
     }
     if (refs.getValue > 0) {
       logDebug(s"Task $taskAttemptId releasing GPU")
+      activeRanges.remove(taskAttemptId).close()
       semaphore.release()
     }
   }

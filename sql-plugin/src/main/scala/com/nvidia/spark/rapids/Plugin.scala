@@ -16,15 +16,14 @@
 
 package com.nvidia.spark.rapids
 
+import ai.rapids.cudf.{NvtxColor, NvtxRange}
+
 import java.util.Properties
 import java.util.concurrent.atomic.{AtomicBoolean, AtomicReference}
-
 import scala.collection.JavaConverters._
 import scala.util.Try
-
 import com.nvidia.spark.rapids.python.PythonWorkerSemaphore
-
-import org.apache.spark.{SparkConf, SparkContext}
+import org.apache.spark.{SparkConf, SparkContext, TaskContext, TaskFailedReason}
 import org.apache.spark.api.plugin.{DriverPlugin, ExecutorPlugin, PluginContext}
 import org.apache.spark.internal.Logging
 import org.apache.spark.serializer.{JavaSerializer, KryoSerializer}
@@ -36,6 +35,8 @@ import org.apache.spark.sql.execution.adaptive.{AdaptiveSparkPlanExec, QueryStag
 import org.apache.spark.sql.internal.StaticSQLConf
 import org.apache.spark.sql.rapids.GpuShuffleEnv
 import org.apache.spark.sql.util.QueryExecutionListener
+
+import java.util.concurrent.ConcurrentHashMap
 
 class PluginException(msg: String) extends RuntimeException(msg)
 
@@ -167,6 +168,26 @@ class RapidsDriverPlugin extends DriverPlugin with Logging {
  */
 class RapidsExecutorPlugin extends ExecutorPlugin with Logging {
   var rapidsShuffleHeartbeatEndpoint: RapidsShuffleHeartbeatEndpoint = null
+
+  var perTaskRange = new ConcurrentHashMap[Long, NvtxRange]()
+  def onTaskStart(): Unit = {
+    logInfo("onTaskStart")
+    val tid: Long = TaskContext.get().taskAttemptId()
+    perTaskRange.put(tid,
+      new NvtxRange(s"task", NvtxColor.PURPLE, NvtxType.STARTEND))
+  }
+
+  def onTaskSucceeded(): Unit = {
+    logInfo("onTaskSucceeded")
+    val tid: Long = TaskContext.get().taskAttemptId()
+    perTaskRange.remove(tid).close()
+  }
+
+  def onTaskFailed(failureReason: TaskFailedReason): Unit = {
+    logInfo("onTaskFailed")
+    val tid: Long = TaskContext.get().taskAttemptId()
+    perTaskRange.remove(tid).close()
+  }
 
   override def init(
       pluginContext: PluginContext,
