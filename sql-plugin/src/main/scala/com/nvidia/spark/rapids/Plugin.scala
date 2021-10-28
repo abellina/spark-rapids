@@ -169,24 +169,25 @@ class RapidsDriverPlugin extends DriverPlugin with Logging {
 class RapidsExecutorPlugin extends ExecutorPlugin with Logging {
   var rapidsShuffleHeartbeatEndpoint: RapidsShuffleHeartbeatEndpoint = null
 
-  var perTaskRange = new ConcurrentHashMap[Long, NvtxRange]()
-  def onTaskStart(): Unit = {
+  var perThreadRange = new ThreadLocal[NvtxRange]()
+  override def onTaskStart(): Unit = {
     logInfo("onTaskStart")
     val tid: Long = TaskContext.get().taskAttemptId()
-    perTaskRange.put(tid,
-      new NvtxRange(s"task", NvtxColor.PURPLE, NvtxType.STARTEND))
+    perThreadRange.set(
+      new NvtxRange(s"task",
+        NvtxColor.PURPLE, NvtxRange.NvtxRangeType.STARTEND))
   }
 
-  def onTaskSucceeded(): Unit = {
+  override def onTaskSucceeded(): Unit = {
     logInfo("onTaskSucceeded")
-    val tid: Long = TaskContext.get().taskAttemptId()
-    perTaskRange.remove(tid).close()
+    perThreadRange.get().close()
+    perThreadRange.remove()
   }
 
-  def onTaskFailed(failureReason: TaskFailedReason): Unit = {
+  override def onTaskFailed(failureReason: TaskFailedReason): Unit = {
     logInfo("onTaskFailed")
-    val tid: Long = TaskContext.get().taskAttemptId()
-    perTaskRange.remove(tid).close()
+    perThreadRange.get().close()
+    perThreadRange.remove()
   }
 
   override def init(

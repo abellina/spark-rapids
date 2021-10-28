@@ -116,10 +116,12 @@ private final class GpuSemaphore(tasksPerGpu: Int) extends Logging with Arm {
         } else {
           // first time this task has been seen
           activeTasks.put(taskAttemptId, new MutableInt(1))
-          activeRanges.put(taskAttemptId,
-            new NvtxRange(s"task on cpu", NvtxColor.GREEN, NvtxType.STARTEND))
           context.addTaskCompletionListener[Unit](completeTask)
         }
+        activeRanges.put(taskAttemptId,
+          new NvtxRange(s"task on gpu",
+            NvtxColor.GREEN,
+            NvtxRange.NvtxRangeType.STARTEND))
         GpuDeviceManager.initializeFromTask()
       }
     }
@@ -133,7 +135,10 @@ private final class GpuSemaphore(tasksPerGpu: Int) extends Logging with Arm {
       if (refs != null && refs.getValue > 0) {
         if (refs.decrementAndGet() == 0) {
           logDebug(s"Task $taskAttemptId releasing GPU")
-          activeRanges.remove(taskAttemptId).close()
+          val range = activeRanges.remove(taskAttemptId)
+          if (range != null) {
+            range.close()
+          }
           semaphore.release()
         }
       }
@@ -150,7 +155,10 @@ private final class GpuSemaphore(tasksPerGpu: Int) extends Logging with Arm {
     }
     if (refs.getValue > 0) {
       logDebug(s"Task $taskAttemptId releasing GPU")
-      activeRanges.remove(taskAttemptId).close()
+      val range = activeRanges.remove(taskAttemptId)
+      if (range != null) {
+        range.close()
+      }
       semaphore.release()
     }
   }
