@@ -133,6 +133,7 @@ object GpuDeviceManager extends Logging {
     // If Spark didn't provide the address we just use the default GPU.
     val addr = initializeGpu(resources, conf)
     initializeMemory(addr)
+    Cuda.profilerStart()
   }
 
   def shutdown(): Unit = synchronized {
@@ -142,6 +143,7 @@ object GpuDeviceManager extends Logging {
     GpuShuffleEnv.shutdown()
     Rmm.shutdown()
     singletonMemoryInitialized = Uninitialized
+    Cuda.profilerStop()
   }
 
   def getResourcesFromTaskContext: Map[String, ResourceInformation] = {
