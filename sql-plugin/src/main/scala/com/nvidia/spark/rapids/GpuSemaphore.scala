@@ -111,7 +111,7 @@ private final class GpuSemaphore(tasksPerGpu: Int) extends Logging with Arm {
       refCount.increment()
     }
     def unacquire(): Boolean = {
-      val res = refCount.decrementAndGet() == 0
+      val res = refCount.decrementAndGet() <= 0
       if (res && range != null) {
         range.close()
         range = null
@@ -165,6 +165,7 @@ private final class GpuSemaphore(tasksPerGpu: Int) extends Logging with Arm {
     if (refs.isAcquired) {
       logDebug(s"Task $taskAttemptId releasing GPU")
       semaphore.release()
+      refs.unacquire()
     }
   }
 
