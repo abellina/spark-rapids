@@ -16,15 +16,14 @@
 
 package com.nvidia.spark.rapids
 
+import ai.rapids.cudf.{NvtxColor, NvtxUniqueRange}
+
 import java.util.Properties
 import java.util.concurrent.atomic.{AtomicBoolean, AtomicReference}
-
 import scala.collection.JavaConverters._
 import scala.util.Try
-
 import com.nvidia.spark.rapids.python.PythonWorkerSemaphore
-
-import org.apache.spark.{SparkConf, SparkContext}
+import org.apache.spark.{SparkConf, SparkContext, TaskFailedReason}
 import org.apache.spark.api.plugin.{DriverPlugin, ExecutorPlugin, PluginContext}
 import org.apache.spark.internal.Logging
 import org.apache.spark.serializer.{JavaSerializer, KryoSerializer}
@@ -167,6 +166,26 @@ class RapidsDriverPlugin extends DriverPlugin with Logging {
  */
 class RapidsExecutorPlugin extends ExecutorPlugin with Logging {
   var rapidsShuffleHeartbeatEndpoint: RapidsShuffleHeartbeatEndpoint = null
+  val tl = new ThreadLocal[NvtxUniqueRange]
+  override def onTaskStart(): Unit = {
+    if (tl.get() == null) {
+      tl.set(new NvtxUniqueRange("task_cpu", NvtxColor.BLUE))
+    }
+  }
+  override def onTaskFailed(failureReason: TaskFailedReason): Unit = {
+    val range = tl.get()
+    if (range != null) {
+      tl.remove()
+      range.close()
+    }
+  }
+  override def onTaskSucceeded(): Unit = {
+    val range = tl.get()
+    if (range != null) {
+      tl.remove()
+      range.close()
+    }
+  }
 
   override def init(
       pluginContext: PluginContext,
