@@ -16,10 +16,12 @@
 
 package com.nvidia.spark.rapids
 
-import ai.rapids.cudf.{NvtxColor, NvtxUniqueRange}
+import java.util
 
+import ai.rapids.cudf.{NvtxColor, NvtxUniqueRange}
 import java.util.Properties
 import java.util.concurrent.atomic.{AtomicBoolean, AtomicReference}
+
 import scala.collection.JavaConverters._
 import scala.util.Try
 import com.nvidia.spark.rapids.python.PythonWorkerSemaphore
@@ -154,8 +156,7 @@ class RapidsDriverPlugin extends DriverPlugin with Logging {
         rapidsShuffleHeartbeatManager =
           new RapidsShuffleHeartbeatManager(
             conf.shuffleTransportEarlyStartHeartbeatInterval,
-            conf.shuffleTransportEarlyStartHeartbeatTimeout)
-      }
+            conf.shuffleTransportEarlyStartHeartbeatTimeout) }
     }
     conf.rapidsConfMap
   }
@@ -167,6 +168,27 @@ class RapidsDriverPlugin extends DriverPlugin with Logging {
 class RapidsExecutorPlugin extends ExecutorPlugin with Logging {
   var rapidsShuffleHeartbeatEndpoint: RapidsShuffleHeartbeatEndpoint = null
   val tl = new ThreadLocal[NvtxUniqueRange]
+  val ranges = new ThreadLocal[util.HashMap[String, NvtxUniqueRange]]
+
+  override def onEventStarted(evt: String): Unit = {
+    val nvtxColorIx: Int = Math.abs(evt.hashCode % NvtxColor.values().length)
+    if (ranges.get() == null) {
+      ranges.set(new util.HashMap[String, NvtxUniqueRange]())
+    }
+    if (ranges.get().containsKey(evt)) {
+      throw new IllegalStateException(s"have range active for ${evt}")
+    }
+    ranges.get().put(evt,
+      new NvtxUniqueRange(evt, NvtxColor.values()(nvtxColorIx)))
+  }
+
+  override def onEventStopped(evt: String): Unit = {
+    if (!ranges.get().containsKey(evt)) {
+      throw new IllegalStateException(s"did NOT have range active for ${evt}")
+    }
+    ranges.get().remove(evt).close()
+  }
+
   override def onTaskStart(): Unit = {
     if (tl.get() == null) {
       tl.set(new NvtxUniqueRange("task_cpu", NvtxColor.BLUE))

@@ -179,20 +179,24 @@ abstract class MultiFilePartitionReaderFactoryBase(
   def getFileFormatShortName: String
 
   override def createColumnarReader(partition: InputPartition): PartitionReader[ColumnarBatch] = {
-    assert(partition.isInstanceOf[FilePartition])
-    val filePartition = partition.asInstanceOf[FilePartition]
-    val files = filePartition.files
-    val filePaths = files.map(_.filePath)
-    val conf = broadcastedConf.value.value
+    withResource(new NvtxRange("GpuMultiFileReader.createColumnarReader", NvtxColor.RED)) { _ =>
+      assert(partition.isInstanceOf[FilePartition])
+      val filePartition = partition.asInstanceOf[FilePartition]
+      val files = filePartition.files
+      val filePaths = files.map(_.filePath)
+      val conf = withResource(new NvtxRange("waiting for broadcastedConf", NvtxColor.YELLOW)) { _ =>
+        broadcastedConf.value.value
+      }
 
-    if (!canUseCoalesceFilesReader || (canUseMultiThreadReader && arePathsInCloud(filePaths))) {
-      logInfo("Using the multi-threaded multi-file " + getFileFormatShortName + " reader, " +
-        s"files: ${filePaths.mkString(",")} task attemptid: ${TaskContext.get.taskAttemptId()}")
-      buildBaseColumnarReaderForCloud(files, conf)
-    } else {
-      logInfo("Using the coalesce multi-file " + getFileFormatShortName + " reader, files: " +
-        s"${filePaths.mkString(",")} task attemptid: ${TaskContext.get.taskAttemptId()}")
-      buildBaseColumnarReaderForCoalescing(files, conf)
+      if (!canUseCoalesceFilesReader || (canUseMultiThreadReader && arePathsInCloud(filePaths))) {
+        logInfo("Using the multi-threaded multi-file " + getFileFormatShortName + " reader, " +
+          s"files: ${filePaths.mkString(",")} task attemptid: ${TaskContext.get.taskAttemptId()}")
+        buildBaseColumnarReaderForCloud(files, conf)
+      } else {
+        logInfo("Using the coalesce multi-file " + getFileFormatShortName + " reader, files: " +
+          s"${filePaths.mkString(",")} task attemptid: ${TaskContext.get.taskAttemptId()}")
+        buildBaseColumnarReaderForCoalescing(files, conf)
+      }
     }
   }
 

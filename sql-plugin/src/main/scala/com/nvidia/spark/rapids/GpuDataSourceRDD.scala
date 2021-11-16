@@ -16,8 +16,8 @@
 
 package com.nvidia.spark.rapids
 
+import ai.rapids.cudf.{NvtxColor, NvtxUniqueRange}
 import com.nvidia.spark.rapids.shims.v2.ShimDataSourceRDD
-
 import org.apache.spark.{InterruptibleIterator, Partition, SparkContext, SparkException, TaskContext}
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.connector.read.{InputPartition, PartitionReader, PartitionReaderFactory}
@@ -45,11 +45,20 @@ class GpuDataSourceRDD(
 
   override def compute(split: Partition, context: TaskContext): Iterator[InternalRow] = {
     val inputPartition = castPartition(split).inputPartition
+    val r1 = new NvtxUniqueRange("createColumnarReader", NvtxColor.RED)
     val batchReader = partitionReaderFactory.createColumnarReader(inputPartition)
+    r1.close()
+    val r2 = new NvtxUniqueRange("new MetricsBatchIter", NvtxColor.ORANGE)
     val iter = new MetricsBatchIterator(new PartitionIterator[ColumnarBatch](batchReader))
+    r2.close()
+    val r3 = new NvtxUniqueRange("addTaskCompletionListener", NvtxColor.GREEN)
     context.addTaskCompletionListener[Unit](_ => batchReader.close())
+    r3.close()
     // TODO: SPARK-25083 remove the type erasure hack in data source scan
-    new InterruptibleIterator(context, iter.asInstanceOf[Iterator[InternalRow]])
+    val r4 = new NvtxUniqueRange("new InterruptibleIter", NvtxColor.GREEN)
+    val it = new InterruptibleIterator(context, iter.asInstanceOf[Iterator[InternalRow]])
+    r4.close()
+    it
   }
 }
 

@@ -443,22 +443,30 @@ case class GpuParquetMultiFilePartitionReaderFactory(
   override def buildBaseColumnarReaderForCoalescing(
       files: Array[PartitionedFile],
       conf: Configuration): PartitionReader[ColumnarBatch] = {
-    val clippedBlocks = ArrayBuffer[ParquetSingleDataBlockMeta]()
-    files.map { file =>
-      val singleFileInfo = filterHandler.filterBlocks(file, conf, filters, readDataSchema)
-      clippedBlocks ++= singleFileInfo.blocks.map(block =>
-        ParquetSingleDataBlockMeta(
-          singleFileInfo.filePath,
-          ParquetDataBlock(block),
-          file.partitionValues,
-          ParquetSchemaWrapper(singleFileInfo.schema),
-          ParquetExtraInfo(singleFileInfo.isCorrectedRebaseMode,
-            singleFileInfo.isCorrectedInt96RebaseMode, singleFileInfo.hasInt96Timestamps)))
+    withResource(new NvtxRange("buildBaseColumnarReaderForCoalescing", NvtxColor.PURPLE)) { _ =>
+      val clippedBlocks = ArrayBuffer[ParquetSingleDataBlockMeta]()
+      files.map { file =>
+        val singleFileInfo = withResource(new NvtxRange("filterBlocks", NvtxColor.WHITE)) { _ =>
+          filterHandler.filterBlocks(file, conf, filters, readDataSchema)
+        }
+        withResource(new NvtxRange("ParquetSingleDataBlockMeta", NvtxColor.GREEN)) { _ =>
+          clippedBlocks ++= singleFileInfo.blocks.map(block =>
+            ParquetSingleDataBlockMeta(
+              singleFileInfo.filePath,
+              ParquetDataBlock(block),
+              file.partitionValues,
+              ParquetSchemaWrapper(singleFileInfo.schema),
+              ParquetExtraInfo(singleFileInfo.isCorrectedRebaseMode,
+                singleFileInfo.isCorrectedInt96RebaseMode, singleFileInfo.hasInt96Timestamps)))
+        }
+      }
+      withResource(new NvtxRange("new MultiFileParquetPartitionReader", NvtxColor.WHITE)) { _ =>
+        new MultiFileParquetPartitionReader(conf, files, clippedBlocks,
+          isCaseSensitive, readDataSchema, debugDumpPrefix,
+          maxReadBatchSizeRows, maxReadBatchSizeBytes, metrics,
+          partitionSchema, numThreads)
+      }
     }
-    new MultiFileParquetPartitionReader(conf, files, clippedBlocks,
-      isCaseSensitive, readDataSchema, debugDumpPrefix,
-      maxReadBatchSizeRows, maxReadBatchSizeBytes, metrics,
-      partitionSchema, numThreads)
   }
 
   /**

@@ -21,12 +21,11 @@ import java.nio.ByteBuffer
 
 import scala.collection.mutable.ArrayBuffer
 import scala.reflect.ClassTag
-
 import ai.rapids.cudf.{HostColumnVector, HostMemoryBuffer, JCudfSerialization, NvtxColor, NvtxRange}
 import ai.rapids.cudf.JCudfSerialization.SerializedTableHeader
 import com.nvidia.spark.rapids.RapidsPluginImplicits._
-
 import org.apache.spark.TaskContext
+import org.apache.spark.internal.plugin.PluginContainer
 import org.apache.spark.serializer.{DeserializationStream, SerializationStream, Serializer, SerializerInstance}
 import org.apache.spark.sql.types.NullType
 import org.apache.spark.sql.vectorized.ColumnarBatch
@@ -55,7 +54,6 @@ class GpuColumnarBatchSerializer(dataSize: GpuMetric)
 }
 
 private class GpuColumnarBatchSerializerInstance(dataSize: GpuMetric) extends SerializerInstance {
-
   override def serializeStream(out: OutputStream): SerializationStream = new SerializationStream {
     private[this] val dOut: DataOutputStream =
       new DataOutputStream(new BufferedOutputStream(out))
@@ -227,6 +225,9 @@ private class GpuColumnarBatchSerializerInstance(dataSize: GpuMetric) extends Se
   override def deserialize[T: ClassTag](bytes: ByteBuffer): T =
     throw new UnsupportedOperationException
   override def deserialize[T: ClassTag](bytes: ByteBuffer, loader: ClassLoader): T =
+    throw new UnsupportedOperationException
+  override def deserialize[T: ClassTag](bytes: ByteBuffer, loader: ClassLoader,
+                                        ctx: Option[PluginContainer]): T =
     throw new UnsupportedOperationException
 }
 
