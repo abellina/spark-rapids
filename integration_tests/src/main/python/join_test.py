@@ -336,6 +336,39 @@ def test_right_broadcast_nested_loop_join_with_ast_condition(data_gen, join_type
     conf = copy_and_update(allow_negative_scale_of_decimal_conf, {'spark.rapids.sql.batchSizeBytes': batch_size})
     assert_gpu_and_cpu_are_equal_collect(do_join, conf=conf)
 
+
+# local sort because of https://github.com/NVIDIA/spark-rapids/issues/84
+@ignore_order(local=True)
+@pytest.mark.parametrize('join_type', ['Left', 'Inner', 'LeftSemi', 'LeftAnti', 'Cross'], ids=idfn)
+@pytest.mark.parametrize('batch_size', ['100', '1g'], ids=idfn) # set the batch size so we can test multiple stream batches
+def test_right_broadcast_nested_loop_join_without_condition_empty(join_type, batch_size):
+    def do_join(spark):
+        left, right = create_df(spark, long_gen, 50, 0)
+        # This test is impacted by https://github.com/NVIDIA/spark-rapids/issues/294
+        # if the sizes are large enough to have both 0.0 and -0.0 show up 500 and 250
+        # but these take a long time to verify so we run with smaller numbers by default
+        # that do not expose the error
+        return left.join(broadcast(right), how=join_type)
+    conf = copy_and_update(allow_negative_scale_of_decimal_conf, {'spark.rapids.sql.batchSizeBytes': batch_size})
+    assert_gpu_and_cpu_are_equal_collect(do_join, conf=conf)
+
+
+# local sort because of https://github.com/NVIDIA/spark-rapids/issues/84
+# After 3.1.0 is the min spark version we can drop this
+@ignore_order(local=True)
+@pytest.mark.parametrize('join_type', ['Left', 'Inner', 'LeftSemi', 'LeftAnti', 'Cross'], ids=idfn)
+@pytest.mark.parametrize('batch_size', ['100', '1g'], ids=idfn) # set the batch size so we can test multiple stream batches
+def test_right_broadcast_nested_loop_join_with_ast_condition_empty(join_type, batch_size):
+    def do_join(spark):
+        left, right = create_df(spark, long_gen, 50, 0)
+        # This test is impacted by https://github.com/NVIDIA/spark-rapids/issues/294
+        # if the sizes are large enough to have both 0.0 and -0.0 show up 500 and 250
+        # but these take a long time to verify so we run with smaller numbers by default
+        # that do not expose the error
+        return left.join(broadcast(right), (left.b >= right.r_b), join_type)
+    conf = copy_and_update(allow_negative_scale_of_decimal_conf, {'spark.rapids.sql.batchSizeBytes': batch_size})
+    assert_gpu_and_cpu_are_equal_collect(do_join, conf=conf)
+
 # local sort because of https://github.com/NVIDIA/spark-rapids/issues/84
 # After 3.1.0 is the min spark version we can drop this
 @ignore_order(local=True)
