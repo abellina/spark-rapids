@@ -17,7 +17,7 @@
 package com.nvidia.spark.rapids.shims.v2
 
 import com.nvidia.spark.rapids._
-
+import org.apache.spark.broadcast.Broadcast
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.expressions.Expression
