@@ -30,6 +30,12 @@ class GpuShuffleEnv(rapidsConf: RapidsConf) extends Logging {
   private lazy val conf = SparkEnv.get.conf
 
   private lazy val isRapidsShuffleConfigured: Boolean = {
+    logInfo(s"what is? ${GpuShuffleEnv.RAPIDS_SHUFFLE_CLASS}")
+    if (conf.contains("spark.shuffle.manager")) {
+      logInfo(s"what is the conf? ${conf.get("spark.shuffle.manager")}")
+    } else {
+      logInfo("shuffle manager not configured")
+    }
     conf.contains("spark.shuffle.manager") &&
       conf.get("spark.shuffle.manager") == GpuShuffleEnv.RAPIDS_SHUFFLE_CLASS
   }
