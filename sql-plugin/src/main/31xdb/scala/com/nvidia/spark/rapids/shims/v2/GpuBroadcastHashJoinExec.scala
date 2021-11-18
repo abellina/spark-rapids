@@ -17,7 +17,7 @@
 package com.nvidia.spark.rapids.shims.v2
 
 import com.nvidia.spark.rapids._
-
+import org.apache.spark.broadcast.Broadcast
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.expressions.Expression
@@ -148,16 +148,22 @@ case class GpuBroadcastHashJoinExec(
 
     val targetSize = RapidsConf.GPU_BATCH_SIZE_BYTES.get(conf)
 
-    val broadcastRelation = broadcastExchange
-        .executeColumnarBroadcast[SerializeConcatHostBuffersDeserializeBatch]()
+    val broadcastRelation = broadcastExchange.executeColumnarBroadcast[Any]()
 
     val rdd = streamedPlan.executeColumnar()
     rdd.mapPartitions { it =>
       val stIt = new CollectTimeIterator("broadcast join stream", it, streamTime)
-      val builtBatch = broadcastRelation.value.batch
+      val builtBatch =
+        broadcastRelation match {
+          case broadcastBatch: Broadcast[SerializeConcatHostBuffersDeserializeBatch] =>
+            broadcastBatch.value.batch
+          case emptyHashedRelation: Broadcast[EmptyHashedRelation] =>
+            new ColumnarBatch(Array.empty, 0)
+        }
       GpuColumnVector.extractBases(builtBatch).foreach(_.noWarnLeakExpected())
       doJoin(builtBatch, stIt, targetSize, spillCallback,
         numOutputRows, joinOutputRows, numOutputBatches, opTime, joinTime)
+      }
     }
   }
 }
