@@ -11,6 +11,7 @@ import java.util.concurrent.atomic.AtomicLong
 import scala.collection.mutable.ArrayBuffer
 
 object IOSched extends Logging with Arm {
+  type StreamedResult = (HostMemoryBuffer, Long, Long, Seq[DataBlockBase])
   type WriteHeaderFn = (HostMemoryBuffer => Long)
   type StreamerFn = (HostMemoryBuffer, Long) => (Long, Long, ArrayBuffer[DataBlockBase])
   type CombinerFn =
@@ -23,7 +24,7 @@ object IOSched extends Logging with Arm {
   case class Task(myIx: Long,
                   initTotalSize: Long,
                   writeHeaderFn: WriteHeaderFn,
-                  stramerFn: StreamerFn,
+                  streamerFn: StreamerFn,
                   combiner: CombinerFn,
                   readToTableFn: ReadToTableFn,
                   clippedSchema: SchemaBase,
@@ -50,10 +51,25 @@ object IOSched extends Logging with Arm {
     while (true) {
       val toCompute = new ArrayBuffer[Task]()
       var initialTotalSize = 0L
-      while (q.size() > 0 && initialTotalSize < 1L*1024*1024*1024) {
-        val task = q.take()
-        initialTotalSize += task.initTotalSize
-        toCompute.append(task)
+      var schema: SchemaBase = null
+      var schemasSame: Boolean = true
+      while (q.size() > 0 &&
+        initialTotalSize < 1L*1024*1024*1024 &&
+        schemasSame) {
+        logInfo("Dequeing...")
+        if (schema != null) {
+          logInfo("Dequeing: schema not null")
+          schemasSame = q.peek().clippedSchema == schema
+          logInfo(s"Dequeing: schema not null:: same? ${schemasSame}")
+        }
+        if (schemasSame) {
+          logInfo(s"Take it!")
+          val task = q.take()
+          initialTotalSize += task.initTotalSize
+          toCompute.append(task)
+          schema = task.clippedSchema
+          logInfo(s"More? ${q.size()}")
+        }
       }
       if (toCompute.nonEmpty) {
         val hmb = HostMemoryBuffer.allocate(initialTotalSize)
@@ -64,12 +80,16 @@ object IOSched extends Logging with Arm {
         val rowCountsPerTask = new ArrayBuffer[Int]()
         var runningSumOfRows = 0
         for (res <- toCompute) {
-          val (bufferSize, newOffset, outBlocks) = res.stramerFn(hmb, offset)
+          val (bufferSize, newOffset, outBlocks) = res.streamerFn(hmb, offset)
           offset = newOffset
           allOutBlocks ++= outBlocks
           wholeBufferSize += bufferSize
           val rowCount = outBlocks.map(_.getRowCount).sum.toInt
-          logInfo(s"Working! on ${res} blocks = ${outBlocks.size} rowCount ${rowCount}")
+          logInfo(s"Working! on ${res} " +
+            s"offset so far = ${offset} " +
+            s"newOffset = ${newOffset} " +
+            s"blocks = ${outBlocks.size} " +
+            s"rowCount = ${rowCount}")
           runningSumOfRows += rowCount
           rowCountsPerTask.append(runningSumOfRows)
         }
