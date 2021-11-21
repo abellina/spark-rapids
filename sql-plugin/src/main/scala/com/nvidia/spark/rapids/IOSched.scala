@@ -51,6 +51,7 @@ object IOSched extends Logging with Arm {
   }
 
   val tp = Executors.newSingleThreadExecutor()
+  val tpWaitForIo = Executors.newSingleThreadExecutor()
   val tp2 = Executors.newFixedThreadPool(20)
 
   tp.execute(() => {
@@ -83,7 +84,6 @@ object IOSched extends Logging with Arm {
           toCompute.head.writeHeaderFn(hmb)
         }
         var offset = headerOffset
-        //val allOutBlocks = new ArrayBuffer[DataBlockBase]()
         val rowCountsPerTask = new ArrayBuffer[Int]()
         var runningSumOfRows = 0
         val offsets: Seq[Long] = toCompute.map { res =>
@@ -105,37 +105,39 @@ object IOSched extends Logging with Arm {
           rowCountsPerTask.append(runningSumOfRows)
         }
 
-        val allOutBlocks: Seq[DataBlockBase] =
-          futures.flatMap(f => f.get())
+        tpWaitForIo.execute(() => {
+          val allOutBlocks: Seq[DataBlockBase] =
+            futures.flatMap(f => f.get())
 
-        // Fourth, calculate the final buffer size
-        val wholeBufferSize = toCompute.head.finalFn(offset, allOutBlocks, schema)
+          // Fourth, calculate the final buffer size
+          val wholeBufferSize = toCompute.head.finalFn(offset, allOutBlocks, schema)
 
-        rowCountsPerTask.remove(rowCountsPerTask.size-1)
-        logInfo(s"Built bigger file with whole size = ${wholeBufferSize}," +
-          s" init size ${initialTotalSize}, splits ${rowCountsPerTask}, " +
-          s"blocks ${allOutBlocks.size}, rowCount ${runningSumOfRows}")
-        val (dataBuffer, dataSize) = toCompute.head.combiner(
-          hmb, allOutBlocks, toCompute.head.clippedSchema,
-          wholeBufferSize, initialTotalSize, offset)
+          rowCountsPerTask.remove(rowCountsPerTask.size-1)
+          logInfo(s"Built bigger file with whole size = ${wholeBufferSize}," +
+            s" init size ${initialTotalSize}, splits ${rowCountsPerTask}, " +
+            s"blocks ${allOutBlocks.size}, rowCount ${runningSumOfRows}")
+          val (dataBuffer, dataSize) = toCompute.head.combiner(
+            hmb, allOutBlocks, toCompute.head.clippedSchema,
+            wholeBufferSize, initialTotalSize, offset)
 
-        withResource(dataBuffer) { _ =>
-          val tbl = toCompute.head.readToTableFn(dataBuffer, dataSize,
-            toCompute.head.clippedSchema, toCompute.head.extraInfo)
-          withResource(tbl) { _ =>
-            val tbls: Array[ContiguousTable] = tbl.contiguousSplit(rowCountsPerTask: _*)
-            logInfo(s"Got slices ${tbls.length} have tasks waiting ${toCompute.length}. Counts " +
-              s"${rowCountsPerTask}")
-            var i = 0
-            for (res <- toCompute) {
-              r.put(res.myIx, tbls(i))
-              i += 1
+          withResource(dataBuffer) { _ =>
+            val tbl = toCompute.head.readToTableFn(dataBuffer, dataSize,
+              toCompute.head.clippedSchema, toCompute.head.extraInfo)
+            withResource(tbl) { _ =>
+              val tbls: Array[ContiguousTable] = tbl.contiguousSplit(rowCountsPerTask: _*)
+              logInfo(s"Got slices ${tbls.length} have tasks waiting ${toCompute.length}. Counts " +
+                s"${rowCountsPerTask}")
+              var i = 0
+              for (res <- toCompute) {
+                r.put(res.myIx, tbls(i))
+                i += 1
+              }
             }
           }
-        }
-      }
-      bMonitor.synchronized {
-        bMonitor.notifyAll()
+          bMonitor.synchronized {
+            bMonitor.notifyAll()
+          }
+        })
       }
     }
   })
