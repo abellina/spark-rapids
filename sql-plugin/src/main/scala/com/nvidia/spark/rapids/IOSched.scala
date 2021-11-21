@@ -35,6 +35,7 @@ object IOSched extends Logging with Arm {
                   extraInfo: ExtraInfo)
 
   val q = new LinkedBlockingQueue[Task]()
+  val b = new LinkedBlockingQueue[() => Unit]()
   val r = new ConcurrentHashMap[Long, ContiguousTable]()
   var ix = new AtomicLong(0L)
   val bMonitor = new Object
@@ -82,21 +83,20 @@ object IOSched extends Logging with Arm {
           toCompute.head.writeHeaderFn(hmb)
         }
         var offset = headerOffset
+        //val allOutBlocks = new ArrayBuffer[DataBlockBase]()
         val rowCountsPerTask = new ArrayBuffer[Int]()
         var runningSumOfRows = 0
         val offsets: Seq[Long] = toCompute.map { res =>
           res.filesAndBlocks.values.toSeq.flatten.map(_.getBlockSize).sum
         }
-
         val futures = new ArrayBuffer[Future[Seq[DataBlockBase]]]()
         for ((res, myOffset) <- toCompute.zip(offsets)) {
+          val theOffset = offset
           futures += tp2.submit(() => {
-            val (_, outBlocks: Seq[DataBlockBase]) = res.streamerFn(hmb, offset)
-            outBlocks.toSeq
+            val (_, outBlocks: Seq[DataBlockBase]) = res.streamerFn(hmb, theOffset)
+            outBlocks
           })
           offset += myOffset
-        }
-        for (res <- toCompute) {
           val rowCount = res.filesAndBlocks.values.flatten.map(_.getRowCount).sum.toInt
           logInfo(s"Working! on ${res} " +
             s"offset so far = ${offset} " +
