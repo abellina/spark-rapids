@@ -770,19 +770,19 @@ abstract class MultiFileCoalescingPartitionReaderBase(
       filesAndBlocks.getOrElseUpdate(path, new ArrayBuffer[DataBlockBase]) += block
     }
 
-    val blockStreamerFn: (HostMemoryBuffer, Long) => (Long, Long, ArrayBuffer[DataBlockBase]) = {
+    val blockStreamerFn: (HostMemoryBuffer, Long) => (Long, ArrayBuffer[DataBlockBase]) = {
       (hmb: HostMemoryBuffer, headerOffset: Long) => {
-        val (bufferSize, footerOffset, outBlocks) =
+        val (footerOffset, outBlocks) =
           blockStreamer(hmb, headerOffset, filesAndBlocks, clippedSchema)
-        (bufferSize, footerOffset, outBlocks)
+        (footerOffset, outBlocks)
       }
     }
 
     val blockCombinerFn:
-      (HostMemoryBuffer, ArrayBuffer[DataBlockBase], SchemaBase, Long, Long, Long)
+      (HostMemoryBuffer, Seq[DataBlockBase], SchemaBase, Long, Long, Long)
         => (HostMemoryBuffer, Long) = {
       (hmb: HostMemoryBuffer,
-       outBlocks: ArrayBuffer[DataBlockBase],
+       outBlocks: Seq[DataBlockBase],
        clippedSchema: SchemaBase,
        bufferSize: Long,
        initTotalSize: Long,
@@ -804,9 +804,11 @@ abstract class MultiFileCoalescingPartitionReaderBase(
 
     // First, estimate the output file size for the initial allocating.
     //   the estimated size should be >= size of HEAD + Blocks + FOOTER
+    val getStreamOffsetFn = {} // returns the next offset given the blocks for this stream
     val initTotalSize = calculateEstimatedBlocksOutputSize(filesAndBlocks, clippedSchema)
     val table =
       IOSched.addReadTask(
+        filesAndBlocks,
         clippedSchema,
         initTotalSize,
         extraInfo,
@@ -814,6 +816,7 @@ abstract class MultiFileCoalescingPartitionReaderBase(
         blockStreamerFn,
         blockCombinerFn,
         readerToTableFn,
+        calculateFinalBlocksOutputSize,
         readDataSchema,
         currentChunkedBlocks)
 
@@ -821,10 +824,11 @@ abstract class MultiFileCoalescingPartitionReaderBase(
     table
   }
 
-  def blockStreamer(hmb: HostMemoryBuffer, headerOffset: Long,
-                   filesAndBlocks: LinkedHashMap[Path, ArrayBuffer[DataBlockBase]],
-                   clippedSchema: SchemaBase):
-  (Long, Long, ArrayBuffer[DataBlockBase]) = {
+  def blockStreamer(hmb: HostMemoryBuffer,
+                    headerOffset: Long,
+                    filesAndBlocks: LinkedHashMap[Path, ArrayBuffer[DataBlockBase]],
+                    clippedSchema: SchemaBase):
+  (Long, ArrayBuffer[DataBlockBase]) = {
     withResource(new NvtxWithMetrics("Buffer file split", NvtxColor.YELLOW,
       metrics("bufferTime"))) { _ =>
       val tasks = new java.util.ArrayList[Future[(Seq[DataBlockBase], Long)]]()
@@ -849,11 +853,7 @@ abstract class MultiFileCoalescingPartitionReaderBase(
           TrampolineUtil.incBytesRead(inputMetrics, bytesRead)
         }
 
-        // Fourth, calculate the final buffer size
-        val finalBufferSize = calculateFinalBlocksOutputSize(offset, allOutputBlocks,
-          clippedSchema)
-
-        (finalBufferSize, offset, allOutputBlocks)
+        (offset, allOutputBlocks)
       }
     }
   }

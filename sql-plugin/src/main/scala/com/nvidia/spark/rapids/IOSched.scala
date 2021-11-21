@@ -8,25 +8,29 @@ import org.apache.spark.sql.types.StructType
 
 import java.util.concurrent.{ConcurrentHashMap, Executors, LinkedBlockingQueue}
 import java.util.concurrent.atomic.AtomicLong
+import scala.collection.mutable
 import scala.collection.mutable.ArrayBuffer
+import java.util.concurrent.Future
 
 object IOSched extends Logging with Arm {
   type StreamedResult = (HostMemoryBuffer, Long, Long, Seq[DataBlockBase])
   type WriteHeaderFn = (HostMemoryBuffer => Long)
-  type StreamerFn = (HostMemoryBuffer, Long) => (Long, Long, ArrayBuffer[DataBlockBase])
+  type StreamerFn = (HostMemoryBuffer, Long) => (Long, ArrayBuffer[DataBlockBase])
   type CombinerFn =
-    (HostMemoryBuffer, ArrayBuffer[DataBlockBase], SchemaBase, Long, Long, Long)
+    (HostMemoryBuffer, Seq[DataBlockBase], SchemaBase, Long, Long, Long)
     => (HostMemoryBuffer, Long)
 
   type ReadToTableFn = (HostMemoryBuffer, Long, SchemaBase, ExtraInfo) =>
     Table
 
-  case class Task(myIx: Long,
+  case class Task(filesAndBlocks: mutable.LinkedHashMap[Path, ArrayBuffer[DataBlockBase]],
+                  myIx: Long,
                   initTotalSize: Long,
                   writeHeaderFn: WriteHeaderFn,
                   streamerFn: StreamerFn,
                   combiner: CombinerFn,
                   readToTableFn: ReadToTableFn,
+                  finalFn: ((Long, Seq[DataBlockBase], SchemaBase) => Long),
                   clippedSchema: SchemaBase,
                   extraInfo: ExtraInfo)
 
@@ -46,6 +50,7 @@ object IOSched extends Logging with Arm {
   }
 
   val tp = Executors.newSingleThreadExecutor()
+  val tp2 = Executors.newFixedThreadPool(20)
 
   tp.execute(() => {
     while (true) {
@@ -73,26 +78,39 @@ object IOSched extends Logging with Arm {
       }
       if (toCompute.nonEmpty) {
         val hmb = HostMemoryBuffer.allocate(initialTotalSize)
-        var offset = toCompute.head.writeHeaderFn(hmb)
-        val allOutBlocks = new ArrayBuffer[DataBlockBase]()
-        var wholeBufferSize = 0L
-
+        val headerOffset = {
+          toCompute.head.writeHeaderFn(hmb)
+        }
+        var offset = headerOffset
         val rowCountsPerTask = new ArrayBuffer[Int]()
         var runningSumOfRows = 0
+        val offsets: Seq[Long] = toCompute.map { res =>
+          res.filesAndBlocks.values.toSeq.flatten.map(_.getBlockSize).sum
+        }
+
+        val futures = new ArrayBuffer[Future[Seq[DataBlockBase]]]()
+        for ((res, myOffset) <- toCompute.zip(offsets)) {
+          futures += tp2.submit(() => {
+            val (_, outBlocks: Seq[DataBlockBase]) = res.streamerFn(hmb, offset)
+            outBlocks.toSeq
+          })
+          offset += myOffset
+        }
         for (res <- toCompute) {
-          val (bufferSize, newOffset, outBlocks) = res.streamerFn(hmb, offset)
-          offset = newOffset
-          allOutBlocks ++= outBlocks
-          wholeBufferSize += bufferSize
-          val rowCount = outBlocks.map(_.getRowCount).sum.toInt
+          val rowCount = res.filesAndBlocks.values.flatten.map(_.getRowCount).sum.toInt
           logInfo(s"Working! on ${res} " +
             s"offset so far = ${offset} " +
-            s"newOffset = ${newOffset} " +
-            s"blocks = ${outBlocks.size} " +
             s"rowCount = ${rowCount}")
           runningSumOfRows += rowCount
           rowCountsPerTask.append(runningSumOfRows)
         }
+
+        val allOutBlocks: Seq[DataBlockBase] =
+          futures.flatMap(f => f.get())
+
+        // Fourth, calculate the final buffer size
+        val wholeBufferSize = toCompute.head.finalFn(offset, allOutBlocks, schema)
+
         rowCountsPerTask.remove(rowCountsPerTask.size-1)
         logInfo(s"Built bigger file with whole size = ${wholeBufferSize}," +
           s" init size ${initialTotalSize}, splits ${rowCountsPerTask}, " +
@@ -122,13 +140,15 @@ object IOSched extends Logging with Arm {
     }
   })
 
-  def addReadTask(clippedSchema: SchemaBase,
+  def addReadTask(filesAndBlocks: mutable.LinkedHashMap[Path, ArrayBuffer[DataBlockBase]],
+                  clippedSchema: SchemaBase,
                   initTotalSize: Long,
                   extraInfo: ExtraInfo,
                   writeHeaderFn: WriteHeaderFn,
                   blockStreamerFn: StreamerFn,
                   blockCombinerFn: CombinerFn,
                   readerToTableFn: ReadToTableFn,
+                  finalFn: ((Long, Seq[DataBlockBase], SchemaBase) => Long),
                   readDataSchema: StructType,
                   currentChunkedBlocks: Seq[(Path, DataBlockBase)]): Option[ContiguousTable] = {
     logInfo(s"I got a task from ${TaskContext.get()}: " +
@@ -137,12 +157,14 @@ object IOSched extends Logging with Arm {
 
     val myIx: Long = ix.getAndIncrement()
     q.offer(Task(
+      filesAndBlocks,
       myIx,
       initTotalSize,
       writeHeaderFn,
       blockStreamerFn,
       blockCombinerFn,
       readerToTableFn,
+      finalFn,
       clippedSchema,
       extraInfo))
 
