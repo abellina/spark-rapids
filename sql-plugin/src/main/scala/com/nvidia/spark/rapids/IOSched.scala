@@ -52,6 +52,7 @@ object IOSched extends Logging with Arm {
 
   val tp = Executors.newSingleThreadExecutor()
   val tpWaitForIo = Executors.newSingleThreadExecutor()
+  val tpWaitForParquetRead = Executors.newSingleThreadExecutor()
   val tp2 = Executors.newFixedThreadPool(20)
 
   tp.execute(() => {
@@ -120,23 +121,26 @@ object IOSched extends Logging with Arm {
             hmb, allOutBlocks, toCompute.head.clippedSchema,
             wholeBufferSize, initialTotalSize, offset)
 
-          withResource(dataBuffer) { _ =>
-            val tbl = toCompute.head.readToTableFn(dataBuffer, dataSize,
-              toCompute.head.clippedSchema, toCompute.head.extraInfo)
-            withResource(tbl) { _ =>
-              val tbls: Array[ContiguousTable] = tbl.contiguousSplit(rowCountsPerTask: _*)
-              logInfo(s"Got slices ${tbls.length} have tasks waiting ${toCompute.length}. Counts " +
-                s"${rowCountsPerTask}")
-              var i = 0
-              for (res <- toCompute) {
-                r.put(res.myIx, tbls(i))
-                i += 1
+          tpWaitForParquetRead.execute(() => {
+            withResource(dataBuffer) { _ =>
+              val tbl = toCompute.head.readToTableFn(dataBuffer, dataSize,
+                toCompute.head.clippedSchema, toCompute.head.extraInfo)
+              withResource(tbl) { _ =>
+                val tbls: Array[ContiguousTable] = tbl.contiguousSplit(rowCountsPerTask: _*)
+                logInfo(s"Got slices ${tbls.length} have tasks waiting " +
+                  s"${toCompute.length}. Counts " +
+                  s"${rowCountsPerTask}")
+                var i = 0
+                for (res <- toCompute) {
+                  r.put(res.myIx, tbls(i))
+                  i += 1
+                }
               }
             }
-          }
-          bMonitor.synchronized {
-            bMonitor.notifyAll()
-          }
+            bMonitor.synchronized {
+              bMonitor.notifyAll()
+            }
+          })
         })
       }
     }
