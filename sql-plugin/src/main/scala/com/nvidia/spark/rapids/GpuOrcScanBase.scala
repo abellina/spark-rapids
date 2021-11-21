@@ -23,14 +23,12 @@ import java.nio.channels.{Channels, WritableByteChannel}
 import java.util
 import java.util.Locale
 import java.util.concurrent.{Callable, ThreadPoolExecutor}
-
 import scala.annotation.tailrec
 import scala.collection.JavaConverters._
 import scala.collection.mutable.{ArrayBuffer, LinkedHashMap}
 import scala.collection.mutable
 import scala.language.implicitConversions
 import scala.math.max
-
 import ai.rapids.cudf._
 import com.google.protobuf.CodedOutputStream
 import com.nvidia.spark.rapids.GpuMetric._
@@ -43,7 +41,6 @@ import org.apache.orc.{CompressionKind, DataReader, OrcConf, OrcFile, OrcProto, 
 import org.apache.orc.impl._
 import org.apache.orc.impl.RecordReaderImpl.SargApplier
 import org.apache.orc.mapred.OrcInputFormat
-
 import org.apache.spark.TaskContext
 import org.apache.spark.broadcast.Broadcast
 import org.apache.spark.internal.Logging

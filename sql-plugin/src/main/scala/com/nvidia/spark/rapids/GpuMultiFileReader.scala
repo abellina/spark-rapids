@@ -19,19 +19,15 @@ package com.nvidia.spark.rapids
 import java.io.File
 import java.net.{URI, URISyntaxException}
 import java.util.concurrent.{Callable, ConcurrentLinkedQueue, Future, LinkedBlockingQueue, ThreadPoolExecutor, TimeUnit}
-
 import scala.annotation.tailrec
 import scala.collection.JavaConverters._
 import scala.collection.mutable.{ArrayBuffer, LinkedHashMap, Queue}
-import scala.math.max
-
-import ai.rapids.cudf.{ColumnVector, HostMemoryBuffer, NvtxColor, NvtxRange, Table}
+import ai.rapids.cudf.{ColumnVector, ContiguousTable, HostMemoryBuffer, NvtxColor, NvtxRange, Table}
 import com.google.common.util.concurrent.ThreadFactoryBuilder
 import com.nvidia.spark.rapids.GpuMetric.{NUM_OUTPUT_BATCHES, PEAK_DEVICE_MEMORY, SEMAPHORE_WAIT_TIME}
 import org.apache.commons.io.IOUtils
 import org.apache.hadoop.conf.Configuration
 import org.apache.hadoop.fs.{FileSystem, Path}
-
 import org.apache.spark.TaskContext
 import org.apache.spark.broadcast.Broadcast
 import org.apache.spark.internal.Logging
@@ -736,11 +732,17 @@ abstract class MultiFileCoalescingPartitionReaderBase(
             currentChunkMeta.rowsPerPartition, partitionSchema)
         }
       } else {
-        val table = readToTable(currentChunkMeta.currentChunk, currentChunkMeta.clippedSchema,
+        val ct= readToTable(
+          currentChunkMeta.currentChunk,
+          currentChunkMeta.clippedSchema,
           currentChunkMeta.extraInfo)
         try {
           val colTypes = readDataSchema.fields.map(f => f.dataType)
-          val maybeBatch = table.map(t => GpuColumnVector.from(t, colTypes))
+          val maybeBatch = ct.map { t =>
+            withResource(t.getTable) {
+              tbl => GpuColumnVector.from(tbl, colTypes)
+            }
+          }
           maybeBatch.foreach { batch =>
             logDebug(s"GPU batch size: ${GpuColumnVector.getTotalDeviceMemoryUsed(batch)} bytes")
           }
@@ -749,7 +751,7 @@ abstract class MultiFileCoalescingPartitionReaderBase(
           addAllPartitionValues(maybeBatch, currentChunkMeta.allPartValues,
             currentChunkMeta.rowsPerPartition, partitionSchema)
         } finally {
-          table.foreach(_.close())
+          ct.foreach(_.close())
         }
       }
     }
@@ -758,130 +760,156 @@ abstract class MultiFileCoalescingPartitionReaderBase(
   private def readToTable(
       currentChunkedBlocks: Seq[(Path, DataBlockBase)],
       clippedSchema: SchemaBase,
-      extraInfo: ExtraInfo): Option[Table] = {
+      extraInfo: ExtraInfo): Option[ContiguousTable] = {
     if (currentChunkedBlocks.isEmpty) {
       return None
     }
-    val (dataBuffer, dataSize) = readPartFiles(currentChunkedBlocks, clippedSchema)
-    withResource(dataBuffer) { _ =>
-      if (dataSize == 0) {
-        None
-      } else {
-        val table = readBufferToTable(dataBuffer, dataSize, clippedSchema, extraInfo)
-        closeOnExcept(table) { _ =>
-          maxDeviceMemory = max(GpuColumnVector.getTotalDeviceMemoryUsed(table), maxDeviceMemory)
-          if (readDataSchema.length < table.getNumberOfColumns) {
-            throw new QueryExecutionException(s"Expected ${readDataSchema.length} columns " +
-              s"but read ${table.getNumberOfColumns} from $currentChunkedBlocks")
-          }
+    // ugly but we want to keep the order
+    val filesAndBlocks = LinkedHashMap[Path, ArrayBuffer[DataBlockBase]]()
+    currentChunkedBlocks.foreach { case (path, block) =>
+      filesAndBlocks.getOrElseUpdate(path, new ArrayBuffer[DataBlockBase]) += block
+    }
+
+    val blockStreamerFn: (HostMemoryBuffer, Long) => (Long, Long, ArrayBuffer[DataBlockBase]) = {
+      (hmb: HostMemoryBuffer, headerOffset: Long) => {
+        val (bufferSize, footerOffset, outBlocks) =
+          blockStreamer(hmb, headerOffset, filesAndBlocks, clippedSchema)
+        (bufferSize, footerOffset, outBlocks)
+      }
+    }
+
+    val blockCombinerFn:
+      (HostMemoryBuffer, ArrayBuffer[DataBlockBase], SchemaBase, Long, Long, Long)
+        => (HostMemoryBuffer, Long) = {
+      (hmb: HostMemoryBuffer,
+       outBlocks: ArrayBuffer[DataBlockBase],
+       clippedSchema: SchemaBase,
+       bufferSize: Long,
+       initTotalSize: Long,
+       footerOffset: Long) =>
+        blockCombiner(hmb, outBlocks, clippedSchema, bufferSize, initTotalSize, footerOffset)
+    }
+
+    val readerToTableFn: (HostMemoryBuffer, Long, SchemaBase, ExtraInfo) => Table = {
+      (dataBuffer: HostMemoryBuffer,
+        dataSize: Long,
+        clippedSchema: SchemaBase,
+        extraInfo: ExtraInfo) =>
+      readBufferToTable(dataBuffer, dataSize, clippedSchema, extraInfo)
+    }
+
+    val writeHeaderFn: (HostMemoryBuffer) => Long = {
+      (hmb: HostMemoryBuffer) => writeFileHeader(hmb)
+    }
+
+    // First, estimate the output file size for the initial allocating.
+    //   the estimated size should be >= size of HEAD + Blocks + FOOTER
+    val initTotalSize = calculateEstimatedBlocksOutputSize(filesAndBlocks, clippedSchema)
+    val table =
+      IOSched.addReadTask(
+        clippedSchema,
+        initTotalSize,
+        extraInfo,
+        writeHeaderFn,
+        blockStreamerFn,
+        blockCombinerFn,
+        readerToTableFn,
+        readDataSchema,
+        currentChunkedBlocks)
+
+    metrics(NUM_OUTPUT_BATCHES) += 1
+    table
+  }
+
+  def blockStreamer(hmb: HostMemoryBuffer, headerOffset: Long,
+                   filesAndBlocks: LinkedHashMap[Path, ArrayBuffer[DataBlockBase]],
+                   clippedSchema: SchemaBase):
+  (Long, Long, ArrayBuffer[DataBlockBase]) = {
+    withResource(new NvtxWithMetrics("Buffer file split", NvtxColor.YELLOW,
+      metrics("bufferTime"))) { _ =>
+      val tasks = new java.util.ArrayList[Future[(Seq[DataBlockBase], Long)]]()
+      closeOnExcept(hmb) { _ =>
+        // Second, write header
+        var offset = headerOffset
+        val allOutputBlocks = scala.collection.mutable.ArrayBuffer[DataBlockBase]()
+        val tc = TaskContext.get
+        filesAndBlocks.foreach { case (file, blocks) =>
+          val fileBlockSize = blocks.map(_.getBlockSize).sum
+          // use a single buffer and slice it up for different files if we need
+          val outLocal = hmb.slice(offset, fileBlockSize)
+          // Third, copy the blocks for each file in parallel using background threads
+          tasks.add(getThreadPool(numThreads).submit(
+            getBatchRunner(tc, file, outLocal, blocks, offset)))
+          offset += fileBlockSize
         }
-        metrics(NUM_OUTPUT_BATCHES) += 1
-        Some(table)
+
+        for (future <- tasks.asScala) {
+          val (blocks, bytesRead) = future.get()
+          allOutputBlocks ++= blocks
+          TrampolineUtil.incBytesRead(inputMetrics, bytesRead)
+        }
+
+        // Fourth, calculate the final buffer size
+        val finalBufferSize = calculateFinalBlocksOutputSize(offset, allOutputBlocks,
+          clippedSchema)
+
+        (finalBufferSize, offset, allOutputBlocks)
       }
     }
   }
 
-  /**
-   * Read all data blocks into HostMemoryBuffer
-   * @param blocks a sequence of data blocks to be read
-   * @param clippedSchema the clipped schema is used to calculate the estimated output size
-   * @return (HostMemoryBuffer, Long)
-   *         the HostMemoryBuffer and its data size
-   */
-  private def readPartFiles(
-      blocks: Seq[(Path, DataBlockBase)],
-      clippedSchema: SchemaBase): (HostMemoryBuffer, Long) = {
-
-    withResource(new NvtxWithMetrics("Buffer file split", NvtxColor.YELLOW,
-        metrics("bufferTime"))) { _ =>
-      // ugly but we want to keep the order
-      val filesAndBlocks = LinkedHashMap[Path, ArrayBuffer[DataBlockBase]]()
-      blocks.foreach { case (path, block) =>
-        filesAndBlocks.getOrElseUpdate(path, new ArrayBuffer[DataBlockBase]) += block
+  def blockCombiner(buffer: HostMemoryBuffer,
+                    outBlocks: Seq[DataBlockBase],
+                    clippedSchema: SchemaBase,
+                    bufferSize: Long,
+                    initTotalSize: Long,
+                    footerOffset: Long): (HostMemoryBuffer, Long) = {
+    // The footer size can change vs the initial estimated because we are combining more
+    // blocks and offsets are larger, check to make sure we allocated enough memory before
+    // writing. Not sure how expensive this is, we could throw exception instead if the
+    // written size comes out > then the estimated size.
+    var buf: HostMemoryBuffer = buffer
+    val totalBufferSize = if (bufferSize > initTotalSize) {
+      // Just ensure to close buffer when there is an exception
+      closeOnExcept(buffer) { _ =>
+        logWarning(s"The original estimated size $initTotalSize is too small, " +
+          s"reallocing and copying data to bigger buffer size: $bufferSize")
       }
-      val tasks = new java.util.ArrayList[Future[(Seq[DataBlockBase], Long)]]()
-
-      // First, estimate the output file size for the initial allocating.
-      //   the estimated size should be >= size of HEAD + Blocks + FOOTER
-      val initTotalSize = calculateEstimatedBlocksOutputSize(filesAndBlocks, clippedSchema)
-
-      val (buffer, bufferSize, footerOffset, outBlocks) =
-        closeOnExcept(HostMemoryBuffer.allocate(initTotalSize)) { hmb =>
-          // Second, write header
-          var offset = writeFileHeader(hmb)
-
-          val allOutputBlocks = scala.collection.mutable.ArrayBuffer[DataBlockBase]()
-          val tc = TaskContext.get
-          filesAndBlocks.foreach { case (file, blocks) =>
-            val fileBlockSize = blocks.map(_.getBlockSize).sum
-            // use a single buffer and slice it up for different files if we need
-            val outLocal = hmb.slice(offset, fileBlockSize)
-            // Third, copy the blocks for each file in parallel using background threads
-            tasks.add(getThreadPool(numThreads).submit(
-              getBatchRunner(tc, file, outLocal, blocks, offset)))
-            offset += fileBlockSize
-          }
-
-          for (future <- tasks.asScala) {
-            val (blocks, bytesRead) = future.get()
-            allOutputBlocks ++= blocks
-            TrampolineUtil.incBytesRead(inputMetrics, bytesRead)
-          }
-
-          // Fourth, calculate the final buffer size
-          val finalBufferSize = calculateFinalBlocksOutputSize(offset, allOutputBlocks,
-            clippedSchema)
-
-          (hmb, finalBufferSize, offset, allOutputBlocks)
-      }
-
-      // The footer size can change vs the initial estimated because we are combining more
-      // blocks and offsets are larger, check to make sure we allocated enough memory before
-      // writing. Not sure how expensive this is, we could throw exception instead if the
-      // written size comes out > then the estimated size.
-      var buf: HostMemoryBuffer = buffer
-      val totalBufferSize = if (bufferSize > initTotalSize) {
-        // Just ensure to close buffer when there is an exception
-        closeOnExcept(buffer) { _ =>
-          logWarning(s"The original estimated size $initTotalSize is too small, " +
-            s"reallocing and copying data to bigger buffer size: $bufferSize")
-        }
-        // Copy the old buffer to a new allocated bigger buffer and close the old buffer
-        buf = withResource(buffer) { _ =>
-          withResource(new HostMemoryInputStream(buffer, footerOffset)) { in =>
-            // realloc memory and copy
-            closeOnExcept(HostMemoryBuffer.allocate(bufferSize)) { newhmb =>
-              withResource(new HostMemoryOutputStream(newhmb)) { out =>
-                IOUtils.copy(in, out)
-              }
-              newhmb
+      // Copy the old buffer to a new allocated bigger buffer and close the old buffer
+      buf = withResource(buffer) { _ =>
+        withResource(new HostMemoryInputStream(buffer, footerOffset)) { in =>
+          // realloc memory and copy
+          closeOnExcept(HostMemoryBuffer.allocate(bufferSize)) { newhmb =>
+            withResource(new HostMemoryOutputStream(newhmb)) { out =>
+              IOUtils.copy(in, out)
             }
+            newhmb
           }
         }
-        bufferSize
-      } else {
-        initTotalSize
       }
-
-      // Fifth, write footer,
-      // The implementation should be in charge of closing buf when there is an exception thrown,
-      // Closing the original buf and returning a new allocated buffer is allowed, but there is no
-      // reason to do that.
-      // If you have to do this, please think about to add other abstract methods first.
-      val (finalBuffer, finalBufferSize) = writeFileFooter(buf, totalBufferSize, footerOffset,
-        outBlocks, clippedSchema)
-
-      closeOnExcept(finalBuffer) { _ =>
-        // triple check we didn't go over memory
-        if (finalBufferSize > totalBufferSize) {
-          throw new QueryExecutionException(s"Calculated buffer size $totalBufferSize is to " +
-            s"small, actual written: ${finalBufferSize}")
-        }
-      }
-      logDebug(s"$getFileFormatShortName Coalescing reading estimates the initTotalSize:" +
-        s" $initTotalSize, and the true size: $finalBufferSize")
-      (finalBuffer, finalBufferSize)
+      bufferSize
+    } else {
+      initTotalSize
     }
+
+    // Fifth, write footer,
+    // The implementation should be in charge of closing buf when there is an exception thrown,
+    // Closing the original buf and returning a new allocated buffer is allowed, but there is no
+    // reason to do that.
+    // If you have to do this, please think about to add other abstract methods first.
+    val (finalBuffer, finalBufferSize) = writeFileFooter(buf, totalBufferSize, footerOffset,
+      outBlocks, clippedSchema)
+
+    closeOnExcept(finalBuffer) { _ =>
+      // triple check we didn't go over memory
+      if (finalBufferSize > totalBufferSize) {
+        throw new QueryExecutionException(s"Calculated buffer size $totalBufferSize is to " +
+          s"small, actual written: ${finalBufferSize}")
+      }
+    }
+    logDebug(s"$getFileFormatShortName Coalescing reading estimates the initTotalSize:" +
+      s" $initTotalSize, and the true size: $finalBufferSize")
+    (finalBuffer, finalBufferSize)
   }
 
   /**
@@ -1041,5 +1069,4 @@ abstract class MultiFileCoalescingPartitionReaderBase(
     }
     allPartCols
   }
-
 }
