@@ -16,10 +16,9 @@
 
 package org.apache.spark.sql.rapids.execution
 
-import ai.rapids.cudf.{ast, GatherMap, NvtxColor, OutOfBoundsPolicy, Table}
+import ai.rapids.cudf.{GatherMap, NvtxColor, OutOfBoundsPolicy, Table, ast}
 import com.nvidia.spark.rapids._
 import com.nvidia.spark.rapids.shims.v2.ShimBinaryExecNode
-
 import org.apache.spark.TaskContext
 import org.apache.spark.broadcast.Broadcast
 import org.apache.spark.rdd.RDD
@@ -31,7 +30,7 @@ import org.apache.spark.sql.execution.SparkPlan
 import org.apache.spark.sql.execution.adaptive.BroadcastQueryStageExec
 import org.apache.spark.sql.execution.exchange.ReusedExchangeExec
 import org.apache.spark.sql.execution.joins.BroadcastNestedLoopJoinExec
-import org.apache.spark.sql.vectorized.{ColumnarBatch, ColumnVector}
+import org.apache.spark.sql.vectorized.{ColumnVector, ColumnarBatch}
 
 class GpuBroadcastNestedLoopJoinMeta(
     join: BroadcastNestedLoopJoinExec,
@@ -477,6 +476,21 @@ abstract class GpuBroadcastNestedLoopJoinExecBase(
     }
   }
 
+
+  private def leftExistenceJoin(broadcast: () => ColumnarBatch,
+                                exists: Boolean): RDD[ColumnarBatch] = {
+    assert(getGpuBuildSide == GpuBuildRight)
+    streamed.executeColumnar().mapPartitionsInternal { streamedIter =>
+      val broadcastBatch = broadcast()
+      val buildRows = broadcastBatch.numRows
+      if (buildRows > 0 == exists) {
+        streamedIter
+      } else {
+        Iterator.empty
+      }
+    }
+  }
+
   private def doUnconditionalJoin(
       broadcastRelation: Broadcast[SerializeConcatHostBuffersDeserializeBatch]
   ): RDD[ColumnarBatch] = {
@@ -492,12 +506,19 @@ abstract class GpuBroadcastNestedLoopJoinExecBase(
       lazy val builtBatch = makeBuiltBatch(broadcastRelation, buildTime, buildDataSize)
       val joinIterator: RDD[ColumnarBatch] = joinType match {
         case LeftSemi =>
-          // just return the left table
-          left.executeColumnar()
+          if (getGpuBuildSide == GpuBuildRight) {
+            leftExistenceJoin(() => builtBatch, true)
+          } else {
+            left.executeColumnar()
+          }
         case LeftAnti =>
-          // degenerate case, no rows are returned.
-          val childRDD = left.executeColumnar()
-          new GpuCoalesceExec.EmptyRDDWithPartitions(sparkContext, childRDD.getNumPartitions)
+          if (getGpuBuildSide == GpuBuildRight) {
+            leftExistenceJoin(() => builtBatch, false)
+          } else {
+            // degenerate case, no rows are returned.
+            val childRDD = left.executeColumnar()
+            new GpuCoalesceExec.EmptyRDDWithPartitions(sparkContext, childRDD.getNumPartitions)
+          }
         case _ =>
           // Everything else is treated like an unconditional cross join
           val buildSide = getGpuBuildSide
