@@ -52,7 +52,7 @@ object IOSched extends Logging with Arm {
 
   val tp = Executors.newSingleThreadExecutor()
   val tpWaitForIo = Executors.newSingleThreadExecutor()
-  val tpWaitForParquetRead = Executors.newSingleThreadExecutor()
+  val tpWaitForParquetRead = Executors.newFixedThreadPool(16)
   val tp2 = Executors.newFixedThreadPool(20)
 
   tp.execute(() => {
