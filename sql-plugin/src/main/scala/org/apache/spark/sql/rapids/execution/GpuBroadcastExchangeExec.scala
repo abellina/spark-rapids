@@ -45,7 +45,7 @@ import org.apache.spark.sql.execution.joins.{BroadcastHashJoinExec, BroadcastNes
 import org.apache.spark.sql.execution.metric.SQLMetrics
 import org.apache.spark.sql.internal.{SQLConf, StaticSQLConf}
 import org.apache.spark.sql.types.DataType
-import org.apache.spark.sql.vectorized.{ColumnarBatch, ColumnVector}
+import org.apache.spark.sql.vectorized.ColumnarBatch
 
 object SerializedHostTableUtils extends Arm {
   /** Read in a cudf serialized table into host memory */
@@ -94,12 +94,15 @@ class SerializeConcatHostBuffersDeserializeBatch(
       withResource(new NvtxRange("broadcast manifest batch", NvtxColor.PURPLE)) { _ =>
         if (headers.isEmpty) {
           batchInternal = GpuColumnVector.emptyBatchFromTypes(dataTypes)
+          GpuColumnVector.extractBases(batchInternal).foreach(_.noWarnLeakExpected())
         } else {
           withResource(JCudfSerialization.readTableFrom(headers.head, buffers.head)) { tableInfo =>
             val table = tableInfo.getContiguousTable
             if (table == null) {
               val numRows = tableInfo.getNumRows
-              batchInternal = new ColumnarBatch(new Array[ColumnVector](0), numRows)
+              //batchInternal = new ColumnarBatch(new Array[ColumnVector](0), numRows)
+              batchInternal = GpuColumnVector.emptyBatchFromTypes(dataTypes)
+              GpuColumnVector.extractBases(batchInternal).foreach(_.noWarnLeakExpected())
             } else {
               batchInternal = GpuColumnVectorFromBuffer.from(table, dataTypes)
               GpuColumnVector.extractBases(batchInternal).foreach(_.noWarnLeakExpected())
