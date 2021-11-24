@@ -476,8 +476,8 @@ abstract class GpuBroadcastNestedLoopJoinExecBase(
        * scenarios with a no-op condition to simulate the unconditional join.
        */
       val useAlwaysTrueAst = joinType match {
-        case LeftOuter if getGpuBuildSide == GpuBuildRight => true
-        case RightOuter if getGpuBuildSide == GpuBuildLeft => true
+        case LeftOuter if getGpuBuildSide == GpuBuildRight => right.output.nonEmpty
+        case RightOuter if getGpuBuildSide == GpuBuildLeft => left.output.nonEmpty
         case _ => false
       }
 
