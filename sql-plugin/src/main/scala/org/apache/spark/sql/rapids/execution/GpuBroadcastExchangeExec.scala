@@ -102,6 +102,7 @@ class SerializeConcatHostBuffersDeserializeBatch(
             } else {
               batchInternal = GpuColumnVectorFromBuffer.from(table, dataTypes)
               GpuColumnVector.extractBases(batchInternal).foreach(_.noWarnLeakExpected())
+              table.getBuffer.noWarnLeakExpected()
             }
           }
         }

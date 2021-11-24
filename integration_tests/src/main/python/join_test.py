@@ -99,7 +99,7 @@ def create_nested_df(spark, key_data_gen, data_gen, left_length, right_length):
     return left, right
 
 @ignore_order(local=True)
-@pytest.mark.parametrize('join_type', ['Left', 'Inner', 'LeftSemi', 'LeftAnti', 'Cross'], ids=idfn)
+@pytest.mark.parametrize('join_type', ['Left', 'Inner', 'LeftSemi', 'LeftAnti'], ids=idfn)
 @pytest.mark.parametrize('batch_size', ['100', '1g'], ids=idfn)
 def test_right_broadcast_nested_loop_join_without_condition_empty(join_type, batch_size):
     def do_join(spark):
@@ -109,7 +109,7 @@ def test_right_broadcast_nested_loop_join_without_condition_empty(join_type, bat
     assert_gpu_and_cpu_are_equal_collect(do_join, conf=conf)
 
 @ignore_order(local=True)
-@pytest.mark.parametrize('join_type', ['Left', 'Inner', 'LeftSemi', 'LeftAnti', 'Cross'], ids=idfn)
+@pytest.mark.parametrize('join_type', ['Left', 'Inner', 'LeftSemi', 'LeftAnti'], ids=idfn)
 @pytest.mark.parametrize('batch_size', ['100', '1g'], ids=idfn)
 def test_left_broadcast_nested_loop_join_without_condition_empty(join_type, batch_size):
     def do_join(spark):
@@ -119,7 +119,7 @@ def test_left_broadcast_nested_loop_join_without_condition_empty(join_type, batc
     assert_gpu_and_cpu_are_equal_collect(do_join, conf=conf)
 
 @ignore_order(local=True)
-@pytest.mark.parametrize('join_type', ['Left', 'Inner', 'LeftSemi', 'LeftAnti', 'Cross'], ids=idfn)
+@pytest.mark.parametrize('join_type', ['Left', 'Inner', 'LeftSemi', 'LeftAnti'], ids=idfn)
 @pytest.mark.parametrize('batch_size', ['100', '1g'], ids=idfn)
 def test_broadcast_nested_loop_join_without_condition_empty(join_type, batch_size):
     def do_join(spark):
