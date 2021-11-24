@@ -438,7 +438,7 @@ abstract class GpuBroadcastNestedLoopJoinExecBase(
       buildTime: GpuMetric,
       buildDataSize: GpuMetric): ColumnarBatch = {
     withResource(new NvtxWithMetrics("build join table", NvtxColor.GREEN, buildTime)) { _ =>
-      val ret = GpuBroadcastHelper.getBroadcastBatch(broadcastRelation, broadcast)
+      val ret = GpuBroadcastHelper.getBroadcastBatch(broadcastRelation)
       buildDataSize += GpuColumnVector.getTotalDeviceMemoryUsed(ret)
       ret
     }
@@ -476,8 +476,8 @@ abstract class GpuBroadcastNestedLoopJoinExecBase(
        * scenarios with a no-op condition to simulate the unconditional join.
        */
       val useAlwaysTrueAst = joinType match {
-        case LeftOuter if getGpuBuildSide == GpuBuildRight => true
-        case RightOuter if getGpuBuildSide == GpuBuildLeft => true
+        case LeftOuter if getGpuBuildSide == GpuBuildRight => right.output.nonEmpty
+        case RightOuter if getGpuBuildSide == GpuBuildLeft => left.output.nonEmpty
         case _ => false
       }
 
@@ -610,18 +610,18 @@ abstract class GpuBroadcastNestedLoopJoinExecBase(
       numFirstTableColumns: Int): RDD[ColumnarBatch] = {
     val buildTime = gpuLongMetric(BUILD_TIME)
     val buildDataSize = gpuLongMetric(BUILD_DATA_SIZE)
-    val spillCallback = GpuMetric.makeSpillCallback(allMetrics)
-    lazy val builtBatch =
-      withResource(makeBuiltBatch(broadcastRelation, buildTime, buildDataSize)) { batch =>
-        LazySpillableColumnarBatch(batch, spillCallback, "built_batch")
-      }
-
     val streamAttributes = streamed.output
     val numOutputRows = gpuLongMetric(NUM_OUTPUT_ROWS)
     val numOutputBatches = gpuLongMetric(NUM_OUTPUT_BATCHES)
     val opTime = gpuLongMetric(OP_TIME)
     val joinTime = gpuLongMetric(JOIN_TIME)
     val joinOutputRows = gpuLongMetric(JOIN_OUTPUT_ROWS)
+    val spillCallback = GpuMetric.makeSpillCallback(allMetrics)
+    lazy val builtBatch =
+      withResource(makeBuiltBatch(broadcastRelation, buildTime, buildDataSize)) { batch =>
+        LazySpillableColumnarBatch(batch, spillCallback, "built_batch")
+      }
+
     val nestedLoopJoinType = joinType
     val buildSide = getGpuBuildSide
     streamed.executeColumnar().mapPartitions { streamedIter =>
