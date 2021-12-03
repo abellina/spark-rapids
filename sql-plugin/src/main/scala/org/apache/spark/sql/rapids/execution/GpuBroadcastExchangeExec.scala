@@ -314,7 +314,7 @@ abstract class GpuBroadcastExchangeExecBase(
                   cb.close()
                 })
                 val d = data.collect()
-                if (d.length == 0) {
+                if (false && d.length == 0) {
                   // This call for `HashedRelationBroadcastMode` produces
                   // `EmptyHashedRelation` allowing the AQE rule `EliminateJoinToEmptyRelation` to
                   // optimize out our parent join given that this is a empty broadcast result.
