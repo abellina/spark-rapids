@@ -309,13 +309,12 @@ abstract class GpuBroadcastExchangeExecBase(
               withResource(new NvtxWithMetrics("broadcast collect", NvtxColor.GREEN,
                 collectTime)) { _ =>
                 val childRdd = child.executeColumnar()
-                val data = childRdd.map(cb => try {
+                val data = childRdd.map { withResource(_) { cb =>
                   new SerializeBatchDeserializeHostBuffer(cb)
-                } finally {
-                  cb.close()
-                })
+                }}
+
                 val d = data.collect()
-                val emptyRelation: Any = if (d.length == 0) {
+                val emptyRelation: Any = if (d.isEmpty) {
                   // This call for `HashedRelationBroadcastMode` produces
                   // `EmptyHashedRelation` allowing the AQE rule `EliminateJoinToEmptyRelation`
                   // before Spark 3.2.0 to optimize out our parent join given that this is
@@ -323,7 +322,7 @@ abstract class GpuBroadcastExchangeExecBase(
                   // In Spark 3.2.0, the optimization is still performed, but the AQE optimizer
                   // is looking at the metrics for the query stage to determine if numRows == 0,
                   // and if so it can eliminate certain joins.
-                  val transformed = mode.transform(Iterator.empty, None)
+                  val transformed = mode.transform(Array.empty)
 
                   // We make sure that the transformation is indeed an EmptyHashedRelation or an
                   // empty array of rows, and in those cases only do we short cirtcuit our
@@ -343,6 +342,7 @@ abstract class GpuBroadcastExchangeExecBase(
                   checkRowLimit(numRows)
                   numOutputBatches += 1
                   numOutputRows += numRows
+                  dataSize += batch.dataSize
                   batch
                 } else {
                   emptyRelation
@@ -350,8 +350,6 @@ abstract class GpuBroadcastExchangeExecBase(
               }
             withResource(new NvtxWithMetrics("broadcast build", NvtxColor.DARK_GREEN,
                 buildTime)) { _ =>
-              // we only support hashjoin so this is a noop
-              // val relation = mode.transform(input, Some(numRows))
               gpuLongMetric("dataSize") += dataSize
               if (dataSize >= MAX_BROADCAST_TABLE_BYTES) {
                 throw new SparkException(
@@ -362,7 +360,7 @@ abstract class GpuBroadcastExchangeExecBase(
             val broadcasted = withResource(new NvtxWithMetrics("broadcast", NvtxColor.CYAN,
                 broadcastTime)) { _ =>
               // Broadcast the relation
-              sparkContext.broadcast(broadcastResult.asInstanceOf[Any])
+              sparkContext.broadcast(broadcastResult)
             }
 
             SQLMetrics.postDriverMetricUpdates(sparkContext, executionId, metrics.values.toSeq)
