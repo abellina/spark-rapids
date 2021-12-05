@@ -42,6 +42,7 @@ import org.apache.spark.sql.execution.{SparkPlan, SQLExecution}
 import org.apache.spark.sql.execution.exchange.BroadcastExchangeExec
 import org.apache.spark.sql.execution.exchange.BroadcastExchangeExec.MAX_BROADCAST_TABLE_BYTES
 import org.apache.spark.sql.execution.joins.{BroadcastHashJoinExec, BroadcastNestedLoopJoinExec}
+import org.apache.spark.sql.execution.joins._
 import org.apache.spark.sql.execution.metric.SQLMetrics
 import org.apache.spark.sql.internal.{SQLConf, StaticSQLConf}
 import org.apache.spark.sql.types.DataType
@@ -314,11 +315,13 @@ abstract class GpuBroadcastExchangeExecBase(
                   cb.close()
                 })
                 val d = data.collect()
-                if (false && d.length == 0) {
+                if (d.length == 0) {
                   // This call for `HashedRelationBroadcastMode` produces
                   // `EmptyHashedRelation` allowing the AQE rule `EliminateJoinToEmptyRelation` to
                   // optimize out our parent join given that this is a empty broadcast result.
-                  mode.transform(Iterator.empty, None)
+                  val transformed = mode.transform(Iterator.empty, None)
+                  logWarning(s"Transformed classname ${transformed.getClass.getSimpleName}")
+                  transformed
                 } else {
                   val batch = new SerializeConcatHostBuffersDeserializeBatch(d, output)
                   val numRows = batch.numRows
