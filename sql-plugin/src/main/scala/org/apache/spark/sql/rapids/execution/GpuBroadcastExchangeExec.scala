@@ -315,23 +315,38 @@ abstract class GpuBroadcastExchangeExecBase(
                   cb.close()
                 })
                 val d = data.collect()
-                if (d.length == 0) {
+                val emptyRelation: Any = if (d.length == 0) {
                   // This call for `HashedRelationBroadcastMode` produces
-                  // `EmptyHashedRelation` allowing the AQE rule `EliminateJoinToEmptyRelation` to
-                  // optimize out our parent join given that this is a empty broadcast result.
+                  // `EmptyHashedRelation` allowing the AQE rule `EliminateJoinToEmptyRelation`
+                  // before Spark 3.2.0 to optimize out our parent join given that this is
+                  // a empty broadcast result.
+                  // In Spark 3.2.0, the optimization is still performed, but the AQE optimizer
+                  // is looking at the metrics for the query stage to determine if numRows == 0,
+                  // and if so it can eliminate certain joins.
                   val transformed = mode.transform(Iterator.empty, None)
-                  logWarning(s"Transformed classname ${transformed.getClass.getSimpleName}")
-                  transformed
-                } else {
+                  // We make sure that the transformation is indeed an EmptyHashedRelation or an
+                  // empty array of rows, and in those cases only do we short cirtcuit our
+                  // broadcast. The reason for this is to be protective, since an
+                  // EmptyHashedRelation or Array.empty are not the only results of a transform
+                  // call, depending on BroadcastMode specifics. At this time other results are
+                  // not expectd, but we default to the unoptimized path.
+                  transformed match {
+                    case EmptyHashedRelation | arr: Array[InternalRow] if arr.isEmpty =>
+                      transformed
+                    case _ => null
+                  }
+                }
+                if (emptyRelation == null) {
                   val batch = new SerializeConcatHostBuffersDeserializeBatch(d, output)
                   val numRows = batch.numRows
                   checkRowLimit(numRows)
                   numOutputBatches += 1
                   numOutputRows += numRows
                   batch
+                } else {
+                  emptyRelation
                 }
               }
-
             withResource(new NvtxWithMetrics("broadcast build", NvtxColor.DARK_GREEN,
                 buildTime)) { _ =>
               // we only support hashjoin so this is a noop
