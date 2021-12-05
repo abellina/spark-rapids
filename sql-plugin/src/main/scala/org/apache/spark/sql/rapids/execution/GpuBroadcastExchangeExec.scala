@@ -324,6 +324,7 @@ abstract class GpuBroadcastExchangeExecBase(
                   // is looking at the metrics for the query stage to determine if numRows == 0,
                   // and if so it can eliminate certain joins.
                   val transformed = mode.transform(Iterator.empty, None)
+
                   // We make sure that the transformation is indeed an EmptyHashedRelation or an
                   // empty array of rows, and in those cases only do we short cirtcuit our
                   // broadcast. The reason for this is to be protective, since an
@@ -331,8 +332,8 @@ abstract class GpuBroadcastExchangeExecBase(
                   // call, depending on BroadcastMode specifics. At this time other results are
                   // not expectd, but we default to the unoptimized path.
                   transformed match {
-                    case EmptyHashedRelation | arr: Array[InternalRow] if arr.isEmpty =>
-                      transformed
+                    case EmptyHashedRelation => transformed
+                    case arr: Array[InternalRow] if arr.isEmpty => transformed
                     case _ => null
                   }
                 }
