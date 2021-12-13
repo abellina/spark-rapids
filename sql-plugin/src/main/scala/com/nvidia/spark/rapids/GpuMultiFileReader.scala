@@ -24,14 +24,12 @@ import scala.annotation.tailrec
 import scala.collection.JavaConverters._
 import scala.collection.mutable.{ArrayBuffer, LinkedHashMap, Queue}
 import scala.math.max
-
-import ai.rapids.cudf.{ColumnVector, HostMemoryBuffer, NvtxColor, NvtxRange, Table}
+import ai.rapids.cudf.{ColumnVector, HostMemoryBuffer, NvtxColor, NvtxRange, ParquetOptions, Table}
 import com.google.common.util.concurrent.ThreadFactoryBuilder
-import com.nvidia.spark.rapids.GpuMetric.{NUM_OUTPUT_BATCHES, PEAK_DEVICE_MEMORY, SEMAPHORE_WAIT_TIME}
+import com.nvidia.spark.rapids.GpuMetric.{GPU_DECODE_TIME, NUM_OUTPUT_BATCHES, PEAK_DEVICE_MEMORY, SEMAPHORE_WAIT_TIME}
 import org.apache.commons.io.IOUtils
 import org.apache.hadoop.conf.Configuration
 import org.apache.hadoop.fs.{FileSystem, Path}
-
 import org.apache.spark.TaskContext
 import org.apache.spark.broadcast.Broadcast
 import org.apache.spark.internal.Logging
@@ -280,6 +278,23 @@ abstract class FilePartitionReaderBase(conf: Configuration, execMetrics: Map[Str
       }
     }
   }
+
+  def readParquetWithDump(parseOpts: ParquetOptions,
+                          dataBuffer: HostMemoryBuffer,
+                          offset: Long,
+                          dataSize: Long): Table = {
+    withResource(new NvtxWithMetrics("Parquet decode",
+      NvtxColor.DARK_GREEN, metrics(GPU_DECODE_TIME))) { _ =>
+      val start = System.currentTimeMillis()
+      val table = Table.readParquet(parseOpts, dataBuffer, 0, dataSize)
+      val end = System.currentTimeMillis()
+      if (end - start > 100) {
+        DumpUtils.dumpToParquetFile(table, "/tmp/for_dave")
+      }
+      table
+    }
+  }
+
 }
 
 /**

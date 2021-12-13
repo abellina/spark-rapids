@@ -1098,17 +1098,14 @@ class MultiFileParquetPartitionReader(
 
     val includeColumns = toCudfColumnNames(readDataSchema, clippedSchema,
       isSchemaCaseSensitive)
-    val parseOpts = ParquetOptions.builder()
+    val parseOpts: ParquetOptions = ParquetOptions.builder()
       .withTimeUnit(DType.TIMESTAMP_MICROSECONDS)
       .includeColumn(includeColumns: _*).build()
 
     // About to start using the GPU
     GpuSemaphore.acquireIfNecessary(TaskContext.get(), metrics(SEMAPHORE_WAIT_TIME))
 
-    val table = withResource(new NvtxWithMetrics(s"$getFileFormatShortName decode",
-      NvtxColor.DARK_GREEN, metrics(GPU_DECODE_TIME))) { _ =>
-      Table.readParquet(parseOpts, dataBuffer, 0, dataSize)
-    }
+    val table = readParquetWithDump(parseOpts, dataBuffer, 0, dataSize)
 
     closeOnExcept(table) { _ =>
       GpuParquetScanBase.throwIfNeeded(
@@ -1378,10 +1375,8 @@ class MultiFileCloudParquetPartitionReader(
       // about to start using the GPU
       GpuSemaphore.acquireIfNecessary(TaskContext.get(), metrics(SEMAPHORE_WAIT_TIME))
 
-      val table = withResource(new NvtxWithMetrics("Parquet decode", NvtxColor.DARK_GREEN,
-        metrics(GPU_DECODE_TIME))) { _ =>
-        Table.readParquet(parseOpts, hostBuffer, 0, dataSize)
-      }
+      val table = readParquetWithDump(parseOpts, hostBuffer, 0, dataSize)
+
       closeOnExcept(table) { _ =>
         GpuParquetScanBase.throwIfNeeded(table, isCorrectInt96RebaseMode, isCorrectRebaseMode,
           hasInt96Timestamps)
@@ -1518,10 +1513,8 @@ class ParquetPartitionReader(
         // about to start using the GPU
         GpuSemaphore.acquireIfNecessary(TaskContext.get(), metrics(SEMAPHORE_WAIT_TIME))
 
-        val table = withResource(new NvtxWithMetrics("Parquet decode", NvtxColor.DARK_GREEN,
-            metrics(GPU_DECODE_TIME))) { _ =>
-          Table.readParquet(parseOpts, dataBuffer, 0, dataSize)
-        }
+        val table = readParquetWithDump(parseOpts, dataBuffer, 0, dataSize)
+
         closeOnExcept(table) { _ =>
           GpuParquetScanBase.throwIfNeeded(table, isCorrectedInt96RebaseMode, isCorrectedRebaseMode,
             hasInt96Timestamps)
