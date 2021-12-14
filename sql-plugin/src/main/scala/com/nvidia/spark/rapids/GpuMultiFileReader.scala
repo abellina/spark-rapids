@@ -16,8 +16,9 @@
 
 package com.nvidia.spark.rapids
 
-import java.io.File
+import java.io.{File, FileOutputStream}
 import java.net.{URI, URISyntaxException}
+import java.util.UUID
 import java.util.concurrent.{Callable, ConcurrentLinkedQueue, Future, LinkedBlockingQueue, ThreadPoolExecutor, TimeUnit}
 
 import scala.annotation.tailrec
@@ -289,7 +290,24 @@ abstract class FilePartitionReaderBase(conf: Configuration, execMetrics: Map[Str
       val table = Table.readParquet(parseOpts, dataBuffer, 0, dataSize)
       val end = System.currentTimeMillis()
       if (end - start > 100) {
-        DumpUtils.dumpToParquetFile(table, "/tmp/for_dave")
+        val uuid = UUID.randomUUID()
+        val path = if (end - start < 150) {
+          new File(s"/tmp/parquet_decode/lt_150/${uuid}")
+        } else if (end - start < 200) {
+          new File(s"/tmp/parquet_decode/lt_200/${uuid}")
+        } else if (end - start < 250) {
+          new File(s"/tmp/parquet_decode/lt_250/${uuid}")
+        } else {
+          new File(s"/tmp/parquet_decode/gte_250/${uuid}")
+        }
+        path.mkdirs()
+        val bb = dataBuffer.asByteBuffer()
+        bb.limit(dataSize.toInt)
+        withResource(
+          new FileOutputStream(
+            s"${path}/${System.currentTimeMillis()}.data").getChannel) { fc =>
+          fc.write(bb)
+        }
       }
       table
     }
