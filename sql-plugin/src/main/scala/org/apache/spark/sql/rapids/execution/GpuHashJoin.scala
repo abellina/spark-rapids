@@ -372,7 +372,10 @@ class HashJoinIterator(
   }
 }
 
-/** An iterator that does a hash join against a stream of batches with an inequality condition. */
+/**
+ * An iterator that does a hash join against a stream of batches with an inequality condition.
+ * The compiled condition will be closed when this iterator is closed.
+ */
 class ConditionalHashJoinIterator(
     built: LazySpillableColumnarBatch,
     val boundBuiltKeys: Seq[Expression],
@@ -438,6 +441,13 @@ class ConditionalHashJoinIterator(
         // Split batch and return no gatherer so the outer loop will try again
         splitAndSave(cb, numBatches, Some(oom))
         None
+    }
+  }
+
+  override def close(): Unit = {
+    if (!closed) {
+      super.close()
+      compiledCondition.close()
     }
   }
 
@@ -693,6 +703,7 @@ trait GpuHashJoin extends GpuExec {
     // The HashJoinIterator takes ownership of the built keys and built data. It will close
     // them when it is done
     val joinIterator = if (boundCondition.isDefined) {
+      // ConditionalHashJoinIterator will close the compiled condition
       val compiledCondition =
         boundCondition.get.convertToAst(numFirstConditionTableColumns).compile()
       new ConditionalHashJoinIterator(spillableBuiltBatch, boundBuildKeys, lazyStream,
