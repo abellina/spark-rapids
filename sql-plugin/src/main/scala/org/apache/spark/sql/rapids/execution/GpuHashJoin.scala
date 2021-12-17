@@ -15,7 +15,8 @@
  */
 package org.apache.spark.sql.rapids.execution
 
-import ai.rapids.cudf.{DType, GroupByAggregation, NullPolicy, NvtxColor, ReductionAggregation, Table}
+import ai.rapids.cudf.{DType, GroupByAggregation, NullEquality, NullPolicy, NvtxColor, ReductionAggregation, Table}
+import ai.rapids.cudf.ast.CompiledExpression
 import com.nvidia.spark.rapids._
 
 import org.apache.spark.sql.catalyst.expressions.{Attribute, AttributeReference, Expression, NamedExpression}
@@ -371,6 +372,177 @@ class HashJoinIterator(
   }
 }
 
+/** An iterator that does a hash join against a stream of batches with an inequality condition. */
+class ConditionalHashJoinIterator(
+    built: LazySpillableColumnarBatch,
+    val boundBuiltKeys: Seq[Expression],
+    private val stream: Iterator[LazySpillableColumnarBatch],
+    val boundStreamKeys: Seq[Expression],
+    val streamAttributes: Seq[Attribute],
+    val compiledCondition: CompiledExpression,
+    val targetSize: Long,
+    val joinType: JoinType,
+    val buildSide: GpuBuildSide,
+    val compareNullsEqual: Boolean, // This is a workaround to how cudf support joins for structs
+    private val spillCallback: SpillCallback,
+    private val opTime: GpuMetric,
+    private val joinTime: GpuMetric)
+    extends SplittableJoinIterator(
+      s"hash $joinType gather",
+      stream,
+      streamAttributes,
+      built,
+      targetSize,
+      spillCallback,
+      opTime = opTime,
+      joinTime = joinTime) {
+  // We can cache this because the build side is not changing
+  private lazy val streamMagnificationFactor = joinType match {
+    case _: InnerLike | LeftOuter | RightOuter =>
+      withResource(GpuProjectExec.project(built.getBatch, boundBuiltKeys)) { builtKeys =>
+        guessStreamMagnificationFactor(builtKeys)
+      }
+    case _ =>
+      // existence joins don't change size, and FullOuter cannot be split
+      1.0
+  }
+
+  override def computeNumJoinRows(cb: ColumnarBatch): Long = {
+    // TODO: Replace this estimate with exact join row counts using the corresponding cudf APIs
+    //       being added in https://github.com/rapidsai/cudf/issues/9053.
+    joinType match {
+      case _: InnerLike | LeftOuter | RightOuter =>
+        Math.ceil(cb.numRows() * streamMagnificationFactor).toLong
+      case _ => cb.numRows()
+    }
+  }
+
+  override def createGatherer(
+      cb: ColumnarBatch,
+      numJoinRows: Option[Long]): Option[JoinGatherer] = {
+    try {
+      withResource(GpuProjectExec.project(built.getBatch, boundBuiltKeys)) { builtKeys =>
+        joinGatherer(builtKeys, built, cb)
+      }
+    } catch {
+      // This should work for all join types except for FullOuter. There should be no need
+      // to do this for any of the existence joins because the output rows will never be
+      // larger than the input rows on the stream side.
+      case oom: OutOfMemoryError if joinType.isInstanceOf[InnerLike]
+          || joinType == LeftOuter
+          || joinType == RightOuter =>
+        // Because this is just an estimate, it is possible for us to get this wrong, so
+        // make sure we at least split the batch in half.
+        val numBatches = Math.max(2, estimatedNumBatches(cb))
+
+        // Split batch and return no gatherer so the outer loop will try again
+        splitAndSave(cb, numBatches, Some(oom))
+        None
+    }
+  }
+
+  private def joinGathererLeftRight(
+      leftKeys: Table,
+      leftData: LazySpillableColumnarBatch,
+      rightKeys: Table,
+      rightData: LazySpillableColumnarBatch): Option[JoinGatherer] = {
+    val nullEquality = if (compareNullsEqual) NullEquality.EQUAL else NullEquality.UNEQUAL
+    withResource(new NvtxWithMetrics("hash join gather map", NvtxColor.ORANGE, joinTime)) { _ =>
+      withResource(GpuColumnVector.from(leftData.getBatch)) { leftTable =>
+        withResource(GpuColumnVector.from(rightData.getBatch)) { rightTable =>
+          val maps = joinType match {
+//            case LeftOuter => leftKeys.leftJoinGatherMaps(rightKeys, compareNullsEqual)
+//            case RightOuter =>
+//              // Reverse the output of the join, because we expect the right gather map to
+//              // always be on the right
+//              rightKeys.leftJoinGatherMaps(leftKeys, compareNullsEqual).reverse
+            case _: InnerLike => Table.mixedInnerJoinGatherMaps(
+              leftKeys, rightKeys, leftTable, rightTable, compiledCondition, nullEquality)
+//            case LeftSemi => Array(leftKeys.leftSemiJoinGatherMap(rightKeys, compareNullsEqual))
+//            case LeftAnti => Array(leftKeys.leftAntiJoinGatherMap(rightKeys, compareNullsEqual))
+//            case FullOuter => leftKeys.fullJoinGatherMaps(rightKeys, compareNullsEqual)
+            case _ =>
+              throw new NotImplementedError(s"Joint Type ${joinType.getClass} is not currently" +
+                  s" supported")
+          }
+          makeGatherer(maps, leftData, rightData, joinType)
+        }
+      }
+    }
+  }
+
+  private def joinGathererLeftRight(
+      leftKeys: ColumnarBatch,
+      leftData: LazySpillableColumnarBatch,
+      rightKeys: ColumnarBatch,
+      rightData: LazySpillableColumnarBatch): Option[JoinGatherer] = {
+    withResource(GpuColumnVector.from(leftKeys)) { leftKeysTab =>
+      withResource(GpuColumnVector.from(rightKeys)) { rightKeysTab =>
+        joinGathererLeftRight(leftKeysTab, leftData, rightKeysTab, rightData)
+      }
+    }
+  }
+
+  private def joinGatherer(
+      buildKeys: ColumnarBatch,
+      buildData: LazySpillableColumnarBatch,
+      streamKeys: ColumnarBatch,
+      streamData: LazySpillableColumnarBatch): Option[JoinGatherer] = {
+    buildSide match {
+      case GpuBuildLeft =>
+        joinGathererLeftRight(buildKeys, buildData, streamKeys, streamData)
+      case GpuBuildRight =>
+        joinGathererLeftRight(streamKeys, streamData, buildKeys, buildData)
+    }
+  }
+
+  private def joinGatherer(
+      buildKeys: ColumnarBatch,
+      buildData: LazySpillableColumnarBatch,
+      streamCb: ColumnarBatch): Option[JoinGatherer] = {
+    withResource(GpuProjectExec.project(streamCb, boundStreamKeys)) { streamKeys =>
+      closeOnExcept(LazySpillableColumnarBatch(streamCb, spillCallback, "stream_data")) { sd =>
+        joinGatherer(buildKeys, LazySpillableColumnarBatch.spillOnly(buildData), streamKeys, sd)
+      }
+    }
+  }
+
+  private def countGroups(keys: ColumnarBatch): Table = {
+    withResource(GpuColumnVector.from(keys)) { keysTable =>
+      keysTable.groupBy(0 until keysTable.getNumberOfColumns: _*)
+          .aggregate(GroupByAggregation.count(NullPolicy.INCLUDE).onColumn(0))
+    }
+  }
+
+  /**
+   * Guess the magnification factor for a stream side batch.
+   * This is temporary until cudf gives us APIs to get the actual gather map size.
+   */
+  private def guessStreamMagnificationFactor(builtKeys: ColumnarBatch): Double = {
+    // Based off of the keys on the build side guess at how many output rows there
+    // will be for each input row on the stream side. This does not take into account
+    // the join type, data skew or even if the keys actually match.
+    withResource(countGroups(builtKeys)) { builtCount =>
+      val counts = builtCount.getColumn(builtCount.getNumberOfColumns - 1)
+      withResource(counts.reduce(ReductionAggregation.mean(), DType.FLOAT64)) { scalarAverage =>
+        scalarAverage.getDouble
+      }
+    }
+  }
+
+  private def estimatedNumBatches(cb: ColumnarBatch): Int = joinType match {
+    case _: InnerLike | LeftOuter | RightOuter =>
+      // We want the gather map size to be around the target size. There are two gather maps
+      // that are made up of ints, so estimate how many rows per batch on the stream side
+      // will produce the desired gather map size.
+      val approximateStreamRowCount = ((targetSize.toDouble / 2) /
+          DType.INT32.getSizeInBytes) / streamMagnificationFactor
+      val estimatedRowsPerStreamBatch = Math.min(Int.MaxValue, approximateStreamRowCount)
+      Math.ceil(cb.numRows() / estimatedRowsPerStreamBatch).toInt
+    case _ => 1
+  }
+}
+
 trait GpuHashJoin extends GpuExec {
   def left: SparkPlan
   def right: SparkPlan
@@ -465,16 +637,24 @@ trait GpuHashJoin extends GpuExec {
   protected lazy val compareNullsEqual: Boolean = (joinType != FullOuter) &&
       GpuHashJoin.anyNullableStructChild(buildKeys)
 
-  protected lazy val (boundBuildKeys, boundStreamKeys, boundCondition) = {
+  protected lazy val (boundBuildKeys, boundStreamKeys) = {
     val lkeys = GpuBindReferences.bindGpuReferences(leftKeys, left.output)
     val rkeys = GpuBindReferences.bindGpuReferences(rightKeys, right.output)
-    val boundCondition =
-      condition.map(c => GpuBindReferences.bindGpuReference(c, output))
-
     buildSide match {
-      case GpuBuildLeft => (lkeys, rkeys, boundCondition)
-      case GpuBuildRight => (rkeys, lkeys, boundCondition)
+      case GpuBuildLeft => (lkeys, rkeys)
+      case GpuBuildRight => (rkeys, lkeys)
     }
+  }
+
+  protected lazy val (numFirstConditionTableColumns, boundCondition) = {
+    val (joinLeft, joinRight) = joinType match {
+      case RightOuter => (right, left)
+      case _ => (left, right)
+    }
+    val boundCondition = condition.map { c =>
+      GpuBindReferences.bindGpuReference(c, joinLeft.output ++ joinRight.output)
+    }
+    (joinLeft.output.size, boundCondition)
   }
 
   def doJoin(
@@ -512,19 +692,23 @@ trait GpuHashJoin extends GpuExec {
 
     // The HashJoinIterator takes ownership of the built keys and built data. It will close
     // them when it is done
-    val joinIterator =
+    val joinIterator = if (boundCondition.isDefined) {
+      val compiledCondition =
+        boundCondition.get.convertToAst(numFirstConditionTableColumns).compile()
+      new ConditionalHashJoinIterator(spillableBuiltBatch, boundBuildKeys, lazyStream,
+        boundStreamKeys, streamedPlan.output, compiledCondition,
+        realTarget, joinType, buildSide, compareNullsEqual, spillCallback, opTime, joinTime)
+    } else {
       new HashJoinIterator(spillableBuiltBatch, boundBuildKeys, lazyStream, boundStreamKeys,
         streamedPlan.output, realTarget, joinType, buildSide, compareNullsEqual, spillCallback,
         opTime, joinTime)
-    if (boundCondition.isDefined) {
-      throw new IllegalStateException("Conditional joins are not supported on the GPU")
-    } else {
-      joinIterator.map { cb =>
-        joinOutputRows += cb.numRows()
-        numOutputRows += cb.numRows()
-        numOutputBatches += 1
-        cb
-      }
+    }
+
+    joinIterator.map { cb =>
+      joinOutputRows += cb.numRows()
+      numOutputRows += cb.numRows()
+      numOutputBatches += 1
+      cb
     }
   }
 }
