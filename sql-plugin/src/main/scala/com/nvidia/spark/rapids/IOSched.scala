@@ -6,11 +6,10 @@ import org.apache.spark.TaskContext
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.types.StructType
 
-import java.util.concurrent.{ConcurrentHashMap, Executors, LinkedBlockingQueue}
+import java.util.concurrent.{ConcurrentHashMap, Executors, Future, LinkedBlockingQueue, TimeUnit}
 import java.util.concurrent.atomic.AtomicLong
 import scala.collection.mutable
 import scala.collection.mutable.ArrayBuffer
-import java.util.concurrent.Future
 
 object IOSched extends Logging with Arm {
   type StreamedResult = (HostMemoryBuffer, Long, Long, Seq[DataBlockBase])
@@ -19,6 +18,7 @@ object IOSched extends Logging with Arm {
   type CombinerFn =
     (HostMemoryBuffer, Seq[DataBlockBase], SchemaBase, Long, Long, Long)
     => (HostMemoryBuffer, Long)
+  type FinalFn = (Long, Seq[DataBlockBase], SchemaBase) => Long
 
   type ReadToTableFn = (HostMemoryBuffer, Long, SchemaBase, ExtraInfo) =>
     Table
@@ -30,17 +30,25 @@ object IOSched extends Logging with Arm {
                   streamerFn: StreamerFn,
                   combiner: CombinerFn,
                   readToTableFn: ReadToTableFn,
-                  finalFn: ((Long, Seq[DataBlockBase], SchemaBase) => Long),
+                  finalFn: FinalFn,
                   clippedSchema: SchemaBase,
                   extraInfo: ExtraInfo)
 
   val q = new LinkedBlockingQueue[Task]()
   val b = new LinkedBlockingQueue[() => Unit]()
   val r = new ConcurrentHashMap[Long, ContiguousTable]()
+  val s = new ConcurrentHashMap[Long, () => Unit]()
   var ix = new AtomicLong(0L)
   val bMonitor = new Object
 
   def getMySlice(l: Long): ContiguousTable = {
+    while (!s.containsKey(l)) {
+      bMonitor.synchronized {
+        logInfo(s"Waiting for stream task ${l}")
+        bMonitor.wait()
+      }
+    }
+    s.remove(l)()
     while (!r.containsKey(l)) {
       bMonitor.synchronized {
         logInfo(s"Waiting for ${l}")
@@ -93,10 +101,60 @@ object IOSched extends Logging with Arm {
         val futures = new ArrayBuffer[Future[Seq[DataBlockBase]]]()
         for ((res, myOffset) <- toCompute.zip(offsets)) {
           val theOffset = offset
-          futures += tp2.submit(() => {
-            val (_, outBlocks: Seq[DataBlockBase]) = res.streamerFn(hmb, theOffset)
-            outBlocks
+
+          class Foo extends Future[Seq[DataBlockBase]] {
+            var _result: Seq[DataBlockBase] = null
+
+            def setResult(dbb: Seq[DataBlockBase]): Unit = {
+              synchronized {
+                _result = dbb
+                notifyAll()
+              }
+            }
+
+            override def cancel(b: Boolean): Boolean = {
+              false
+            }
+
+            override def isCancelled: Boolean = {
+              false
+            }
+
+            override def isDone: Boolean = synchronized {
+              _result != null
+            }
+
+            override def get(): Seq[DataBlockBase] = {
+              synchronized {
+                logInfo("going into get")
+                while (_result == null) {
+                  wait()
+                }
+                logInfo("return from get")
+                _result
+              }
+            }
+
+            override def get(l: Long, timeUnit: TimeUnit): Seq[DataBlockBase] = {
+              synchronized {
+                while (_result == null) {
+                  wait(l)
+                }
+                _result
+              }
+            }
+          }
+          val f = new Foo
+          futures += f
+          s.put(res.myIx, () => {
+            val x: (Long, ArrayBuffer[DataBlockBase]) =
+              res.streamerFn(hmb, theOffset)
+            logInfo(s"Streamed ${res.myIx}")
+            f.setResult(x._2)
           })
+          bMonitor.synchronized {
+            bMonitor.notifyAll()
+          }
           offset += myOffset
           val rowCount = res.filesAndBlocks.values.flatten.map(_.getRowCount).sum.toInt
           logInfo(s"Working! on ${res} " +
@@ -105,7 +163,6 @@ object IOSched extends Logging with Arm {
           runningSumOfRows += rowCount
           rowCountsPerTask.append(runningSumOfRows)
         }
-
         tpWaitForIo.execute(() => {
           val allOutBlocks: Seq[DataBlockBase] =
             futures.flatMap(f => f.get())
@@ -146,6 +203,8 @@ object IOSched extends Logging with Arm {
     }
   })
 
+  var currentTask: Task = null
+
   def addReadTask(filesAndBlocks: mutable.LinkedHashMap[Path, ArrayBuffer[DataBlockBase]],
                   clippedSchema: SchemaBase,
                   initTotalSize: Long,
@@ -154,7 +213,7 @@ object IOSched extends Logging with Arm {
                   blockStreamerFn: StreamerFn,
                   blockCombinerFn: CombinerFn,
                   readerToTableFn: ReadToTableFn,
-                  finalFn: ((Long, Seq[DataBlockBase], SchemaBase) => Long),
+                  finalFn: FinalFn,
                   readDataSchema: StructType,
                   currentChunkedBlocks: Seq[(Path, DataBlockBase)]): Option[ContiguousTable] = {
     logInfo(s"I got a task from ${TaskContext.get()}: " +

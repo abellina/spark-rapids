@@ -693,7 +693,7 @@ trait ParquetPartitionReaderBase extends Logging with Arm with ScanWithMetrics
     val copyRanges = new ArrayBuffer[CopyRange]
     val outputBlocks = computeBlockMetaData(blocks, realStartOffset, Some(copyRanges))
     val copyBuffer = new Array[Byte](copyBufferSize)
-    copyRanges.foreach(copyRange => copyDataRange(copyRange, in, out, copyBuffer))
+    copyRanges.foreach(copyDataRange(_, in, out, copyBuffer))
     outputBlocks
   }
 
@@ -1025,7 +1025,7 @@ class MultiFileParquetPartitionReader(
         val startBytesRead = fileSystemBytesRead()
         val res = withResource(outhmb) { _ =>
           withResource(new HostMemoryOutputStream(outhmb)) { out =>
-            withResource(file.getFileSystem(conf).open(file)) { in =>
+            withResource(file.getFileSystem(conf).open(file)) { in: FSDataInputStream =>
               copyBlocksData(in, out, blocks, offset)
             }
           }
