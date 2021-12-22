@@ -403,7 +403,7 @@ class ConditionalHashJoinIterator(
   private lazy val streamMagnificationFactor = joinType match {
     case _: InnerLike | LeftOuter | RightOuter =>
       withResource(GpuProjectExec.project(built.getBatch, boundBuiltKeys)) { builtKeys =>
-        guessStreamMagnificationFactor(builtKeys)
+        guessStreamMagnificationFactor(builtKeys)/System.getProperty("rapidsMagFactorFudge").toLong
       }
     case _ =>
       // existence joins don't change size, and FullOuter cannot be split
