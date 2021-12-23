@@ -18,7 +18,6 @@ package com.nvidia.spark.rapids
 
 import java.util.concurrent.{ConcurrentHashMap, Semaphore}
 import ai.rapids.cudf.{NvtxColor, NvtxRange}
-import com.nvidia.spark.rapids.GpuSemaphore.logInfo
 import org.apache.commons.lang3.mutable.MutableInt
 import org.apache.spark.TaskContext
 import org.apache.spark.internal.Logging
@@ -107,7 +106,11 @@ object GpuSemaphore {
 private final class GpuSemaphore(tasksPerGpu: Int) extends Logging with Arm {
   private val semaphore = new Semaphore(tasksPerGpu)
   // Map to track which tasks have acquired the semaphore.
-  case class ActiveTask(count: MutableInt, deviceMemorySize: Long)
+  class ActiveTask { 
+    val count: MutableInt = new MutableInt(1)
+    var deviceMemorySize: Long = 0L
+  }
+
   private val activeTasks = new ConcurrentHashMap[Long, ActiveTask]
 
   def taskUsedDeviceMemory(context: TaskContext, deviceMemorySize: Long) = {
@@ -150,7 +153,7 @@ private final class GpuSemaphore(tasksPerGpu: Int) extends Logging with Arm {
           refs.count.increment()
         } else {
           // first time this task has been seen
-          activeTasks.put(taskAttemptId, ActiveTask(new MutableInt(1), 0L))
+          activeTasks.put(taskAttemptId, new ActiveTask)
           context.addTaskCompletionListener[Unit](completeTask)
         }
         GpuDeviceManager.initializeFromTask()
