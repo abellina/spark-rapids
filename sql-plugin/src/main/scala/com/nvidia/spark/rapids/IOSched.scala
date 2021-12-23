@@ -67,10 +67,14 @@ object IOSched extends Logging with Arm {
     while (true) {
       val toCompute = new ArrayBuffer[Task]()
       var initialTotalSize = 0L
-      var schema: SchemaBase = null
       var schemasSame: Boolean = true
+      val task = q.take() // sleep if empty
+      var schema = task.clippedSchema
+      toCompute.append(task)
+      initialTotalSize += task.initTotalSize
+      logInfo(s"More? ${q.size()}")
       while (q.size() > 0 &&
-        initialTotalSize < 1L*1024*1024*1024 &&
+        initialTotalSize < 512L*1024*1024 &&
         schemasSame) {
         logInfo("Dequeing...")
         if (schema != null) {
