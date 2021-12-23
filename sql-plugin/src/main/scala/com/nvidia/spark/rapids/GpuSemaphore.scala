@@ -104,7 +104,10 @@ object GpuSemaphore {
 }
 
 private final class GpuSemaphore(tasksPerGpu: Int) extends Logging with Arm {
-  private val semaphore = new Semaphore(tasksPerGpu)
+  private val semaphore = new Semaphore(16)
+
+  semaphore.acquire(16 - tasksPerGpu)
+  var fudge = 16 - tasksPerGpu
   // Map to track which tasks have acquired the semaphore.
   class ActiveTask { 
     val count: MutableInt = new MutableInt(1)
@@ -134,11 +137,32 @@ private final class GpuSemaphore(tasksPerGpu: Int) extends Logging with Arm {
       val othersUsedMB = (othersUsed.toDouble/1024L/1024L).toInt
       val allocatedMB = (ai.rapids.cudf.Rmm.getTotalBytesAllocated.toDouble/1024L/1024L).toInt
       val underUtilFactor = (othersUsedMB.toDouble + iUsedMB.toDouble)/maxAllocationMB
+
       logInfo(s"Task $taskAttemptId actually used $iUsedMB MB, and " +
         s"others used $othersUsedMB MB. Under util factor ($underUtilFactor)." +
         s"We have $allocatedMB MB overall allocated out of $maxAllocationMB " +
         s"We have ${semaphore.availablePermits()} available permits, and " +
         s"${semaphore.getQueueLength} queued.")
+
+      if (semaphore.getQueueLength > 1) {
+        synchronized { 
+          if (underUtilFactor < 0.25) {
+            logInfo(s"Under utilized ${underUtilFactor}. Available ${fudge}")
+            if (fudge > 0) {
+              logInfo(s"Adding permit. Under utilized ${underUtilFactor}, Available ${fudge}")
+              semaphore.release(1)
+              fudge = fudge - 1
+            }
+          } else {
+            logInfo(s"Over utilized ${underUtilFactor}, removing permit. Available ${fudge}")
+            if (fudge < 16 - tasksPerGpu) {
+              logInfo(s"Removing permit. Over utilized ${underUtilFactor}, Available ${fudge}")
+              semaphore.acquire(1)
+              fudge = fudge + 1
+            }
+          }
+        }
+      }
     }
   }
 
