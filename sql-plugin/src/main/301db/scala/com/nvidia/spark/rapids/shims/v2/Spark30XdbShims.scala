@@ -396,6 +396,7 @@ abstract class Spark30XdbShims extends Spark30XdbShimsBase with Logging {
         override def tagSelfForGpu(): Unit = GpuParquetScanBase.tagSupport(this)
 
         override def convertToGpu(): Scan = {
+          // TODO: can you find if this task is part of magnification stage.
           GpuParquetScan(a.sparkSession,
             a.hadoopConf,
             a.fileIndex,

@@ -112,6 +112,12 @@ abstract class GpuParquetScanBase(
 object GpuParquetScanBase {
   def tagSupport(scanMeta: ScanMeta[ParquetScan]): Unit = {
     val scan = scanMeta.wrapped
+    var parent = scanMeta.parent
+    logInfo(s"${scanMeta} check parents. ${parent}")
+    while (parent.isDefined) {
+      logInfo(s".. parent ${parent}")
+      parent = parent.get.parent
+    }
     val schema = StructType(scan.readDataSchema ++ scan.readPartitionSchema)
     tagSupport(scan.sparkSession, schema, scanMeta)
   }

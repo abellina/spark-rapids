@@ -132,6 +132,13 @@ private final class GpuSemaphore(tasksPerGpu: Int) extends Logging with Arm {
           }
         }
       }
+      // iUsedMB + othersUsedMB is overall GPU memory used right now (more or less)
+      // it comes from the scan tasks only, and it's actual memory, but it doesn't include
+      // any effects of downstream tasks (will they filter, or magnify the data on the gpu)
+      // Rule:
+      // if all stages running end in an exchange, we can play games. If the stage has
+      // an expand that may be bad, if the stage is the stream side of a broadcast that
+      // may also be bad.
       val maxAllocationMB = (GpuDeviceManager.poolAllocationTotal.toDouble/1024L/1024L).toInt
       val iUsedMB = (refs.deviceMemorySize.toDouble/1024L/1024L).toInt
       val othersUsedMB = (othersUsed.toDouble/1024L/1024L).toInt
