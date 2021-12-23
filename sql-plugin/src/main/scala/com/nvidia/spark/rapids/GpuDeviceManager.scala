@@ -34,6 +34,7 @@ private case object Uninitialized extends MemoryState
 private case object Errored extends MemoryState
 
 object GpuDeviceManager extends Logging {
+
   // This config controls whether RMM/Pinned memory are initialized from the task
   // or from the executor side plugin. The default is to initialize from the
   // executor plugin.
@@ -218,6 +219,8 @@ object GpuDeviceManager extends Logging {
     poolAllocation
   }
 
+  var poolAllocationTotal: Long = 0L
+
   private def initializeRmm(gpuId: Int, rapidsConf: Option[RapidsConf] = None): Unit = {
     if (!Rmm.isInitialized) {
       val conf = rapidsConf.getOrElse(new RapidsConf(SparkEnv.get.conf))
@@ -290,12 +293,14 @@ object GpuDeviceManager extends Logging {
       try {
         Cuda.setDevice(gpuId)
         Rmm.initialize(init, logConf, poolAllocation)
+        poolAllocationTotal = poolAllocation
         RapidsBufferCatalog.init(conf)
       } catch {
         case e: Exception => logError("Could not initialize RMM", e)
       }
     }
   }
+
 
   private def allocatePinnedMemory(gpuId: Int, rapidsConf: Option[RapidsConf] = None): Unit = {
     val conf = rapidsConf.getOrElse(new RapidsConf(SparkEnv.get.conf))
