@@ -45,7 +45,6 @@ import org.apache.parquet.schema.PrimitiveType.PrimitiveTypeName
 import org.apache.spark.TaskContext
 import org.apache.spark.broadcast.Broadcast
 import org.apache.spark.internal.Logging
-import org.apache.spark.rapids.shims.v2.GpuShuffleExchangeExec
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.util.CaseInsensitiveMap
@@ -55,7 +54,7 @@ import org.apache.spark.sql.execution.datasources.{DataSourceUtils, PartitionedF
 import org.apache.spark.sql.execution.datasources.parquet.ParquetReadSupport
 import org.apache.spark.sql.execution.datasources.v2.FilePartitionReaderFactory
 import org.apache.spark.sql.execution.datasources.v2.parquet.ParquetScan
-import org.apache.spark.sql.execution.exchange.ShuffleExchangeLike
+import org.apache.spark.sql.execution.exchange.{BroadcastExchangeLike, ShuffleExchangeLike}
 import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.rapids.execution.{GpuHashJoin, TrampolineUtil}
 import org.apache.spark.sql.sources.Filter
@@ -146,14 +145,19 @@ object GpuParquetScanBase {
     println(s"${meta} check parents. ${parent}")
 
     var couldExplode = false
-    var foundExchange = parent.exists(x => x.wrapped.isInstanceOf[ShuffleExchangeLike])
+    var foundExchange =
+      parent.exists(x => {
+        x.wrapped.isInstanceOf[ShuffleExchangeLike] || x.wrapped.isInstanceOf[BroadcastExchangeLike]
+      })
     while (parent.isDefined && !couldExplode && !foundExchange) {
       couldExplode = parent.get.wrapped match {
         case GpuHashJoin => true
         case GpuHashAggregateExec => true
         case _ => false
       }
-      foundExchange = parent.exists(x => x.wrapped.isInstanceOf[ShuffleExchangeLike])
+      foundExchange = parent.exists(x => {
+        x.wrapped.isInstanceOf[ShuffleExchangeLike] || x.wrapped.isInstanceOf[BroadcastExchangeLike]
+      })
       println(s".. parent ${parent} could explode? $couldExplode found exchange? $foundExchange")
       parent = parent.get.parent
     }
