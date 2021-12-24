@@ -152,16 +152,29 @@ private final class GpuSemaphore(tasksPerGpu: Int) extends Logging with Arm {
         s"We have ${semaphore.availablePermits()} available permits, and " +
         s"${semaphore.getQueueLength} queued. Could explode? $couldExplode")
 
-      if (semaphore.getQueueLength > 1) {
-        synchronized { 
-          if (underUtilFactor < 0.25) {
+      if (couldExplode || semaphore.getQueueLength > 1) {
+        if (couldExplode) {
+          logInfo("COULD EXPLODE!!")
+          if (semaphore.availablePermits() > tasksPerGpu){
+            // block until we acquire all this
+            semaphore.acquire(16 - tasksPerGpu)
+            synchronized { 
+              fudge = 16 - tasksPerGpu
+            }
+          } else {
+            logInfo("Already reclaimed credits..")
+          }
+        } else if (underUtilFactor < 0.25) {
+          synchronized { 
             logInfo(s"Under utilized ${underUtilFactor}. Available ${fudge}")
             if (fudge > 0) {
               logInfo(s"Adding permit. Under utilized ${underUtilFactor}, Available ${fudge}")
               semaphore.release(1)
               fudge = fudge - 1
             }
-          } else {
+          }
+        } else {
+          synchronized { 
             logInfo(s"Over utilized ${underUtilFactor}, removing permit. Available ${fudge}")
             if (fudge < 16 - tasksPerGpu) {
               logInfo(s"Removing permit. Over utilized ${underUtilFactor}, Available ${fudge}")
