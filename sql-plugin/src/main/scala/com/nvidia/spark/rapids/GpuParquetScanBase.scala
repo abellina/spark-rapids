@@ -21,13 +21,11 @@ import java.net.URI
 import java.nio.charset.StandardCharsets
 import java.util.{Collections, Locale}
 import java.util.concurrent._
-
 import scala.annotation.tailrec
 import scala.collection.JavaConverters._
 import scala.collection.mutable.{ArrayBuffer, LinkedHashMap}
 import scala.language.implicitConversions
 import scala.math.max
-
 import ai.rapids.cudf._
 import com.nvidia.spark.RebaseHelper
 import com.nvidia.spark.rapids.GpuMetric._
@@ -44,10 +42,10 @@ import org.apache.parquet.hadoop.{ParquetFileReader, ParquetInputFormat}
 import org.apache.parquet.hadoop.metadata._
 import org.apache.parquet.schema.{GroupType, MessageType, OriginalType, PrimitiveType, Type, Types}
 import org.apache.parquet.schema.PrimitiveType.PrimitiveTypeName
-
 import org.apache.spark.TaskContext
 import org.apache.spark.broadcast.Broadcast
 import org.apache.spark.internal.Logging
+import org.apache.spark.rapids.shims.v2.GpuShuffleExchangeExec
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.util.CaseInsensitiveMap
@@ -57,12 +55,15 @@ import org.apache.spark.sql.execution.datasources.{DataSourceUtils, PartitionedF
 import org.apache.spark.sql.execution.datasources.parquet.ParquetReadSupport
 import org.apache.spark.sql.execution.datasources.v2.FilePartitionReaderFactory
 import org.apache.spark.sql.execution.datasources.v2.parquet.ParquetScan
+import org.apache.spark.sql.execution.exchange.ShuffleExchangeLike
 import org.apache.spark.sql.internal.SQLConf
-import org.apache.spark.sql.rapids.execution.TrampolineUtil
+import org.apache.spark.sql.rapids.execution.{GpuHashJoin, TrampolineUtil}
 import org.apache.spark.sql.sources.Filter
 import org.apache.spark.sql.types._
 import org.apache.spark.sql.vectorized.ColumnarBatch
 import org.apache.spark.util.SerializableConfiguration
+
+import scala.Option
 
 
 /**
@@ -143,10 +144,20 @@ object GpuParquetScanBase {
       meta: RapidsMeta[_, _, _]): Unit = {
     var parent = meta.parent
     println(s"${meta} check parents. ${parent}")
-    while (parent.isDefined) {
-      println(s".. parent ${parent}")
+
+    var couldExplode = false
+    var foundExchange = parent.exists(x => x.wrapped.isInstanceOf[ShuffleExchangeLike])
+    while (parent.isDefined && !couldExplode && !foundExchange) {
+      couldExplode = parent.get.wrapped match {
+        case GpuHashJoin => true
+        case GpuHashAggregateExec => true
+        case _ => false
+      }
+      foundExchange = parent.exists(x => x.wrapped.isInstanceOf[ShuffleExchangeLike])
+      println(s".. parent ${parent} could explode? $couldExplode found exchange? $foundExchange")
       parent = parent.get.parent
     }
+    println(s"This could explode $couldExplode found exchange? $foundExchange")
     val sqlConf = sparkSession.conf
 
     if (!meta.conf.isParquetEnabled) {
