@@ -66,7 +66,8 @@ case class GpuFileSourceScanExec(
     optionalNumCoalescedBuckets: Option[Int],
     dataFilters: Seq[Expression],
     tableIdentifier: Option[TableIdentifier],
-    queryUsesInputFile: Boolean = false)(@transient val rapidsConf: RapidsConf)
+    queryUsesInputFile: Boolean = false,
+    couldExplode: Boolean = false)(@transient val rapidsConf: RapidsConf)
     extends GpuDataSourceScanExec with GpuExec {
   import GpuMetric._
 
@@ -517,7 +518,8 @@ case class GpuFileSourceScanExec(
             pushedDownFilters.toArray,
             rapidsConf,
             allMetrics,
-            queryUsesInputFile)
+            queryUsesInputFile,
+            couldExplode = couldExplode)
         case _: OrcFileFormat =>
           GpuOrcMultiFilePartitionReaderFactory(
             sqlConf,

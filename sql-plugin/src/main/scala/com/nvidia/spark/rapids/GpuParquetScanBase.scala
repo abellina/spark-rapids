@@ -142,7 +142,7 @@ object GpuParquetScanBase {
     }
   }
   
-  def couldExplode(scanMeta: ScanMeta[ParquetScan]): Boolean = {
+  def couldExplode(scanMeta: RapidsMeta[_, _, _]): Boolean = {
     var parent = scanMeta.parent
     println(s"${scanMeta} check parents}")
 
