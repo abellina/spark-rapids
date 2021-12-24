@@ -200,7 +200,8 @@ trait Spark301until320Shims extends SparkShims {
             a.options,
             a.partitionFilters,
             a.dataFilters,
-            conf)
+            conf,
+            GpuParquetScanBase.couldExplode(this))
         }
       }),
     GpuOverrides.scan[OrcScan](

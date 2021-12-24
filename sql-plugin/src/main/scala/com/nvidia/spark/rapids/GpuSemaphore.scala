@@ -76,9 +76,10 @@ object GpuSemaphore {
     }
   }
 
-  def taskUsedDeviceMemory(context: TaskContext, deviceMemorySize: Long) = {
+  def taskUsedDeviceMemory(
+      context: TaskContext, deviceMemorySize: Long, couldExplode: Boolean) = {
     if (enabled && context != null) {
-      getInstance.taskUsedDeviceMemory(context, deviceMemorySize)
+      getInstance.taskUsedDeviceMemory(context, deviceMemorySize, couldExplode)
     }
   }
 
@@ -116,7 +117,7 @@ private final class GpuSemaphore(tasksPerGpu: Int) extends Logging with Arm {
 
   private val activeTasks = new ConcurrentHashMap[Long, ActiveTask]
 
-  def taskUsedDeviceMemory(context: TaskContext, deviceMemorySize: Long) = {
+  def taskUsedDeviceMemory(context: TaskContext, deviceMemorySize: Long, couldExplode: Boolean) = {
     val taskAttemptId = context.taskAttemptId()
     val refs = activeTasks.get(taskAttemptId)
     var othersUsed = 0L
@@ -149,7 +150,7 @@ private final class GpuSemaphore(tasksPerGpu: Int) extends Logging with Arm {
         s"others used $othersUsedMB MB. Under util factor ($underUtilFactor)." +
         s"We have $allocatedMB MB overall allocated out of $maxAllocationMB " +
         s"We have ${semaphore.availablePermits()} available permits, and " +
-        s"${semaphore.getQueueLength} queued.")
+        s"${semaphore.getQueueLength} queued. Could explode? $couldExplode")
 
       if (semaphore.getQueueLength > 1) {
         synchronized { 

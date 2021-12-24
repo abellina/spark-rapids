@@ -50,13 +50,17 @@ import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.util.CaseInsensitiveMap
 import org.apache.spark.sql.connector.read.{InputPartition, PartitionReader, PartitionReaderFactory}
 import org.apache.spark.sql.execution.QueryExecutionException
+import org.apache.spark.sql.execution.aggregate.HashAggregateExec
 import org.apache.spark.sql.execution.datasources.{DataSourceUtils, PartitionedFile}
 import org.apache.spark.sql.execution.datasources.parquet.ParquetReadSupport
 import org.apache.spark.sql.execution.datasources.v2.FilePartitionReaderFactory
 import org.apache.spark.sql.execution.datasources.v2.parquet.ParquetScan
 import org.apache.spark.sql.execution.exchange.{BroadcastExchangeLike, ShuffleExchangeLike}
+import org.apache.spark.sql.execution.joins.ShuffledHashJoinExec
+import org.apache.spark.sql.execution.joins.BroadcastHashJoinExec
+import org.apache.spark.sql.execution.joins.SortMergeJoinExec
 import org.apache.spark.sql.internal.SQLConf
-import org.apache.spark.sql.rapids.execution.{GpuHashJoin, TrampolineUtil}
+import org.apache.spark.sql.rapids.execution.TrampolineUtil
 import org.apache.spark.sql.sources.Filter
 import org.apache.spark.sql.types._
 import org.apache.spark.sql.vectorized.ColumnarBatch
@@ -88,7 +92,8 @@ abstract class GpuParquetScanBase(
     readPartitionSchema: StructType,
     pushedFilters: Array[Filter],
     rapidsConf: RapidsConf,
-    queryUsesInputFile: Boolean)
+    queryUsesInputFile: Boolean,
+    couldExplode: Boolean = false)
   extends ScanWithMetrics with Logging {
 
   def isSplitableBase(path: Path): Boolean = true
@@ -104,7 +109,7 @@ abstract class GpuParquetScanBase(
     } else {
       GpuParquetMultiFilePartitionReaderFactory(sparkSession.sessionState.conf, broadcastedConf,
         dataSchema, readDataSchema, readPartitionSchema, pushedFilters, rapidsConf, metrics,
-        queryUsesInputFile)
+        queryUsesInputFile, couldExplode)
     }
   }
 }
@@ -136,13 +141,10 @@ object GpuParquetScanBase {
       }
     }
   }
-
-  def tagSupport(
-      sparkSession: SparkSession,
-      readSchema: StructType,
-      meta: RapidsMeta[_, _, _]): Unit = {
-    var parent = meta.parent
-    println(s"${meta} check parents. ${parent}")
+  
+  def couldExplode(scanMeta: ScanMeta[ParquetScan]): Boolean = {
+    var parent = scanMeta.parent
+    println(s"${scanMeta} check parents}")
 
     var couldExplode = false
     var foundExchange =
@@ -151,8 +153,10 @@ object GpuParquetScanBase {
       })
     while (parent.isDefined && !couldExplode && !foundExchange) {
       couldExplode = parent.get.wrapped match {
-        case GpuHashJoin => true
-        case GpuHashAggregateExec => true
+        case _: BroadcastHashJoinExec => true
+        case _: ShuffledHashJoinExec => true
+        case _: HashAggregateExec => false
+        case _: SortMergeJoinExec => true
         case _ => false
       }
       foundExchange = parent.exists(x => {
@@ -162,6 +166,13 @@ object GpuParquetScanBase {
       parent = parent.get.parent
     }
     println(s"This could explode $couldExplode found exchange? $foundExchange")
+    couldExplode
+  }
+
+  def tagSupport(
+      sparkSession: SparkSession,
+      readSchema: StructType,
+      meta: RapidsMeta[_, _, _]): Unit = {
     val sqlConf = sparkSession.conf
 
     if (!meta.conf.isParquetEnabled) {
@@ -424,7 +435,8 @@ case class GpuParquetMultiFilePartitionReaderFactory(
     filters: Array[Filter],
     @transient rapidsConf: RapidsConf,
     metrics: Map[String, GpuMetric],
-    queryUsesInputFile: Boolean)
+    queryUsesInputFile: Boolean,
+    couldExplode: Boolean = false)
   extends MultiFilePartitionReaderFactoryBase(sqlConf, broadcastedConf, rapidsConf) {
 
   private val isCaseSensitive = sqlConf.caseSensitiveAnalysis
@@ -483,7 +495,7 @@ case class GpuParquetMultiFilePartitionReaderFactory(
     new MultiFileParquetPartitionReader(conf, files, clippedBlocks,
       isCaseSensitive, readDataSchema, debugDumpPrefix,
       maxReadBatchSizeRows, maxReadBatchSizeBytes, metrics,
-      partitionSchema, numThreads)
+      partitionSchema, numThreads, couldExplode)
   }
 
   /**
@@ -1010,7 +1022,8 @@ class MultiFileParquetPartitionReader(
     maxReadBatchSizeBytes: Long,
     execMetrics: Map[String, GpuMetric],
     partitionSchema: StructType,
-    numThreads: Int)
+    numThreads: Int,
+    couldExplode: Boolean = false)
   extends MultiFileCoalescingPartitionReaderBase(conf, clippedBlocks, readDataSchema,
     partitionSchema, maxReadBatchSizeRows, maxReadBatchSizeBytes, numThreads, execMetrics)
   with ParquetPartitionReaderBase {
@@ -1131,7 +1144,8 @@ class MultiFileParquetPartitionReader(
       Table.readParquet(parseOpts, dataBuffer, 0, dataSize)
     }
 
-    GpuSemaphore.taskUsedDeviceMemory(TaskContext.get(), table.getDeviceMemorySize)
+    GpuSemaphore.taskUsedDeviceMemory(TaskContext.get(), table.getDeviceMemorySize, 
+      couldExplode)
 
     closeOnExcept(table) { _ =>
       GpuParquetScanBase.throwIfNeeded(
