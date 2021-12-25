@@ -1137,15 +1137,15 @@ class MultiFileParquetPartitionReader(
       .includeColumn(includeColumns: _*).build()
 
     // About to start using the GPU
-    GpuSemaphore.acquireIfNecessary(TaskContext.get(), metrics(SEMAPHORE_WAIT_TIME))
+    GpuSemaphore.acquireIfNecessary(
+      TaskContext.get(), metrics(SEMAPHORE_WAIT_TIME), couldExplode)
 
     val table = withResource(new NvtxWithMetrics(s"$getFileFormatShortName decode",
       NvtxColor.DARK_GREEN, metrics(GPU_DECODE_TIME))) { _ =>
       Table.readParquet(parseOpts, dataBuffer, 0, dataSize)
     }
 
-    GpuSemaphore.taskUsedDeviceMemory(TaskContext.get(), table.getDeviceMemorySize, 
-      couldExplode)
+    GpuSemaphore.taskUsedDeviceMemory(TaskContext.get(), table.getDeviceMemorySize)
 
     closeOnExcept(table) { _ =>
       GpuParquetScanBase.throwIfNeeded(
