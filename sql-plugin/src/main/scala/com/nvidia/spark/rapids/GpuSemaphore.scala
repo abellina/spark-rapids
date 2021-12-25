@@ -62,6 +62,9 @@ object GpuSemaphore {
       instance = new GpuSemaphore(tasksPerGpu)
     }
   }
+  def acquireIfNecessary(context: TaskContext, waitMetric: GpuMetric): Unit = {
+    acquireIfNecessary(context, waitMetric, true)
+  }
 
   /**
    * Tasks must call this when they begin to use the GPU.
@@ -71,7 +74,7 @@ object GpuSemaphore {
    *       the semaphore is always released by the time the task completes.
    */
   def acquireIfNecessary(context: TaskContext, waitMetric: GpuMetric,
-                         couldExplode: Boolean = true): Unit = {
+                         couldExplode: Boolean): Unit = {
     if (enabled && context != null) {
       getInstance.acquireIfNecessary(context, waitMetric, couldExplode)
     }
@@ -194,7 +197,9 @@ private final class GpuSemaphore(tasksPerGpu: Int) extends Logging with Arm {
     while (keys.hasMoreElements) {
       val active = keys.nextElement()
       val t = activeTasks.get(active)
-      couldExplode = couldExplode || t.couldExplode
+      if (t != null) {
+        couldExplode = couldExplode || t.couldExplode
+      }
     }
     couldExplode
   }
@@ -207,11 +212,17 @@ private final class GpuSemaphore(tasksPerGpu: Int) extends Logging with Arm {
       val refs = activeTasks.get(taskAttemptId)
       val othersCouldExplode = checkCouldExplode
 
-      if (!couldExplode && !othersCouldExplode) {
-        // if nothing else is explody
+      if (!couldExplode) {
+        // nothing is explody
         // acquire the non-explody semaphore, else acquire regular
         if (refs == null || refs.count.getValue == 0) {
-          logInfo(s"Task $taskAttemptId acquiring mem GPU")
+          logInfo(s"Task $taskAttemptId acquiring mem GPU ${memSemaphore.availablePermits()}")
+          synchronized {
+            while (othersCouldExplode && semaphore.availablePermits() < 4) {
+              logInfo(s"Waiting non others: ${othersCouldExplode}, permits ${semaphore.availablePermits()}")
+              wait()
+            }
+          }
           memSemaphore.acquire()
           if (refs != null) {
             refs.count.increment()
@@ -227,9 +238,10 @@ private final class GpuSemaphore(tasksPerGpu: Int) extends Logging with Arm {
       } else {
         // if something non-explody exists, we have to wait for it to finish
         if (refs == null || refs.count.getValue == 0) {
-          logInfo(s"Task $taskAttemptId acquiring GPU")
+          logInfo(s"Task $taskAttemptId acquiring GPU ${semaphore.availablePermits()}")
           synchronized {
-            while (!othersCouldExplode) {
+            while (!othersCouldExplode && memSemaphore.availablePermits() < 16) {
+              logInfo(s"Waiting others: ${othersCouldExplode}, permits ${memSemaphore.availablePermits()}")
               wait()
             }
           }
@@ -246,7 +258,6 @@ private final class GpuSemaphore(tasksPerGpu: Int) extends Logging with Arm {
           GpuDeviceManager.initializeFromTask()
         }
       }
-
     }
   }
 
@@ -257,7 +268,7 @@ private final class GpuSemaphore(tasksPerGpu: Int) extends Logging with Arm {
       val refs = activeTasks.get(taskAttemptId)
       if (refs != null && refs.count.getValue > 0) {
         if (refs.count.decrementAndGet() == 0) {
-          logDebug(s"Task $taskAttemptId releasing GPU")
+          logInfo(s"Task $taskAttemptId releasing GPU")
           if (refs.couldExplode) {
             semaphore.release()
           } else {
@@ -280,8 +291,12 @@ private final class GpuSemaphore(tasksPerGpu: Int) extends Logging with Arm {
       throw new IllegalStateException(s"Completion of unknown task $taskAttemptId")
     }
     if (refs.count.getValue > 0) {
-      logDebug(s"Task $taskAttemptId releasing GPU")
-      semaphore.release()
+      logInfo(s"Task $taskAttemptId releasing GPU")
+      if (refs.couldExplode) {
+        semaphore.release()
+      } else {
+        memSemaphore.release()
+      }
     }
   }
 

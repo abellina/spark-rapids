@@ -1145,7 +1145,7 @@ class MultiFileParquetPartitionReader(
       Table.readParquet(parseOpts, dataBuffer, 0, dataSize)
     }
 
-    GpuSemaphore.taskUsedDeviceMemory(TaskContext.get(), table.getDeviceMemorySize)
+    //GpuSemaphore.taskUsedDeviceMemory(TaskContext.get(), table.getDeviceMemorySize)
 
     closeOnExcept(table) { _ =>
       GpuParquetScanBase.throwIfNeeded(
