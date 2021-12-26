@@ -222,6 +222,7 @@ private final class GpuSemaphore(tasksPerGpu: Int) extends Logging with Arm {
               logInfo(s"Waiting non others: ${othersCouldExplode}, permits ${semaphore.availablePermits()}")
               wait()
             }
+            logInfo(s"Done waiting non others: ${othersCouldExplode}, permits ${semaphore.availablePermits()}")
           }
           memSemaphore.acquire()
           if (refs != null) {
@@ -296,6 +297,9 @@ private final class GpuSemaphore(tasksPerGpu: Int) extends Logging with Arm {
         semaphore.release()
       } else {
         memSemaphore.release()
+      }
+      synchronized {
+        notifyAll()
       }
     }
   }
