@@ -81,13 +81,6 @@ object GpuSemaphore {
     }
   }
 
-  def taskUsedDeviceMemory(
-      context: TaskContext, deviceMemorySize: Long, couldExplode: Boolean) = {
-    if (enabled && context != null) {
-      getInstance.taskUsedDeviceMemory(context, deviceMemorySize, couldExplode)
-    }
-  }
-
   /**
    * Tasks must call this when they are finished using the GPU.
    */
@@ -110,86 +103,17 @@ object GpuSemaphore {
 }
 
 private final class GpuSemaphore(tasksPerGpu: Int) extends Logging with Arm {
-  private val semaphore = new Semaphore(tasksPerGpu)
-  var fudge = 16 - tasksPerGpu
+  private val creditsTotalMB: Int = ((GpuDeviceManager.poolAllocationTotal)/1024.0D).toInt
+  private val perTaskCreditsMB: Int = creditsTotalMB/tasksPerGpu
+  private val semaphore = new Semaphore(creditsTotalMB)
   // Map to track which tasks have acquired the semaphore.
   class ActiveTask { 
     val count: MutableInt = new MutableInt(1)
-    var deviceMemorySize: Long = 0L
+    var deviceMemorySize: Int = 0
     var couldExplode: Boolean = false
   }
 
   private val activeTasks = new ConcurrentHashMap[Long, ActiveTask]
-
-  def taskUsedDeviceMemory(context: TaskContext, deviceMemorySize: Long, couldExplode: Boolean) = {
-    val taskAttemptId = context.taskAttemptId()
-    val refs = activeTasks.get(taskAttemptId)
-    var othersUsed = 0L
-    if (refs != null) {
-      refs.deviceMemorySize += deviceMemorySize
-      val activeTaskIds = activeTasks.keys()
-      while (activeTaskIds.hasMoreElements) {
-        val tId = activeTaskIds.nextElement()
-        if (tId != taskAttemptId) {
-          val activeTask = activeTasks.get(tId)
-          if (activeTask != null) {
-            othersUsed += activeTask.deviceMemorySize
-          }
-        }
-      }
-      // iUsedMB + othersUsedMB is overall GPU memory used right now (more or less)
-      // it comes from the scan tasks only, and it's actual memory, but it doesn't include
-      // any effects of downstream tasks (will they filter, or magnify the data on the gpu)
-      // Rule:
-      // if all stages running end in an exchange, we can play games. If the stage has
-      // an expand that may be bad, if the stage is the stream side of a broadcast that
-      // may also be bad.
-      val maxAllocationMB = (GpuDeviceManager.poolAllocationTotal.toDouble/1024L/1024L).toInt
-      val iUsedMB = (refs.deviceMemorySize.toDouble/1024L/1024L).toInt
-      val othersUsedMB = (othersUsed.toDouble/1024L/1024L).toInt
-      val allocatedMB = (ai.rapids.cudf.Rmm.getTotalBytesAllocated.toDouble/1024L/1024L).toInt
-      val underUtilFactor = (othersUsedMB.toDouble + iUsedMB.toDouble)/maxAllocationMB
-
-      logInfo(s"Task $taskAttemptId actually used $iUsedMB MB, and " +
-        s"others used $othersUsedMB MB. Under util factor ($underUtilFactor)." +
-        s"We have $allocatedMB MB overall allocated out of $maxAllocationMB " +
-        s"We have ${semaphore.availablePermits()} available permits, and " +
-        s"${semaphore.getQueueLength} queued. Could explode? $couldExplode")
-
-      if (couldExplode || semaphore.getQueueLength > 1) {
-        if (couldExplode) {
-          logInfo("COULD EXPLODE!!")
-          if (semaphore.availablePermits() > tasksPerGpu){
-            // block until we acquire all this
-            semaphore.acquire(16 - tasksPerGpu)
-            synchronized { 
-              fudge = 16 - tasksPerGpu
-            }
-          } else {
-            logInfo("Already reclaimed credits..")
-          }
-        } else if (underUtilFactor < 0.25) {
-          synchronized { 
-            logInfo(s"Under utilized ${underUtilFactor}. Available ${fudge}")
-            if (fudge > 0) {
-              logInfo(s"Adding permit. Under utilized ${underUtilFactor}, Available ${fudge}")
-              semaphore.release(1)
-              fudge = fudge - 1
-            }
-          }
-        } else {
-          synchronized { 
-            logInfo(s"Over utilized ${underUtilFactor}, removing permit. Available ${fudge}")
-            if (fudge < 16 - tasksPerGpu) {
-              logInfo(s"Removing permit. Over utilized ${underUtilFactor}, Available ${fudge}")
-              semaphore.acquire(1)
-              fudge = fudge + 1
-            }
-          }
-        }
-      }
-    }
-  }
 
   def checkCouldExplode: Boolean = {
     val keys = activeTasks.keys()
@@ -204,8 +128,6 @@ private final class GpuSemaphore(tasksPerGpu: Int) extends Logging with Arm {
     couldExplode
   }
 
-  var memoryState = 0L
-
   def acquireIfNecessary(context: TaskContext,
                          waitMetric: GpuMetric,
                          couldExplode: Boolean,
@@ -214,26 +136,17 @@ private final class GpuSemaphore(tasksPerGpu: Int) extends Logging with Arm {
       val taskAttemptId = context.taskAttemptId()
       val refs = activeTasks.get(taskAttemptId)
       if (refs == null || refs.count.getValue == 0) {
-        val memNeededMB = (memNeeded.toDouble / 1024.0 / 1024.0).toInt
+        val memNeededMB =
+          Math.min((memNeeded.toDouble / 1024.0 / 1024.0).toInt, perTaskCreditsMB)
         logInfo(s"Task $taskAttemptId acquiring GPU " +
-          s"${memoryState} available needing ${memNeededMB}MB")
-        if (!couldExplode) {
+          s"Available: ${semaphore.availablePermits()}MB, needing ${memNeededMB}MB")
+        val amountAcquired = if (!couldExplode && memNeededMB < perTaskCreditsMB) {
           // we need to make sure we can fit this
-          synchronized {
-            val regularReserve =
-              (tasksPerGpu - semaphore.availablePermits()) * (
-                GpuDeviceManager.poolAllocationTotal/tasksPerGpu)
-            while (memoryState + memNeeded - regularReserve >=
-                GpuDeviceManager.poolAllocationTotal) {
-              wait()
-            }
-            memoryState = memoryState + memNeeded
-          }
+          semaphore.acquire(memNeededMB)
+          memNeededMB
         } else {
-          if (couldExplode) {
-            semaphore.acquire() // we further restrict for those that are explody,
-            // this ensures we take the 4 from semaphore
-          }
+          semaphore.acquire(perTaskCreditsMB)
+          perTaskCreditsMB
         }
         if (refs != null) {
           refs.count.increment()
@@ -241,7 +154,7 @@ private final class GpuSemaphore(tasksPerGpu: Int) extends Logging with Arm {
           // first time this task has been seen
           val at = new ActiveTask
           at.couldExplode = couldExplode
-          at.deviceMemorySize = memNeeded
+          at.deviceMemorySize = amountAcquired
           activeTasks.put(taskAttemptId, at)
           context.addTaskCompletionListener[Unit](completeTask)
         }
@@ -257,18 +170,8 @@ private final class GpuSemaphore(tasksPerGpu: Int) extends Logging with Arm {
       val refs = activeTasks.get(taskAttemptId)
       if (refs != null && refs.count.getValue > 0) {
         if (refs.count.decrementAndGet() == 0) {
-          logInfo(s"Task $taskAttemptId releasing GPU")
-          if (refs.couldExplode) {
-            semaphore.release()
-            synchronized {
-              notifyAll()
-            }
-          } else {
-            synchronized {
-              memoryState = memoryState - refs.deviceMemorySize
-              notifyAll()
-            }
-          }
+          logInfo(s"Task $taskAttemptId releasing GPU ${refs.deviceMemorySize}")
+          semaphore.release(refs.deviceMemorySize)
         }
       }
     } finally {
@@ -283,18 +186,8 @@ private final class GpuSemaphore(tasksPerGpu: Int) extends Logging with Arm {
       throw new IllegalStateException(s"Completion of unknown task $taskAttemptId")
     }
     if (refs.count.getValue > 0) {
-      logInfo(s"Task $taskAttemptId releasing GPU")
-      if (refs.couldExplode) {
-        semaphore.release()
-        synchronized {
-          notifyAll()
-        }
-      } else {
-        synchronized {
-          memoryState = memoryState - refs.deviceMemorySize
-          notifyAll()
-        }
-      }
+      logInfo(s"Task $taskAttemptId releasing GPU ${refs.deviceMemorySize}")
+      semaphore.release(refs.deviceMemorySize)
     }
   }
 
