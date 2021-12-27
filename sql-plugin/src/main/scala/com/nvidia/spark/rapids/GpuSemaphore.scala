@@ -22,6 +22,8 @@ import org.apache.commons.lang3.mutable.MutableInt
 import org.apache.spark.TaskContext
 import org.apache.spark.internal.Logging
 
+import java.util.concurrent.atomic.AtomicLong
+
 object GpuSemaphore {
 
   private val enabled = {
@@ -110,7 +112,6 @@ object GpuSemaphore {
 
 private final class GpuSemaphore(tasksPerGpu: Int) extends Logging with Arm {
   private val semaphore = new Semaphore(tasksPerGpu)
-  private val memSemaphore = new Semaphore(16)
   var fudge = 16 - tasksPerGpu
   // Map to track which tasks have acquired the semaphore.
   class ActiveTask { 
@@ -204,6 +205,8 @@ private final class GpuSemaphore(tasksPerGpu: Int) extends Logging with Arm {
     couldExplode
   }
 
+  var memoryState = 0L
+
   def acquireIfNecessary(context: TaskContext,
                          waitMetric: GpuMetric,
                          couldExplode: Boolean,
@@ -211,56 +214,39 @@ private final class GpuSemaphore(tasksPerGpu: Int) extends Logging with Arm {
     withResource(new NvtxWithMetrics("Acquire GPU", NvtxColor.RED, waitMetric)) { _ =>
       val taskAttemptId = context.taskAttemptId()
       val refs = activeTasks.get(taskAttemptId)
-      val othersCouldExplode = checkCouldExplode
-
-      if (!couldExplode) {
-        // nothing is explody
-        // acquire the non-explody semaphore, else acquire regular
-        if (refs == null || refs.count.getValue == 0) {
-          val memNeededMB = (memNeeded.toDouble/1024.0/1024.0).toInt
-          logInfo(s"Task $taskAttemptId acquiring mem GPU " +
-            s"${memSemaphore.availablePermits()} needing ${memNeededMB}MB")
+      if (refs == null || refs.count.getValue == 0) {
+        val memNeededMB = (memNeeded.toDouble / 1024.0 / 1024.0).toInt
+        logInfo(s"Task $taskAttemptId acquiring GPU " +
+          s"${memoryState} available needing ${memNeededMB}MB")
+        if (!couldExplode) {
+          // we need to make sure we can fit this
           synchronized {
-            while (othersCouldExplode && semaphore.availablePermits() < 4) {
-              logInfo(s"Waiting non others: ${othersCouldExplode}, permits ${semaphore.availablePermits()}")
+            val regularReserve =
+              (tasksPerGpu - semaphore.availablePermits()) * (
+                GpuDeviceManager.poolAllocationTotal/tasksPerGpu)
+            while (memoryState + memNeeded - regularReserve >=
+                GpuDeviceManager.poolAllocationTotal) {
               wait()
             }
-            logInfo(s"Done waiting non others: ${othersCouldExplode}, permits ${semaphore.availablePermits()}")
+            memoryState = memoryState + memNeeded
           }
-          memSemaphore.acquire()
-          if (refs != null) {
-            refs.count.increment()
-          } else {
-            // first time this task has been seen
-            val at = new ActiveTask
-            at.couldExplode = couldExplode
-            activeTasks.put(taskAttemptId, at)
-            context.addTaskCompletionListener[Unit](completeTask)
+        } else {
+          if (couldExplode) {
+            semaphore.acquire() // we further restrict for those that are explody,
+            // this ensures we take the 4 from semaphore
           }
-          GpuDeviceManager.initializeFromTask()
         }
-      } else {
-        // if something non-explody exists, we have to wait for it to finish
-        if (refs == null || refs.count.getValue == 0) {
-          logInfo(s"Task $taskAttemptId acquiring GPU ${semaphore.availablePermits()}")
-          synchronized {
-            while (!othersCouldExplode && memSemaphore.availablePermits() < 16) {
-              logInfo(s"Waiting others: ${othersCouldExplode}, permits ${memSemaphore.availablePermits()}")
-              wait()
-            }
-          }
-          semaphore.acquire()
-          if (refs != null) {
-            refs.count.increment()
-          } else {
-            // first time this task has been seen
-            val at = new ActiveTask
-            at.couldExplode = couldExplode
-            activeTasks.put(taskAttemptId, at)
-            context.addTaskCompletionListener[Unit](completeTask)
-          }
-          GpuDeviceManager.initializeFromTask()
+        if (refs != null) {
+          refs.count.increment()
+        } else {
+          // first time this task has been seen
+          val at = new ActiveTask
+          at.couldExplode = couldExplode
+          at.deviceMemorySize = memNeeded
+          activeTasks.put(taskAttemptId, at)
+          context.addTaskCompletionListener[Unit](completeTask)
         }
+        GpuDeviceManager.initializeFromTask()
       }
     }
   }
@@ -275,11 +261,14 @@ private final class GpuSemaphore(tasksPerGpu: Int) extends Logging with Arm {
           logInfo(s"Task $taskAttemptId releasing GPU")
           if (refs.couldExplode) {
             semaphore.release()
+            synchronized {
+              notifyAll()
+            }
           } else {
-            memSemaphore.release()
-          }
-          synchronized {
-            notifyAll()
+            synchronized {
+              memoryState = memoryState - refs.deviceMemorySize
+              notifyAll()
+            }
           }
         }
       }
@@ -298,11 +287,14 @@ private final class GpuSemaphore(tasksPerGpu: Int) extends Logging with Arm {
       logInfo(s"Task $taskAttemptId releasing GPU")
       if (refs.couldExplode) {
         semaphore.release()
+        synchronized {
+          notifyAll()
+        }
       } else {
-        memSemaphore.release()
-      }
-      synchronized {
-        notifyAll()
+        synchronized {
+          memoryState = memoryState - refs.deviceMemorySize
+          notifyAll()
+        }
       }
     }
   }
