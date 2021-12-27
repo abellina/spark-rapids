@@ -489,8 +489,10 @@ case class GpuParquetMultiFilePartitionReaderFactory(
           ParquetDataBlock(block),
           file.partitionValues,
           ParquetSchemaWrapper(singleFileInfo.schema),
-          ParquetExtraInfo(singleFileInfo.isCorrectedRebaseMode,
-            singleFileInfo.isCorrectedInt96RebaseMode, singleFileInfo.hasInt96Timestamps)))
+          ParquetExtraInfo(
+            singleFileInfo.isCorrectedRebaseMode,
+            singleFileInfo.isCorrectedInt96RebaseMode,
+            singleFileInfo.hasInt96Timestamps)))
     }
     new MultiFileParquetPartitionReader(conf, files, clippedBlocks,
       isCaseSensitive, readDataSchema, debugDumpPrefix,
@@ -1101,7 +1103,7 @@ class MultiFileParquetPartitionReader(
   override def calculateEstimatedBlocksOutputSize(
       filesAndBlocks: LinkedHashMap[Path, ArrayBuffer[DataBlockBase]],
       schema: SchemaBase): Long = {
-    val allBlocks = filesAndBlocks.values.flatten.toSeq
+    val allBlocks: Seq[BlockMetaData] = filesAndBlocks.values.flatten.toSeq
     // Some Parquet versions sanity check the block metadata, and since the blocks could be from
     // multiple files they will not pass the checks as they are.
     val blockStartOffset = ParquetPartitionReader.PARQUET_MAGIC.length
@@ -1136,9 +1138,18 @@ class MultiFileParquetPartitionReader(
       .withTimeUnit(DType.TIMESTAMP_MICROSECONDS)
       .includeColumn(includeColumns: _*).build()
 
+    val resultingSize = clippedBlocks.map(_.dataBlock.getReadDataSize).sum
+    val ratio = resultingSize.toDouble/dataSize
+    val ratioStr = f"$ratio%1.2f"
+    logInfo(s"The resulting size is $resultingSize Bytes, and the compressed size is $dataSize. " +
+      s"Compression ratio: $ratioStr x")
+
     // About to start using the GPU
     GpuSemaphore.acquireIfNecessary(
-      TaskContext.get(), metrics(SEMAPHORE_WAIT_TIME), couldExplode)
+      TaskContext.get(),
+      metrics(SEMAPHORE_WAIT_TIME),
+      couldExplode,
+      resultingSize)
 
     val table = withResource(new NvtxWithMetrics(s"$getFileFormatShortName decode",
       NvtxColor.DARK_GREEN, metrics(GPU_DECODE_TIME))) { _ =>

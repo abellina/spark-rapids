@@ -63,7 +63,7 @@ object GpuSemaphore {
     }
   }
   def acquireIfNecessary(context: TaskContext, waitMetric: GpuMetric): Unit = {
-    acquireIfNecessary(context, waitMetric, true)
+    acquireIfNecessary(context, waitMetric, true, -1)
   }
 
   /**
@@ -74,9 +74,9 @@ object GpuSemaphore {
    *       the semaphore is always released by the time the task completes.
    */
   def acquireIfNecessary(context: TaskContext, waitMetric: GpuMetric,
-                         couldExplode: Boolean): Unit = {
+                         couldExplode: Boolean, memNeeded: Long): Unit = {
     if (enabled && context != null) {
-      getInstance.acquireIfNecessary(context, waitMetric, couldExplode)
+      getInstance.acquireIfNecessary(context, waitMetric, couldExplode, memNeeded)
     }
   }
 
@@ -206,7 +206,8 @@ private final class GpuSemaphore(tasksPerGpu: Int) extends Logging with Arm {
 
   def acquireIfNecessary(context: TaskContext,
                          waitMetric: GpuMetric,
-                         couldExplode: Boolean): Unit = {
+                         couldExplode: Boolean,
+                         memNeeded: Long): Unit = {
     withResource(new NvtxWithMetrics("Acquire GPU", NvtxColor.RED, waitMetric)) { _ =>
       val taskAttemptId = context.taskAttemptId()
       val refs = activeTasks.get(taskAttemptId)
@@ -216,7 +217,9 @@ private final class GpuSemaphore(tasksPerGpu: Int) extends Logging with Arm {
         // nothing is explody
         // acquire the non-explody semaphore, else acquire regular
         if (refs == null || refs.count.getValue == 0) {
-          logInfo(s"Task $taskAttemptId acquiring mem GPU ${memSemaphore.availablePermits()}")
+          val memNeededMB = (memNeeded.toDouble/1024.0/1024.0).toInt
+          logInfo(s"Task $taskAttemptId acquiring mem GPU " +
+            s"${memSemaphore.availablePermits()} needing ${memNeededMB}MB")
           synchronized {
             while (othersCouldExplode && semaphore.availablePermits() < 4) {
               logInfo(s"Waiting non others: ${othersCouldExplode}, permits ${semaphore.availablePermits()}")
