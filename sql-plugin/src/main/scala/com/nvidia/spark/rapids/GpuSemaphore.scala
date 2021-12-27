@@ -22,7 +22,6 @@ import org.apache.commons.lang3.mutable.MutableInt
 import org.apache.spark.TaskContext
 import org.apache.spark.internal.Logging
 
-import java.util.concurrent.atomic.AtomicLong
 
 object GpuSemaphore {
 
