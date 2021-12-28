@@ -103,7 +103,7 @@ object GpuSemaphore {
 }
 
 private final class GpuSemaphore(tasksPerGpu: Int) extends Logging with Arm {
-  private val creditsTotalMB: Int = ((GpuDeviceManager.poolAllocationTotal)/1024.0D).toInt
+  private val creditsTotalMB: Int = ((GpuDeviceManager.poolAllocationTotal)/1024.0D/1024.0D).toInt
   private val perTaskCreditsMB: Int = creditsTotalMB/tasksPerGpu
   private val semaphore = new Semaphore(creditsTotalMB)
   // Map to track which tasks have acquired the semaphore.
