@@ -17,18 +17,17 @@
 package com.nvidia.spark.rapids
 
 import java.time.ZoneId
-
 import scala.collection.mutable
-
 import org.apache.spark.sql.catalyst.expressions.{Attribute, AttributeReference, BinaryExpression, ComplexTypeMergingExpression, Expression, QuaternaryExpression, String2TrimExpression, TernaryExpression, UnaryExpression, WindowExpression, WindowFunction}
 import org.apache.spark.sql.catalyst.expressions.aggregate.{AggregateExpression, AggregateFunction, ImperativeAggregate, TypedImperativeAggregate}
 import org.apache.spark.sql.catalyst.plans.physical.Partitioning
 import org.apache.spark.sql.catalyst.trees.TreeNodeTag
 import org.apache.spark.sql.connector.read.Scan
 import org.apache.spark.sql.execution.SparkPlan
-import org.apache.spark.sql.execution.aggregate.BaseAggregateExec
+import org.apache.spark.sql.execution.aggregate.{BaseAggregateExec, HashAggregateExec}
 import org.apache.spark.sql.execution.command.DataWritingCommand
-import org.apache.spark.sql.execution.exchange.ShuffleExchangeExec
+import org.apache.spark.sql.execution.exchange.{BroadcastExchangeLike, ShuffleExchangeExec, ShuffleExchangeLike}
+import org.apache.spark.sql.execution.joins.{BroadcastHashJoinExec, ShuffledHashJoinExec, SortMergeJoinExec}
 import org.apache.spark.sql.rapids.{CpuToGpuAggregateBufferConverter, GpuToCpuAggregateBufferConverter}
 import org.apache.spark.sql.types.DataType
 
@@ -487,6 +486,36 @@ abstract class ScanMeta[INPUT <: Scan](scan: INPUT,
 
   override def tagSelfForGpu(): Unit = {}
 }
+
+object ExplodeUtil {
+  def couldExplode(meta: RapidsMeta[_, _, _]): Boolean = {
+    var parent = meta.parent
+    println(s"${meta} check parents}")
+
+    var couldExplode = false
+    var foundExchange =
+      parent.exists(x => {
+        x.wrapped.isInstanceOf[ShuffleExchangeLike] || x.wrapped.isInstanceOf[BroadcastExchangeLike]
+      })
+    while (parent.isDefined && !couldExplode && !foundExchange) {
+      couldExplode = parent.get.wrapped match {
+        case _: BroadcastHashJoinExec => true
+        case _: ShuffledHashJoinExec => true
+        case _: HashAggregateExec => false
+        case _: SortMergeJoinExec => true
+        case _ => false
+      }
+      foundExchange = parent.exists(x => {
+        x.wrapped.isInstanceOf[ShuffleExchangeLike] || x.wrapped.isInstanceOf[BroadcastExchangeLike]
+      })
+      println(s".. parent ${parent} could explode? $couldExplode found exchange? $foundExchange")
+      parent = parent.get.parent
+    }
+    println(s"This could explode $couldExplode found exchange? $foundExchange")
+    couldExplode
+  }
+}
+
 
 /**
  * Metadata for `Scan` with no rule found

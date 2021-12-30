@@ -141,6 +141,7 @@ class ShuffledBatchRDD(
     ShuffledBatchRDDUtil.preferredLocations(partition, dependency)
 
   override def compute(split: Partition, context: TaskContext): Iterator[ColumnarBatch] = {
+    // TODO: find out if I am an explody task
     val tempMetrics = context.taskMetrics().createTempShuffleReadMetrics()
     // `SQLShuffleReadMetricsReporter` will update its own metrics for SQL exchange operator,
     // as well as the `tempMetrics` for basic shuffle metrics.

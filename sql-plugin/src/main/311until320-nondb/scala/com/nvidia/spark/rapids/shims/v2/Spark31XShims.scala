@@ -395,7 +395,7 @@ abstract class Spark31XShims extends Spark301until320Shims with Logging {
               wrapped.optionalNumCoalescedBuckets,
               wrapped.dataFilters,
               wrapped.tableIdentifier,
-              couldExplode = GpuParquetScanBase.couldExplode(this))(conf)
+              couldExplode = ExplodeUtil.couldExplode(this))(conf)
           }
         }),
       GpuOverrides.exec[InMemoryTableScanExec](

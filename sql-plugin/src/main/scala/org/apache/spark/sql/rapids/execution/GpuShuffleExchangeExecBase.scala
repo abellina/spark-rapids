@@ -18,11 +18,10 @@ package org.apache.spark.sql.rapids.execution
 
 import scala.collection.AbstractIterator
 import scala.concurrent.Future
-
 import com.nvidia.spark.rapids._
 import com.nvidia.spark.rapids.RapidsPluginImplicits._
 import com.nvidia.spark.rapids.shims.v2.ShimUnaryExecNode
-
+import org.apache.spark.internal.Logging
 import org.apache.spark.{MapOutputStatistics, ShuffleDependency}
 import org.apache.spark.rdd.RDD
 import org.apache.spark.serializer.Serializer
@@ -44,7 +43,7 @@ class GpuShuffleMeta(
     conf: RapidsConf,
     parent: Option[RapidsMeta[_, _, _]],
     rule: DataFromReplacementRule)
-  extends SparkPlanMeta[ShuffleExchangeExec](shuffle, conf, parent, rule) {
+  extends SparkPlanMeta[ShuffleExchangeExec](shuffle, conf, parent, rule) with Logging {
   // Some kinds of Partitioning are a type of expression, but Partitioning itself is not
   // so don't let them leak through as expressions
   override val childExprs: scala.Seq[ExprMeta[_]] = Seq.empty
@@ -106,12 +105,16 @@ class GpuShuffleMeta(
     }
   }
 
-  override def convertToGpu(): GpuExec =
+  override def convertToGpu(): GpuExec = {
+    // TODO: find out if this shuffle is explody
+    val couldExplode = ExplodeUtil.couldExplode(this)
+    logInfo(s"Shuffle ${this} could explode? ${couldExplode}")
     ShimLoader.getSparkShims.getGpuShuffleExchangeExec(
       childParts.head.convertToGpu(),
       childPlans.head.convertIfNeeded(),
       shuffle.outputPartitioning,
       Some(shuffle))
+  }
 }
 
 object GpuShuffleMeta {
