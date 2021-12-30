@@ -50,24 +50,16 @@ import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.util.CaseInsensitiveMap
 import org.apache.spark.sql.connector.read.{InputPartition, PartitionReader, PartitionReaderFactory}
 import org.apache.spark.sql.execution.QueryExecutionException
-import org.apache.spark.sql.execution.aggregate.HashAggregateExec
 import org.apache.spark.sql.execution.datasources.{DataSourceUtils, PartitionedFile}
 import org.apache.spark.sql.execution.datasources.parquet.ParquetReadSupport
 import org.apache.spark.sql.execution.datasources.v2.FilePartitionReaderFactory
 import org.apache.spark.sql.execution.datasources.v2.parquet.ParquetScan
-import org.apache.spark.sql.execution.exchange.{BroadcastExchangeLike, ShuffleExchangeLike}
-import org.apache.spark.sql.execution.joins.ShuffledHashJoinExec
-import org.apache.spark.sql.execution.joins.BroadcastHashJoinExec
-import org.apache.spark.sql.execution.joins.SortMergeJoinExec
 import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.rapids.execution.TrampolineUtil
 import org.apache.spark.sql.sources.Filter
 import org.apache.spark.sql.types._
 import org.apache.spark.sql.vectorized.ColumnarBatch
 import org.apache.spark.util.SerializableConfiguration
-
-import scala.Option
-
 
 /**
  * Base GpuParquetScan used for common code across Spark versions. Gpu version of
@@ -140,33 +132,6 @@ object GpuParquetScanBase {
         }
       }
     }
-  }
-  
-  def couldExplode(scanMeta: RapidsMeta[_, _, _]): Boolean = {
-    var parent = scanMeta.parent
-    println(s"${scanMeta} check parents}")
-
-    var couldExplode = false
-    var foundExchange =
-      parent.exists(x => {
-        x.wrapped.isInstanceOf[ShuffleExchangeLike] || x.wrapped.isInstanceOf[BroadcastExchangeLike]
-      })
-    while (parent.isDefined && !couldExplode && !foundExchange) {
-      couldExplode = parent.get.wrapped match {
-        case _: BroadcastHashJoinExec => true
-        case _: ShuffledHashJoinExec => true
-        case _: HashAggregateExec => false
-        case _: SortMergeJoinExec => true
-        case _ => false
-      }
-      foundExchange = parent.exists(x => {
-        x.wrapped.isInstanceOf[ShuffleExchangeLike] || x.wrapped.isInstanceOf[BroadcastExchangeLike]
-      })
-      println(s".. parent ${parent} could explode? $couldExplode found exchange? $foundExchange")
-      parent = parent.get.parent
-    }
-    println(s"This could explode $couldExplode found exchange? $foundExchange")
-    couldExplode
   }
 
   def tagSupport(

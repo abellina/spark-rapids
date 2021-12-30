@@ -17,16 +17,13 @@
 package com.nvidia.spark.rapids
 
 import java.nio.charset.StandardCharsets
-
 import scala.collection.JavaConverters._
 import scala.math.max
-
 import ai.rapids.cudf
 import ai.rapids.cudf.{HostMemoryBuffer, NvtxColor, NvtxRange, Table}
 import org.apache.hadoop.conf.Configuration
 import org.apache.hadoop.fs.Path
 import org.apache.hadoop.io.compress.CompressionCodecFactory
-
 import org.apache.spark.TaskContext
 import org.apache.spark.broadcast.Broadcast
 import org.apache.spark.rdd.RDD
@@ -84,7 +81,7 @@ case class GpuBatchScanExec(
 
 trait ScanWithMetrics {
   //this is initialized by the exec post creation
-  var metrics : Map[String, GpuMetric] = Map.empty
+  var metrics: Map[String, GpuMetric] = Map.empty
 }
 
 object GpuCSVScan {
