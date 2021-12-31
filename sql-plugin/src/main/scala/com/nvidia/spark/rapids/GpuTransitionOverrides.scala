@@ -377,12 +377,19 @@ class GpuTransitionOverrides extends Rule[SparkPlan] {
    * on the host before copying the data to the GPU.
    * @note This should not be used in combination with the RAPIDS shuffle.
    */
-  private def insertShuffleCoalesce(plan: SparkPlan): SparkPlan = plan match {
+  private def insertShuffleCoalesce(
+      plan: SparkPlan, parent: Seq[SparkPlan] = Seq.empty): SparkPlan = plan match {
     case exec: GpuShuffleExchangeExecBase =>
       // always follow a GPU shuffle with a shuffle coalesce
-      GpuShuffleCoalesceExec(exec.withNewChildren(exec.children.map(insertShuffleCoalesce)),
+      // if the parents so far are non-explosive, this shuffle also is non-explosive
+      logInfo(s"Inserting shuffle coalesce.. my parents are: " +
+        s"${parent.map(_.nodeName).mkString(",")}")
+      GpuShuffleCoalesceExec(
+        exec.withNewChildren(
+          exec.children.map(c => insertShuffleCoalesce(c, parent :+ plan))),
         rapidsConf.gpuTargetBatchSizeBytes)
-    case exec => exec.withNewChildren(plan.children.map(insertShuffleCoalesce))
+    case exec => exec.withNewChildren(
+      plan.children.map(c => insertShuffleCoalesce(c, parent :+ plan)))
   }
 
   /**

@@ -61,6 +61,8 @@ import org.apache.spark.sql.types._
 import org.apache.spark.sql.vectorized.ColumnarBatch
 import org.apache.spark.util.SerializableConfiguration
 
+import scala.collection.mutable
+
 /**
  * Base GpuParquetScan used for common code across Spark versions. Gpu version of
  * Spark's 'ParquetScan'.
@@ -1106,10 +1108,24 @@ class MultiFileParquetPartitionReader(
     val resultingSize = clippedBlocks.map(_.dataBlock.getReadDataSize).sum
     val ratio = resultingSize.toDouble/dataSize
     val ratioStr = f"$ratio%1.2f"
+
+    val blocksRowCountAndMaxLen: Seq[(Long, Seq[Int])] = clippedBlocks.map(cb => {
+      (cb.dataBlock.getRowCount,
+        cb.dataBlock.dataBlock.getColumns.asScala.map(_.getStatistics.getMaxBytes.length))
+    })
+
+    val maxPerCol =
+      blocksRowCountAndMaxLen.map(_._2).reduce { (a1, a2) =>
+        a1.zip(a2).map { case (x1, x2) => x1 + x2 }
+      }
+
     logInfo(s"The resulting size is $resultingSize Bytes, and the compressed size is $dataSize. " +
-      s"Compression ratio: $ratioStr x")
+      s"Compression ratio: $ratioStr x. Row count is ${blocksRowCountAndMaxLen.map(_._1).sum}," +
+      s" and max value bytes per column is ${maxPerCol.mkString(",")}")
 
     // About to start using the GPU
+    // this happens once... but there could be multiple batches
+    // we need to release or acquire the semaphore as we get here
     GpuSemaphore.acquireIfNecessary(
       TaskContext.get(),
       metrics(SEMAPHORE_WAIT_TIME),

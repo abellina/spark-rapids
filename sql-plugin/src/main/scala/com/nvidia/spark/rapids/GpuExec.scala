@@ -19,13 +19,13 @@ package com.nvidia.spark.rapids
 import ai.rapids.cudf.NvtxColor
 import com.nvidia.spark.RebaseHelper.withResource
 import com.nvidia.spark.rapids.StorageTier.{DEVICE, DISK, GDS, HOST, StorageTier}
-
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.SparkSession
-import org.apache.spark.sql.catalyst.expressions.{Alias, AttributeReference, Expression, ExprId}
+import org.apache.spark.sql.catalyst.expressions.{Alias, AttributeReference, ExprId, Expression}
 import org.apache.spark.sql.catalyst.plans.QueryPlan
 import org.apache.spark.sql.execution.SparkPlan
 import org.apache.spark.sql.execution.metric.{SQLMetric, SQLMetrics}
+import org.apache.spark.sql.types.StringType
 import org.apache.spark.sql.vectorized.ColumnarBatch
 
 sealed class MetricsLevel(val num: Integer) extends Serializable {
@@ -256,6 +256,20 @@ trait GpuExec extends SparkPlan with Arm {
 
   protected val outputRowsLevel: MetricsLevel = DEBUG_LEVEL
   protected val outputBatchesLevel: MetricsLevel = DEBUG_LEVEL
+
+  // naive implementation of maximum memory needed
+  def maxMemoryModel(numRows: Long): Option[Long] = {
+    if (!schema.exists(a => a.dataType == StringType)){
+      val bytesPerRow = schema.map { f => {
+        f.dataType.defaultSize
+      }}.sum
+      // assume we need twice, once for the input and one for the output
+      // but that is overestimating in some cases
+      Some(2 * numRows * bytesPerRow)
+    } else {
+      None
+    }
+  }
 
   lazy val allMetrics: Map[String, GpuMetric] = Map(
     NUM_OUTPUT_ROWS -> createMetric(outputRowsLevel, DESCRIPTION_NUM_OUTPUT_ROWS),
