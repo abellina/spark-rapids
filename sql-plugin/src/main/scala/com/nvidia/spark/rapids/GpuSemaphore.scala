@@ -159,6 +159,18 @@ private final class GpuSemaphore(tasksPerGpu: Int) extends Logging with Arm {
           context.addTaskCompletionListener[Unit](completeTask)
         }
         GpuDeviceManager.initializeFromTask()
+      } else if (refs != null) {
+        val memNeededMB = (memNeeded / 1024.0D).toInt
+        if (refs.deviceMemorySize > memNeededMB){
+          logInfo(s"Task $taskAttemptId asking for less memory now. " +
+            s"It had ${refs.deviceMemorySize} before, and now it wants $memNeededMB")
+          semaphore.release(refs.deviceMemorySize - memNeededMB)
+        } else {
+          logInfo(s"Task $taskAttemptId asking for MORE memory now. " +
+            s"It had ${refs.deviceMemorySize} before, and now it wants $memNeededMB")
+          semaphore.acquire(memNeededMB - refs.deviceMemorySize)
+        }
+        refs.deviceMemorySize = memNeededMB
       }
     }
   }
