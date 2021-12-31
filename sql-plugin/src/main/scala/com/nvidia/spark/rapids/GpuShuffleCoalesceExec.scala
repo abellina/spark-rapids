@@ -200,20 +200,22 @@ class GpuShuffleCoalesceIterator(
       withResource(new NvtxRange("Concat+Load Batch", NvtxColor.YELLOW)) { _ =>
         withResource(JCudfSerialization.concatToHostBuffer(headers, buffers)) { hostConcatResult =>
           // about to start using the GPU in this task
-          val result = parents.map { p => 
-            p match {
-              case g: GpuExec =>
-                val modelSays = g.maxMemoryModel(numRowsInBatch)
-                logInfo(
-                  s"Found GPU Parent: row count: ${numRowsInBatch} " +
+          val result = parents.map {
+            case g: GpuExec =>
+              val modelSays = g.maxMemoryModel(numRowsInBatch)
+              logInfo(
+                s"Found GPU Parent: row count: ${numRowsInBatch} " +
                   s"Mem model says: ${modelSays}")
-                Some(modelSays)
-              case _ => None
-            }
+              Some(modelSays)
+            case p =>
+              logInfo(s"Parent ${p.nodeName} returned None for model")
+              None
           }
           if (result.forall(_.isDefined) && result.nonEmpty) {
             val theMax = result.map(_.get).max
             logInfo(s"all parents produced something: ${result.mkString(",")} max is: $theMax")
+          } else {
+            logInfo(s"NOT all parents produced something: ${result.mkString(",")}")
           }
 
           GpuSemaphore.acquireIfNecessary(TaskContext.get(), semWaitTime)
