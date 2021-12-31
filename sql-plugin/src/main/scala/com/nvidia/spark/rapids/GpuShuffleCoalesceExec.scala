@@ -23,6 +23,7 @@ import ai.rapids.cudf.JCudfSerialization.SerializedTableHeader
 import com.nvidia.spark.rapids.shims.v2.ShimUnaryExecNode
 
 import org.apache.spark.TaskContext
+import org.apache.spark.internal.Logging
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.expressions.Attribute
@@ -38,7 +39,8 @@ import org.apache.spark.sql.vectorized.ColumnarBatch
  * @note This should ALWAYS appear in the plan after a GPU shuffle when RAPIDS shuffle is
  *       not being used.
  */
-case class GpuShuffleCoalesceExec(child: SparkPlan, targetBatchByteSize: Long)
+case class GpuShuffleCoalesceExec(child: SparkPlan, targetBatchByteSize: Long, 
+  parents: Seq[SparkPlan] = Seq.empty)
     extends ShimUnaryExecNode with GpuExec {
 
   import GpuMetric._
@@ -64,7 +66,7 @@ case class GpuShuffleCoalesceExec(child: SparkPlan, targetBatchByteSize: Long)
     val sparkSchema = GpuColumnVector.extractTypes(schema)
 
     child.executeColumnar().mapPartitions { iter =>
-      new GpuShuffleCoalesceIterator(iter, targetSize, sparkSchema, metricsMap)
+      new GpuShuffleCoalesceIterator(iter, targetSize, sparkSchema, metricsMap, parents)
     }
   }
 }
@@ -79,8 +81,9 @@ class GpuShuffleCoalesceIterator(
     iter: Iterator[ColumnarBatch],
     targetBatchByteSize: Long,
     sparkSchema: Array[DataType],
-    metricsMap: Map[String, GpuMetric])
-    extends Iterator[ColumnarBatch] with Arm with AutoCloseable {
+    metricsMap: Map[String, GpuMetric],
+    parents: Seq[SparkPlan])
+    extends Iterator[ColumnarBatch] with Arm with AutoCloseable with Logging {
   private[this] val opTimeMetric = metricsMap(GpuMetric.OP_TIME)
   private[this] val inputBatchesMetric = metricsMap(GpuMetric.NUM_INPUT_BATCHES)
   private[this] val inputRowsMetric = metricsMap(GpuMetric.NUM_INPUT_ROWS)
@@ -197,6 +200,22 @@ class GpuShuffleCoalesceIterator(
       withResource(new NvtxRange("Concat+Load Batch", NvtxColor.YELLOW)) { _ =>
         withResource(JCudfSerialization.concatToHostBuffer(headers, buffers)) { hostConcatResult =>
           // about to start using the GPU in this task
+          val result = parents.map { p => 
+            p match {
+              case g: GpuExec =>
+                val modelSays = g.maxMemoryModel(numRowsInBatch)
+                logInfo(
+                  s"Found GPU Parent: row count: ${numRowsInBatch} " +
+                  s"Mem model says: ${modelSays}")
+                Some(modelSays)
+              case _ => None
+            }
+          }
+          if (result.forall(_.isDefined) && result.nonEmpty) {
+            val theMax = result.map(_.get).max
+            logInfo(s"all parents produced something: ${result.mkString(",")} max is: $theMax")
+          }
+
           GpuSemaphore.acquireIfNecessary(TaskContext.get(), semWaitTime)
           withResource(hostConcatResult.toContiguousTable) { contigTable =>
             GpuColumnVectorFromBuffer.from(contigTable, sparkSchema)

@@ -179,11 +179,10 @@ class RapidsExecutorPlugin extends ExecutorPlugin with Logging {
     if (ranges.get() == null) {
       ranges.set(new util.HashMap[String, NvtxUniqueRange]())
     }
-    if (ranges.get().containsKey(evt)) {
-      throw new IllegalStateException(s"have range active for ${evt}")
+    if (!ranges.get().containsKey(evt)) {
+      ranges.get().put(evt,
+        new NvtxUniqueRange(evt, NvtxColor.values()(nvtxColorIx)))
     }
-    ranges.get().put(evt,
-      new NvtxUniqueRange(evt, NvtxColor.values()(nvtxColorIx)))
   }
 
   override def onEventStopped(evt: String): Unit = {

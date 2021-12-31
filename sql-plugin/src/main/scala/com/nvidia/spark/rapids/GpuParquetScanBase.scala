@@ -1112,14 +1112,19 @@ class MultiFileParquetPartitionReader(
         cb.dataBlock.dataBlock.getColumns.asScala.map(_.getStatistics.getMaxBytes.length))
     })
 
-    val maxPerCol =
+    val sumPerCol =
       blocksRowCountAndMaxLen.map(_._2).reduce { (a1, a2) =>
         a1.zip(a2).map { case (x1, x2) => x1 + x2 }
       }
 
-    logInfo(s"The resulting size is $resultingSize Bytes, and the compressed size is $dataSize. " +
-      s"Compression ratio: $ratioStr x. Row count is ${blocksRowCountAndMaxLen.map(_._1).sum}," +
-      s" and max value bytes per column is ${maxPerCol.mkString(",")}")
+    val maxPerCol =
+      blocksRowCountAndMaxLen.map(_._2).reduce { (a1, a2) =>
+        a1.zip(a2).map { case (x1, x2) => max(x1, x2) }
+      }
+
+    val numBlocks = clippedBlocks.length
+    val rowCount = blocksRowCountAndMaxLen.map(_._1).sum
+    val amountNeeded = ((maxPerCol.sum) * rowCount) + (maxPerCol.length * (rowCount/8))
 
     // About to start using the GPU
     // this happens once... but there could be multiple batches
@@ -1128,12 +1133,19 @@ class MultiFileParquetPartitionReader(
       TaskContext.get(),
       metrics(SEMAPHORE_WAIT_TIME),
       couldExplode,
-      resultingSize)
+      amountNeeded)
 
     val table = withResource(new NvtxWithMetrics(s"$getFileFormatShortName decode",
       NvtxColor.DARK_GREEN, metrics(GPU_DECODE_TIME))) { _ =>
       Table.readParquet(parseOpts, dataBuffer, 0, dataSize)
     }
+
+
+    logInfo(s"The resulting size is $resultingSize Bytes, and the compressed size is $dataSize. " +
+      s"Compression ratio: $ratioStr x. Row count is ${blocksRowCountAndMaxLen.map(_._1).sum}," +
+      s" number of blocks ${numBlocks} " +
+      s" and (max, sum) value bytes per column is ${maxPerCol.mkString(",")}, ${sumPerCol.mkString(",")}" +
+      s" -- actually used: ${table.getDeviceMemorySize}, projected needed: ${amountNeeded}")
 
     //GpuSemaphore.taskUsedDeviceMemory(TaskContext.get(), table.getDeviceMemorySize)
 

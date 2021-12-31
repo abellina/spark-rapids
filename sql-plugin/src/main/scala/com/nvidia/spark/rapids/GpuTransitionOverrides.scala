@@ -117,7 +117,7 @@ class GpuTransitionOverrides extends Rule[SparkPlan] {
         // because we need to return an operator that implements `BroadcastExchangeLike` or
         // `ShuffleExchangeLike`.
         bb.child match {
-          case GpuShuffleCoalesceExec(e: GpuShuffleExchangeExecBase, _) if parent.isEmpty =>
+          case GpuShuffleCoalesceExec(e: GpuShuffleExchangeExecBase, _, _) if parent.isEmpty =>
             // The coalesce step gets added back into the plan later on, in a
             // future query stage that reads the output from this query stage. This
             // is handled in the case clauses below.
@@ -387,7 +387,8 @@ class GpuTransitionOverrides extends Rule[SparkPlan] {
       GpuShuffleCoalesceExec(
         exec.withNewChildren(
           exec.children.map(c => insertShuffleCoalesce(c, parent :+ plan))),
-        rapidsConf.gpuTargetBatchSizeBytes)
+        rapidsConf.gpuTargetBatchSizeBytes,
+        parent)
     case exec => exec.withNewChildren(
       plan.children.map(c => insertShuffleCoalesce(c, parent :+ plan)))
   }
