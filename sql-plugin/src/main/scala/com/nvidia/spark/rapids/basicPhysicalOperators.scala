@@ -362,6 +362,11 @@ case class GpuFilterExec(
       GpuFilter(batch, boundCondition, numOutputRows, numOutputBatches, opTime)
     }
   }
+
+  override def maxMemoryModel(numRows: Long): Option[Long] = {
+    super.maxMemoryModel(numRows)
+      .map(basic => basic + condition.dataType.defaultSize * numRows)
+  }
 }
 
 class GpuSampleExecMeta(

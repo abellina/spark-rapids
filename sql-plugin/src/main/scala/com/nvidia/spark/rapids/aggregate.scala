@@ -1325,6 +1325,11 @@ case class GpuHashAggregateExec(
     child: SparkPlan,
     configuredTargetBatchSize: Long) extends ShimUnaryExecNode with GpuExec with Arm {
 
+  override def maxMemoryModel(numRows: Long): Option[Long] = {
+    // because we'll go up to this size
+    Some(2 * configuredTargetBatchSize)
+  }
+
   // lifted directly from `BaseAggregateExec.inputAttributes`, edited comment.
   def inputAttributes: Seq[Attribute] = {
     val modes = aggregateExpressions.map(_.mode).distinct

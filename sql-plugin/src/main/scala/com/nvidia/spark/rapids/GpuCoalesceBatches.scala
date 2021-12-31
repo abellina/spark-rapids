@@ -529,6 +529,21 @@ case class GpuCoalesceBatches(child: SparkPlan, goal: CoalesceGoal)
   extends ShimUnaryExecNode with GpuExec {
   import GpuMetric._
 
+  override def maxMemoryModel(numRows: Long): Option[Long] = {
+    // this is over simplified. We may want to go under the goal
+    // if batches are generally small?
+    val basic = super.maxMemoryModel(numRows)
+    goal match {
+      case csg:CoalesceSizeGoal =>
+        if (basic.isDefined) {
+          Some(Math.max(csg.targetSizeBytes, basic.get))
+        } else {
+          Some(csg.targetSizeBytes)
+        }
+      case _ => None // all bets are off
+    }
+  }
+
   private[this] val (codecConfigs, maxDecompressBatchMemory) = {
     val rapidsConf = new RapidsConf(child.conf)
     (TableCompressionCodec.makeCodecConfig(rapidsConf),
