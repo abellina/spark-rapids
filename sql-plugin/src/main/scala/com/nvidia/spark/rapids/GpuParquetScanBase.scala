@@ -61,8 +61,6 @@ import org.apache.spark.sql.types._
 import org.apache.spark.sql.vectorized.ColumnarBatch
 import org.apache.spark.util.SerializableConfiguration
 
-import scala.collection.mutable
-
 /**
  * Base GpuParquetScan used for common code across Spark versions. Gpu version of
  * Spark's 'ParquetScan'.
