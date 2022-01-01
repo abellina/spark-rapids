@@ -206,16 +206,14 @@ class GpuShuffleCoalesceIterator(
               logInfo(
                 s"Found GPU Parent ${g.nodeName}: row count: ${numRowsInBatch} " +
                   s"Mem model says: ${modelSays}")
-              Some(modelSays)
-            case p =>
-              logInfo(s"Parent ${p.nodeName} is not a GpuExec. Ignore.")
-              Some(0)
+              modelSays
+            case _ => Some(0L)
           }
           if (result.forall(_.isDefined) && result.nonEmpty) {
             val theMax = result.map(_.get).max
             logInfo(s"all parents produced something: ${result.mkString(",")} max is: $theMax")
           } else {
-            logInfo(s"NOT all parents produced something: ${parents.mkString(",")}. " +
+            logInfo(s"NOT all parents produced something: ${parents.map(_.nodeName).mkString(",")}. " +
               s"Num parents ${parents.length}")
           }
 
