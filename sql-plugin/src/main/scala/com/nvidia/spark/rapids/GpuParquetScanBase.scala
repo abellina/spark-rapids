@@ -459,6 +459,23 @@ case class GpuParquetMultiFilePartitionReaderFactory(
             singleFileInfo.isCorrectedInt96RebaseMode,
             singleFileInfo.hasInt96Timestamps)))
     }
+    // compute here the max memory needed for all files for this reader
+    // this should override the maximum from the model...or call the model
+    // with a maximum number of rows for all batches (instead of just one)
+    val blocksRowCountAndMaxLen: Seq[(Long, Seq[Int])] = clippedBlocks.map(cb => {
+      (cb.dataBlock.getRowCount,
+        cb.dataBlock.dataBlock.getColumns.asScala.map(_.getStatistics.getMaxBytes.length))
+    })
+
+    val maxPerCol =
+      blocksRowCountAndMaxLen.map(_._2).reduce { (a1, a2) =>
+        a1.zip(a2).map { case (x1, x2) => max(x1, x2) }
+      }
+
+    val rowCount = blocksRowCountAndMaxLen.map(_._1).sum
+    val amountNeeded = ((maxPerCol.sum) * rowCount) + (maxPerCol.length * (rowCount/8))
+    logInfo(s"Overall, this scan reads ${rowCount} rows and will need $amountNeeded")
+
     new MultiFileParquetPartitionReader(conf, files, clippedBlocks,
       isCaseSensitive, readDataSchema, debugDumpPrefix,
       maxReadBatchSizeRows, maxReadBatchSizeBytes, metrics,

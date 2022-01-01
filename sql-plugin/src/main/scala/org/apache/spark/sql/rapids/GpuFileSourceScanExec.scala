@@ -485,6 +485,8 @@ case class GpuFileSourceScanExec(
       .getPartitionSplitFiles(selectedPartitions, maxSplitBytes, relation)
       .sortBy(_.length)(implicitly[Ordering[Long]].reverse)
 
+    logInfo(s"Getting partitioned files ${splitFiles}")
+
     val partitions =
       FilePartition.getFilePartitions(relation.sparkSession, splitFiles, maxSplitBytes)
 
