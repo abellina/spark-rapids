@@ -46,6 +46,8 @@ case class GpuParquetScan(
     readDataSchema, readPartitionSchema, pushedFilters, rapidsConf,
     queryUsesInputFile) with FileScan {
 
+  logInfo(s"at GpuParquetScan, my parents are ${myParents}")
+
   override def isSplitable(path: Path): Boolean = super.isSplitableBase(path)
 
   override def createReaderFactory(): PartitionReaderFactory = super.createReaderFactoryBase()
