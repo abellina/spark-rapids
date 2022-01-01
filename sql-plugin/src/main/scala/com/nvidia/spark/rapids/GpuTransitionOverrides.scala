@@ -117,7 +117,7 @@ class GpuTransitionOverrides extends Rule[SparkPlan] {
         // because we need to return an operator that implements `BroadcastExchangeLike` or
         // `ShuffleExchangeLike`.
         bb.child match {
-          case GpuShuffleCoalesceExec(e: GpuShuffleExchangeExecBase, _, _) if parent.isEmpty =>
+          case GpuShuffleCoalesceExec(e: GpuShuffleExchangeExecBase, _) if parent.isEmpty =>
             // The coalesce step gets added back into the plan later on, in a
             // future query stage that reads the output from this query stage. This
             // is handled in the case clauses below.
@@ -550,6 +550,18 @@ class GpuTransitionOverrides extends Rule[SparkPlan] {
     case _ => plan
   }
 
+  def maxModel(plan: SparkPlan, prevParents: Seq[SparkPlan] = Seq.empty): SparkPlan = plan match {
+    case g: GpuExec =>
+      val parents = prevParents :+ plan
+      g.setParents(parents)
+      g.children.map(maxModel(_, parents))
+      g
+    case c =>
+      val parents = prevParents :+ plan
+      c.children.map(maxModel(_, parents))
+      c
+  }
+
   override def apply(sparkPlan: SparkPlan): SparkPlan = GpuOverrideUtil.tryOverride { plan =>
     this.rapidsConf = new RapidsConf(plan.conf)
     if (rapidsConf.isSqlEnabled) {
@@ -580,6 +592,8 @@ class GpuTransitionOverrides extends Rule[SparkPlan] {
           updatedPlan.canonicalized
           validateExecsInGpuPlan(updatedPlan, rapidsConf)
         }
+
+        updatedPlan = maxModel(updatedPlan)
         updatedPlan
       }
     } else {

@@ -193,6 +193,12 @@ object GpuExec {
 }
 
 trait GpuExec extends SparkPlan with Arm {
+  var myParents: Seq[SparkPlan] = Seq.empty
+
+  def setParents(parents: Seq[SparkPlan]) = {
+    myParents = parents
+  }
+
   import GpuMetric._
   def sparkSession: SparkSession = {
     ShimLoader.getSparkShims.sessionFromPlan(this)

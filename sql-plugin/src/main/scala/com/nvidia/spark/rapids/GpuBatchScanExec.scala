@@ -34,7 +34,7 @@ import org.apache.spark.sql.catalyst.expressions.{AttributeReference, Expression
 import org.apache.spark.sql.catalyst.plans.QueryPlan
 import org.apache.spark.sql.catalyst.util.PermissiveMode
 import org.apache.spark.sql.connector.read._
-import org.apache.spark.sql.execution.QueryExecutionException
+import org.apache.spark.sql.execution.{QueryExecutionException, SparkPlan}
 import org.apache.spark.sql.execution.datasources.{HadoopFileLinesReader, PartitionedFile, PartitioningAwareFileIndex}
 import org.apache.spark.sql.execution.datasources.csv.CSVDataSource
 import org.apache.spark.sql.execution.datasources.v2._
@@ -62,7 +62,9 @@ case class GpuBatchScanExec(
       semaphoreMetrics
 
   scan match {
-    case s: ScanWithMetrics => s.metrics = allMetrics ++ additionalMetrics
+    case s: ScanWithMetrics =>
+      s.metrics = allMetrics ++ additionalMetrics
+      s.setParents(myParents)
     case _ =>
   }
 
@@ -82,6 +84,11 @@ case class GpuBatchScanExec(
 trait ScanWithMetrics {
   //this is initialized by the exec post creation
   var metrics: Map[String, GpuMetric] = Map.empty
+
+  var myParents: Seq[SparkPlan] = Seq.empty
+  def setParents(parents: Seq[SparkPlan]) = {
+    myParents = parents
+  }
 }
 
 object GpuCSVScan {

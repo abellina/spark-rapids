@@ -39,8 +39,7 @@ import org.apache.spark.sql.vectorized.ColumnarBatch
  * @note This should ALWAYS appear in the plan after a GPU shuffle when RAPIDS shuffle is
  *       not being used.
  */
-case class GpuShuffleCoalesceExec(child: SparkPlan, targetBatchByteSize: Long, 
-  parents: Seq[SparkPlan] = Seq.empty)
+case class GpuShuffleCoalesceExec(child: SparkPlan, targetBatchByteSize: Long)
     extends ShimUnaryExecNode with GpuExec {
 
   import GpuMetric._
@@ -66,7 +65,7 @@ case class GpuShuffleCoalesceExec(child: SparkPlan, targetBatchByteSize: Long,
     val sparkSchema = GpuColumnVector.extractTypes(schema)
 
     child.executeColumnar().mapPartitions { iter =>
-      new GpuShuffleCoalesceIterator(iter, targetSize, sparkSchema, metricsMap, parents)
+      new GpuShuffleCoalesceIterator(iter, targetSize, sparkSchema, metricsMap, myParents)
     }
   }
 }
