@@ -35,7 +35,7 @@ import org.apache.spark.sql.catalyst.expressions.{AttributeReference, Expression
 import org.apache.spark.sql.catalyst.plans.QueryPlan
 import org.apache.spark.sql.catalyst.util.PermissiveMode
 import org.apache.spark.sql.connector.read._
-import org.apache.spark.sql.execution.{QueryExecutionException, SparkPlan}
+import org.apache.spark.sql.execution.QueryExecutionException
 import org.apache.spark.sql.execution.datasources.{HadoopFileLinesReader, PartitionedFile, PartitioningAwareFileIndex}
 import org.apache.spark.sql.execution.datasources.csv.CSVDataSource
 import org.apache.spark.sql.execution.datasources.v2._
@@ -87,12 +87,8 @@ trait ScanWithMetrics extends Logging {
   var metrics: Map[String, GpuMetric] = Map.empty
 
   @transient var myParents: Seq[GpuExec.ParentInfo] = Seq.empty
-  def setParents(parents: Seq[SparkPlan]) = {
-    logInfo (s"Scan with metrics setParents ${parents}")
-    myParents = parents.map {
-      case p@(g: GpuExec) => (p.nodeName, Some(n => g.maxMemoryModel(n)))
-      case p => (p.nodeName, None)
-    }
+  def setParents(parents: Seq[GpuExec.ParentInfo]) = {
+    myParents = parents
   }
 }
 

@@ -81,7 +81,7 @@ class GpuShuffleCoalesceIterator(
     targetBatchByteSize: Long,
     sparkSchema: Array[DataType],
     metricsMap: Map[String, GpuMetric],
-    parents: Seq[ParentInfo])
+    parents: Seq[GpuExec.ParentInfo])
     extends Iterator[ColumnarBatch] with Arm with AutoCloseable with Logging {
   private[this] val opTimeMetric = metricsMap(GpuMetric.OP_TIME)
   private[this] val inputBatchesMetric = metricsMap(GpuMetric.NUM_INPUT_BATCHES)
@@ -200,20 +200,19 @@ class GpuShuffleCoalesceIterator(
         withResource(JCudfSerialization.concatToHostBuffer(headers, buffers)) { hostConcatResult =>
           // about to start using the GPU in this task
           val result = parents.map {
-            case g: GpuExec =>
-              val modelSays = g.maxMemoryModel(numRowsInBatch)
+            case (nodeName, maxMemoryModel) =>
+              val modelSays = maxMemoryModel.flatMap(fn => fn(numRowsInBatch))
               logInfo(
-                s"Found GPU Parent ${g.nodeName}: row count: ${numRowsInBatch} " +
+                s"Found GPU Parent ${nodeName}: row count: ${numRowsInBatch} " +
                   s"Mem model says: ${modelSays}")
               modelSays
-            case _ => Some(0L)
           }
           if (result.forall(_.isDefined) && result.nonEmpty) {
             val theMax = result.map(_.get).max
             logInfo(s"all parents produced something: ${result.mkString(",")} " +
               s", max is: $theMax")
           } else {
-            logInfo(s"NOT all parents produced something: ${parents.map(_.nodeName).mkString(",")}. " +
+            logInfo(s"NOT all parents produced something: ${parents.map(_._1).mkString(",")}. " +
               s"Num parents ${parents.length}")
           }
 
