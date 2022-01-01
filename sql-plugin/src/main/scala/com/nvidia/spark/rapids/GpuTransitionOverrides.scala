@@ -387,8 +387,7 @@ class GpuTransitionOverrides extends Rule[SparkPlan] {
       GpuShuffleCoalesceExec(
         exec.withNewChildren(
           exec.children.map(c => insertShuffleCoalesce(c, parent :+ plan))),
-        rapidsConf.gpuTargetBatchSizeBytes,
-        parent)
+        rapidsConf.gpuTargetBatchSizeBytes)
     case exec => exec.withNewChildren(
       plan.children.map(c => insertShuffleCoalesce(c, parent :+ plan)))
   }
