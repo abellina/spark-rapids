@@ -402,7 +402,7 @@ case class GpuParquetMultiFilePartitionReaderFactory(
     metrics: Map[String, GpuMetric],
     queryUsesInputFile: Boolean,
     couldExplode: Boolean = false,
-    parents: Seq[SparkPlan] = Seq.empty)
+    parents: Seq[GpuExec.ParentInfo] = Seq.empty)
   extends MultiFilePartitionReaderFactoryBase(sqlConf, broadcastedConf, rapidsConf) {
 
   private val isCaseSensitive = sqlConf.caseSensitiveAnalysis
@@ -478,24 +478,22 @@ case class GpuParquetMultiFilePartitionReaderFactory(
       val rowCount = blocksRowCountAndMaxLen.map(_._1).sum
       val amountNeeded = ((maxPerCol.sum) * rowCount) + (maxPerCol.length * (rowCount/8))
       logInfo(s"Overall, this scan reads ${rowCount} rows and will need $amountNeeded")
-    }
 
-    val result = parents.map {
-      case g: GpuExec =>
-        val modelSays = g.maxMemoryModel(rowCount)
+      val result = parents.map { case (nodeName, maxMemoryModel) =>
+        val modelSays = maxMemoryModel.flatMap(fn => fn(rowCount))
         logInfo(
-          s"Found GPU Parent ${g.nodeName}: row count: ${rowCount} " +
+          s"Found GPU Parent ${nodeName}: row count: ${rowCount} " +
             s"Mem model says: ${modelSays}")
         modelSays
-      case _ => Some(0L)
-    }
-    if (result.forall(_.isDefined) && result.nonEmpty) {
-      val theMax = result.map(_.get).max
-      logInfo(s"all parents produced something: ${result.mkString(",")} " +
-        s", max is: $theMax")
-    } else {
-      logInfo(s"NOT all parents produced something: ${parents.map(_.nodeName).mkString(",")}. " +
-        s"Num parents ${parents.length}")
+      }
+      if (result.forall(_.isDefined) && result.nonEmpty) {
+        val theMax = result.map(_.get).max
+        logInfo(s"all parents produced something: ${result.mkString(",")} " +
+          s", max is: $theMax")
+      } else {
+        logInfo(s"NOT all parents produced something: ${parents.map(_._1).mkString(",")}. " +
+          s"Num parents ${parents.length}")
+      }
     }
 
     new MultiFileParquetPartitionReader(conf, files, clippedBlocks,

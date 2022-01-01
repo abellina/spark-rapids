@@ -190,13 +190,19 @@ object GpuExec {
     case gpu: GpuExec => gpu.outputBatching
     case _ => null
   }
+
+  type ParentInfo = (String, Option[Long => Option[Long]])
 }
 
 trait GpuExec extends SparkPlan with Arm {
-  var myParents: Seq[SparkPlan] = Seq.empty
+
+  var myParents: Seq[GpuExec.ParentInfo] = Seq.empty
 
   def setParents(parents: Seq[SparkPlan]) = {
-    myParents = parents
+    myParents = parents.map {
+      case p@(g: GpuExec) => (p.nodeName, Some(n => g.maxMemoryModel(n)))
+      case p => (p.nodeName, None)
+    }
   }
 
   import GpuMetric._

@@ -295,9 +295,7 @@ trait Spark301until320Shims extends SparkShims {
         orcScan.copy(queryUsesInputFile = queryUsesInputFile)
       case _ => throw new RuntimeException("Wrong format") // never reach here
     }
-    val newOne = batchScanExec.copy(scan = scanCopy)
-    newOne.setParents(batchScanExec.myParents)
-    newOne
+    batchScanExec.copy(scan = scanCopy)
   }
 
   override def copyFileSourceScanExec(

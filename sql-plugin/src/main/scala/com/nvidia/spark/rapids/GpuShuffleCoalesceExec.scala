@@ -81,7 +81,7 @@ class GpuShuffleCoalesceIterator(
     targetBatchByteSize: Long,
     sparkSchema: Array[DataType],
     metricsMap: Map[String, GpuMetric],
-    parents: Seq[SparkPlan])
+    parents: Seq[ParentInfo])
     extends Iterator[ColumnarBatch] with Arm with AutoCloseable with Logging {
   private[this] val opTimeMetric = metricsMap(GpuMetric.OP_TIME)
   private[this] val inputBatchesMetric = metricsMap(GpuMetric.NUM_INPUT_BATCHES)
