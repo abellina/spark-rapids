@@ -215,7 +215,8 @@ class GpuShuffleCoalesceIterator(
             val theMax = result.map(_.get).max
             logInfo(s"all parents produced something: ${result.mkString(",")} max is: $theMax")
           } else {
-            logInfo(s"NOT all parents produced something: ${result.mkString(",")}")
+            logInfo(s"NOT all parents produced something: ${parents.mkString(",")}. " +
+              s"Num parents ${parents.length}")
           }
 
           GpuSemaphore.acquireIfNecessary(TaskContext.get(), semWaitTime)
