@@ -86,10 +86,13 @@ trait ScanWithMetrics extends Logging {
   //this is initialized by the exec post creation
   var metrics: Map[String, GpuMetric] = Map.empty
 
-  var myParents: Seq[SparkPlan] = Seq.empty
+  var myParents: Seq[GpuExec.ParentInfo] = Seq.empty
   def setParents(parents: Seq[SparkPlan]) = {
     logInfo (s"Scan with metrics setParents ${parents}")
-    myParents = parents
+    myParents = parents.map {
+      case p@(g: GpuExec) => (p.nodeName, Some(n => g.maxMemoryModel(n)))
+      case p => (p.nodeName, None)
+    }
   }
 }
 
