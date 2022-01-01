@@ -491,6 +491,8 @@ case class GpuFileSourceScanExec(
     getFinalRDD(relation, readFile, partitions)
   }
 
+  logInfo(s"at GpuFileSourceScanExec, my parents are ${myParents}")
+
   private def getFinalRDD(
       fsRelation: HadoopFsRelation,
       readFile: Option[(PartitionedFile) => Iterator[InternalRow]],
