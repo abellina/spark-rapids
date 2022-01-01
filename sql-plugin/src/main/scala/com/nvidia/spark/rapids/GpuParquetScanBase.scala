@@ -468,14 +468,17 @@ case class GpuParquetMultiFilePartitionReaderFactory(
         cb.dataBlock.dataBlock.getColumns.asScala.map(_.getStatistics.getMaxBytes.length))
     })
 
-    val maxPerCol =
-      blocksRowCountAndMaxLen.map(_._2).reduce { (a1, a2) =>
-        a1.zip(a2).map { case (x1, x2) => max(x1, x2) }
-      }
-
-    val rowCount = blocksRowCountAndMaxLen.map(_._1).sum
-    val amountNeeded = ((maxPerCol.sum) * rowCount) + (maxPerCol.length * (rowCount/8))
-    logInfo(s"Overall, this scan reads ${rowCount} rows and will need $amountNeeded")
+    if (blocksRowCountAndMaxLen.isEmpty) {
+      logInfo(s"No blocks!!")
+    } else {
+      val maxPerCol =
+        blocksRowCountAndMaxLen.map(_._2).reduce { (a1, a2) =>
+          a1.zip(a2).map { case (x1, x2) => max(x1, x2) }
+        }
+      val rowCount = blocksRowCountAndMaxLen.map(_._1).sum
+      val amountNeeded = ((maxPerCol.sum) * rowCount) + (maxPerCol.length * (rowCount/8))
+      logInfo(s"Overall, this scan reads ${rowCount} rows and will need $amountNeeded")
+    }
 
     val result = parents.map {
       case g: GpuExec =>
