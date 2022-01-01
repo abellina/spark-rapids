@@ -210,7 +210,8 @@ class GpuShuffleCoalesceIterator(
           }
           if (result.forall(_.isDefined) && result.nonEmpty) {
             val theMax = result.map(_.get).max
-            logInfo(s"all parents produced something: ${result.mkString(",")} max is: $theMax")
+            logInfo(s"all parents produced something: ${result.mkString(",")} " +
+              s", max is: $theMax")
           } else {
             logInfo(s"NOT all parents produced something: ${parents.map(_.nodeName).mkString(",")}. " +
               s"Num parents ${parents.length}")

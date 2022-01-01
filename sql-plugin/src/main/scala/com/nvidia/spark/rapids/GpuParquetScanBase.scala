@@ -49,7 +49,7 @@ import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.util.CaseInsensitiveMap
 import org.apache.spark.sql.connector.read.{InputPartition, PartitionReader, PartitionReaderFactory}
-import org.apache.spark.sql.execution.QueryExecutionException
+import org.apache.spark.sql.execution.{QueryExecutionException, SparkPlan}
 import org.apache.spark.sql.execution.datasources.{DataSourceUtils, PartitionedFile}
 import org.apache.spark.sql.execution.datasources.parquet.ParquetReadSupport
 import org.apache.spark.sql.execution.datasources.v2.FilePartitionReaderFactory
@@ -101,7 +101,7 @@ abstract class GpuParquetScanBase(
     } else {
       GpuParquetMultiFilePartitionReaderFactory(sparkSession.sessionState.conf, broadcastedConf,
         dataSchema, readDataSchema, readPartitionSchema, pushedFilters, rapidsConf, metrics,
-        queryUsesInputFile, couldExplode)
+        queryUsesInputFile, couldExplode, myParents)
     }
   }
 }
@@ -401,7 +401,8 @@ case class GpuParquetMultiFilePartitionReaderFactory(
     @transient rapidsConf: RapidsConf,
     metrics: Map[String, GpuMetric],
     queryUsesInputFile: Boolean,
-    couldExplode: Boolean = false)
+    couldExplode: Boolean = false,
+    parents: Seq[SparkPlan] = Seq.empty)
   extends MultiFilePartitionReaderFactoryBase(sqlConf, broadcastedConf, rapidsConf) {
 
   private val isCaseSensitive = sqlConf.caseSensitiveAnalysis
@@ -475,6 +476,24 @@ case class GpuParquetMultiFilePartitionReaderFactory(
     val rowCount = blocksRowCountAndMaxLen.map(_._1).sum
     val amountNeeded = ((maxPerCol.sum) * rowCount) + (maxPerCol.length * (rowCount/8))
     logInfo(s"Overall, this scan reads ${rowCount} rows and will need $amountNeeded")
+
+    val result = parents.map {
+      case g: GpuExec =>
+        val modelSays = g.maxMemoryModel(rowCount)
+        logInfo(
+          s"Found GPU Parent ${g.nodeName}: row count: ${rowCount} " +
+            s"Mem model says: ${modelSays}")
+        modelSays
+      case _ => Some(0L)
+    }
+    if (result.forall(_.isDefined) && result.nonEmpty) {
+      val theMax = result.map(_.get).max
+      logInfo(s"all parents produced something: ${result.mkString(",")} " +
+        s", max is: $theMax")
+    } else {
+      logInfo(s"NOT all parents produced something: ${parents.map(_.nodeName).mkString(",")}. " +
+        s"Num parents ${parents.length}")
+    }
 
     new MultiFileParquetPartitionReader(conf, files, clippedBlocks,
       isCaseSensitive, readDataSchema, debugDumpPrefix,
