@@ -523,7 +523,8 @@ case class GpuFileSourceScanExec(
             rapidsConf,
             allMetrics,
             queryUsesInputFile,
-            couldExplode = couldExplode)
+            couldExplode = couldExplode,
+            parents = myParents)
         case _: OrcFileFormat =>
           GpuOrcMultiFilePartitionReaderFactory(
             sqlConf,
