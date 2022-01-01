@@ -26,6 +26,7 @@ import org.apache.hadoop.fs.Path
 import org.apache.hadoop.io.compress.CompressionCodecFactory
 import org.apache.spark.TaskContext
 import org.apache.spark.broadcast.Broadcast
+import org.apache.spark.internal.Logging
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.catalyst.InternalRow
@@ -81,12 +82,13 @@ case class GpuBatchScanExec(
   }
 }
 
-trait ScanWithMetrics {
+trait ScanWithMetrics extends Logging {
   //this is initialized by the exec post creation
   var metrics: Map[String, GpuMetric] = Map.empty
 
   var myParents: Seq[SparkPlan] = Seq.empty
   def setParents(parents: Seq[SparkPlan]) = {
+    logInfo (s"Scan with metrics setParents ${parents}")
     myParents = parents
   }
 }
