@@ -491,12 +491,12 @@ case class GpuFileSourceScanExec(
     getFinalRDD(relation, readFile, partitions)
   }
 
-  logInfo(s"at GpuFileSourceScanExec, my parents are ${myParents}")
-
   private def getFinalRDD(
       fsRelation: HadoopFsRelation,
       readFile: Option[(PartitionedFile) => Iterator[InternalRow]],
       partitions: Seq[FilePartition]): RDD[InternalRow] = {
+
+    logInfo(s"at GpuFileSourceScanExec, my parents are ${myParents}")
 
     if (isPerFileReadEnabled) {
       logInfo("Using the original per file parquet reader")
