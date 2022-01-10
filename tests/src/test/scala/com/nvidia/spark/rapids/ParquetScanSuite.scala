@@ -152,4 +152,9 @@ class ParquetScanSuite extends SparkQueryCompareTestSuite {
     assumeCondition = (_ => (VersionUtils.isSpark320OrLater, "Spark version not 3.2.0+"))) {
     frame => frame.select(col("*"))
   }
+
+  testSparkResultsAreEqual("Test Parquet doesn't acquire semaphore for empty input",
+      frameFromParquet("empty_table.parquet")) {
+    frame => frame.selectExpr("count(*), sum(value)")
+  }
 }
