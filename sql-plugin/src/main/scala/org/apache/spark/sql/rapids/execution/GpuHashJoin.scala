@@ -17,12 +17,14 @@ package org.apache.spark.sql.rapids.execution
 
 import ai.rapids.cudf.{DType, GroupByAggregation, NullPolicy, NvtxColor, ReductionAggregation, Table}
 import com.nvidia.spark.rapids._
-
 import org.apache.spark.sql.catalyst.expressions.{Attribute, AttributeReference, Expression, NamedExpression}
 import org.apache.spark.sql.catalyst.plans.{Cross, ExistenceJoin, FullOuter, Inner, InnerLike, JoinType, LeftAnti, LeftExistence, LeftOuter, LeftSemi, RightOuter}
 import org.apache.spark.sql.execution.SparkPlan
 import org.apache.spark.sql.types._
 import org.apache.spark.sql.vectorized.ColumnarBatch
+
+import java.io.File
+import java.util.UUID
 
 object JoinTypeChecks {
   def tagForGpu(joinType: JoinType, meta: RapidsMeta[_, _, _]): Unit = {
@@ -301,23 +303,37 @@ class HashJoinIterator(
       leftData: LazySpillableColumnarBatch,
       rightKeys: Table,
       rightData: LazySpillableColumnarBatch): Option[JoinGatherer] = {
-    withResource(new NvtxWithMetrics("hash join gather map", NvtxColor.ORANGE, joinTime)) { _ =>
-      val maps = joinType match {
-        case LeftOuter => leftKeys.leftJoinGatherMaps(rightKeys, compareNullsEqual)
-        case RightOuter =>
-          // Reverse the output of the join, because we expect the right gather map to
-          // always be on the right
-          rightKeys.leftJoinGatherMaps(leftKeys, compareNullsEqual).reverse
-        case _: InnerLike => leftKeys.innerJoinGatherMaps(rightKeys, compareNullsEqual)
-        case LeftSemi => Array(leftKeys.leftSemiJoinGatherMap(rightKeys, compareNullsEqual))
-        case LeftAnti => Array(leftKeys.leftAntiJoinGatherMap(rightKeys, compareNullsEqual))
-        case FullOuter => leftKeys.fullJoinGatherMaps(rightKeys, compareNullsEqual)
-        case _ =>
-          throw new NotImplementedError(s"Joint Type ${joinType.getClass} is not currently" +
-              s" supported")
+    val start = System.currentTimeMillis()
+    val gatherer =
+      withResource(new NvtxWithMetrics("hash join gather map", NvtxColor.ORANGE, joinTime)) { _ =>
+        val maps = joinType match {
+          case LeftOuter => leftKeys.leftJoinGatherMaps(rightKeys, compareNullsEqual)
+          case RightOuter =>
+            // Reverse the output of the join, because we expect the right gather map to
+            // always be on the right
+            rightKeys.leftJoinGatherMaps(leftKeys, compareNullsEqual).reverse
+          case _: InnerLike => leftKeys.innerJoinGatherMaps(rightKeys, compareNullsEqual)
+          case LeftSemi => Array(leftKeys.leftSemiJoinGatherMap(rightKeys, compareNullsEqual))
+          case LeftAnti => Array(leftKeys.leftAntiJoinGatherMap(rightKeys, compareNullsEqual))
+          case FullOuter => leftKeys.fullJoinGatherMaps(rightKeys, compareNullsEqual)
+          case _ =>
+            throw new NotImplementedError(s"Joint Type ${joinType.getClass} is not currently" +
+                s" supported")
+        }
+        makeGatherer(maps, leftData, rightData, joinType)
       }
-      makeGatherer(maps, leftData, rightData, joinType)
+
+    val end = System.currentTimeMillis()
+    val uuid = UUID.randomUUID()
+    if (end - start > 100) {
+      logInfo(s"Dumping to parquet at ${uuid}. It took ${end-start}")
+      val path = new File(s"/tmp/slow_join/${uuid}")
+      path.mkdirs()
+      val bb = leftKeys.contiguousSplit()(0)
+      DumpUtils.dumpToParquetFile(leftKeys, path.getPath +  "left_keys")
+      DumpUtils.dumpToParquetFile(rightKeys, path.getPath +  "right_keys")
     }
+    gatherer
   }
 
   private def joinGathererLeftRight(
