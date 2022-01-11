@@ -82,6 +82,17 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
     }
   }
 
+  def addBatch(
+      id: RapidsBufferId,
+      batch: ColumnarBatch,
+      initialSpillPriority: Long,
+      spillCallback: SpillCallback): Unit = {
+    withResource(GpuColumnVector.from(batch)) { tbl =>
+      addBuffer(new RapidsNonContiguousMemoryBuffer(
+        id, tbl.getDeviceMemorySize, batch, initialSpillPriority, spillCallback))
+    }
+  }
+
   /**
    * Adds a contiguous table to the device storage. This does NOT take ownership of the
    * contiguous table, so it is the responsibility of the caller to close it. The refcount of the
@@ -147,6 +158,51 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
           s"meta_id=${tableMeta.bufferMeta.id}, " +
           s"meta_size=${tableMeta.bufferMeta.size}]")
       addBuffer(buff)
+    }
+  }
+
+  class RapidsNonContiguousMemoryBuffer(
+      id: RapidsBufferId,
+      size: Long,
+      batch: ColumnarBatch,
+      spillPriority: Long,
+      override val spillCallback: SpillCallback)
+    extends RapidsBufferBase(id, size, null, spillPriority, spillCallback) {
+
+    // take ownership of this batch
+    GpuColumnVector.incRefCounts(batch)
+
+    override def getColumnarBatch(sparkTypes: Array[DataType]): ColumnarBatch = {
+      GpuColumnVector.incRefCounts(batch)
+    }
+
+    var contig: Option[ContiguousTable] = None
+    /** Release the underlying resources for this buffer. */
+    override protected def releaseResources(): Unit = {
+      contig.foreach(_.close())
+      batch.close()
+    }
+
+    /** The storage tier for this buffer */
+    override val storageTier: StorageTier = StorageTier.DEVICE
+
+    /**
+     * Get the underlying memory buffer. This may be either a HostMemoryBuffer or a
+     * DeviceMemoryBuffer depending on where the buffer currently resides.
+     * The caller must have successfully acquired the buffer beforehand.
+     *
+     * @see [[addReference]]
+     * @note It is the responsibility of the caller to close the buffer.
+     */
+    override def getMemoryBuffer: MemoryBuffer = {
+      // contig split at this point (spill time?)
+      if (contig.isEmpty) {
+        contig = withResource(GpuColumnVector.from(batch)) { tbl =>
+          Some(tbl.contiguousSplit()(0))
+        }
+      }
+      contig.get.getBuffer.incRefCount()
+      contig.get.getBuffer
     }
   }
 

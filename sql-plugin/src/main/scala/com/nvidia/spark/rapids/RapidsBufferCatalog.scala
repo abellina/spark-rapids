@@ -18,14 +18,13 @@ package com.nvidia.spark.rapids
 
 import java.util.concurrent.ConcurrentHashMap
 import java.util.function.BiFunction
-
 import ai.rapids.cudf.{ContiguousTable, DeviceMemoryBuffer, Rmm, Table}
 import com.nvidia.spark.rapids.StorageTier.StorageTier
 import com.nvidia.spark.rapids.format.TableMeta
-
 import org.apache.spark.{SparkConf, SparkEnv}
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.rapids.RapidsDiskBlockManager
+import org.apache.spark.sql.vectorized.ColumnarBatch
 
 /**
  *  Exception thrown when inserting a buffer into the catalog with a duplicate buffer ID
@@ -251,6 +250,14 @@ object RapidsBufferCatalog extends Logging with Arm {
       initialSpillPriority: Long,
       spillCallback: SpillCallback = RapidsBuffer.defaultSpillCallback): Unit =
     deviceStorage.addTable(id, table, contigBuffer, tableMeta, initialSpillPriority, spillCallback)
+
+  def addBatch(id: RapidsBufferId,
+               batch: ColumnarBatch,
+               initialSpillPriority: Long,
+               spillCallback: SpillCallback): Unit = {
+    deviceStorage.addBatch(id, batch, initialSpillPriority, spillCallback)
+  }
+
 
   /**
    * Adds a contiguous table to the device storage, taking ownership of the table.

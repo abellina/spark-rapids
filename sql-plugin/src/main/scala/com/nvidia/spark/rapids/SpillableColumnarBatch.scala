@@ -200,13 +200,15 @@ object SpillableColumnarBatch extends Arm {
         RapidsBufferCatalog.addTable(id, table, buff, cv.getTableMeta, initialSpillPriority,
           spillCallback)
       } else {
-        withResource(GpuColumnVector.from(batch)) { tmpTable =>
-          withResource(tmpTable.contiguousSplit()) { contigTables =>
-            require(contigTables.length == 1, "Unexpected number of contiguous spit tables")
-            RapidsBufferCatalog.addContiguousTable(id, contigTables.head, initialSpillPriority,
-              spillCallback)
-          }
-        }
+        RapidsBufferCatalog.addBatch(id, batch, initialSpillPriority, spillCallback)
+
+        //withResource(GpuColumnVector.from(batch)) { tmpTable =>
+        //  withResource(tmpTable.contiguousSplit()) { contigTables =>
+        //    require(contigTables.length == 1, "Unexpected number of contiguous spit tables")
+        //    RapidsBufferCatalog.addContiguousTable(id, contigTables.head, initialSpillPriority,
+        //      spillCallback)
+        //  }
+        //}
       }
     }
   }
