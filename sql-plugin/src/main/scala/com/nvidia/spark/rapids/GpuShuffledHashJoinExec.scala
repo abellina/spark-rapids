@@ -131,6 +131,7 @@ case class GpuShuffledHashJoinExec(
     val streamTime = gpuLongMetric(STREAM_TIME)
     val joinTime = gpuLongMetric(JOIN_TIME)
     val joinOutputRows = gpuLongMetric(JOIN_OUTPUT_ROWS)
+    val hostTargetSize = RapidsConf.SHJ_MOCK_GPU_BATCH_SIZE_BYTES.get(conf)
     val targetSize = RapidsConf.GPU_BATCH_SIZE_BYTES.get(conf)
     val spillCallback = GpuMetric.makeSpillCallback(allMetrics)
 
@@ -138,7 +139,7 @@ case class GpuShuffledHashJoinExec(
       (streamIter, buildIter) => {
         val (builtBatch, maybeBufferedStreamIter) =
           GpuShuffledHashJoinExec.getBuiltBatchAndStreamIter(
-            targetSize,
+            hostTargetSize,
             buildPlan.output,
             buildIter,
             new CollectTimeIterator("shuffled join stream", streamIter, streamTime),
@@ -238,12 +239,11 @@ object GpuShuffledHashJoinExec extends Arm {
         }
       }
 
-      if (!firstBatchIsSerialized || !streamIter.hasNext) {
-        // fallback if we failed to find serialized build batches, or if the
-        // stream iterator is empty
+      if (!firstBatchIsSerialized) {
+        // fallback if we failed to find serialized build batches
         val builtBatch =
-        ConcatAndConsumeAll.getSingleBatchWithVerification(
-          Option(bufferedBuildIterator).getOrElse(buildIter), buildOutput)
+          ConcatAndConsumeAll.getSingleBatchWithVerification(
+            Option(bufferedBuildIterator).getOrElse(buildIter), buildOutput)
         val delta = System.nanoTime() - startTime
         buildTime += delta
         (builtBatch, streamIter)
@@ -264,38 +264,52 @@ object GpuShuffledHashJoinExec extends Arm {
                   hostBuffs += serializedTableColumn
                   sizeInHost += serializedTableColumn.hostBuffer.getLength
                 }
+              }
 
-                // concat our host batches on the host
-                val hostConcat = withResource(hostBuffs) { _ =>
+              // concat our host batches on the host
+              val hostConcat = withResource(hostBuffs) { _ =>
+                withResource(new NvtxRange("concat build batches", NvtxColor.YELLOW)) { _ =>
                   JCudfSerialization.concatToHostBuffer(
                     hostBuffs.map(_.header).toArray,
                     hostBuffs.map(_.hostBuffer).toArray)
                 }
-                hostBuffs.clear()
+              }
+              hostBuffs.clear()
 
-                // Optimal case, we drained the build iterator and we didn't have a prior
-                // build batch (so it was a single batch, and is entirely on the host.
-                // We peek at the stream iterator with `hasNext` on the buffered
-                // iterator, which will grab the semaphore when putting the first stream
-                // batch on the GPU, and then after that we will bring the build batch
-                // to the GPU and return.
-                if (buildBatch == null && !bufferedBuildIterator.hasNext) {
-                  buildTime += System.nanoTime() - startTime
-                  require(bufferedStreamIter.hasNext,
-                    "BufferedStreamIterator was empty, but the input stream iterator was not")
-                  val buildBatchToDeviceTime = System.nanoTime()
-                  withResource(hostConcat) { _ =>
-                    withResource(new NvtxRange("build batch to GPU", NvtxColor.GREEN)) { _ =>
-                      withResource(hostConcat.toContiguousTable) { contiguousTable =>
-                        buildBatch = GpuColumnVectorFromBuffer.from(contiguousTable, dataTypes)
-                        buildTime += System.nanoTime() - buildBatchToDeviceTime
-                      }
+              // Optimal case, we drained the build iterator and we didn't have a prior
+              // build batch (so it was a single batch, and is entirely on the host.
+              // We peek at the stream iterator with `hasNext` on the buffered
+              // iterator, which will grab the semaphore when putting the first stream
+              // batch on the GPU, and then after that we will bring the build batch
+              // to the GPU and return.
+              if (buildBatch == null && !bufferedBuildIterator.hasNext) {
+                buildTime += System.nanoTime() - startTime
+                // force the buffered stream iterator to load up a batch
+                withResource(new NvtxRange("work stream side", NvtxColor.RED)) { _ =>
+                  if (bufferedStreamIter.hasNext) {
+                    bufferedStreamIter.head
+                    // we are now on the GPU yet
+                  } else {
+                    withResource(new NvtxRange("empty stream side acquire", NvtxColor.CYAN)) { _ =>
+                      GpuSemaphore.acquireIfNecessary(TaskContext.get(), semWait)
                     }
                   }
-                } else {
-                  // Non-optimal case, we reached our limit and we still have build-side batches
-                  // that need to be coalesce (and this needs to occur while holding onto the
-                  // semaphore)
+                }
+                val buildBatchToDeviceTime = System.nanoTime()
+                withResource(hostConcat) { _ =>
+                  withResource(new NvtxRange("single build batch GPU", NvtxColor.GREEN)) { _ =>
+                    withResource(hostConcat.toContiguousTable) { contiguousTable =>
+                      buildBatch = GpuColumnVectorFromBuffer.from(contiguousTable, dataTypes)
+                      buildTime += System.nanoTime() - buildBatchToDeviceTime
+                    }
+                  }
+                }
+              } else {
+                // Non-optimal case, we reached our limit and we still have build-side batches
+                // that need to be coalesce (and this needs to occur while holding onto the
+                // semaphore)
+                // Use shuffled coalesce iterator
+                withResource(new NvtxRange("build to GPU and concat", NvtxColor.CYAN)) { _ =>
                   GpuSemaphore.acquireIfNecessary(TaskContext.get(), semWait)
                   withResource(hostConcat) { _ =>
                     val buildBatchToDeviceTime = System.nanoTime()
