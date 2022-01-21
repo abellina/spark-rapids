@@ -475,9 +475,9 @@ class GpuCoalesceBatchesSuite extends SparkQueryCompareTestSuite {
     val schema = new StructType().add("i", LongType)
       .add("j", DecimalType(ai.rapids.cudf.DType.DECIMAL64_MAX_PRECISION, 3))
     val dummyMetric = WrappedGpuMetric(new SQLMetric("ignored"))
-    val coalesceIter = new GpuCoalesceIterator(
+    val coalesceIter = new GpuCompressionAwareCoalesceIterator(
       batchIter,
-      schema,
+      GpuColumnVector.extractTypes(schema),
       TargetSize(coalesceTargetBytes),
       maxCompressedBatchMemoryLimit,
       dummyMetric,
@@ -559,9 +559,9 @@ class GpuCoalesceBatchesSuite extends SparkQueryCompareTestSuite {
     val schema = new StructType().add("i", LongType)
       .add("j", DecimalType(ai.rapids.cudf.DType.DECIMAL64_MAX_PRECISION, 3))
     val dummyMetric = WrappedGpuMetric(new SQLMetric("ignored"))
-    val coalesceIter = new GpuCoalesceIterator(
+    val coalesceIter = new GpuCompressionAwareCoalesceIterator(
       batchIter,
-      schema,
+      GpuColumnVector.extractTypes(schema),
       TargetSize(coalesceTargetBytes),
       maxCompressedBatchMemoryLimit,
       dummyMetric,
