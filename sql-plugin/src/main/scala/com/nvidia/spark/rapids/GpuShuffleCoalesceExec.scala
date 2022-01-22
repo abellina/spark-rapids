@@ -69,6 +69,7 @@ case class GpuShuffleCoalesceExec(child: SparkPlan, targetBatchByteSize: Long)
   }
 }
 
+
 /**
  * Iterator that coalesces columnar batches that are expected to only contain
  * [[SerializedTableColumn]]. The serialized tables within are collected up
@@ -89,6 +90,7 @@ class GpuShuffleCoalesceIterator(
   private[this] val concatTimeMetric = metricsMap(GpuMetric.CONCAT_TIME)
   private[this] val semWaitTime = metricsMap(GpuMetric.SEMAPHORE_WAIT_TIME)
   private[this] val serializedTables = new util.ArrayDeque[SerializedTableColumn]
+  // TODO: we need to prepopulate this, so we do a concat apriori
   private[this] var numTablesInBatch: Int = 0
   private[this] var numRowsInBatch: Int = 0
   private[this] var batchByteSize: Long = 0L
