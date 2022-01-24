@@ -16,11 +16,9 @@
 
 package com.nvidia.spark.rapids
 
-import ai.rapids.cudf.JCudfSerialization.SerializedTableHeader
-
-import scala.collection.mutable.ArrayBuffer
-import ai.rapids.cudf.{HostMemoryBuffer, JCudfSerialization, NvtxColor, NvtxRange}
+import ai.rapids.cudf.{NvtxColor, NvtxRange}
 import com.nvidia.spark.rapids.shims.v2.{GpuHashPartitioning, GpuJoinUtils, ShimBinaryExecNode}
+
 import org.apache.spark.TaskContext
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.catalyst.InternalRow
@@ -256,52 +254,25 @@ object GpuShuffledHashJoinExec extends Arm {
       } else {
         val dataTypes = buildOutput.map(_.dataType).toArray
         val bufferedStreamIter = new CloseableBufferedIterator(streamIter.buffered)
-        val hostBatches = new ArrayBuffer[ColumnarBatch]()
         var buildBatch: ColumnarBatch = null
         closeOnExcept(bufferedStreamIter) { _ =>
           closeOnExcept(buildBatch) { _ =>
-            withResource(new NvtxRange("get build batches", NvtxColor.ORANGE)) { _ =>
-              var sizeInHost = 0L
-              while (bufferedBuildIterator.hasNext && sizeInHost <= targetBatchSize) {
-                val hostBatch = bufferedBuildIterator.next()
-                val serializedTableColumn =
-                  hostBatch.column(0).asInstanceOf[SerializedTableColumn]
-                hostBatches += hostBatch
-                sizeInHost += serializedTableColumn.hostBuffer.getLength
-              }
+            val buildIt = withResource(new NvtxRange("get build batches", NvtxColor.ORANGE)) { _ =>
+              new GpuShuffleCoalesceWithPriorIterator(
+                bufferedBuildIterator,
+                RequireSingleBatch.targetSizeBytes,
+                dataTypes,
+                metricsMap)
             }
 
-            if (bufferedBuildIterator.hasNext) {
-              // have leftover
-              buildBatch = withResource(new NvtxRange("fallback case", NvtxColor.YELLOW)) { _ =>
-                ConcatAndConsumeAll.getSingleBatchWithVerification(
-                  new GpuShuffleCoalesceWithPriorIterator(
-                    bufferedBuildIterator,
-                    hostBatches.iterator,
-                    RequireSingleBatch.targetSizeBytes,
-                    dataTypes,
-                    metricsMap),
-                  buildOutput)
-              }
-            } else {
+            // if it drained the build iterator
+            if (!buildIt.bufferToHost()) {
               // Optimal case, we drained the build iterator and we didn't have a prior
               // build batch (so it was a single batch, and is entirely on the host.
               // We peek at the stream iterator with `hasNext` on the buffered
               // iterator, which will grab the semaphore when putting the first stream
               // batch on the GPU, and then after that we will bring the build batch
               // to the GPU and return.
-              val hostConcat = withResource(hostBatches) { _ =>
-                withResource(new NvtxRange("concat build batches", NvtxColor.YELLOW)) { _ =>
-                  val headers = new Array[SerializedTableHeader](hostBatches.length)
-                  val buffs = new Array[HostMemoryBuffer](hostBatches.length)
-                  hostBatches.zipWithIndex.foreach { case (b, ix) =>
-                    val serialized = b.column(0).asInstanceOf[SerializedTableColumn]
-                    headers(ix) = serialized.header
-                    buffs(ix) = serialized.hostBuffer
-                  }
-                  JCudfSerialization.concatToHostBuffer(headers, buffs)
-                }
-              }
               // we need to touch the stream iterator
               withResource(new NvtxRange("work stream side", NvtxColor.RED)) { _ =>
                 if (bufferedStreamIter.hasNext) {
@@ -311,15 +282,13 @@ object GpuShuffledHashJoinExec extends Arm {
                   GpuSemaphore.acquireIfNecessary(TaskContext.get(), semWait)
                 }
               }
-              val buildBatchToDeviceTime = System.nanoTime()
-              withResource(hostConcat) { _ =>
-                withResource(new NvtxRange("single build batch GPU", NvtxColor.GREEN)) { _ =>
-                  withResource(hostConcat.toContiguousTable) { contiguousTable =>
-                    buildBatch = GpuColumnVectorFromBuffer.from(contiguousTable, dataTypes)
-                    buildTime += System.nanoTime() - buildBatchToDeviceTime
-                  }
-                }
-              }
+            }
+
+            val buildBatchToDeviceTime = System.nanoTime()
+            withResource(new NvtxRange("single build batch GPU", NvtxColor.GREEN)) { _ =>
+              buildBatch =
+                ConcatAndConsumeAll.getSingleBatchWithVerification(buildIt, buildOutput)
+              buildTime += System.nanoTime() - buildBatchToDeviceTime
             }
           }
         }
