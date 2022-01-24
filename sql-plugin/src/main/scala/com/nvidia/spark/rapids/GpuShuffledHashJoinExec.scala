@@ -275,8 +275,9 @@ object GpuShuffledHashJoinExec extends Arm {
               // have leftover
               buildBatch = withResource(new NvtxRange("fallback case", NvtxColor.YELLOW)) { _ =>
                 ConcatAndConsumeAll.getSingleBatchWithVerification(
-                  new GpuShuffleCoalesceIterator(
-                    hostBatches.iterator ++ bufferedBuildIterator,
+                  new GpuShuffleCoalesceWithPriorIterator(
+                    bufferedBuildIterator,
+                    hostBatches.iterator,
                     RequireSingleBatch.targetSizeBytes,
                     dataTypes,
                     metricsMap),

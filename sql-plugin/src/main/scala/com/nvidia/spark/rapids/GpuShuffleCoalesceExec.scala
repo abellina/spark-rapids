@@ -69,6 +69,17 @@ case class GpuShuffleCoalesceExec(child: SparkPlan, targetBatchByteSize: Long)
   }
 }
 
+class GpuShuffleCoalesceWithPriorIterator(iter: Iterator[ColumnarBatch],
+                                          prior: Iterator[ColumnarBatch],
+                                          targetBatchByteSize: Long,
+                                          sparkSchema: Array[DataType],
+                                          metricsMap: Map[String, GpuMetric])
+  extends GpuShuffleCoalesceIterator(iter, targetBatchByteSize, sparkSchema, metricsMap)
+    with Arm with AutoCloseable {
+
+  bufferNextBatch(prior)
+}
+
 
 /**
  * Iterator that coalesces columnar batches that are expected to only contain
@@ -98,7 +109,7 @@ class GpuShuffleCoalesceIterator(
   Option(TaskContext.get()).foreach(_.addTaskCompletionListener[Unit](_ => close()))
 
   override def hasNext: Boolean = {
-    bufferNextBatch()
+    bufferNextBatch(iter)
     numTablesInBatch > 0
   }
 
@@ -114,11 +125,11 @@ class GpuShuffleCoalesceIterator(
     serializedTables.clear()
   }
 
-  private def bufferNextBatch(): Unit = {
+  protected def bufferNextBatch(it: Iterator[ColumnarBatch]): Unit = {
     if (numTablesInBatch == serializedTables.size()) {
       var batchCanGrow = batchByteSize < targetBatchByteSize
-      while (batchCanGrow && iter.hasNext) {
-        closeOnExcept(iter.next()) { batch =>
+      while (batchCanGrow && it.hasNext) {
+        closeOnExcept(it.next()) { batch =>
           inputBatchesMetric += 1
           // don't bother tracking empty tables
           if (batch.numRows > 0) {
