@@ -571,8 +571,7 @@ class GpuTransitionOverrides extends Rule[SparkPlan] {
         }
         updatedPlan = fixupHostColumnarTransitions(updatedPlan)
         updatedPlan = optimizeCoalesce(updatedPlan)
-        if (rapidsConf.optimizeShuffledHashJoin &&
-          !GpuShuffleEnv.isRapidsShuffleAvailable(rapidsConf)) {
+        if (rapidsConf.optimizeShuffledHashJoin) {
           updatedPlan = optimizeShuffledHashJoin(updatedPlan)
         }
         if (rapidsConf.exportColumnarRdd) {

@@ -69,17 +69,9 @@ case class GpuShuffleCoalesceExec(child: SparkPlan, targetBatchByteSize: Long)
   }
 }
 
-class GpuShuffleCoalesceWithPriorIterator(iter: Iterator[ColumnarBatch],
-                                          targetBatchByteSize: Long,
-                                          sparkSchema: Array[DataType],
-                                          metricsMap: Map[String, GpuMetric])
-  extends GpuShuffleCoalesceIterator(iter, targetBatchByteSize, sparkSchema, metricsMap)
-    with Arm with AutoCloseable {
+class WithPriorIterator[T <: AutoCloseable](prior: Array[T], iter: Iterator[T])
+    extends AutoCloseable {
 
-  def bufferToHost(): Boolean = {
-    bufferNextBatch(iter)
-    iter.hasNext
-  }
 }
 
 
@@ -89,6 +81,7 @@ class GpuShuffleCoalesceWithPriorIterator(iter: Iterator[ColumnarBatch],
  * to the target batch size and then concatenated on the host before the data
  * is transferred to the GPU.
  */
+// new GpuShuffleCoalesceIterator(iter, targetBatchByteSize, sparkSchema, metricsMap)
 class GpuShuffleCoalesceIterator(
     iter: Iterator[ColumnarBatch],
     targetBatchByteSize: Long,
