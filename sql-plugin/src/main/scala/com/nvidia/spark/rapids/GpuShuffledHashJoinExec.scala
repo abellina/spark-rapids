@@ -128,7 +128,6 @@ case class GpuShuffledHashJoinExec(
     val streamTime = gpuLongMetric(STREAM_TIME)
     val joinTime = gpuLongMetric(JOIN_TIME)
     val joinOutputRows = gpuLongMetric(JOIN_OUTPUT_ROWS)
-    val hostTargetSize = RapidsConf.SHJ_MOCK_GPU_BATCH_SIZE_BYTES.get(conf)
     val targetSize = RapidsConf.GPU_BATCH_SIZE_BYTES.get(conf)
     val spillCallback = GpuMetric.makeSpillCallback(allMetrics)
 
@@ -136,17 +135,11 @@ case class GpuShuffledHashJoinExec(
       (streamIter, buildIter) => {
         val (builtBatch, maybeBufferedStreamIter) =
           GpuShuffledHashJoinExec.getBuiltBatchAndStreamIter(
-            hostTargetSize,
             buildPlan.output,
             buildIter,
             new CollectTimeIterator("shuffled join stream", streamIter, streamTime),
-            allMetrics + (
-              // stomp on metrics that don't make sense in the join
-              GpuMetric.CONCAT_TIME -> NoopMetric,
-              GpuMetric.NUM_INPUT_ROWS -> NoopMetric,
-              GpuMetric.NUM_INPUT_BATCHES -> NoopMetric,
-              GpuMetric.NUM_OUTPUT_BATCHES -> NoopMetric,
-              GpuMetric.NUM_OUTPUT_ROWS -> NoopMetric))
+            allMetrics)
+
         withResource(builtBatch) { _ =>
           // doJoin will increment the reference counts as needed for the builtBatch
           buildDataSize += GpuColumnVector.getTotalDeviceMemoryUsed(builtBatch)
@@ -213,13 +206,19 @@ object GpuShuffledHashJoinExec extends Arm {
    *         used for the join
    */
   def getBuiltBatchAndStreamIter(
-      targetBatchSize: Long,
       buildOutput: Seq[Attribute],
       buildIter: Iterator[ColumnarBatch],
       streamIter: Iterator[ColumnarBatch],
       metricsMap: Map[String, GpuMetric]): (ColumnarBatch, Iterator[ColumnarBatch]) = {
     val semWait = metricsMap(GpuMetric.SEMAPHORE_WAIT_TIME)
     val buildTime = metricsMap(GpuMetric.BUILD_TIME)
+    // stomp on metrics that don't make sense in the join
+    val coalesceMetricsMap = metricsMap +
+      (GpuMetric.CONCAT_TIME -> NoopMetric,
+      GpuMetric.NUM_INPUT_ROWS -> NoopMetric,
+      GpuMetric.NUM_INPUT_BATCHES -> NoopMetric,
+      GpuMetric.NUM_OUTPUT_BATCHES -> NoopMetric,
+      GpuMetric.NUM_OUTPUT_ROWS -> NoopMetric)
     var bufferedBuildIterator: CloseableBufferedIterator[ColumnarBatch] = null
     closeOnExcept(bufferedBuildIterator) { _ =>
       val startTime = System.nanoTime()
@@ -260,9 +259,9 @@ object GpuShuffledHashJoinExec extends Arm {
             val buildIt = withResource(new NvtxRange("get build batches", NvtxColor.ORANGE)) { _ =>
               new GpuShuffleCoalesceIterator(
                 bufferedBuildIterator,
-                targetBatchSize,
+                RequireSingleBatch.targetSizeBytes,
                 dataTypes,
-                metricsMap)
+                coalesceMetricsMap)
             }
 
             // if it drained the build iterator
@@ -289,8 +288,7 @@ object GpuShuffledHashJoinExec extends Arm {
               val coalescedIt = new MyGpuCoalesceIterator(
                 buildIt, dataTypes, RequireSingleBatch, NoopMetric, NoopMetric, NoopMetric,
                 "single build")
-              buildBatch =
-                ConcatAndConsumeAll.getSingleBatchWithVerification(coalescedIt, buildOutput)
+              buildBatch = coalescedIt.next()
               buildTime += System.nanoTime() - buildBatchToDeviceTime
             }
           }
