@@ -135,6 +135,7 @@ case class GpuShuffledHashJoinExec(
       (streamIter, buildIter) => {
         val (builtBatch, maybeBufferedStreamIter) =
           GpuShuffledHashJoinExec.getBuiltBatchAndStreamIter(
+            RequireSingleBatch.targetSizeBytes,
             buildPlan.output,
             buildIter,
             new CollectTimeIterator("shuffled join stream", streamIter, streamTime),
@@ -206,6 +207,7 @@ object GpuShuffledHashJoinExec extends Arm {
    *         used for the join
    */
   def getBuiltBatchAndStreamIter(
+      targetSizeBytes: Long,
       buildOutput: Seq[Attribute],
       buildIter: Iterator[ColumnarBatch],
       streamIter: Iterator[ColumnarBatch],
@@ -259,7 +261,7 @@ object GpuShuffledHashJoinExec extends Arm {
             val buildIt = withResource(new NvtxRange("get build batches", NvtxColor.ORANGE)) { _ =>
               new GpuShuffleCoalesceIterator(
                 bufferedBuildIterator,
-                RequireSingleBatch.targetSizeBytes,
+                targetSizeBytes,
                 dataTypes,
                 coalesceMetricsMap)
             }
