@@ -258,15 +258,15 @@ object GpuShuffledHashJoinExec extends Arm {
         closeOnExcept(bufferedStreamIter) { _ =>
           closeOnExcept(buildBatch) { _ =>
             val buildIt = withResource(new NvtxRange("get build batches", NvtxColor.ORANGE)) { _ =>
-              new GpuShuffleCoalesceWithPriorIterator(
+              new GpuShuffleCoalesceIterator(
                 bufferedBuildIterator,
-                RequireSingleBatch.targetSizeBytes,
+                targetBatchSize,
                 dataTypes,
                 metricsMap)
             }
 
             // if it drained the build iterator
-            if (!buildIt.bufferToHost()) {
+            if (buildIt.tryBufferingFullyToHost()) {
               // Optimal case, we drained the build iterator and we didn't have a prior
               // build batch (so it was a single batch, and is entirely on the host.
               // We peek at the stream iterator with `hasNext` on the buffered
@@ -286,8 +286,11 @@ object GpuShuffledHashJoinExec extends Arm {
 
             val buildBatchToDeviceTime = System.nanoTime()
             withResource(new NvtxRange("single build batch GPU", NvtxColor.GREEN)) { _ =>
+              val coalescedIt = new MyGpuCoalesceIterator(
+                buildIt, dataTypes, RequireSingleBatch, NoopMetric, NoopMetric, NoopMetric,
+                "single build")
               buildBatch =
-                ConcatAndConsumeAll.getSingleBatchWithVerification(buildIt, buildOutput)
+                ConcatAndConsumeAll.getSingleBatchWithVerification(coalescedIt, buildOutput)
               buildTime += System.nanoTime() - buildBatchToDeviceTime
             }
           }

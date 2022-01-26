@@ -69,12 +69,6 @@ case class GpuShuffleCoalesceExec(child: SparkPlan, targetBatchByteSize: Long)
   }
 }
 
-class WithPriorIterator[T <: AutoCloseable](prior: Array[T], iter: Iterator[T])
-    extends AutoCloseable {
-
-}
-
-
 /**
  * Iterator that coalesces columnar batches that are expected to only contain
  * [[SerializedTableColumn]]. The serialized tables within are collected up
@@ -144,6 +138,11 @@ class GpuShuffleCoalesceIterator(
         }
       }
     }
+  }
+
+  def tryBufferingFullyToHost(): Boolean = {
+    bufferNextBatch(iter)
+    !iter.hasNext
   }
 
   private def canAddToBatch(nextTable: SerializedTableHeader): Boolean = {

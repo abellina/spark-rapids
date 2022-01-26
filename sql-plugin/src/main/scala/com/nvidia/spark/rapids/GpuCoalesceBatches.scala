@@ -422,8 +422,73 @@ abstract class AbstractGpuCoalesceIterator(
   }
 }
 
+class MyGpuCoalesceIterator(iter: Iterator[ColumnarBatch],
+                          sparkTypes: Array[DataType],
+                          goal: CoalesceSizeGoal,
+                          concatTime: GpuMetric,
+                          opTime: GpuMetric,
+                          peakDevMemory: GpuMetric,
+                          opName: String)
+  extends AbstractGpuCoalesceIterator(iter,
+    goal,
+    NoopMetric,
+    NoopMetric,
+    NoopMetric,
+    NoopMetric,
+    NoopMetric,
+    concatTime,
+    opTime,
+    opName) with Arm {
+
+  private val batches: ArrayBuffer[ColumnarBatch] = ArrayBuffer.empty
+  private var maxDeviceMemory: Long = 0
+
+  override def initNewBatch(batch: ColumnarBatch): Unit = {
+    batches.safeClose()
+    batches.clear()
+  }
+
+  // take ownership of batch
+  override def addBatchToConcat(batch: ColumnarBatch): Unit =
+    batches.append(batch)
+
+  override def concatAllAndPutOnGPU(): ColumnarBatch = {
+    val ret = ConcatAndConsumeAll.buildNonEmptyBatchFromTypes(batches.toArray, sparkTypes)
+    // sum of current batches and concatenating batches. Approximately sizeof(ret * 2).
+    maxDeviceMemory = GpuColumnVector.getTotalDeviceMemoryUsed(ret) * 2
+    ret
+  }
+
+  override def cleanupConcatIsDone(): Unit = {
+    peakDevMemory.set(maxDeviceMemory)
+    batches.clear()
+  }
+
+  private var onDeck: Option[ColumnarBatch] = None
+
+  override protected def hasOnDeck: Boolean = onDeck.isDefined
+
+  override protected def saveOnDeck(batch: ColumnarBatch): Unit = {
+    assert(onDeck.isEmpty)
+    onDeck = Some(batch)
+  }
+
+  override protected def clearOnDeck(): Unit = {
+    onDeck.foreach(_.close())
+    onDeck = None
+  }
+
+  override protected def popOnDeck(): ColumnarBatch = {
+    val ret = onDeck.get
+    // remove the batch from onDeck
+    onDeck = None
+    clearOnDeck()
+    ret
+  }
+}
+
 class GpuCoalesceIterator(iter: Iterator[ColumnarBatch],
-    schema: StructType,
+    sparkTypes: Array[DataType],
     goal: CoalesceSizeGoal,
     maxDecompressBatchMemory: Long,
     numInputRows: GpuMetric,
@@ -448,7 +513,6 @@ class GpuCoalesceIterator(iter: Iterator[ColumnarBatch],
     opTime,
     opName) with Arm {
 
-  private val sparkTypes: Array[DataType] = GpuColumnVector.extractTypes(schema)
   private val batches: ArrayBuffer[SpillableColumnarBatch] = ArrayBuffer.empty
   private var maxDeviceMemory: Long = 0
 
@@ -505,7 +569,7 @@ class GpuCoalesceIterator(iter: Iterator[ColumnarBatch],
   }
 
   override def concatAllAndPutOnGPU(): ColumnarBatch = {
-    val ret = ConcatAndConsumeAll.buildNonEmptyBatch(popAllDecompressed(), schema)
+    val ret = ConcatAndConsumeAll.buildNonEmptyBatchFromTypes(popAllDecompressed(), sparkTypes)
     // sum of current batches and concatenating batches. Approximately sizeof(ret * 2).
     maxDeviceMemory = GpuColumnVector.getTotalDeviceMemoryUsed(ret) * 2
     ret
@@ -606,7 +670,8 @@ case class GpuCoalesceBatches(child: SparkPlan, goal: CoalesceGoal)
       goal match {
         case sizeGoal: CoalesceSizeGoal =>
           batches.mapPartitions { iter =>
-            new GpuCoalesceIterator(iter, outputSchema, sizeGoal, decompressMemoryTarget,
+            new GpuCoalesceIterator(iter, GpuColumnVector.extractTypes(outputSchema),
+              sizeGoal, decompressMemoryTarget,
               numInputRows, numInputBatches, numOutputRows, numOutputBatches, NoopMetric,
               concatTime, opTime, peakDevMemory, callback, "GpuCoalesceBatches",
               codecConfigs)
