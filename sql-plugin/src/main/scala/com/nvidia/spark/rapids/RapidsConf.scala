@@ -472,10 +472,10 @@ object RapidsConf {
 
   val SHUFFLED_HASH_JOIN_OPTIMIZE_SHUFFLE =
     conf("spark.rapids.sql.shuffledHashJoin.optimizeShuffle")
-      .doc("Enable or disable an optimization where shuffled build side batches are kept on " +
-        "the host while the first stream batch is loaded onto the GPU. The optimization increases " +
-        "off-heap host memory usage to avoid holding onto the GPU semaphore while waiting for " +
-        "stream side IO.")
+      .doc("Enable or disable an optimization where shuffled build side batches are kept " +
+        "on the host while the first stream batch is loaded onto the GPU. The optimization " +
+        "increases off-heap host memory usage to avoid holding onto the GPU semaphore while " +
+        "waiting for stream side IO.")
       .internal()
       .booleanConf
       .createWithDefault(true)
