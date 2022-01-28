@@ -110,7 +110,7 @@ object GpuShuffleEnv extends Logging {
   }
 
   def isRapidsShuffleAvailable(conf: RapidsConf): Boolean = {
-    // the driver has `SparkEnv.shuffleManager` defined when this is checked
+    // the driver has `mgr` defined when this is checked
     val sparkEnv = SparkEnv.get
     val isRapidsManager = sparkEnv.shuffleManager.isInstanceOf[VisibleShuffleManager]
     if (isRapidsManager) {
@@ -118,7 +118,7 @@ object GpuShuffleEnv extends Logging {
     }
     // executors have `env` defined when this is checked
     // in tests
-    val isConfiguredInEnv = Option(env).exists(_.isRapidsShuffleConfigured)
+    val isConfiguredInEnv = Option(env).map(_.isRapidsShuffleConfigured).getOrElse(false)
     (isConfiguredInEnv || isRapidsManager) &&
       !isExternalShuffleEnabled &&
       !isSparkAuthenticateEnabled &&
