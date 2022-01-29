@@ -169,8 +169,23 @@ case class GpuBroadcastHashJoinExec(
       val stIt = new CollectTimeIterator("broadcast join stream", it, streamTime)
       withResource(
           GpuBroadcastHelper.getBroadcastBatch(broadcastRelation, buildSchema)) { builtBatch =>
-        doJoin(builtBatch, stIt, targetSize, spillCallback,
-          numOutputRows, joinOutputRows, numOutputBatches, opTime, joinTime)
+        val joinIter = doJoin(builtBatch, stIt, targetSize, spillCallback,
+          numOutputRows = NoopMetric,
+          joinOutputRows,
+          numOutputBatches = NoopMetric,
+          opTime,
+          joinTime)
+        new GpuCoalesceIterator(
+          joinIter,
+          GpuColumnVector.extractTypes(buildSchema),
+          numInputRows = NoopMetric,
+          numInputBatches = NoopMetric,
+          numOutputRows = numOutputRows,
+          numOutputBatches = numOutputBatches,
+          concatTime = NoopMetric,
+          opTime = NoopMetric,
+          peakDevMemory = NoopMetric,
+          spillCallback, "brodcast join")
       }
     }
   }
