@@ -191,8 +191,7 @@ class RapidsShuffleServer(transport: RapidsShuffleTransport,
             bssToIssue.append(new BufferSendState(
               pendingTransfer.tx,
               sendBounceBuffers.head, // there's only one bounce buffer here for now
-              pendingTransfer.requestHandler,
-              serverStream))
+              pendingTransfer.requestHandler))
           } else {
             // TODO: make this a metric => "blocked while waiting on bounce buffers"
             logTrace(s"Can't acquire send bounce buffers")
@@ -211,9 +210,6 @@ class RapidsShuffleServer(transport: RapidsShuffleTransport,
       }
     }
   })
-
-  // NOTE: this stream will likely move to its own non-blocking stream in the future
-  val serverStream = Cuda.DEFAULT_STREAM
 
   /**
    * Handler for a metadata request. It queues request handlers for either
@@ -370,7 +366,7 @@ class RapidsShuffleServer(transport: RapidsShuffleTransport,
         addToContinueQueue(toTryAgain)
       }
 
-      serverStream.sync()
+      Cuda.DEFAULT_STREAM.sync()
 
       // need to release at this point, we do this after the sync so
       // we are sure we actually copied everything to the bounce buffer

@@ -36,10 +36,6 @@ import org.apache.spark.shuffle.rapids.RapidsShuffleSendPrepareException
  * `MemoryBuffer` slice of the bounce buffer is returned. Buffers are copied to the bounce
  * buffer in `TransferRequest` order. The receiver has the same conventions.
  *
- * Synchronization with `serverStream` is outside of this class. It is assumed that the caller
- * has several `BufferSendState` iterators and on calling next on this collection, it will
- * perform a sync on `serverStream` before handing it off to the transport.
- *
  * It also is AutoCloseable. close() should be called to free bounce buffers.
  *
  * In terms of the lifecycle of this object, it begins with the client asking for transfers to
@@ -50,13 +46,11 @@ import org.apache.spark.shuffle.rapids.RapidsShuffleSendPrepareException
  * @param sendBounceBuffers - an object that contains a device and potentially a host
  *                          buffer also
  * @param requestHandler - impl of trait that interfaces to the catalog
- * @param serverStream - CUDA stream to use for copies.
  */
 class BufferSendState(
     transaction: Transaction,
     sendBounceBuffers: SendBounceBuffers,
-    requestHandler: RapidsShuffleRequestHandler,
-    serverStream: Cuda.Stream = Cuda.DEFAULT_STREAM)
+    requestHandler: RapidsShuffleRequestHandler)
     extends AutoCloseable with Logging with Arm {
 
   class SendBlock(val bufferId: Int, tableSize: Long) extends BlockWithSize {
@@ -204,7 +198,7 @@ class BufferSendState(
             needsCleanup = true
             require(blockRange.rangeSize() <= bounceBuffToUse.getLength - buffOffset)
             rapidsBuffer.copyToMemoryBuffer(blockRange.rangeStart, bounceBuffToUse, buffOffset,
-              blockRange.rangeSize(), serverStream)
+              blockRange.rangeSize(), Cuda.DEFAULT_STREAM)
             buffOffset += blockRange.rangeSize()
           }
           needsCleanup = false

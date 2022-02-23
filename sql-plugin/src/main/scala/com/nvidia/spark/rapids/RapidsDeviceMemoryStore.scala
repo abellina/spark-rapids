@@ -19,9 +19,10 @@ package com.nvidia.spark.rapids
 import ai.rapids.cudf.{ContiguousTable, Cuda, DeviceMemoryBuffer, HostMemoryBuffer, MemoryBuffer, Table}
 import com.nvidia.spark.rapids.StorageTier.StorageTier
 import com.nvidia.spark.rapids.format.TableMeta
-
 import org.apache.spark.sql.types.DataType
 import org.apache.spark.sql.vectorized.ColumnarBatch
+
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * Buffer storage using device memory.
@@ -29,6 +30,15 @@ import org.apache.spark.sql.vectorized.ColumnarBatch
  */
 class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog.singleton)
     extends RapidsBufferStore(StorageTier.DEVICE, catalog) with Arm {
+
+  private[this] val eventPerThread = new ConcurrentHashMap[Long, Cuda.Event]()
+
+  private def getEventAndRecord(stream: Cuda.Stream): Cuda.Event = {
+    val evt =
+      eventPerThread.computeIfAbsent(Thread.currentThread().getId, _ => new Cuda.Event())
+    evt.record(stream)
+    evt
+  }
 
   override protected def createBuffer(other: RapidsBuffer, memoryBuffer: MemoryBuffer,
       stream: Cuda.Stream): RapidsBufferBase = {
@@ -47,7 +57,7 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
       }
     }
     new RapidsDeviceMemoryBuffer(other.id, other.size, other.meta, None,
-      deviceBuffer, other.getSpillPriority, other.spillCallback)
+      deviceBuffer, other.getSpillPriority, other.spillCallback, getEventAndRecord(stream))
   }
 
   /**
@@ -75,7 +85,8 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
         Some(table),
         contigBuffer,
         initialSpillPriority,
-        spillCallback)) { buffer =>
+        spillCallback,
+        getEventAndRecord(Cuda.DEFAULT_STREAM))) { buffer =>
       logDebug(s"Adding table for: [id=$id, size=${buffer.size}, " +
           s"meta_id=${buffer.meta.bufferMeta.id}, meta_size=${buffer.meta.bufferMeta.size}]")
       addBuffer(buffer)
@@ -110,7 +121,8 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
         None,
         contigBuffer,
         initialSpillPriority,
-        spillCallback)) { buffer =>
+        spillCallback,
+        getEventAndRecord(Cuda.DEFAULT_STREAM))) { buffer =>
       logDebug(s"Adding table for: [id=$id, size=${buffer.size}, " +
           s"uncompressed=${buffer.meta.bufferMeta.uncompressedSize}, " +
           s"meta_id=${buffer.meta.bufferMeta.id}, meta_size=${buffer.meta.bufferMeta.size}]")
@@ -141,7 +153,8 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
         None,
         buffer,
         initialSpillPriority,
-        spillCallback)) { buff =>
+        spillCallback,
+        getEventAndRecord(Cuda.DEFAULT_STREAM))) { buff =>
       logDebug(s"Adding receive side table for: [id=$id, size=${buffer.getLength}, " +
           s"uncompressed=${buff.meta.bufferMeta.uncompressedSize}, " +
           s"meta_id=${tableMeta.bufferMeta.id}, " +
@@ -157,11 +170,31 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
       table: Option[Table],
       contigBuffer: DeviceMemoryBuffer,
       spillPriority: Long,
-      override val spillCallback: SpillCallback)
+      override val spillCallback: SpillCallback,
+      event: Cuda.Event)
       extends RapidsBufferBase(id, size, meta, spillPriority, spillCallback) {
+
+    event.sync()
+
     override val storageTier: StorageTier = StorageTier.DEVICE
 
-    override protected def releaseResources(): Unit = {
+    // TODO: add a set of events that are not the allocating event
+    //   keyed by threadId.
+    // b1 = evt1, evt2
+    // b2 = evt2
+    // we don't wait for a free on the creating stream
+    // set of 0 for this scenario.
+    private[this] val otherEvents = new ConcurrentHashMap[Cuda.Event, Boolean]()
+
+    override protected def releaseResources(): Unit = synchronized {
+      // refcount == 0 if we reached this point according to the CPU
+      // before we `.close()` and hand the buffer back to cuDF to close,
+      // we need to wait for actions done to this buffer by other streams
+      // as of this point.
+      otherEvents.forEach((e, _) => {
+        Cuda.DEFAULT_STREAM.waitOn(e)
+      })
+
       contigBuffer.close()
       table.foreach(_.close())
     }
@@ -180,6 +213,14 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
       } else {
         columnarBatchFromDeviceBuffer(contigBuffer, sparkTypes)
       }
+    }
+
+    override def close(): Unit = synchronized {
+      val evt = getEventAndRecord(Cuda.DEFAULT_STREAM)
+      if (evt != event) {
+        otherEvents.putIfAbsent(evt, true)
+      }
+      super.close()
     }
   }
 }

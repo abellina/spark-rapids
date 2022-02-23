@@ -747,6 +747,8 @@ class GpuHashAggregateIterator(
         }
 
         // perform the aggregate
+        println(s"Preprocessed row count: ${preProcessedTbl.getRowCount()}, " +
+          s"col count: ${preProcessedTbl.getNumberOfColumns()}, aggs: ${cudfAggsOnColumn}, groups: ${groupingExpressions.indices}")
         val aggTbl = preProcessedTbl
           .groupBy(groupOptions, groupingExpressions.indices: _*)
           .aggregate(cudfAggsOnColumn: _*)

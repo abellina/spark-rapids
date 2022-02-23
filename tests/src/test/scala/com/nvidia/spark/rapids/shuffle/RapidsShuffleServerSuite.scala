@@ -244,7 +244,7 @@ class RapidsShuffleServerSuite extends RapidsShuffleTestHelper with Arm {
 
         server.start()
 
-        val bss = new BufferSendState(mockTransaction, mockSendBuffer, mockRequestHandler, null)
+        val bss = new BufferSendState(mockTransaction, mockSendBuffer, mockRequestHandler)
         server.doHandleTransferRequest(Seq(bss))
         val cb = ac.getValue.asInstanceOf[TransactionCallback]
         cb(mockTransaction)
@@ -306,7 +306,7 @@ class RapidsShuffleServerSuite extends RapidsShuffleTestHelper with Arm {
         when(rapidsBuffer.copyToMemoryBuffer(any(), any(), any(), any(), any()))
             .thenAnswer(_ => throw ioe)
 
-        val bss = new BufferSendState(mockTransaction, mockSendBuffer, mockRequestHandler, null)
+        val bss = new BufferSendState(mockTransaction, mockSendBuffer, mockRequestHandler)
         // if nothing else can be handled, we throw
         assertThrows[IllegalStateException] {
           try {
@@ -406,10 +406,10 @@ class RapidsShuffleServerSuite extends RapidsShuffleTestHelper with Arm {
           server.start()
 
           val bssFailed = new BufferSendState(
-            mockTransaction, mockSendBuffer, mockRequestHandler, null)
+            mockTransaction, mockSendBuffer, mockRequestHandler)
 
           val bssSuccess = spy(new BufferSendState(
-            mockTransaction2, mockSendBuffer, mockRequestHandler, null))
+            mockTransaction2, mockSendBuffer, mockRequestHandler))
 
           when(bssSuccess.hasMoreSends)
               .thenReturn(true) // send 1 bounce buffer length
