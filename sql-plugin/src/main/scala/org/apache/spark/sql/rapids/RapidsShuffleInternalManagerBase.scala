@@ -16,22 +16,48 @@
 
 package org.apache.spark.sql.rapids
 
+import java.io.{ByteArrayOutputStream, EOFException, File, FileInputStream, InputStream, OutputStream}
+import java.nio.channels.FileChannel
+import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.{Callable, ConcurrentHashMap, ExecutorService, Executors, Future, LinkedBlockingQueue}
+import java.util.{Optional, Random}
+
 import ai.rapids.cudf.{NvtxColor, NvtxRange}
 import com.nvidia.spark.rapids._
 import com.nvidia.spark.rapids.format.TableMeta
 import com.nvidia.spark.rapids.shuffle.{RapidsShuffleRequestHandler, RapidsShuffleServer, RapidsShuffleTransport}
-import scala.collection.mutable.{ArrayBuffer, ListBuffer}
+import org.apache.spark.executor.TaskMetrics
 
-import org.apache.spark.{ShuffleDependency, SparkConf, SparkEnv, TaskContext}
-import org.apache.spark.internal.Logging
+import scala.collection.mutable.{ArrayBuffer, ListBuffer}
+import org.apache.spark.shuffle.api.metadata.MapOutputCommitMessage
+import org.apache.spark.{InterruptibleIterator, MapOutputTracker, ShuffleDependency, SparkConf, SparkEnv, TaskContext}
+import org.apache.spark.internal.{Logging, config}
+import org.apache.spark.internal.config.SHUFFLE_UNSAFE_FAST_MERGE_ENABLE
+import org.apache.spark.io.{CompressionCodec, NioBufferedFileInputStream}
+import org.apache.spark.memory.TaskMemoryManager
+import org.apache.spark.metrics.source.Source
 import org.apache.spark.network.buffer.ManagedBuffer
+import org.apache.spark.network.util.LimitedInputStream
+import org.apache.spark.resource.ResourceInformation
 import org.apache.spark.scheduler.MapStatus
-import org.apache.spark.shuffle._
-import org.apache.spark.shuffle.sort.SortShuffleManager
+import org.apache.spark.shuffle.{ShuffleWriter, _}
+import org.apache.spark.shuffle.api._
+import org.apache.spark.shuffle.sort.{BypassMergeSortShuffleHandle, RapidsShuffleExternalSorter, RapidsSpillInfo, SerializedShuffleHandle, SortShuffleManager, UnsafeShuffleWriter}
 import org.apache.spark.sql.execution.metric.SQLMetric
 import org.apache.spark.sql.rapids.shims.GpuShuffleBlockResolver
 import org.apache.spark.sql.vectorized.ColumnarBatch
 import org.apache.spark.storage._
+import org.apache.spark.unsafe.Platform
+import org.sparkproject.guava.io.{ByteStreams, Closeables}
+import java.util
+
+import org.apache.spark.serializer.{DeserializationStream, KryoDeserializationStream, Serializer, SerializerInstance, SerializerManager}
+import org.apache.spark.util.collection.ExternalSorter
+import org.apache.spark.util.{AccumulatorV2, CompletionIterator, TaskCompletionListener, TaskFailureListener, Utils}
+import java.nio.ByteBuffer
+
+import scala.collection.mutable
+import scala.reflect.{ClassTag, classTag}
 
 class GpuShuffleHandle[K, V](
     val wrapped: ShuffleHandle,
@@ -68,6 +94,798 @@ object RapidsShuffleInternalManagerBase extends Logging {
   def unwrapHandle(handle: ShuffleHandle): ShuffleHandle = handle match {
     case gh: GpuShuffleHandle[_, _] => gh.wrapped
     case other => other
+  }
+
+  class Pool {
+    val tasks = new LinkedBlockingQueue[() => Unit]()
+    val p = Executors.newSingleThreadExecutor()
+    def offer(task: () => Unit): Unit = {
+      tasks.offer(task)
+    }
+    val exec = p.submit[Unit](() => {
+      while (true) {
+        val t = tasks.take()
+        t()
+      }
+    })
+  }
+
+  val numPools= 128 // TODO: make this configurable
+
+  lazy val pools = new mutable.HashMap[Int, Pool]()
+
+  def queueTask(part: Int, task: () => Unit): Unit = {
+    //logWarning(s"$part: queueing task at ${part % numPools}")
+    pools.get(part % numPools).get.offer(task)
+  }
+
+  def startPools(): Unit = synchronized  {
+    if (pools.isEmpty) {
+      (0 until numPools).foreach { i  =>
+        pools.put(i, new Pool())
+      }
+    }
+  }
+}
+
+class ThreadedUnsafeThreadedWriter[K, V](
+    blockManager: BlockManager,
+    taskMemoryManager: TaskMemoryManager,
+    handle: SerializedShuffleHandle[K, V],
+    mapId: Long,
+    sparkConf: SparkConf,
+    writeMetrics: ShuffleWriteMetricsReporter,
+    shuffleExecutorComponents: ShuffleExecutorComponents)
+   extends ShuffleWriter [K,V] with Logging {
+
+  val numPartitions = handle.dependency.partitioner.numPartitions
+  // TODO: check that numPartitions <= MAX_SHUFFLE_OUTPUT_PARTITIONS_FOR_SERIALIZED_MODE
+  val dep = handle.dependency
+  val shuffleId = dep.shuffleId
+  val serializer = dep.serializer.newInstance()
+  val partitioner = dep.partitioner
+  val taskContext = TaskContext.get
+
+  val sorter = new RapidsShuffleExternalSorter(
+    taskMemoryManager, blockManager, taskContext, 4096,
+    numPartitions, sparkConf, writeMetrics)
+
+  /** Subclass of ByteArrayOutputStream that exposes `buf` directly. */
+  class MyByteArrayOutputStream(override val size: Int)
+    extends ByteArrayOutputStream(size) {
+    def getSize() = super.size()
+    def getBuf: Array[Byte] = buf
+  }
+
+  val serBuffer = new MyByteArrayOutputStream(1024*1024)
+  val serOutputStream = serializer.serializeStream(serBuffer)
+  //private val OBJECT_CLASS_TAG: ClassTag[K] = ClassTag[Object]()
+
+  override def write(records: Iterator[Product2[K, V]]): Unit = {
+    try {
+      records.foreach { record =>
+        insertRecordIntoSorter(record)
+      }
+      closeAndWriteOutput()
+    } finally {
+      if (sorter != null) {
+        sorter.cleanupResources()
+      }
+    }
+  }
+
+  private def insertRecordIntoSorter(record: Product2[K, V]): Unit = {
+    val nv = new NvtxRange("writing  to stream", NvtxColor.RED)
+    // per thread ? => so N SerOutputStreams
+    val key = record._1
+    val partitionId = partitioner.getPartition(key)
+    serBuffer.reset()
+    serOutputStream.writeKey[Object](key.asInstanceOf[Object])
+    serOutputStream.writeValue[Object](record._2.asInstanceOf[Object])
+    serOutputStream.flush()
+    nv.close()
+
+    val nv2 = new NvtxRange("insert into sorter", NvtxColor.ORANGE)
+    val serializedRecordSize = serBuffer.getSize()
+    logInfo(s"size: ${serializedRecordSize}")
+    sorter.insertRecord(
+      serBuffer.getBuf,
+      Platform.BYTE_ARRAY_OFFSET,
+      serializedRecordSize,
+      partitionId)
+    nv2.close()
+  }
+
+  private var mapStatus: Option[MapStatus] = None
+
+  private def closeAndWriteOutput(): Unit = {
+    val spills = sorter.closeAndGetSpills()
+    val partitionLengths = mergeSpills(spills)
+    mapStatus = Some(MapStatus(blockManager.shuffleServerId, partitionLengths, mapId))
+  }
+
+  /**
+   * Merge zero or more spill files together, choosing the fastest merging strategy based on the
+   * number of spills and the IO compression codec.
+   *
+   * @return the partition lengths in the merged file.
+   */
+  private def mergeSpills(spills: Array[RapidsSpillInfo]): Array[Long] = {
+    var partitionLengths: Array[Long] = null
+    if (spills.length == 0) {
+      val mapWriter =
+        shuffleExecutorComponents.createMapOutputWriter(
+          shuffleId, mapId, partitioner.numPartitions)
+      return mapWriter.commitAllPartitions().getPartitionLengths
+    }
+    else if (spills.length == 1) {
+      //val maybeSingleFileWriter =
+      //  shuffleExecutorComponents.createSingleFileMapOutputWriter(shuffleId, mapId)
+      //if (maybeSingleFileWriter.isPresent) {
+      //  // Here, we don't need to perform any metrics updates because the bytes written to this
+      //  // output file would have already been counted as shuffle bytes written.
+      //  partitionLengths = spills(0).partitionLengths
+      //  // FIXME: logInfo("Merge shuffle spills for mapId {} with length {}", mapId, partitionLengths.length)
+      //  //  maybeSingleFileWriter.get.transferMapSpillFile(
+      //  //    spills(0).file, partitionLengths, sorter.getChecksums)
+      //}
+      partitionLengths = mergeSpillsUsingStandardWriter(spills)
+    }
+    else partitionLengths = mergeSpillsUsingStandardWriter(spills)
+    partitionLengths
+  }
+
+  val transferToEnabled = true
+
+  private def mergeSpillsUsingStandardWriter(spills: Array[RapidsSpillInfo]): Array[Long] = {
+    var partitionLengths: Array[Long] = null
+    val compressionEnabled: Boolean = true
+    val compressionCodec = CompressionCodec.createCodec(sparkConf)
+    val fastMergeEnabled: Boolean = sparkConf.get(SHUFFLE_UNSAFE_FAST_MERGE_ENABLE)
+    val fastMergeIsSupported =
+      !(compressionEnabled) ||
+        CompressionCodec.supportsConcatenationOfSerializedStreams(compressionCodec)
+    logInfo("supports compressed concatenated merge")
+
+    val encryptionEnabled: Boolean = blockManager.serializerManager.encryptionEnabled
+    val mapWriter: ShuffleMapOutputWriter =
+      shuffleExecutorComponents.createMapOutputWriter(
+        shuffleId, mapId, partitioner.numPartitions)
+
+    try { // There are multiple spills to merge, so none of these spill files' lengths were counted
+      // towards our shuffle write count or shuffle write time. If we use the slow merge path,
+      // then the final output file's size won't necessarily be equal to the sum of the spill
+      // files' sizes. To guard against this case, we look at the output file's actual size when
+      // computing shuffle bytes written.
+      //
+      // We allow the individual merge methods to report their own IO times since different merge
+      // strategies use different IO techniques.  We count IO during merge towards the shuffle
+      // write time, which appears to be consistent with the "not bypassing merge-sort" branch in
+      // ExternalSorter.
+      if (fastMergeEnabled && fastMergeIsSupported) {
+        // Compression is disabled or we are using an IO compression codec that supports
+        // decompression of concatenated compressed streams, so we can perform a fast spill merge
+        // that doesn't need to interpret the spilled bytes.
+        //if (transferToEnabled && !(encryptionEnabled)) {
+        //  logInfo("Using transferTo-based fast merge")
+        //  mergeSpillsWithTransferTo(spills, mapWriter)
+        //} else {
+          logInfo("Using fileStream-based fast merge")
+          mergeSpillsWithFileStream(spills, mapWriter, compressionCodec)
+       // }
+      }
+      else {
+        logInfo("Using slow merge")
+        mergeSpillsWithFileStream(spills, mapWriter, compressionCodec)
+      }
+      // When closing an UnsafeShuffleExternalSorter that has already spilled once but also has
+      // in-memory records, we write out the in-memory records to a file but do not count that
+      // final write as bytes spilled (instead, it's accounted as shuffle write). The merge needs
+      // to be counted as shuffle write, but this will lead to double-counting of the final
+      // SpillInfo's bytes.
+      writeMetrics.decBytesWritten(spills(spills.length - 1).file.length)
+      partitionLengths = mapWriter.commitAllPartitions().getPartitionLengths
+    } catch {
+      case e: Exception =>
+        try mapWriter.abort(e)
+        catch {
+          case e2: Exception =>
+            logWarning("Failed to abort writing the map output.", e2)
+            e.addSuppressed(e2)
+        }
+        throw e
+    }
+    partitionLengths
+  }
+
+  /**
+   * Merges spill files using Java FileStreams. This code path is typically slower than
+   * the NIO-based merge, {@link UnsafeShuffleWriter# mergeSpillsWithTransferTo ( SpillInfo [ ],
+   * ShuffleMapOutputWriter)}, and it's mostly used in cases where the IO compression codec
+   * does not support concatenation of compressed data, when encryption is enabled, or when
+   * users have explicitly disabled use of {@code transferTo} in order to work around kernel bugs.
+   * This code path might also be faster in cases where individual partition size in a spill
+   * is small and UnsafeShuffleWriter#mergeSpillsWithTransferTo method performs many small
+   * disk ios which is inefficient. In those case, Using large buffers for input and output
+   * files helps reducing the number of disk ios, making the file merging faster.
+   *
+   * @param spills           the spills to merge.
+   * @param mapWriter        the map output writer to use for output.
+   * @param compressionCodec the IO compression codec, or null if shuffle compression is disabled.
+   * @return the partition lengths in the merged file.
+   */
+
+  private def mergeSpillsWithFileStream(
+      spills: Array[RapidsSpillInfo],
+      mapWriter: ShuffleMapOutputWriter,
+      compressionCodec: CompressionCodec): Unit = {
+    logInfo(s"Merge shuffle spills with FileStream for mapId $mapId")
+    val numPartitions: Int = partitioner.numPartitions
+    val spillInputStreams: Array[InputStream] = new Array[InputStream](spills.length)
+    var threwException: Boolean = true
+    try {
+      for (i <- 0 until spills.length) {
+        spillInputStreams(i) =
+          new NioBufferedFileInputStream(spills(i).file, (1.4*1024).toInt)
+        // Only convert the partitionLengths when debug level is enabled.
+        //logDebug("Partition lengths for mapId {} in Spill {}: {}",
+        //  mapId, i, util.Arrays.toString(spills(i).partitionLengths))
+      }
+      for (partition <- 0 until numPartitions) {
+        var copyThrewException: Boolean = true
+        val writer: ShufflePartitionWriter = mapWriter.getPartitionWriter(partition)
+        var partitionOutput: OutputStream = writer.openStream
+        try {
+          partitionOutput = new TimeTrackingOutputStream(writeMetrics, partitionOutput)
+          partitionOutput = blockManager.serializerManager.wrapForEncryption(partitionOutput)
+          if (compressionCodec != null) {
+            partitionOutput = compressionCodec.compressedOutputStream(partitionOutput)
+          }
+          for (i <- 0 until spills.length) {
+            val partitionLengthInSpill: Long = spills(i).partitionLengths(partition)
+            if (partitionLengthInSpill > 0) {
+              var partitionInputStream: InputStream = null
+              var copySpillThrewException: Boolean = true
+              try {
+                partitionInputStream =
+                  new LimitedInputStream(spillInputStreams(i), partitionLengthInSpill, false)
+                partitionInputStream =
+                  blockManager.serializerManager.wrapForEncryption(partitionInputStream)
+                if (compressionCodec != null) {
+                  partitionInputStream =
+                    compressionCodec.compressedInputStream(partitionInputStream)
+                }
+                ByteStreams.copy(partitionInputStream, partitionOutput)
+                copySpillThrewException = false
+              } finally {
+                Closeables.close(partitionInputStream, copySpillThrewException)
+              }
+            }
+          }
+          copyThrewException = false
+        } finally {
+          Closeables.close(partitionOutput, copyThrewException)
+        }
+        val numBytesWritten: Long = writer.getNumBytesWritten
+        writeMetrics.incBytesWritten(numBytesWritten)
+      }
+      threwException = false
+    } finally {
+      // To avoid masking exceptions that caused us to prematurely enter the finally block, only
+      // throw exceptions during cleanup if threwException == false.
+      for (stream <- spillInputStreams) {
+        Closeables.close(stream, threwException)
+      }
+    }
+  }
+
+  ///**
+  // * Merges spill files by using NIO's transferTo to concatenate spill partitions' bytes.
+  // * This is only safe when the IO compression codec and serializer support concatenation of
+  // * serialized streams.
+  // *
+  // * @param spills    the spills to merge.
+  // * @param mapWriter the map output writer to use for output.
+  // * @return the partition lengths in the merged file.
+  // */
+  //@throws[IOException]
+  //private def mergeSpillsWithTransferTo(spills: Array[SpillInfo], mapWriter: ShuffleMapOutputWriter): Unit = {
+  //  logger.debug("Merge shuffle spills with TransferTo for mapId {}", mapId)
+  //  val numPartitions: Int = partitioner.numPartitions
+  //  val spillInputChannels: Array[FileChannel] = new Array[FileChannel](spills.length)
+  //  val spillInputChannelPositions: Array[Long] = new Array[Long](spills.length)
+  //  var threwException: Boolean = true
+  //  try {
+  //    for (i <- 0 until spills.length) {
+  //      spillInputChannels(i) = new FileInputStream(spills(i).file).getChannel
+  //      if (logger.isDebugEnabled) {
+  //        logger.debug("Partition lengths for mapId {} in Spill {}: {}", mapId, i, Arrays.toString(spills(i).partitionLengths))
+  //      }
+  //    }
+  //    for (partition <- 0 until numPartitions) {
+  //      var copyThrewException: Boolean = true
+  //      val writer: ShufflePartitionWriter = mapWriter.getPartitionWriter(partition)
+  //      val resolvedChannel: WritableByteChannelWrapper = writer.openChannelWrapper.orElseGet(() => new UnsafeShuffleWriter.StreamFallbackChannelWrapper(openStreamUnchecked(writer)))
+  //      try for (i <- 0 until spills.length) {
+  //        val partitionLengthInSpill: Long = spills(i).partitionLengths(partition)
+  //        val spillInputChannel: FileChannel = spillInputChannels(i)
+  //        val writeStartTime: Long = System.nanoTime
+  //        Utils.copyFileStreamNIO(spillInputChannel, resolvedChannel.channel, spillInputChannelPositions(i), partitionLengthInSpill)
+  //        copyThrewException = false
+  //        spillInputChannelPositions(i) += partitionLengthInSpill
+  //        writeMetrics.incWriteTime(System.nanoTime - writeStartTime)
+  //      }
+  //      finally {
+  //        Closeables.close(resolvedChannel, copyThrewException)
+  //      }
+  //      val numBytes: Long = writer.getNumBytesWritten
+  //      writeMetrics.incBytesWritten(numBytes)
+  //    }
+  //    threwException = false
+  //  } finally {
+  //    for (i <- 0 until spills.length) {
+  //      assert((spillInputChannelPositions(i) == spills(i).file.length))
+  //      Closeables.close(spillInputChannels(i), threwException)
+  //    }
+  //  }
+  //}
+
+  override def stop(success: Boolean): Option[MapStatus] = {
+    mapStatus
+  }
+}
+
+class ThreadedWriter[K, V](
+    blockManager: BlockManager,
+    handle: BypassMergeSortShuffleHandle[K, V],
+    mapId: Long,
+    sparkConf: SparkConf,
+    writeMetrics: ShuffleWriteMetricsReporter,
+    shuffleExecutorComponents: ShuffleExecutorComponents) extends ShuffleWriter [K,V] with Logging {
+  //extends org.apache.spark.shuffle.sort.BypassMergeSortShuffleWriter[K, V](
+  //  blockManager, handle, mapId,
+  //  sparkConf, writeMetrics, shuffleExecutorComponents) {
+
+  var myMapStatus: Option[MapStatus] = None
+  var fs: Array[FileSegment] = null
+
+
+  var stillWriting: Boolean = true
+  val rng = new Random(0)
+
+  override def write(records: Iterator[Product2[K, V]]): Unit = {
+    val nvtxRange = new NvtxRange("ThreadedWriter.write", NvtxColor.RED)
+    RapidsShuffleInternalManagerBase.startPools()
+    val serializer = handle.dependency.serializer.newInstance()
+
+    val writer = shuffleExecutorComponents.createMapOutputWriter(
+      handle.shuffleId,
+      mapId,
+      handle.dependency.partitioner.numPartitions)
+
+    val writers = new mutable.HashMap[Int, (Int, DiskBlockObjectWriter)]()
+    // per reduce partition id
+    (0 until handle.dependency.partitioner.numPartitions).map { i =>
+      logDebug(s"Creating writer for partition $i")
+      val r1 = new NvtxRange(s"creating writer", NvtxColor.GREEN)
+      val (blockId, file) = blockManager.diskBlockManager.createTempShuffleBlock()
+      writers.put(i, (Math.abs(rng.nextInt()), blockManager.getDiskWriter(
+        blockId, file, serializer, 4 * 1024, writeMetrics)))
+      r1.close()
+    }
+
+    val scheduledWrites = new AtomicLong(0L)
+    val doneQueue = new ArrayBuffer[FileSegment]()
+    val r = new NvtxRange("foreach", NvtxColor.DARK_GREEN)
+    records.foreach { record =>
+      val key = record._1
+      val value = record._2
+      val reducePartitionId = handle.dependency.partitioner.getPartition(key)
+      logDebug(s"Writing $reducePartitionId from ${TaskContext.get().taskAttemptId()}")
+      scheduledWrites.incrementAndGet()
+      val (slot, myWriter) = writers(reducePartitionId)
+      val cb = if (value.isInstanceOf[ColumnarBatch]) {
+        val cb = value.asInstanceOf[ColumnarBatch]
+        (0 until cb.numCols()).foreach {
+          c => cb.column(c).asInstanceOf[SlicedGpuColumnVector].getBase.incRefCount()
+        }
+        cb
+      } else {
+        null
+      }
+
+      // per reducer partition
+      RapidsShuffleInternalManagerBase.queueTask(slot, () => {
+        val r2 = new NvtxRange("Draining", NvtxColor.ORANGE)
+        if (key == null) {
+          logWarning("NULL KEY??")
+        } else {
+          logDebug(s"writing ${key} and ${value}")
+          try {
+            myWriter.write(key, value)
+          } catch {
+            case e: Throwable => logError("Error writing", e)
+          }
+          if (cb != null) {
+            (0 until cb.numCols()).foreach {
+              c => cb.column(c).asInstanceOf[SlicedGpuColumnVector].close()
+            }
+          }
+        }
+        logDebug(s"done writing ${key} and ${value}")
+        r2.close()
+        doneQueue.synchronized {
+          scheduledWrites.decrementAndGet()
+          doneQueue.notifyAll()
+        }
+      })
+    }
+    r.close()
+
+    val r2a = new NvtxRange("waiting..", NvtxColor.PURPLE)
+    doneQueue.synchronized {
+      while(scheduledWrites.get() > 0) {
+        doneQueue.wait()
+      }
+    }
+    r2a.close()
+
+    val r3 = new NvtxRange("committing...", NvtxColor.RED)
+    val r4 = new NvtxRange("commit_and_get", NvtxColor.ORANGE)
+    // per reduce partition
+    val partWriters = (0 until handle.dependency.partitioner.numPartitions).map { reducePartitionId =>
+      val segment = writers(reducePartitionId)._2.commitAndGet()
+      val file = segment.file
+      (reducePartitionId, file, writer.getPartitionWriter(reducePartitionId))
+    }
+    r4.close()
+
+
+    val r5 = new NvtxRange("write partitioned by map", NvtxColor.GREEN)
+    partWriters.foreach { case (_, file, partWriter) =>
+      if (file.exists()) {
+        val maybeOutputChannel: Optional[WritableByteChannelWrapper] =
+          partWriter.openChannelWrapper()
+        if (maybeOutputChannel.isPresent) {
+          writePartitionedDataWithChannel(file, maybeOutputChannel.get())
+         } else {
+          writePartitionedDataWithStream(file, partWriter)
+        }
+      }
+    }
+    r5.close()
+    val r6 = new NvtxRange("commit all", NvtxColor.DARK_GREEN)
+    val lengths = writer.commitAllPartitions().getPartitionLengths
+    myMapStatus = Some(MapStatus(blockManager.shuffleServerId, lengths, mapId))
+    r6.close()
+    r3.close()
+    nvtxRange.close()
+    stillWriting.synchronized {
+      stillWriting = false
+    }
+  }
+
+  def writePartitionedDataWithStream(file: java.io.File, writer: ShufflePartitionWriter): Unit = {
+    val in = new java.io.FileInputStream(file)
+    var os: OutputStream = writer.openStream()
+    logDebug(s"Writing segment from ${file} to ${writer}")
+    org.apache.spark.util.Utils.copyStream(in, os, false, false)
+    os.close()
+    in.close()
+  }
+
+  def writePartitionedDataWithChannel(
+    file: File, outputChannel: WritableByteChannelWrapper): Unit = {
+    val in = new FileInputStream(file)
+    val inputChannel = in.getChannel
+    Utils.copyFileStreamNIO(
+      inputChannel, outputChannel.channel, 0L, inputChannel.size)
+    Closeables.close(in, false)
+    inputChannel.close()
+    Closeables.close(outputChannel, false)
+  }
+
+  override def stop(success: Boolean): Option[MapStatus] = {
+    stillWriting.synchronized { 
+      if (stillWriting) {
+        throw new IllegalStateException("still writing")
+      }
+    }
+    myMapStatus
+  }
+}
+
+class ThreadedReader[K, C](
+    handle: BaseShuffleHandle[K, _, C],
+    blocksByAddress: Iterator[(BlockManagerId, Seq[(BlockId, Long, Int)])],
+    context: TaskContext,
+    readMetrics: ShuffleReadMetricsReporter,
+    shuffleReaderThreads: Int,
+    serializerManager: SerializerManager = SparkEnv.get.serializerManager,
+    blockManager: BlockManager = SparkEnv.get.blockManager,
+    mapOutputTracker: MapOutputTracker = SparkEnv.get.mapOutputTracker,
+    shouldBatchFetch: Boolean = false)
+  extends ShuffleReader[K, C] with Logging with Arm {
+
+  private val dep = handle.dependency
+
+  private def fetchContinuousBlocksInBatch: Boolean = {
+    val conf = SparkEnv.get.conf
+    val serializerRelocatable = dep.serializer.supportsRelocationOfSerializedObjects
+    val compressed = conf.get(config.SHUFFLE_COMPRESS)
+    val codecConcatenation = if (compressed) {
+      CompressionCodec.supportsConcatenationOfSerializedStreams(CompressionCodec.createCodec(conf))
+    } else {
+      true
+    }
+    val useOldFetchProtocol = conf.get(config.SHUFFLE_USE_OLD_FETCH_PROTOCOL)
+    // SPARK-34790: Fetching continuous blocks in batch is incompatible with io encryption.
+    val ioEncryption = conf.get(config.IO_ENCRYPTION_ENABLED)
+
+    val doBatchFetch = shouldBatchFetch && serializerRelocatable &&
+      (!compressed || codecConcatenation) && !useOldFetchProtocol && !ioEncryption
+    if (shouldBatchFetch && !doBatchFetch) {
+      logDebug("The feature tag of continuous shuffle block fetching is set to true, but " +
+        "we can not enable the feature because other conditions are not satisfied. " +
+        s"Shuffle compress: $compressed, serializer relocatable: $serializerRelocatable, " +
+        s"codec concatenation: $codecConcatenation, use old shuffle fetch protocol: " +
+        s"$useOldFetchProtocol, io encryption: $ioEncryption.")
+    }
+    doBatchFetch
+  }
+
+  class ParallelDeserializerIterator(
+      streams: Iterator[(BlockId, ManagedBuffer, InputStream)],
+      serializer: Serializer, 
+      streamWrapper: (BlockId, InputStream) => InputStream) 
+      extends Iterator[(Any, Any)] with Arm {
+    val inFlight = new AtomicLong(0L)
+    val queued = new LinkedBlockingQueue[(Any, Any)]
+
+    override def hasNext: Boolean = queued.synchronized {
+      streams.hasNext || !queued.isEmpty || inFlight.get() > 0
+    }
+
+    val serializers: Array[SerializerInstance] =
+      (0 until RapidsShuffleInternalManagerBase.numPools)
+        .map(_ => serializer.newInstance()).toArray
+
+    def deserialize(
+        serializerInstance: SerializerInstance,
+        deserStream: DeserializationStream): Unit = {
+      // could be really bad if consumer is slow
+      var count = 0
+      try {
+        // queued and inflight need to be updated in the lock?
+        var finished = false
+
+        // highest level
+        withResource(new NvtxRange("reader.deser", NvtxColor.DARK_GREEN)) { _ =>
+          val results = new ArrayBuffer[(Any, Any)]()
+          while (!finished) {
+            try {
+              val r = (deserStream.readKey[Any](), deserStream.readValue[Any]())
+              results.append(r)
+              count = count + 1
+              //logInfo(s"GOT ${count}: ${r}")
+            } catch {
+              case eof: EOFException =>
+                finished = true
+              //logError(s"EOF: count = ${count} ${eof}")
+            }
+          }
+          queued.synchronized {
+            results.foreach(queued.add)
+            inFlight.decrementAndGet()
+          }
+        }
+      } catch {
+        case t: Throwable =>
+          logError(s"error: got ${count}", t)
+          throw t
+      }
+    }
+
+    var toClose = new ArrayBuffer[AutoCloseable]()
+    val rnd = new Random()
+
+    TaskContext.get().addTaskCompletionListener[Unit](_ => {
+      if (toClose.nonEmpty) {
+        logWarning(s"CLOSING AT TASK COMPLETION ${toClose.size}")
+        toClose.foreach(_.close())
+      }
+    })
+
+    override def next(): (Any, Any) = {
+      if (streams.hasNext) {
+        queued.synchronized {
+          require(hasNext, "called next on an empty iterator")
+          RapidsShuffleInternalManagerBase.startPools()
+
+          // queue all of it?
+          while (streams.hasNext) {
+            inFlight.incrementAndGet()
+            // n is  (BlockId, BufferReleasingInputStream)
+
+            val slot = if (shuffleReaderThreads == 0) {
+              0
+            } else {
+              Math.abs(rnd.nextInt() % shuffleReaderThreads)
+            }
+
+
+            val (blockId, managedBuffer, inputStream) = streams.next()
+            // TODO: bring back toClose
+            toClose.append(() => {
+              managedBuffer.release()
+            })
+            toClose.append(inputStream)
+
+            def runIt(): Unit = {
+              withResource(new NvtxRange("reader.deser", NvtxColor.DARK_GREEN)) { _ =>
+                val ser = serializers(slot)
+                managedBuffer.retain()
+                val deserStream = queued.synchronized {
+                  val res = ser.deserializeStream(inputStream)
+                  toClose.append(res)
+                  res
+                }
+
+                val it = deserStream.asKeyValueIterator
+                val res = new ArrayBuffer[(Any, Any)]()
+                while (it.hasNext) {
+                  res.append(it.next())
+                }
+
+                queued.synchronized {
+                  res.foreach(queued.offer)
+                  inFlight.decrementAndGet()
+                  managedBuffer.release()
+                }
+              }
+            }
+
+            if (shuffleReaderThreads > 0) {
+              RapidsShuffleInternalManagerBase.queueTask(slot, () => {
+                runIt()
+              })
+            } else {
+              runIt()
+            }
+
+            // toClose.append(deserStream)
+            // toClose.append(n._2)
+            //logInfo(s"Sending ${shuffleBlockId} to slot ${deserStream}")
+
+            //RapidsShuffleInternalManagerBase.queueTask(slot, () => {
+              //deserialize(ser, deserStream)
+            //})
+          }
+        }
+      }
+      val res = queued.take()
+      //logInfo(
+      //  s"done queuing tasks: ${queued.size()} -- ${inFlight.get} -- ${streams.hasNext} --- hasNext? ${hasNext}")
+      if (!hasNext) {
+        logInfo(s"closing ${toClose.size} streams")
+        toClose.foreach(_.close)
+        toClose.clear()
+      }
+      res
+    }
+  }
+
+
+  /** Read the combined key-values for this reduce task */
+  override def read(): Iterator[Product2[K, C]] = {
+    val myStreamWrapper =
+      (block: BlockId, inputStream: InputStream) => {
+        val wrapped = serializerManager.wrapStream(block, inputStream)
+        new InputStream {
+          override def read() = {
+            // lowest level
+            withResource(new NvtxRange("wrap.read", NvtxColor.ORANGE)) { _ =>
+              wrapped.read()
+            }
+          }
+
+          override def close() = {
+            withResource(new NvtxRange("wrap.close", NvtxColor.RED)) { _ =>
+              wrapped.close()
+              inputStream.close()
+            }
+          }
+        }
+      }
+
+    val wrappedStreams = new RapidsShuffleBlockFetcherIterator(
+      context,
+      blockManager.blockStoreClient,
+      blockManager,
+      blocksByAddress,
+      myStreamWrapper,
+      //serializerManager.wrapStream,
+      // Note: we use getSizeAsMb when no suffix is provided for backwards compatibility
+      SparkEnv.get.conf.get(config.REDUCER_MAX_SIZE_IN_FLIGHT) * 1024 * 1024,
+      SparkEnv.get.conf.get(config.REDUCER_MAX_REQS_IN_FLIGHT),
+      SparkEnv.get.conf.get(config.REDUCER_MAX_BLOCKS_IN_FLIGHT_PER_ADDRESS),
+      SparkEnv.get.conf.get(config.MAX_REMOTE_BLOCK_SIZE_FETCH_TO_MEM),
+      SparkEnv.get.conf.get(config.SHUFFLE_DETECT_CORRUPT),
+      SparkEnv.get.conf.get(config.SHUFFLE_DETECT_CORRUPT_MEMORY),
+      readMetrics,
+      fetchContinuousBlocksInBatch)
+
+    //val serializerInstance = dep.serializer.newInstance()
+
+    // need a "ParallelizedDesrializerIterator"
+    // it will submit deserialization tasks in parallel and queue results
+    // until the caller is ready to call next
+
+
+    val recordIter = new ParallelDeserializerIterator(
+      wrappedStreams, dep.serializer, myStreamWrapper)
+
+    // Create a key/value iterator for each stream
+    //val recordIter: Iterator[(Any, Any)] = wrappedStreams.flatMap { case (blockId, wrappedStream) =>
+    //  // Note: the asKeyValueIterator below wraps a key/value iterator inside of a
+    //  // NextIterator. The NextIterator makes sure that close() is called on the
+    //  // underlying InputStream when all records have been read.
+    //  serializerInstance.deserializeStream(wrappedStream).asKeyValueIterator
+    //}
+
+    // Update the context task metrics for each record read.
+    val metricIter = CompletionIterator[(Any, Any), Iterator[(Any, Any)]](
+      recordIter.map { record =>
+        readMetrics.incRecordsRead(1)
+        record
+      },
+      context.taskMetrics().mergeShuffleReadMetrics())
+
+    // An interruptible iterator must be used here in order to support task cancellation
+    val interruptibleIter = new InterruptibleIterator[(Any, Any)](context, metricIter)
+
+    val aggregatedIter: Iterator[Product2[K, C]] = if (dep.aggregator.isDefined) {
+      if (dep.mapSideCombine) {
+        // We are reading values that are already combined
+        val combinedKeyValuesIterator = interruptibleIter.asInstanceOf[Iterator[(K, C)]]
+        dep.aggregator.get.combineCombinersByKey(combinedKeyValuesIterator, context)
+      } else {
+        // We don't know the value type, but also don't care -- the dependency *should*
+        // have made sure its compatible w/ this aggregator, which will convert the value
+        // type to the combined type C
+        val keyValuesIterator = interruptibleIter.asInstanceOf[Iterator[(K, Nothing)]]
+        dep.aggregator.get.combineValuesByKey(keyValuesIterator, context)
+      }
+    } else {
+      interruptibleIter.asInstanceOf[Iterator[Product2[K, C]]]
+    }
+
+    // Sort the output if there is a sort ordering defined.
+    val resultIter = dep.keyOrdering match {
+      case Some(keyOrd: Ordering[K]) =>
+        // Create an ExternalSorter to sort the data.
+        val sorter =
+          new ExternalSorter[K, C, C](context, ordering = Some(keyOrd), serializer = dep.serializer)
+        sorter.insertAll(aggregatedIter)
+        context.taskMetrics().incMemoryBytesSpilled(sorter.memoryBytesSpilled)
+        context.taskMetrics().incDiskBytesSpilled(sorter.diskBytesSpilled)
+        context.taskMetrics().incPeakExecutionMemory(sorter.peakMemoryUsedBytes)
+        // Use completion callback to stop sorter if task was finished/cancelled.
+        context.addTaskCompletionListener[Unit](_ => {
+          sorter.stop()
+        })
+        CompletionIterator[Product2[K, C], Iterator[Product2[K, C]]](sorter.iterator, sorter.stop())
+      case None =>
+        aggregatedIter
+    }
+
+    resultIter match {
+      case _: InterruptibleIterator[Product2[K, C]] => resultIter
+      case _ =>
+        // Use another interruptible iterator here to support task cancellation as aggregator
+        // or(and) sorter may have consumed previous interruptible iterator.
+        new InterruptibleIterator[Product2[K, C]](context, resultIter)
+    }
   }
 }
 
@@ -182,7 +1000,7 @@ class RapidsCachingWriter[K, V](
         } else {
           blockManager.shuffleServerId
         }
-        logInfo(s"Done caching shuffle success=$success, server_id=$shuffleServerId, "
+        logDebug(s"Done caching shuffle success=$success, server_id=$shuffleServerId, "
             + s"map_id=$mapId, sizes=${sizes.mkString(",")}")
         Some(MapStatus(shuffleServerId, sizes, mapId))
       }
@@ -329,11 +1147,18 @@ abstract class RapidsShuffleInternalManagerBase(conf: SparkConf, val isDriver: B
     }
   }
 
+  lazy val execComponents: Option[ShuffleExecutorComponents] = {
+    import scala.collection.JavaConverters._
+    val executorComponents = ShuffleDataIOUtils.loadShuffleDataIO(conf).executor()
+    // TODO: extra configs
+    executorComponents.initializeExecutor(
+      conf.getAppId, SparkEnv.get.executorId, Map.empty[String, String].asJava)
+    Some(executorComponents)
+  }
+
   override def getWriter[K, V](
-      handle: ShuffleHandle,
-      mapId: Long,
-      context: TaskContext,
-      metricsReporter: ShuffleWriteMetricsReporter): ShuffleWriter[K, V] = {
+    handle: ShuffleHandle, mapId: Long, context: TaskContext, 
+    metricsReporter: ShuffleWriteMetricsReporter): ShuffleWriter[K, V] = {
     handle match {
       case gpu: GpuShuffleHandle[_, _] =>
         registerGpuShuffle(handle.shuffleId)
@@ -346,8 +1171,20 @@ abstract class RapidsShuffleInternalManagerBase(conf: SparkConf, val isDriver: B
           RapidsBufferCatalog.getDeviceStorage,
           server,
           gpu.dependency.metrics)
-      case other =>
-        wrapped.getWriter(other, mapId, context, metricsReporter)
+      case other => other match {
+        case _: BypassMergeSortShuffleHandle[_, _] =>
+          new ThreadedWriter[K, V](
+            blockManager, 
+            other.asInstanceOf[BypassMergeSortShuffleHandle[K, V]], mapId, 
+            conf, 
+            metricsReporter, 
+            execComponents.get)
+        case _: SerializedShuffleHandle[_, _] =>
+          new ThreadedUnsafeThreadedWriter[K, V](
+            blockManager, TaskContext.get().taskMemoryManager(),
+            other.asInstanceOf[SerializedShuffleHandle[K, V]], 
+            mapId, conf, metricsReporter, execComponents.get)
+      }
     }
   }
 
@@ -385,8 +1222,27 @@ abstract class RapidsShuffleInternalManagerBase(conf: SparkConf, val isDriver: B
           getCatalogOrThrow,
           gpu.dependency.sparkTypes)
       case other => {
-        val shuffleHandle = RapidsShuffleInternalManagerBase.unwrapHandle(other)
-        wrapped.getReader(shuffleHandle, startPartition, endPartition, context, metrics)
+        val nvtxRange = new NvtxRange("getMapSizesByExecId", NvtxColor.CYAN)
+        val blocksByAddress = try {
+          SparkEnv.get.mapOutputTracker.getMapSizesByExecutorId(other.shuffleId,
+            startMapIndex, endMapIndex, startPartition, endPartition)
+        } finally {
+          nvtxRange.close()
+        }
+        val shuffleHandle =
+          RapidsShuffleInternalManagerBase.unwrapHandle(other)
+            .asInstanceOf[BaseShuffleHandle[K, _, C]]
+
+        new ThreadedReader[K, C](
+          shuffleHandle,
+          blocksByAddress,
+          context,
+          metrics,
+          rapidsConf.shuffleReaderThreads,
+          blockManager.serializerManager)
+
+        //wrapped.getReader(shuffleHandle, startMapIndex, endMapIndex, startPartition,
+        //  endPartition, context, metrics)
       }
     }
   }
@@ -436,6 +1292,70 @@ trait VisibleShuffleManager {
   def initialize: Unit
 }
 
+
+class RapidsShuffleExecutorComponents extends ShuffleExecutorComponents with Logging with Arm {
+  override def initializeExecutor(
+    appId: String,
+    execId: String,
+    extraConfigs: java.util.Map[String, String]) = {
+    logWarning(s"initializing executor ${execId}")
+  }
+
+  override def createMapOutputWriter(
+    shuffleId: Int, mapTaskId: Long, numPartitions: Int): ShuffleMapOutputWriter = {
+    withResource(new NvtxRange("createMapOutputWriter", NvtxColor.YELLOW)) { _ =>
+      logWarning(s"get map output writer for ${shuffleId} ${mapTaskId} ${numPartitions}")
+      val bbos = new ByteArrayOutputStream()
+      val nvbbos = new OutputStream {
+        override def write(i: Int): Unit = {
+          withResource(new NvtxRange("write", NvtxColor.CYAN)) { _ =>
+          }
+        }
+      }
+      new ShuffleMapOutputWriter {
+        val partLengths = new ArrayBuffer[Long]()
+        override def getPartitionWriter(reducePartitionId: Int): ShufflePartitionWriter = {
+          withResource(new NvtxRange("getPartitionWriter", NvtxColor.ORANGE)) { _ =>
+            logInfo(s"getPartitionWriter ${reducePartitionId}")
+            partLengths.append(0L)
+            new ShufflePartitionWriter {
+              override def openStream(): OutputStream = {
+                withResource(new NvtxRange("open_stream", NvtxColor.GREEN)) { _ =>
+                  logWarning(s"opening stream for ${reducePartitionId}")
+                  nvbbos
+                }
+              }
+
+              override def getNumBytesWritten: Long = {
+                withResource(new NvtxRange("getNumBytesWritten", NvtxColor.DARK_GREEN)) { _ =>
+                  bbos.size()
+                }
+              }
+            }
+          }
+        }
+
+        def commitAllPartitions(checksums: Array[Long]): MapOutputCommitMessage = {
+          withResource(new NvtxRange("commit", NvtxColor.BLUE)) { _ =>
+            logWarning(s"commit all partitions for ${shuffleId}_${mapTaskId}_${numPartitions}")
+            MapOutputCommitMessage.of(partLengths.toArray)
+          }
+        }
+
+        def commitAllPartitions(): MapOutputCommitMessage = {
+          withResource(new NvtxRange("commit", NvtxColor.BLUE)) { _ =>
+            logWarning(s"commit all partitions for ${shuffleId}_${mapTaskId}_${numPartitions}")
+            MapOutputCommitMessage.of(partLengths.toArray)
+          }
+        }
+
+        override def abort(error: Throwable): Unit = {
+        }
+      }
+    }
+  }
+}
+
 /**
  * A simple proxy wrapper allowing to delay loading of the
  * real implementation to a later point when ShimLoader
@@ -444,10 +1364,37 @@ trait VisibleShuffleManager {
  * @param conf
  * @param isDriver
  */
+class RapidsShuffleDataIO(conf: SparkConf) extends ShuffleDataIO with Logging with Arm {
+
+  override def executor: ShuffleExecutorComponents = {
+    logWarning("getting ShuffleExecutorComponents")
+    new RapidsShuffleExecutorComponents()
+  }
+
+  override def driver: ShuffleDriverComponents = {
+    logInfo("getting ShuffleDriverComponents")
+    new ShuffleDriverComponents {
+      override def initializeApplication: java.util.Map[String, String] = {
+        logWarning("Initialize APP")
+        new java.util.HashMap[String, String]()
+      }
+      override def cleanupApplication(): Unit = {
+        logWarning("clean app")
+      }
+      override def registerShuffle(shuffleId: Int): Unit = {
+        logWarning(s"register shuffle ${shuffleId}")
+      }
+      override def removeShuffle(shuffleId: Int, blocking: Boolean): Unit = {
+        logWarning(s"un-register shuffle ${shuffleId}. Blocking? ${blocking}")
+      }
+    }
+  }
+}
+
 abstract class ProxyRapidsShuffleInternalManagerBase(
     conf: SparkConf,
     override val isDriver: Boolean
-) extends VisibleShuffleManager with Proxy {
+) extends VisibleShuffleManager with Proxy with Logging {
 
   // touched in the plugin code after the shim initialization
   // is complete
