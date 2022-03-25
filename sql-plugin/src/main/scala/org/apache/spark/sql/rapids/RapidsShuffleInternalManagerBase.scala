@@ -16,12 +16,14 @@
 
 package org.apache.spark.sql.rapids
 
+import java.io.{ByteArrayOutputStream, OutputStream}
+
 import ai.rapids.cudf.{NvtxColor, NvtxRange}
 import com.nvidia.spark.rapids._
 import com.nvidia.spark.rapids.format.TableMeta
 import com.nvidia.spark.rapids.shuffle.{RapidsShuffleRequestHandler, RapidsShuffleServer, RapidsShuffleTransport}
-import scala.collection.mutable.{ArrayBuffer, ListBuffer}
 
+import scala.collection.mutable.{ArrayBuffer, ListBuffer}
 import org.apache.spark.shuffle.api.metadata.MapOutputCommitMessage
 import org.apache.spark.{ShuffleDependency, SparkConf, SparkEnv, TaskContext}
 import org.apache.spark.internal.Logging
@@ -462,22 +464,36 @@ class RapidsShuffleDataIO(conf: SparkConf) extends ShuffleDataIO with Logging {
           shuffleId: Int, mapTaskId: Long, numPartitions: Int): ShuffleMapOutputWriter = {
         logWarning(s"get map output writer for ${shuffleId} ${mapTaskId} ${numPartitions}")
         new ShuffleMapOutputWriter {
+          val partLengths = new ArrayBuffer[Long]()
           override def getPartitionWriter(reducePartitionId: Int): ShufflePartitionWriter = {
             logInfo(s"getPartitionWriter ${reducePartitionId}")
-            null
+            partLengths.append(0L)
+            new ShufflePartitionWriter {
+              val bbos = new ByteArrayOutputStream()
+              override def openStream(): OutputStream = {
+                throw new IllegalStateException("where is it")
+                logWarning(s"opening stream for ${reducePartitionId}")
+                bbos
+              }
+              override def getNumBytesWritten: Long = {
+                logInfo(s"wrote ${bbos.size()} bytes")
+                bbos.size()
+              }
+            }
           }
 
           def commitAllPartitions(checksums: Array[Long]): MapOutputCommitMessage = {
-            null
+            logWarning(s"commit all partitions for ${shuffleId}_${mapTaskId}_${numPartitions}")
+            MapOutputCommitMessage.of(partLengths.toArray)
           }
 
           def commitAllPartitions(): MapOutputCommitMessage = {
-            null
+            logWarning(s"commit all partitions for ${shuffleId}_${mapTaskId}_${numPartitions}")
+            MapOutputCommitMessage.of(partLengths.toArray)
           }
 
           override def abort(error: Throwable): Unit = {
           }
-
         }
       }
     }
