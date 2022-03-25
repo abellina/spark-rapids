@@ -1447,6 +1447,10 @@ object RapidsConf {
     .booleanConf
     .createWithDefault(value = true)
 
+  val SHUFFLE_THREADS = conf("spark.rapids.shuffle.threads")
+    .integerConf
+    .createWithDefault(128)
+
   private def printSectionHeader(category: String): Unit =
     println(s"\n### $category")
 
@@ -1935,6 +1939,8 @@ class RapidsConf(conf: Map[String, String]) extends Logging {
   lazy val isFastSampleEnabled: Boolean = get(ENABLE_FAST_SAMPLE)
 
   lazy val isDetectDeltaLogQueries: Boolean = get(DETECT_DELTA_LOG_QUERIES)
+
+  lazy val shuffleThreads: Int = get(SHUFFLE_THREADS)
 
   private val optimizerDefaults = Map(
     // this is not accurate because CPU projections do have a cost due to appending values

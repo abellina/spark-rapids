@@ -126,7 +126,9 @@ object GpuShuffleEnv extends Logging {
   }
 
   def shouldUseRapidsShuffle(conf: RapidsConf): Boolean = {
-    conf.shuffleManagerEnabled && isRapidsShuffleAvailable(conf)
+    conf.shuffleManagerEnabled &&
+      conf.shuffleThreads == 0 &&
+        isRapidsShuffleAvailable(conf)
   }
 
   def getCatalog: ShuffleBufferCatalog = if (env == null) {

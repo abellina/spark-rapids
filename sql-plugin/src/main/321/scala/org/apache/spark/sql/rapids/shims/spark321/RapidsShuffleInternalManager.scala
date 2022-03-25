@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, NVIDIA CORPORATION.
+ * Copyright (c) 2021-2022, NVIDIA CORPORATION.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,9 +16,11 @@
 
 package org.apache.spark.sql.rapids.shims.spark321
 
-import org.apache.spark.{SparkConf, TaskContext}
+import org.apache.spark.{SparkConf, SparkEnv, TaskContext}
 import org.apache.spark.shuffle._
+import org.apache.spark.shuffle.sort.BypassMergeSortShuffleHandle
 import org.apache.spark.sql.rapids.{ProxyRapidsShuffleInternalManagerBase, RapidsShuffleInternalManagerBase}
+import org.apache.spark.sql.rapids.shims.RapidsShuffleThreadedWriter
 
 /**
  * A shuffle manager optimized for the RAPIDS Plugin For Apache Spark.
@@ -39,8 +41,29 @@ class RapidsShuffleInternalManager(conf: SparkConf, isDriver: Boolean)
     getReaderInternal(handle, startMapIndex, endMapIndex, startPartition, endPartition, context,
       metrics)
   }
-}
 
+  private lazy val env = SparkEnv.get
+  private lazy val blockManager = env.blockManager
+
+  override def getWriter[K, V](
+      handle: ShuffleHandle,
+      mapId: Long,
+      context: TaskContext,
+      metricsReporter: ShuffleWriteMetricsReporter): ShuffleWriter[K, V] = {
+    handle match {
+      case _: BypassMergeSortShuffleHandle[_, _] =>
+        new RapidsShuffleThreadedWriter[K, V](
+          blockManager,
+          handle.asInstanceOf[BypassMergeSortShuffleHandle[K, V]],
+          mapId,
+          conf,
+          metricsReporter,
+          execComponents.get)
+      case other =>
+        getWriterInternal(handle, mapId, context, metricsReporter)
+    }
+  }
+}
 
 class ProxyRapidsShuffleInternalManager(conf: SparkConf, isDriver: Boolean)
   extends ProxyRapidsShuffleInternalManagerBase(conf, isDriver) with ShuffleManager {
@@ -57,4 +80,12 @@ class ProxyRapidsShuffleInternalManager(conf: SparkConf, isDriver: Boolean)
     self.getReader(handle, startMapIndex, endMapIndex, startPartition, endPartition, context,
       metrics)
   }
+
+  override def getWriter[K, V](handle: ShuffleHandle,
+                      mapId: Long,
+                      context: TaskContext,
+                      metricsReporter: ShuffleWriteMetricsReporter): ShuffleWriter[K, V] = {
+    self.getWriter(handle, mapId, context, metricsReporter)
+  }
+
 }
