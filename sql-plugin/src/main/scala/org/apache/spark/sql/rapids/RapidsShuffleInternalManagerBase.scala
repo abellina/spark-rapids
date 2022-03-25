@@ -22,11 +22,13 @@ import com.nvidia.spark.rapids.format.TableMeta
 import com.nvidia.spark.rapids.shuffle.{RapidsShuffleRequestHandler, RapidsShuffleServer, RapidsShuffleTransport}
 import scala.collection.mutable.{ArrayBuffer, ListBuffer}
 
+import org.apache.spark.shuffle.api.metadata.MapOutputCommitMessage
 import org.apache.spark.{ShuffleDependency, SparkConf, SparkEnv, TaskContext}
 import org.apache.spark.internal.Logging
 import org.apache.spark.network.buffer.ManagedBuffer
 import org.apache.spark.scheduler.MapStatus
 import org.apache.spark.shuffle._
+import org.apache.spark.shuffle.api._
 import org.apache.spark.shuffle.sort.SortShuffleManager
 import org.apache.spark.sql.execution.metric.SQLMetric
 import org.apache.spark.sql.rapids.shims.GpuShuffleBlockResolver
@@ -444,10 +446,67 @@ trait VisibleShuffleManager {
  * @param conf
  * @param isDriver
  */
+class RapidsShuffleDataIO(conf: SparkConf) extends ShuffleDataIO with Logging {
+
+  override def executor: ShuffleExecutorComponents = {
+    logWarning("getting ShuffleExecutorComponents")
+    new ShuffleExecutorComponents {
+      override def initializeExecutor(
+        appId: String, 
+        execId: String, 
+        extraConfigs: java.util.Map[String, String]) = {
+        logWarning(s"initializing executor ${execId}")
+      }
+
+      override def createMapOutputWriter(
+          shuffleId: Int, mapTaskId: Long, numPartitions: Int): ShuffleMapOutputWriter = {
+        logWarning(s"get map output writer for ${shuffleId} ${mapTaskId} ${numPartitions}")
+        new ShuffleMapOutputWriter {
+          override def getPartitionWriter(reducePartitionId: Int): ShufflePartitionWriter = {
+            logInfo(s"getPartitionWriter ${reducePartitionId}")
+            null
+          }
+
+          def commitAllPartitions(checksums: Array[Long]): MapOutputCommitMessage = {
+            null
+          }
+
+          def commitAllPartitions(): MapOutputCommitMessage = {
+            null
+          }
+
+          override def abort(error: Throwable): Unit = {
+          }
+
+        }
+      }
+    }
+  }
+
+  override def driver: ShuffleDriverComponents = {
+    logInfo("getting ShuffleDriverComponents")
+    new ShuffleDriverComponents {
+      override def initializeApplication: java.util.Map[String, String] = {
+        logWarning("Initialize APP")
+        new java.util.HashMap[String, String]()
+      }
+      override def cleanupApplication(): Unit = {
+        logWarning("clean app")
+      }
+      override def registerShuffle(shuffleId: Int): Unit = {
+        logWarning(s"register shuffle ${shuffleId}")
+      }
+      override def removeShuffle(shuffleId: Int, blocking: Boolean): Unit = {
+        logWarning(s"un-register shuffle ${shuffleId}. Blocking? ${blocking}")
+      }
+    }
+  }
+}
+
 abstract class ProxyRapidsShuffleInternalManagerBase(
     conf: SparkConf,
     override val isDriver: Boolean
-) extends VisibleShuffleManager with Proxy {
+) extends VisibleShuffleManager with Proxy with Logging {
 
   // touched in the plugin code after the shim initialization
   // is complete
