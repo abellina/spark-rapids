@@ -16,22 +16,34 @@
 
 package org.apache.spark.sql.rapids
 
+import java.io.{ByteArrayOutputStream, File, FileInputStream, OutputStream}
+import java.util.{Optional, Random}
+import java.util.concurrent.{Executors, LinkedBlockingQueue}
+import java.util.concurrent.atomic.{AtomicInteger, AtomicLong}
+
+import scala.collection.mutable
+import scala.collection.mutable.{ArrayBuffer, ListBuffer}
+
 import ai.rapids.cudf.{NvtxColor, NvtxRange}
 import com.nvidia.spark.rapids._
 import com.nvidia.spark.rapids.format.TableMeta
+import com.nvidia.spark.rapids.shims.SparkShimImpl
 import com.nvidia.spark.rapids.shuffle.{RapidsShuffleRequestHandler, RapidsShuffleServer, RapidsShuffleTransport}
-import scala.collection.mutable.{ArrayBuffer, ListBuffer}
+import org.sparkproject.guava.io.Closeables
 
 import org.apache.spark.{ShuffleDependency, SparkConf, SparkEnv, TaskContext}
 import org.apache.spark.internal.Logging
 import org.apache.spark.network.buffer.ManagedBuffer
 import org.apache.spark.scheduler.MapStatus
-import org.apache.spark.shuffle._
-import org.apache.spark.shuffle.sort.SortShuffleManager
+import org.apache.spark.shuffle.{ShuffleWriter, _}
+import org.apache.spark.shuffle.api._
+import org.apache.spark.shuffle.api.metadata.MapOutputCommitMessage
+import org.apache.spark.shuffle.sort.{BypassMergeSortShuffleHandle, SerializedShuffleHandle, SortShuffleManager, UnsafeShuffleWriter}
 import org.apache.spark.sql.execution.metric.SQLMetric
 import org.apache.spark.sql.rapids.shims.GpuShuffleBlockResolver
 import org.apache.spark.sql.vectorized.ColumnarBatch
 import org.apache.spark.storage._
+import org.apache.spark.util.Utils
 
 class GpuShuffleHandle[K, V](
     val wrapped: ShuffleHandle,
@@ -69,6 +81,207 @@ object RapidsShuffleInternalManagerBase extends Logging {
     case gh: GpuShuffleHandle[_, _] => gh.wrapped
     case other => other
   }
+
+  class Pool(tid: Int) {
+    val tasks = new LinkedBlockingQueue[() => Unit]()
+    val p = Executors.newSingleThreadExecutor()
+    def offer(task: () => Unit): Unit = {
+      tasks.offer(task)
+    }
+    val exec = p.submit[Unit](() => {
+      while (true) {
+        val t = tasks.take()
+        t()
+      }
+    })
+  }
+
+  var numPools: Int = 128
+
+  lazy val pools = new mutable.HashMap[Int, Pool]()
+
+  def queueTask(part: Int, task: () => Unit): Unit = {
+    pools(part % numPools).offer(task)
+  }
+
+  def startPoolsIfNeeded(): Unit = synchronized  {
+    if (pools.isEmpty) {
+      (0 until numPools).foreach { i  =>
+        pools.put(i, new Pool(i)) }
+    }
+  }
+
+  // used to place partition writers in the task pool in a pseudo-random thread
+  val slotNumber = new AtomicInteger(0)
+}
+
+trait RapidsShuffleWriterShimHelper {
+  def setChecksumIfNeeded(writer: DiskBlockObjectWriter, partition: Int): Unit = {
+    // noop
+  }
+
+  def getPartitionLengths(): Array[Long] =
+    throw new UnsupportedOperationException(
+      "getPartitionLengths was added in Spark 3.2.0 yet it is being called for older versions.")
+
+  def commitAllPartitions(writer: ShuffleMapOutputWriter): Array[Long] =
+    throw new UnsupportedOperationException(
+      "commitAllPartitions must be implemented by subclasses of this trait")
+}
+
+abstract class RapidsShuffleThreadedWriter[K, V](
+    blockManager: BlockManager,
+    handle: BypassMergeSortShuffleHandle[K, V],
+    mapId: Long,
+    sparkConf: SparkConf,
+    writeMetrics: ShuffleWriteMetricsReporter,
+    shuffleExecutorComponents: ShuffleExecutorComponents)
+      extends ShuffleWriter[K, V]
+        with RapidsShuffleWriterShimHelper
+        with Arm
+        with Logging {
+
+  logInfo(s"Starting threaded writer for ${mapId} and ${handle}")
+
+  private var myMapStatus: Option[MapStatus] = None
+
+  private val dep: ShuffleDependency[K, V, V] = handle.dependency
+  private val shuffleId = dep.shuffleId
+  private val partitioner = dep.partitioner
+  private val numPartitions = partitioner.numPartitions
+  private val serializer = dep.serializer.newInstance()
+
+  override def write(records: Iterator[Product2[K, V]]): Unit = {
+    withResource(new NvtxRange("ThreadedWriter.write", NvtxColor.RED)) { _ =>
+      withResource(new NvtxRange("compute", NvtxColor.GREEN)) { _ =>
+        val mapOutputWriter = shuffleExecutorComponents.createMapOutputWriter(
+          shuffleId,
+          mapId,
+          numPartitions)
+
+        val diskBlockObjectWriters = new mutable.HashMap[Int, (Int, DiskBlockObjectWriter)]()
+        // per reduce partition id
+        // open all the writers ahead of time (Spark does this already)
+        (0 until numPartitions).map { i =>
+          val (blockId, file) = blockManager.diskBlockManager.createTempShuffleBlock()
+          val writer: DiskBlockObjectWriter = blockManager.getDiskWriter(
+            blockId, file, serializer, 4 * 1024, writeMetrics)
+          setChecksumIfNeeded(writer, i) // spark3.2.0+
+
+          // Places writer objects at round robin slot numbers apriori
+          // this choice is for simplicity but likely needs to change so that
+          // we can handle skew better
+          val slotNumber = Math.abs(RapidsShuffleInternalManagerBase.slotNumber.incrementAndGet())
+          diskBlockObjectWriters.put(i, (slotNumber, writer))
+        }
+
+        // we call write on every writer for every record in parallel
+        val scheduledWrites = new AtomicLong(0L)
+        val doneQueue = new ArrayBuffer[FileSegment]()
+        records.foreach { record =>
+          val key = record._1
+          val value = record._2
+          val reducePartitionId: Int = partitioner.getPartition(key)
+          scheduledWrites.incrementAndGet()
+          val (slot, myWriter) = diskBlockObjectWriters(reducePartitionId)
+
+          // we close batches actively in the `records` iterator as we get the next batch
+          // this makes sure it is kept alive while a task is able to handle it.
+          val cb = if (value.isInstanceOf[ColumnarBatch]) {
+            val cb = value.asInstanceOf[ColumnarBatch]
+            (0 until cb.numCols()).foreach {
+              c => cb.column(c).asInstanceOf[SlicedGpuColumnVector].getBase.incRefCount()
+            }
+            cb
+          } else {
+            null
+          }
+
+          RapidsShuffleInternalManagerBase.queueTask(slot, () => {
+            if (key == null) {
+              logWarning("NULL KEY??")
+            } else {
+              try {
+                myWriter.write(key, value)
+              } catch {
+                case e: Throwable => logError("Error writing", e)
+              }
+              if (cb != null) {
+                (0 until cb.numCols()).foreach {
+                  c => cb.column(c).asInstanceOf[SlicedGpuColumnVector].close()
+                }
+              }
+            }
+            doneQueue.synchronized {
+              scheduledWrites.decrementAndGet()
+              doneQueue.notifyAll()
+            }
+          })
+        }
+
+        withResource(new NvtxRange("WaitingForWrites", NvtxColor.PURPLE)) { _ =>
+          doneQueue.synchronized {
+            while (scheduledWrites.get() > 0) {
+              doneQueue.wait()
+            }
+          }
+        }
+        // this is similar to Spark
+        withResource(new NvtxRange("CommitShuffle", NvtxColor.RED)) { _ =>
+          // per reduce partition
+          var offset = 0L
+          val segments = (0 until numPartitions).map {
+            reducePartitionId =>
+              val segment = diskBlockObjectWriters(reducePartitionId)._2.commitAndGet()
+              val file = segment.file
+              val res = (reducePartitionId, file, offset)
+              offset += segment.length
+              res
+          }
+
+          segments.foreach { case (reducePartitionId, file, offset) =>
+            val partWriter = mapOutputWriter.getPartitionWriter(reducePartitionId)
+            if (file.exists()) {
+              val maybeOutputChannel: Optional[WritableByteChannelWrapper] =
+                partWriter.openChannelWrapper()
+              if (maybeOutputChannel.isPresent) {
+                writePartitionedDataWithChannel(file, maybeOutputChannel.get(), offset)
+              } else {
+                writePartitionedDataWithStream(file, partWriter)
+              }
+              file.delete()
+            }
+            diskBlockObjectWriters(reducePartitionId)._2.close()
+          }
+
+          val partLengths = commitAllPartitions(mapOutputWriter)
+          myMapStatus = Some(MapStatus(blockManager.shuffleServerId, partLengths, mapId))
+        }
+      }
+    }
+  }
+
+  def writePartitionedDataWithStream(file: java.io.File, writer: ShufflePartitionWriter): Unit = {
+    val in = new java.io.FileInputStream(file)
+    val os: OutputStream = writer.openStream()
+    logDebug(s"Writing segment from ${file} to ${writer}")
+    org.apache.spark.util.Utils.copyStream(in, os, false, false)
+    os.close()
+    in.close()
+  }
+
+  def writePartitionedDataWithChannel(
+    file: File, outputChannel: WritableByteChannelWrapper, offset: Long): Unit = {
+    val in = new FileInputStream(file)
+    val inputChannel = in.getChannel
+    Utils.copyFileStreamNIO(
+      inputChannel, outputChannel.channel, 0L, inputChannel.size)
+    Closeables.close(in, false)
+    inputChannel.close()
+    Closeables.close(outputChannel, false)
+  }
+
+  override def stop(success: Boolean): Option[MapStatus] = myMapStatus
 }
 
 class RapidsCachingWriter[K, V](
@@ -188,7 +401,7 @@ class RapidsCachingWriter[K, V](
         } else {
           blockManager.shuffleServerId
         }
-        logInfo(s"Done caching shuffle success=$success, server_id=$shuffleServerId, "
+        logDebug(s"Done caching shuffle success=$success, server_id=$shuffleServerId, "
             + s"map_id=$mapId, sizes=${sizes.mkString(",")}")
         Some(MapStatus(shuffleServerId, sizes, mapId))
       }
@@ -235,13 +448,23 @@ abstract class RapidsShuffleInternalManagerBase(conf: SparkConf, val isDriver: B
 
   private val rapidsConf = new RapidsConf(conf)
 
+  if (!isDriver && rapidsConf.shuffleThreads > 0) {
+    RapidsShuffleInternalManagerBase.numPools = rapidsConf.shuffleThreads
+    RapidsShuffleInternalManagerBase.startPoolsIfNeeded()
+  }
+
   protected val wrapped = new SortShuffleManager(conf)
 
-  private[this] val transportEnabledMessage = if (!rapidsConf.shuffleTransportEnabled) {
-    "Transport disabled (local cached blocks only)"
-  } else {
-    s"Transport enabled (remote fetches will use ${rapidsConf.shuffleTransportClassName}"
-  }
+  private[this] val transportEnabledMessage =
+    if (!rapidsConf.shuffleTransportEnabled || rapidsConf.shuffleThreads > 0) {
+      if (rapidsConf.shuffleThreads == 0) {
+        "Transport disabled (local cached blocks only)"
+      } else {
+        "Transport disabled (threaded shuffle writer)"
+      }
+    } else {
+      s"Transport enabled (remote fetches will use ${rapidsConf.shuffleTransportClassName}"
+    }
 
   logWarning(s"Rapids Shuffle Plugin enabled. ${transportEnabledMessage}. To disable the " +
       s"RAPIDS Shuffle Manager set `${RapidsConf.SHUFFLE_MANAGER_ENABLED}` to false")
@@ -267,6 +490,9 @@ abstract class RapidsShuffleInternalManagerBase(conf: SparkConf, val isDriver: B
       logWarning(s"Rapids Shuffle Plugin is falling back to SortShuffleManager " +
           s"because: ${fallThroughReasons.mkString(", ")}")
     }
+    if (rapidsConf.shuffleThreads > 0) {
+      fallThroughReasons += "Using the threaded shuffle writer"
+    }
     fallThroughReasons.nonEmpty
   }
 
@@ -290,7 +516,7 @@ abstract class RapidsShuffleInternalManagerBase(conf: SparkConf, val isDriver: B
   }
 
   private[this] lazy val transport: Option[RapidsShuffleTransport] = {
-    if (rapidsConf.shuffleTransportEnabled && !isDriver) {
+    if (rapidsConf.shuffleTransportEnabled && !isDriver && rapidsConf.shuffleThreads == 0) {
       Some(RapidsShuffleTransport.makeTransport(blockManager.shuffleServerId, rapidsConf))
     } else {
       None
@@ -298,7 +524,7 @@ abstract class RapidsShuffleInternalManagerBase(conf: SparkConf, val isDriver: B
   }
 
   private[this] lazy val server: Option[RapidsShuffleServer] = {
-    if (rapidsConf.shuffleTransportEnabled && !isDriver) {
+    if (rapidsConf.shuffleTransportEnabled && !isDriver && rapidsConf.shuffleThreads == 0) {
       val catalog = getCatalogOrThrow
       val requestHandler = new RapidsShuffleRequestHandler() {
         override def acquireShuffleBuffer(tableId: Int): RapidsBuffer = {
@@ -335,11 +561,20 @@ abstract class RapidsShuffleInternalManagerBase(conf: SparkConf, val isDriver: B
     }
   }
 
-  override def getWriter[K, V](
-      handle: ShuffleHandle,
-      mapId: Long,
-      context: TaskContext,
-      metricsReporter: ShuffleWriteMetricsReporter): ShuffleWriter[K, V] = {
+  lazy val execComponents: Option[ShuffleExecutorComponents] = {
+    import scala.collection.JavaConverters._
+    val executorComponents = ShuffleDataIOUtils.loadShuffleDataIO(conf).executor()
+    val extraConfigs = conf.getAllWithPrefix(ShuffleDataIOUtils.SHUFFLE_SPARK_CONF_PREFIX).toMap
+    executorComponents.initializeExecutor(
+      conf.getAppId,
+      SparkEnv.get.executorId,
+      extraConfigs.asJava)
+    Some(executorComponents)
+  }
+
+  def getWriterInternal[K, V](
+    handle: ShuffleHandle, mapId: Long, context: TaskContext,
+    metricsReporter: ShuffleWriteMetricsReporter): ShuffleWriter[K, V] = {
     handle match {
       case gpu: GpuShuffleHandle[_, _] =>
         registerGpuShuffle(handle.shuffleId)
@@ -352,8 +587,8 @@ abstract class RapidsShuffleInternalManagerBase(conf: SparkConf, val isDriver: B
           RapidsBufferCatalog.getDeviceStorage,
           server,
           gpu.dependency.metrics)
-      case other =>
-        wrapped.getWriter(other, mapId, context, metricsReporter)
+      case _ =>
+        wrapped.getWriter(handle, mapId, context, metricsReporter)
     }
   }
 
@@ -390,10 +625,10 @@ abstract class RapidsShuffleInternalManagerBase(conf: SparkConf, val isDriver: B
           transport,
           getCatalogOrThrow,
           gpu.dependency.sparkTypes)
-      case other => {
+      case other =>
         val shuffleHandle = RapidsShuffleInternalManagerBase.unwrapHandle(other)
-        wrapped.getReader(shuffleHandle, startPartition, endPartition, context, metrics)
-      }
+        wrapped.getReader(shuffleHandle, startMapIndex, endMapIndex, startPartition,
+          endPartition, context, metrics)
     }
   }
 
@@ -450,10 +685,12 @@ trait VisibleShuffleManager {
  * @param conf
  * @param isDriver
  */
+// TODO: make this the internal manager base, so remove proxy
+//   can we remove VisibleShuffleManager or call it diferently
 abstract class ProxyRapidsShuffleInternalManagerBase(
     conf: SparkConf,
     override val isDriver: Boolean
-) extends VisibleShuffleManager with Proxy {
+) extends VisibleShuffleManager with Proxy with Logging {
 
   // touched in the plugin code after the shim initialization
   // is complete

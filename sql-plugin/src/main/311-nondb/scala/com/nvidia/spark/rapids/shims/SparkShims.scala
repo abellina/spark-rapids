@@ -15,10 +15,12 @@
  */
 
 package com.nvidia.spark.rapids.shims
+import java.util.zip.Checksum
 
 import com.nvidia.spark.rapids._
 import org.apache.parquet.schema.MessageType
 
+import org.apache.spark.SparkConf
 import org.apache.spark.sql.execution.datasources.parquet.ParquetFilters
 
 object SparkShimImpl extends Spark31XShims {

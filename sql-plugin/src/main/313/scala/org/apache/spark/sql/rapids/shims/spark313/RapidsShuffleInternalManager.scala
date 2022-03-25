@@ -18,6 +18,7 @@ package org.apache.spark.sql.rapids.shims.spark313
 
 import org.apache.spark.{SparkConf, TaskContext}
 import org.apache.spark.shuffle._
+import org.apache.spark.shuffle.sort.BypassMergeSortShuffleHandle
 import org.apache.spark.sql.rapids.{ProxyRapidsShuffleInternalManagerBase, RapidsShuffleInternalManagerBase}
 
 /**
@@ -37,6 +38,24 @@ class RapidsShuffleInternalManager(conf: SparkConf, isDriver: Boolean)
       metrics: ShuffleReadMetricsReporter): ShuffleReader[K, C] = {
     getReaderInternal(handle, startMapIndex, endMapIndex, startPartition, endPartition, context,
       metrics)
+  }
+
+  override def getWriter[K, V](handle: ShuffleHandle,
+                               mapId: Long,
+                               context: TaskContext,
+                               metricsReporter: ShuffleWriteMetricsReporter): ShuffleWriter[K, V] = {
+    handle match {
+      case _: BypassMergeSortShuffleHandle[_, _] =>
+        new RapidsShuffleThreadedWriter312[K, V](
+          blockManager,
+          handle.asInstanceOf[BypassMergeSortShuffleHandle[K, V]],
+          mapId,
+          conf,
+          metricsReporter,
+          execComponents.get)
+      case other =>
+        getWriterInternal(handle, mapId, context, metricsReporter)
+    }
   }
 }
 

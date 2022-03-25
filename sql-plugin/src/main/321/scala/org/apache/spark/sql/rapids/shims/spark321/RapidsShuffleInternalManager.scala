@@ -16,9 +16,14 @@
 
 package org.apache.spark.sql.rapids.shims.spark321
 
-import org.apache.spark.{SparkConf, TaskContext}
+import com.nvidia.spark.rapids.RapidsBufferCatalog
+
+import org.apache.spark.{SparkConf, SparkEnv, TaskContext}
 import org.apache.spark.shuffle._
-import org.apache.spark.sql.rapids.{ProxyRapidsShuffleInternalManagerBase, RapidsShuffleInternalManagerBase}
+import org.apache.spark.shuffle.api.{ShuffleExecutorComponents, ShuffleMapOutputWriter}
+import org.apache.spark.shuffle.sort.BypassMergeSortShuffleHandle
+import org.apache.spark.sql.rapids.{GpuShuffleHandle, ProxyRapidsShuffleInternalManagerBase, RapidsCachingWriter, RapidsShuffleInternalManagerBase, RapidsShuffleThreadedWriter, RapidsShuffleWriterShimHelper}
+import org.apache.spark.storage.{BlockManager, DiskBlockObjectWriter}
 
 /**
  * A shuffle manager optimized for the RAPIDS Plugin For Apache Spark.
@@ -39,8 +44,61 @@ class RapidsShuffleInternalManager(conf: SparkConf, isDriver: Boolean)
     getReaderInternal(handle, startMapIndex, endMapIndex, startPartition, endPartition, context,
       metrics)
   }
-}
 
+  class RapidsShuffleThreadedWriter320[K, V](
+    blockManager: BlockManager,
+    handle: BypassMergeSortShuffleHandle[K, V],
+    mapId: Long,
+    sparkConf: SparkConf,
+    writeMetrics: ShuffleWriteMetricsReporter,
+    shuffleExecutorComponents: ShuffleExecutorComponents)
+      extends RapidsShuffleThreadedWriter[K, V](blockManager, handle, mapId, sparkConf,
+        writeMetrics, shuffleExecutorComponents)
+      with org.apache.spark.shuffle.checksum.ShuffleChecksumSupport {
+    // Spark 3.2.0+ computes checksums per map partition as it writes the
+    // temporary files to disk. They are stored in a Checksum array.
+    private val checksums =
+      createPartitionChecksums(handle.dependency.partitioner.numPartitions, sparkConf)
+
+    // Partition lengths, used for MapStatus, but also exposed in Spark 3.2.0+
+    private var myPartitionLengths: Array[Long] = null
+
+    override def setChecksumIfNeeded(writer: DiskBlockObjectWriter, partition: Int): Unit = {
+      writer.setChecksum(checksums(partition))
+    }
+
+    override def getPartitionLengths(): Array[Long] = myPartitionLengths
+
+    override def commitAllPartitions(writer: ShuffleMapOutputWriter): Array[Long] = {
+      myPartitionLengths =
+        writer.commitAllPartitions(getChecksumValues(checksums))
+          .getPartitionLengths
+      myPartitionLengths
+    }
+  }
+
+  private lazy val env = SparkEnv.get
+  private lazy val blockManager = env.blockManager
+
+  override def getWriter[K, V](
+      handle: ShuffleHandle,
+      mapId: Long,
+      context: TaskContext,
+      metricsReporter: ShuffleWriteMetricsReporter): ShuffleWriter[K, V] = {
+    handle match {
+      case _: BypassMergeSortShuffleHandle[_, _] =>
+        new RapidsShuffleThreadedWriter320[K, V](
+          blockManager,
+          handle.asInstanceOf[BypassMergeSortShuffleHandle[K, V]],
+          mapId,
+          conf,
+          metricsReporter,
+          execComponents.get)
+      case other =>
+        getWriterInternal(handle, mapId, context, metricsReporter)
+    }
+  }
+}
 
 class ProxyRapidsShuffleInternalManager(conf: SparkConf, isDriver: Boolean)
   extends ProxyRapidsShuffleInternalManagerBase(conf, isDriver) with ShuffleManager {
@@ -57,4 +115,12 @@ class ProxyRapidsShuffleInternalManager(conf: SparkConf, isDriver: Boolean)
     self.getReader(handle, startMapIndex, endMapIndex, startPartition, endPartition, context,
       metrics)
   }
+
+  override def getWriter[K, V](handle: ShuffleHandle,
+                      mapId: Long,
+                      context: TaskContext,
+                      metricsReporter: ShuffleWriteMetricsReporter): ShuffleWriter[K, V] = {
+    self.getWriter(handle, mapId, context, metricsReporter)
+  }
+
 }

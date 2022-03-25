@@ -17,10 +17,16 @@ package com.nvidia.spark.rapids
 
 import scala.collection.mutable.ArrayBuffer
 
+import ai.rapids.cudf.{NvtxColor, NvtxRange}
 import com.nvidia.spark.rapids.RapidsPluginImplicits._
 
 /** Implementation of the automatic-resource-management pattern */
 trait Arm {
+
+  def withRange[T](rangeName: String, rangeColor: NvtxColor)(body: => T): T =
+    withResource[NvtxRange, T](new NvtxRange(rangeName, rangeColor)) { _ => 
+      body
+    }
 
   /** Executes the provided code block and then closes the resource */
   def withResource[T <: AutoCloseable, V](r: T)(block: T => V): V = {

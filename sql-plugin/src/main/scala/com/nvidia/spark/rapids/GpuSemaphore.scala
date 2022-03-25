@@ -16,10 +16,10 @@
 
 package com.nvidia.spark.rapids
 
-import java.util.concurrent.{ConcurrentHashMap, Semaphore}
+import java.util.concurrent.{ConcurrentHashMap, Executors, Semaphore, TimeUnit}
 
 import ai.rapids.cudf.{NvtxColor, NvtxRange}
-import org.apache.commons.lang3.mutable.MutableInt
+import org.apache.commons.lang3.mutable.{MutableInt, MutableLong}
 
 import org.apache.spark.TaskContext
 import org.apache.spark.internal.Logging
@@ -102,6 +102,11 @@ private final class GpuSemaphore(tasksPerGpu: Int) extends Logging with Arm {
   private val semaphore = new Semaphore(tasksPerGpu)
   // Map to track which tasks have acquired the semaphore.
   private val activeTasks = new ConcurrentHashMap[Long, MutableInt]
+  private val waitingThreads = new ConcurrentHashMap[Long, MutableLong]
+  private val monitor = Executors.newScheduledThreadPool(1)
+  monitor.scheduleAtFixedRate(() => {
+    logInfo(s"Active tasks on the GPU ${waitingThreads.size()}")
+  }, 0, 1, TimeUnit.SECONDS)
 
   def acquireIfNecessary(context: TaskContext, waitMetric: GpuMetric): Unit = {
     withResource(new NvtxWithMetrics("Acquire GPU", NvtxColor.RED, waitMetric)) { _ =>
@@ -109,7 +114,12 @@ private final class GpuSemaphore(tasksPerGpu: Int) extends Logging with Arm {
       val refs = activeTasks.get(taskAttemptId)
       if (refs == null || refs.getValue == 0) {
         logDebug(s"Task $taskAttemptId acquiring GPU")
-        semaphore.acquire()
+        waitingThreads.putIfAbsent(taskAttemptId, new MutableLong(0))
+        while (!semaphore.tryAcquire(10, TimeUnit.MILLISECONDS)) {
+          val counter = waitingThreads.get(taskAttemptId)
+          counter.add(10)
+        }
+        // acquired
         if (refs != null) {
           refs.increment()
         } else {
@@ -141,9 +151,11 @@ private final class GpuSemaphore(tasksPerGpu: Int) extends Logging with Arm {
   def completeTask(context: TaskContext): Unit = {
     val taskAttemptId = context.taskAttemptId()
     val refs = activeTasks.remove(taskAttemptId)
+    val waits = waitingThreads.remove(taskAttemptId)
     if (refs == null) {
       throw new IllegalStateException(s"Completion of unknown task $taskAttemptId")
     }
+    logInfo(s"Task: ${taskAttemptId} waited for ${waits.getValue}")
     if (refs.getValue > 0) {
       logDebug(s"Task $taskAttemptId releasing GPU")
       semaphore.release()

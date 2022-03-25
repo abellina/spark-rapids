@@ -182,7 +182,7 @@ class RapidsDriverPlugin extends DriverPlugin with Logging {
 
     if (GpuShuffleEnv.isRapidsShuffleAvailable(conf)) {
       GpuShuffleEnv.initShuffleManager()
-      if (conf.shuffleTransportEarlyStart) {
+      if (conf.shuffleTransportEarlyStart && conf.shuffleThreads == 0) {
         rapidsShuffleHeartbeatManager =
           new RapidsShuffleHeartbeatManager(
             conf.shuffleTransportEarlyStartHeartbeatInterval,
@@ -232,7 +232,7 @@ class RapidsExecutorPlugin extends ExecutorPlugin with Logging {
         GpuDeviceManager.initializeGpuAndMemory(pluginContext.resources().asScala.toMap, conf)
         if (GpuShuffleEnv.isRapidsShuffleAvailable(conf)) {
           GpuShuffleEnv.initShuffleManager()
-          if (conf.shuffleTransportEarlyStart) {
+          if (conf.shuffleTransportEarlyStart && conf.shuffleThreads == 0) {
             logInfo("Initializing shuffle manager heartbeats")
             rapidsShuffleHeartbeatEndpoint = new RapidsShuffleHeartbeatEndpoint(pluginContext, conf)
             rapidsShuffleHeartbeatEndpoint.registerShuffleHeartbeat()
