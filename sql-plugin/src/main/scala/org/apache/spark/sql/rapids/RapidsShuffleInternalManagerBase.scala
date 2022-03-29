@@ -27,11 +27,12 @@ import scala.collection.mutable.{ArrayBuffer, ListBuffer}
 import org.apache.spark.shuffle.api.metadata.MapOutputCommitMessage
 import org.apache.spark.{ShuffleDependency, SparkConf, SparkEnv, TaskContext}
 import org.apache.spark.internal.Logging
+import org.apache.spark.memory.TaskMemoryManager
 import org.apache.spark.network.buffer.ManagedBuffer
 import org.apache.spark.scheduler.MapStatus
 import org.apache.spark.shuffle._
 import org.apache.spark.shuffle.api._
-import org.apache.spark.shuffle.sort.SortShuffleManager
+import org.apache.spark.shuffle.sort.{BypassMergeSortShuffleHandle, SerializedShuffleHandle, SortShuffleManager, UnsafeShuffleWriter}
 import org.apache.spark.sql.execution.metric.SQLMetric
 import org.apache.spark.sql.rapids.shims.GpuShuffleBlockResolver
 import org.apache.spark.sql.vectorized.ColumnarBatch
@@ -72,6 +73,30 @@ object RapidsShuffleInternalManagerBase extends Logging {
   def unwrapHandle(handle: ShuffleHandle): ShuffleHandle = handle match {
     case gh: GpuShuffleHandle[_, _] => gh.wrapped
     case other => other
+  }
+}
+
+class ThreadedWriter[K, V](
+    blockManager: BlockManager,
+    handle: BypassMergeSortShuffleHandle[K, V],
+    mapId: Long,
+    sparkConf: SparkConf,
+    writeMetrics: ShuffleWriteMetricsReporter,
+    shuffleExecutorComponents: ShuffleExecutorComponents)
+  extends org.apache.spark.shuffle.sort.BypassMergeSortShuffleWriter[K, V](
+    blockManager, handle, mapId,
+    sparkConf, writeMetrics, shuffleExecutorComponents) {
+  override def write(records: Iterator[Product2[K, V]]): Unit = {
+    val nvtxRange = new NvtxRange("ThreadedWriter.write", NvtxColor.RED)
+    records.foreach(x => {
+      val r2 = new NvtxRange("Draining records..", NvtxColor.ORANGE)
+      r2.close()
+    })
+    nvtxRange.close()
+  }
+
+  override def stop(success: Boolean): Option[MapStatus] = {
+    None
   }
 }
 
@@ -351,7 +376,10 @@ abstract class RapidsShuffleInternalManagerBase(conf: SparkConf, val isDriver: B
           server,
           gpu.dependency.metrics)
       case other =>
-        wrapped.getWriter(other, mapId, context, metricsReporter)
+        new ThreadedWriter[K,V](
+          blockManager, handle.asInstanceOf[BypassMergeSortShuffleHandle[K,V]],
+          mapId, conf, metricsReporter, new RapidsShuffleExecutorComponents)
+        //wrapped.getWriter(other, mapId, context, metricsReporter)
     }
   }
 
@@ -440,6 +468,71 @@ trait VisibleShuffleManager {
   def initialize: Unit
 }
 
+
+class RapidsShuffleExecutorComponents extends ShuffleExecutorComponents with Logging with Arm {
+  override def initializeExecutor(
+    appId: String,
+    execId: String,
+    extraConfigs: java.util.Map[String, String]) = {
+    logWarning(s"initializing executor ${execId}")
+  }
+
+  override def createMapOutputWriter(
+    shuffleId: Int, mapTaskId: Long, numPartitions: Int): ShuffleMapOutputWriter = {
+    withResource(new NvtxRange("createMapOutputWriter", NvtxColor.YELLOW)) { _ =>
+      logWarning(s"get map output writer for ${shuffleId} ${mapTaskId} ${numPartitions}")
+      val bbos = new ByteArrayOutputStream()
+      val nvbbos = new OutputStream {
+        override def write(i: Int): Unit = {
+          withResource(new NvtxRange("write", NvtxColor.CYAN)) { _ =>
+          }
+        }
+      }
+      new ShuffleMapOutputWriter {
+        val partLengths = new ArrayBuffer[Long]()
+        override def getPartitionWriter(reducePartitionId: Int): ShufflePartitionWriter = {
+          withResource(new NvtxRange("getPartitionWriter", NvtxColor.ORANGE)) { _ =>
+            logInfo(s"getPartitionWriter ${reducePartitionId}")
+            partLengths.append(0L)
+            new ShufflePartitionWriter {
+              override def openStream(): OutputStream = {
+                withResource(new NvtxRange("open_stream", NvtxColor.GREEN)) { _ =>
+                  logWarning(s"opening stream for ${reducePartitionId}")
+                  nvbbos
+                }
+              }
+
+              override def getNumBytesWritten: Long = {
+                withResource(new NvtxRange("getNumBytesWritten", NvtxColor.DARK_GREEN)) { _ =>
+                  bbos.size()
+                }
+              }
+            }
+          }
+        }
+
+        def commitAllPartitions(checksums: Array[Long]): MapOutputCommitMessage = {
+          withResource(new NvtxRange("commit", NvtxColor.BLUE)) { _ =>
+            logInfo(s"wrote ${bbos.size()} bytes")
+            logWarning(s"commit all partitions for ${shuffleId}_${mapTaskId}_${numPartitions}")
+            MapOutputCommitMessage.of(partLengths.toArray)
+          }
+        }
+
+        def commitAllPartitions(): MapOutputCommitMessage = {
+          withResource(new NvtxRange("commit", NvtxColor.BLUE)) { _ =>
+            logWarning(s"commit all partitions for ${shuffleId}_${mapTaskId}_${numPartitions}")
+            MapOutputCommitMessage.of(partLengths.toArray)
+          }
+        }
+
+        override def abort(error: Throwable): Unit = {
+        }
+      }
+    }
+  }
+}
+
 /**
  * A simple proxy wrapper allowing to delay loading of the
  * real implementation to a later point when ShimLoader
@@ -448,55 +541,11 @@ trait VisibleShuffleManager {
  * @param conf
  * @param isDriver
  */
-class RapidsShuffleDataIO(conf: SparkConf) extends ShuffleDataIO with Logging {
+class RapidsShuffleDataIO(conf: SparkConf) extends ShuffleDataIO with Logging with Arm {
 
   override def executor: ShuffleExecutorComponents = {
     logWarning("getting ShuffleExecutorComponents")
-    new ShuffleExecutorComponents {
-      override def initializeExecutor(
-        appId: String, 
-        execId: String, 
-        extraConfigs: java.util.Map[String, String]) = {
-        logWarning(s"initializing executor ${execId}")
-      }
-
-      override def createMapOutputWriter(
-          shuffleId: Int, mapTaskId: Long, numPartitions: Int): ShuffleMapOutputWriter = {
-        logWarning(s"get map output writer for ${shuffleId} ${mapTaskId} ${numPartitions}")
-        new ShuffleMapOutputWriter {
-          val partLengths = new ArrayBuffer[Long]()
-          override def getPartitionWriter(reducePartitionId: Int): ShufflePartitionWriter = {
-            logInfo(s"getPartitionWriter ${reducePartitionId}")
-            partLengths.append(0L)
-            new ShufflePartitionWriter {
-              val bbos = new ByteArrayOutputStream()
-              override def openStream(): OutputStream = {
-                throw new IllegalStateException("where is it")
-                logWarning(s"opening stream for ${reducePartitionId}")
-                bbos
-              }
-              override def getNumBytesWritten: Long = {
-                logInfo(s"wrote ${bbos.size()} bytes")
-                bbos.size()
-              }
-            }
-          }
-
-          def commitAllPartitions(checksums: Array[Long]): MapOutputCommitMessage = {
-            logWarning(s"commit all partitions for ${shuffleId}_${mapTaskId}_${numPartitions}")
-            MapOutputCommitMessage.of(partLengths.toArray)
-          }
-
-          def commitAllPartitions(): MapOutputCommitMessage = {
-            logWarning(s"commit all partitions for ${shuffleId}_${mapTaskId}_${numPartitions}")
-            MapOutputCommitMessage.of(partLengths.toArray)
-          }
-
-          override def abort(error: Throwable): Unit = {
-          }
-        }
-      }
-    }
+    new RapidsShuffleExecutorComponents()
   }
 
   override def driver: ShuffleDriverComponents = {
