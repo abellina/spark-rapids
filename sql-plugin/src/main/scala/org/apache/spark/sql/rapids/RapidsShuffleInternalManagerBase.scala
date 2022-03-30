@@ -17,6 +17,7 @@
 package org.apache.spark.sql.rapids
 
 import java.io.{ByteArrayOutputStream, OutputStream}
+import java.util.concurrent.{Callable, Executors, Future}
 
 import ai.rapids.cudf.{NvtxColor, NvtxRange}
 import com.nvidia.spark.rapids._
@@ -37,6 +38,8 @@ import org.apache.spark.sql.execution.metric.SQLMetric
 import org.apache.spark.sql.rapids.shims.GpuShuffleBlockResolver
 import org.apache.spark.sql.vectorized.ColumnarBatch
 import org.apache.spark.storage._
+
+import scala.collection.mutable
 
 class GpuShuffleHandle[K, V](
     val wrapped: ShuffleHandle,
@@ -74,6 +77,7 @@ object RapidsShuffleInternalManagerBase extends Logging {
     case gh: GpuShuffleHandle[_, _] => gh.wrapped
     case other => other
   }
+  lazy val pool = Executors.newWorkStealingPool(4)
 }
 
 class ThreadedWriter[K, V](
@@ -86,17 +90,49 @@ class ThreadedWriter[K, V](
   extends org.apache.spark.shuffle.sort.BypassMergeSortShuffleWriter[K, V](
     blockManager, handle, mapId,
     sparkConf, writeMetrics, shuffleExecutorComponents) {
+
+  var myMapStatus: Option[MapStatus] = None
+  var fs: Array[FileSegment] = null
+
   override def write(records: Iterator[Product2[K, V]]): Unit = {
     val nvtxRange = new NvtxRange("ThreadedWriter.write", NvtxColor.RED)
-    records.foreach(x => {
-      val r2 = new NvtxRange("Draining records..", NvtxColor.ORANGE)
-      r2.close()
+    val serializer = handle.dependency.serializer.newInstance()
+    val writer = shuffleExecutorComponents.createMapOutputWriter(
+      handle.shuffleId, mapId, handle.dependency.partitioner.numPartitions)
+    val writers = new mutable.HashMap[Int, DiskBlockObjectWriter]()
+    (0 until handle.dependency.partitioner.numPartitions).map { i =>
+      val r1 = new NvtxRange("creating blocks and writers", NvtxColor.GREEN)
+      val (blockId, file) = blockManager.diskBlockManager.createTempShuffleBlock()
+      writers.put(i, blockManager.getDiskWriter(
+        blockId, file, serializer, 4 * 1024, writeMetrics))
+      r1.close()
+    }
+    val futures: Iterator[Future[Unit]] = records.map (x => {
+      RapidsShuffleInternalManagerBase.pool.submit(() => {
+        val r2 = new NvtxRange("Draining records..", NvtxColor.ORANGE)
+        writers(handle.dependency.partitioner.getPartition(x._1)).write(x._1, x._2)
+        r2.close()
+      })
     })
+    futures.foreach(_.get)
+
+    val r3 = new NvtxRange("committing...", NvtxColor.RED)
+    (0 until handle.dependency.partitioner.numPartitions).foreach { part =>
+      val segment = writers(part).commitAndGet()
+      val file = segment.file
+      val w = writer.getPartitionWriter(part)
+      if (file.exists()) {
+        writePartitionedDataWithStream(file, w)
+      }
+    }
+    val lengths = writer.commitAllPartitions().getPartitionLengths
+    myMapStatus = Some(MapStatus(blockManager.shuffleServerId, lengths, mapId))
+    r3.close()
     nvtxRange.close()
   }
 
   override def stop(success: Boolean): Option[MapStatus] = {
-    None
+    myMapStatus
   }
 }
 
@@ -358,6 +394,9 @@ abstract class RapidsShuffleInternalManagerBase(conf: SparkConf, val isDriver: B
     }
   }
 
+  lazy val execComponents: Option[ShuffleExecutorComponents] =
+    Some(SortShuffleManager.loadShuffleExecutorComponents(conf))
+
   override def getWriter[K, V](
       handle: ShuffleHandle,
       mapId: Long,
@@ -378,8 +417,7 @@ abstract class RapidsShuffleInternalManagerBase(conf: SparkConf, val isDriver: B
       case other =>
         new ThreadedWriter[K,V](
           blockManager, handle.asInstanceOf[BypassMergeSortShuffleHandle[K,V]],
-          mapId, conf, metricsReporter, new RapidsShuffleExecutorComponents)
-        //wrapped.getWriter(other, mapId, context, metricsReporter)
+          mapId, conf, metricsReporter, execComponents.get)
     }
   }
 
