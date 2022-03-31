@@ -86,10 +86,10 @@ class ThreadedWriter[K, V](
     mapId: Long,
     sparkConf: SparkConf,
     writeMetrics: ShuffleWriteMetricsReporter,
-    shuffleExecutorComponents: ShuffleExecutorComponents)
-  extends org.apache.spark.shuffle.sort.BypassMergeSortShuffleWriter[K, V](
-    blockManager, handle, mapId,
-    sparkConf, writeMetrics, shuffleExecutorComponents) {
+    shuffleExecutorComponents: ShuffleExecutorComponents) extends ShuffleWriter [K,V]{
+  //extends org.apache.spark.shuffle.sort.BypassMergeSortShuffleWriter[K, V](
+  //  blockManager, handle, mapId,
+  //  sparkConf, writeMetrics, shuffleExecutorComponents) {
 
   var myMapStatus: Option[MapStatus] = None
   var fs: Array[FileSegment] = null
@@ -129,6 +129,14 @@ class ThreadedWriter[K, V](
     myMapStatus = Some(MapStatus(blockManager.shuffleServerId, lengths, mapId))
     r3.close()
     nvtxRange.close()
+  }
+
+  def writePartitionedDataWithStream(file: java.io.File, writer: ShufflePartitionWriter): Unit = {
+    val in = new java.io.FileInputStream(file)
+    var os: OutputStream = writer.openStream()
+    org.apache.spark.util.Utils.copyStream(in, os, false, false)
+    os.close()
+    in.close()
   }
 
   override def stop(success: Boolean): Option[MapStatus] = {
@@ -394,8 +402,14 @@ abstract class RapidsShuffleInternalManagerBase(conf: SparkConf, val isDriver: B
     }
   }
 
-  lazy val execComponents: Option[ShuffleExecutorComponents] =
-    Some(SortShuffleManager.loadShuffleExecutorComponents(conf))
+  lazy val execComponents: Option[ShuffleExecutorComponents] = {
+    import scala.collection.JavaConverters._
+    val executorComponents = ShuffleDataIOUtils.loadShuffleDataIO(conf).executor()
+    // TODO: extra configs
+    executorComponents.initializeExecutor(
+      conf.getAppId, SparkEnv.get.executorId, Map.empty[String, String].asJava)
+    Some(executorComponents)
+  }
 
   override def getWriter[K, V](
       handle: ShuffleHandle,
