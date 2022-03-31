@@ -17,7 +17,7 @@
 package org.apache.spark.sql.rapids
 
 import java.io.{ByteArrayOutputStream, OutputStream}
-import java.util.concurrent.{Callable, Executors, Future}
+import java.util.concurrent.{Callable, ConcurrentHashMap, ExecutorService, Executors, Future, LinkedBlockingQueue}
 
 import ai.rapids.cudf.{NvtxColor, NvtxRange}
 import com.nvidia.spark.rapids._
@@ -77,7 +77,25 @@ object RapidsShuffleInternalManagerBase extends Logging {
     case gh: GpuShuffleHandle[_, _] => gh.wrapped
     case other => other
   }
-  lazy val pool = Executors.newWorkStealingPool(4)
+
+  val numPools = 4
+  lazy val taskQueue = new LinkedBlockingQueue[() => Unit]()
+
+  var pools: Seq[Future[Unit]] = Seq.empty
+
+  def startPools(): Unit = synchronized  {
+    if (pools.isEmpty) {
+      pools = (0 until numPools).map { _ =>
+        val p = Executors.newSingleThreadExecutor()
+        p.submit[Unit](() => {
+          while (true) {
+            val t = taskQueue.take()
+            t()
+          }
+        })
+      }
+    }
+  }
 }
 
 class ThreadedWriter[K, V](
@@ -86,7 +104,7 @@ class ThreadedWriter[K, V](
     mapId: Long,
     sparkConf: SparkConf,
     writeMetrics: ShuffleWriteMetricsReporter,
-    shuffleExecutorComponents: ShuffleExecutorComponents) extends ShuffleWriter [K,V]{
+    shuffleExecutorComponents: ShuffleExecutorComponents) extends ShuffleWriter [K,V] with Logging {
   //extends org.apache.spark.shuffle.sort.BypassMergeSortShuffleWriter[K, V](
   //  blockManager, handle, mapId,
   //  sparkConf, writeMetrics, shuffleExecutorComponents) {
@@ -96,6 +114,7 @@ class ThreadedWriter[K, V](
 
   override def write(records: Iterator[Product2[K, V]]): Unit = {
     val nvtxRange = new NvtxRange("ThreadedWriter.write", NvtxColor.RED)
+    RapidsShuffleInternalManagerBase.startPools()
     val serializer = handle.dependency.serializer.newInstance()
     val writer = shuffleExecutorComponents.createMapOutputWriter(
       handle.shuffleId, mapId, handle.dependency.partitioner.numPartitions)
@@ -107,14 +126,39 @@ class ThreadedWriter[K, V](
         blockId, file, serializer, 4 * 1024, writeMetrics))
       r1.close()
     }
-    val futures: Iterator[Future[Unit]] = records.map (x => {
-      RapidsShuffleInternalManagerBase.pool.submit(() => {
+
+    val doneQueue = new mutable.HashSet[Int]()
+    records.foreach (x => {
+      val part = handle.dependency.partitioner.getPartition(x._1)
+      doneQueue.add(part)
+      val myWriter = writers(part)
+      val key = x._1
+      val value = x._2
+
+      RapidsShuffleInternalManagerBase.taskQueue.offer(() => {
         val r2 = new NvtxRange("Draining records..", NvtxColor.ORANGE)
-        writers(handle.dependency.partitioner.getPartition(x._1)).write(x._1, x._2)
+        logInfo(s"writing ${key} and ${value}")
+        try {
+          myWriter.write(key, value)
+        } catch {
+          case e: Throwable => logError("Error writing", e)
+        }
+        logInfo(s"done writing ${key} and ${value}")
         r2.close()
+        doneQueue.synchronized {
+          doneQueue.remove(part)
+          doneQueue.notifyAll()
+        }
       })
     })
-    futures.foreach(_.get)
+
+    val r2a = new NvtxRange("waiting..", NvtxColor.PURPLE)
+    doneQueue.synchronized {
+      while(doneQueue.nonEmpty) {
+        doneQueue.wait()
+      }
+    }
+    r2a.close()
 
     val r3 = new NvtxRange("committing...", NvtxColor.RED)
     (0 until handle.dependency.partitioner.numPartitions).foreach { part =>
