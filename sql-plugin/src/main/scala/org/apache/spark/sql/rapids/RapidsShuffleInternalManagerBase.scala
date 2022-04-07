@@ -79,7 +79,7 @@ object RapidsShuffleInternalManagerBase extends Logging {
     case other => other
   }
 
-  val numPools = 16
+  val numPools = 32
   lazy val taskQueue = new LinkedBlockingQueue[() => Unit]()
 
   var pools: Seq[Future[Unit]] = Seq.empty
@@ -121,7 +121,8 @@ class ThreadedWriter[K, V](
       handle.shuffleId, mapId, handle.dependency.partitioner.numPartitions)
     val writers = new mutable.HashMap[Int, DiskBlockObjectWriter]()
     (0 until handle.dependency.partitioner.numPartitions).map { i =>
-      val r1 = new NvtxRange("creating blocks and writers", NvtxColor.GREEN)
+      logInfo(s"Creating writer for partition $i")
+      val r1 = new NvtxRange(s"creating writer", NvtxColor.GREEN)
       val (blockId, file) = blockManager.diskBlockManager.createTempShuffleBlock()
       writers.put(i, blockManager.getDiskWriter(
         blockId, file, serializer, 4 * 1024, writeMetrics))
@@ -133,6 +134,7 @@ class ThreadedWriter[K, V](
     val r = new NvtxRange("foreach", NvtxColor.DARK_GREEN)
     records.foreach (x => {
       val part = handle.dependency.partitioner.getPartition(x._1)
+      logInfo(s"Writing $part from ${TaskContext.get().taskAttemptId()}")
       doneQueue.add(part)
       scheduledWrites.incrementAndGet()
       val myWriter = writers(part)
@@ -144,7 +146,7 @@ class ThreadedWriter[K, V](
       }
 
       RapidsShuffleInternalManagerBase.taskQueue.offer(() => {
-        val r2 = new NvtxRange("Draining records..", NvtxColor.ORANGE)
+        val r2 = new NvtxRange("Draining", NvtxColor.ORANGE)
         if (key == null) {
           logWarning("NULL KEY??")
         } else {
