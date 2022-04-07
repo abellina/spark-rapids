@@ -17,6 +17,7 @@
 package org.apache.spark.sql.rapids
 
 import java.io.{ByteArrayOutputStream, OutputStream}
+import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.{Callable, ConcurrentHashMap, ExecutorService, Executors, Future, LinkedBlockingQueue}
 
 import ai.rapids.cudf.{NvtxColor, NvtxRange}
@@ -78,7 +79,7 @@ object RapidsShuffleInternalManagerBase extends Logging {
     case other => other
   }
 
-  val numPools = 4
+  val numPools = 16
   lazy val taskQueue = new LinkedBlockingQueue[() => Unit]()
 
   var pools: Seq[Future[Unit]] = Seq.empty
@@ -127,34 +128,50 @@ class ThreadedWriter[K, V](
       r1.close()
     }
 
+    val scheduledWrites = new AtomicLong(0L)
     val doneQueue = new mutable.HashSet[Int]()
+    val r = new NvtxRange("foreach", NvtxColor.DARK_GREEN)
     records.foreach (x => {
       val part = handle.dependency.partitioner.getPartition(x._1)
       doneQueue.add(part)
+      scheduledWrites.incrementAndGet()
       val myWriter = writers(part)
       val key = x._1
       val value = x._2
+      val cb = value.asInstanceOf[ColumnarBatch]
+      (0 until cb.numCols()).foreach {
+        c => cb.column(c).asInstanceOf[SlicedGpuColumnVector].getBase.incRefCount()
+      }
 
       RapidsShuffleInternalManagerBase.taskQueue.offer(() => {
         val r2 = new NvtxRange("Draining records..", NvtxColor.ORANGE)
-        logInfo(s"writing ${key} and ${value}")
-        try {
-          myWriter.write(key, value)
-        } catch {
-          case e: Throwable => logError("Error writing", e)
+        if (key == null) {
+          logWarning("NULL KEY??")
+        } else {
+          logInfo(s"writing ${key} and ${value}")
+          try {
+            myWriter.write(key, value)
+          } catch {
+            case e: Throwable => logError("Error writing", e)
+          }
+          (0 until cb.numCols()).foreach {
+            c => cb.column(c).asInstanceOf[SlicedGpuColumnVector].close()
+          }
         }
         logInfo(s"done writing ${key} and ${value}")
         r2.close()
         doneQueue.synchronized {
           doneQueue.remove(part)
+          scheduledWrites.decrementAndGet()
           doneQueue.notifyAll()
         }
       })
     })
+    r.close()
 
     val r2a = new NvtxRange("waiting..", NvtxColor.PURPLE)
     doneQueue.synchronized {
-      while(doneQueue.nonEmpty) {
+      while(scheduledWrites.get() > 0) {
         doneQueue.wait()
       }
     }
