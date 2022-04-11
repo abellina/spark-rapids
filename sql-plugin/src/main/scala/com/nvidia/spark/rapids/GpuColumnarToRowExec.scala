@@ -366,12 +366,7 @@ object GpuColumnarToRowExec {
         // This number includes the 1-bit validity per column, but doesn't include padding.
         // We are being conservative by only allowing 100M columns until we feel the need to
         // increase this number
-        output.length <= 100000000 &&
-        // Work around {@link https://github.com/rapidsai/cudf/issues/10569}, where CUDF JNI
-        // acceleration of column->row transposition produces incorrect results on certain
-        // GPU architectures.
-        // Check that the accelerated transpose works correctly on the current CUDA device.
-        isAcceleratedTransposeSupported) {
+        output.length <= 100000000) {
       (batches: Iterator[ColumnarBatch]) => {
         // UnsafeProjection is not serializable so do it on the executor side
         val toUnsafe = UnsafeProjection.create(output, output)
