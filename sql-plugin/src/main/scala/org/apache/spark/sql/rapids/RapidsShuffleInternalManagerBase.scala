@@ -19,6 +19,7 @@ package org.apache.spark.sql.rapids
 import java.io.{ByteArrayOutputStream, OutputStream}
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.{Callable, ConcurrentHashMap, ExecutorService, Executors, Future, LinkedBlockingQueue}
+import java.util.Random
 
 import ai.rapids.cudf.{NvtxColor, NvtxRange}
 import com.nvidia.spark.rapids._
@@ -79,21 +80,33 @@ object RapidsShuffleInternalManagerBase extends Logging {
     case other => other
   }
 
-  val numPools = 32
-  lazy val taskQueue = new LinkedBlockingQueue[() => Unit]()
+  class Pool {
+    val tasks = new LinkedBlockingQueue[() => Unit]()
+    val p = Executors.newSingleThreadExecutor()
+    def offer(task: () => Unit): Unit = {
+      tasks.offer(task)
+    }
+    val exec = p.submit[Unit](() => {
+      while (true) {
+        val t = tasks.take()
+        t()
+      }
+    })
+  }
 
-  var pools: Seq[Future[Unit]] = Seq.empty
+  val numPools = 128
+
+  lazy val pools = new mutable.HashMap[Int, Pool]()
+
+  def queueTask(part: Int, task: () => Unit): Unit = {
+    logDebug(s"$part: queueing task at ${part % numPools}")
+    pools.get(part % numPools).get.offer(task)
+  }
 
   def startPools(): Unit = synchronized  {
     if (pools.isEmpty) {
-      pools = (0 until numPools).map { _ =>
-        val p = Executors.newSingleThreadExecutor()
-        p.submit[Unit](() => {
-          while (true) {
-            val t = taskQueue.take()
-            t()
-          }
-        })
+      (0 until numPools).foreach { i  =>
+        pools.put(i, new Pool())
       }
     }
   }
@@ -113,57 +126,70 @@ class ThreadedWriter[K, V](
   var myMapStatus: Option[MapStatus] = None
   var fs: Array[FileSegment] = null
 
+  val rng = new Random(0)
+
   override def write(records: Iterator[Product2[K, V]]): Unit = {
     val nvtxRange = new NvtxRange("ThreadedWriter.write", NvtxColor.RED)
     RapidsShuffleInternalManagerBase.startPools()
     val serializer = handle.dependency.serializer.newInstance()
+
     val writer = shuffleExecutorComponents.createMapOutputWriter(
-      handle.shuffleId, mapId, handle.dependency.partitioner.numPartitions)
-    val writers = new mutable.HashMap[Int, DiskBlockObjectWriter]()
+      handle.shuffleId,
+      mapId,
+      handle.dependency.partitioner.numPartitions)
+
+    val writers = new mutable.HashMap[Int, (Int, DiskBlockObjectWriter)]()
+    // per reduce partition id
     (0 until handle.dependency.partitioner.numPartitions).map { i =>
-      logInfo(s"Creating writer for partition $i")
+      logDebug(s"Creating writer for partition $i")
       val r1 = new NvtxRange(s"creating writer", NvtxColor.GREEN)
       val (blockId, file) = blockManager.diskBlockManager.createTempShuffleBlock()
-      writers.put(i, blockManager.getDiskWriter(
-        blockId, file, serializer, 4 * 1024, writeMetrics))
+      writers.put(i, (Math.abs(rng.nextInt()), blockManager.getDiskWriter(
+        blockId, file, serializer, 4 * 1024, writeMetrics)))
       r1.close()
     }
 
     val scheduledWrites = new AtomicLong(0L)
-    val doneQueue = new mutable.HashSet[Int]()
+    val doneQueue = new ArrayBuffer[FileSegment]()
     val r = new NvtxRange("foreach", NvtxColor.DARK_GREEN)
     records.foreach (x => {
-      val part = handle.dependency.partitioner.getPartition(x._1)
-      logInfo(s"Writing $part from ${TaskContext.get().taskAttemptId()}")
-      doneQueue.add(part)
+      val reducePartitionId = handle.dependency.partitioner.getPartition(x._1)
+      logDebug(s"Writing $reducePartitionId from ${TaskContext.get().taskAttemptId()}")
       scheduledWrites.incrementAndGet()
-      val myWriter = writers(part)
+      val (slot, myWriter) = writers(reducePartitionId)
       val key = x._1
       val value = x._2
-      val cb = value.asInstanceOf[ColumnarBatch]
-      (0 until cb.numCols()).foreach {
-        c => cb.column(c).asInstanceOf[SlicedGpuColumnVector].getBase.incRefCount()
+      val cb = if (value.isInstanceOf[ColumnarBatch]) {
+        val cb = value.asInstanceOf[ColumnarBatch]
+        (0 until cb.numCols()).foreach {
+          c => cb.column(c).asInstanceOf[SlicedGpuColumnVector].getBase.incRefCount()
+        }
+        cb
+      } else {
+        null
       }
 
-      RapidsShuffleInternalManagerBase.taskQueue.offer(() => {
+      // per reducer partition
+      RapidsShuffleInternalManagerBase.queueTask(slot, () => {
         val r2 = new NvtxRange("Draining", NvtxColor.ORANGE)
         if (key == null) {
           logWarning("NULL KEY??")
         } else {
-          logInfo(s"writing ${key} and ${value}")
+          logDebug(s"writing ${key} and ${value}")
           try {
             myWriter.write(key, value)
           } catch {
             case e: Throwable => logError("Error writing", e)
           }
-          (0 until cb.numCols()).foreach {
-            c => cb.column(c).asInstanceOf[SlicedGpuColumnVector].close()
+          if (cb != null) {
+            (0 until cb.numCols()).foreach {
+              c => cb.column(c).asInstanceOf[SlicedGpuColumnVector].close()
+            }
           }
         }
-        logInfo(s"done writing ${key} and ${value}")
+        logDebug(s"done writing ${key} and ${value}")
         r2.close()
         doneQueue.synchronized {
-          doneQueue.remove(part)
           scheduledWrites.decrementAndGet()
           doneQueue.notifyAll()
         }
@@ -180,16 +206,27 @@ class ThreadedWriter[K, V](
     r2a.close()
 
     val r3 = new NvtxRange("committing...", NvtxColor.RED)
-    (0 until handle.dependency.partitioner.numPartitions).foreach { part =>
-      val segment = writers(part).commitAndGet()
+    val r4 = new NvtxRange("commit_and_get", NvtxColor.ORANGE)
+    // per reduce partition
+    val partWriters = (0 until handle.dependency.partitioner.numPartitions).map { reducePartitionId =>
+      val segment = writers(reducePartitionId)._2.commitAndGet()
       val file = segment.file
-      val w = writer.getPartitionWriter(part)
+      (reducePartitionId, file, writer.getPartitionWriter(reducePartitionId))
+    }
+    r4.close()
+
+
+    val r5 = new NvtxRange("write partitioned by map", NvtxColor.GREEN)
+    partWriters.foreach { case (_, file, partWriter) =>
       if (file.exists()) {
-        writePartitionedDataWithStream(file, w)
+        writePartitionedDataWithStream(file, partWriter)
       }
     }
+    r5.close()
+    val r6 = new NvtxRange("commit all", NvtxColor.DARK_GREEN)
     val lengths = writer.commitAllPartitions().getPartitionLengths
     myMapStatus = Some(MapStatus(blockManager.shuffleServerId, lengths, mapId))
+    r6.close()
     r3.close()
     nvtxRange.close()
   }
@@ -197,6 +234,7 @@ class ThreadedWriter[K, V](
   def writePartitionedDataWithStream(file: java.io.File, writer: ShufflePartitionWriter): Unit = {
     val in = new java.io.FileInputStream(file)
     var os: OutputStream = writer.openStream()
+    logDebug(s"Writing segment from ${file} to ${writer}")
     org.apache.spark.util.Utils.copyStream(in, os, false, false)
     os.close()
     in.close()
@@ -318,7 +356,7 @@ class RapidsCachingWriter[K, V](
         } else {
           blockManager.shuffleServerId
         }
-        logInfo(s"Done caching shuffle success=$success, server_id=$shuffleServerId, "
+        logDebug(s"Done caching shuffle success=$success, server_id=$shuffleServerId, "
             + s"map_id=$mapId, sizes=${sizes.mkString(",")}")
         Some(MapStatus(shuffleServerId, sizes, mapId))
       }
@@ -628,7 +666,6 @@ class RapidsShuffleExecutorComponents extends ShuffleExecutorComponents with Log
 
         def commitAllPartitions(checksums: Array[Long]): MapOutputCommitMessage = {
           withResource(new NvtxRange("commit", NvtxColor.BLUE)) { _ =>
-            logInfo(s"wrote ${bbos.size()} bytes")
             logWarning(s"commit all partitions for ${shuffleId}_${mapTaskId}_${numPartitions}")
             MapOutputCommitMessage.of(partLengths.toArray)
           }
