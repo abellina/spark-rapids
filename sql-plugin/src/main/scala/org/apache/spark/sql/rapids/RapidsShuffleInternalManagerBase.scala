@@ -126,6 +126,8 @@ class ThreadedWriter[K, V](
   var myMapStatus: Option[MapStatus] = None
   var fs: Array[FileSegment] = null
 
+
+  var stillWriting: Boolean = true
   val rng = new Random(0)
 
   override def write(records: Iterator[Product2[K, V]]): Unit = {
@@ -152,13 +154,11 @@ class ThreadedWriter[K, V](
     val scheduledWrites = new AtomicLong(0L)
     val doneQueue = new ArrayBuffer[FileSegment]()
     val r = new NvtxRange("foreach", NvtxColor.DARK_GREEN)
-    records.foreach (x => {
-      val reducePartitionId = handle.dependency.partitioner.getPartition(x._1)
+    records.foreach { case (key, value) =>
+      val reducePartitionId = handle.dependency.partitioner.getPartition(key)
       logDebug(s"Writing $reducePartitionId from ${TaskContext.get().taskAttemptId()}")
       scheduledWrites.incrementAndGet()
       val (slot, myWriter) = writers(reducePartitionId)
-      val key = x._1
-      val value = x._2
       val cb = if (value.isInstanceOf[ColumnarBatch]) {
         val cb = value.asInstanceOf[ColumnarBatch]
         (0 until cb.numCols()).foreach {
@@ -229,6 +229,9 @@ class ThreadedWriter[K, V](
     r6.close()
     r3.close()
     nvtxRange.close()
+    stillWriting.synchronized {
+      stillWriting = false
+    }
   }
 
   def writePartitionedDataWithStream(file: java.io.File, writer: ShufflePartitionWriter): Unit = {
@@ -241,6 +244,11 @@ class ThreadedWriter[K, V](
   }
 
   override def stop(success: Boolean): Option[MapStatus] = {
+    stillWriting.synchronized { 
+      if (stillWriting) {
+        throw new IllegalStateException("still writing")
+      }
+    }
     myMapStatus
   }
 }
