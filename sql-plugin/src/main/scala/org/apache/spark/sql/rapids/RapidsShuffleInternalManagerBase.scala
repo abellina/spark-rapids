@@ -115,7 +115,7 @@ object RapidsShuffleInternalManagerBase extends Logging {
   }
 }
 
-class ThreadedUnsafeThreadedWriter[K: ClassTag, V: ClassTag](
+class ThreadedUnsafeThreadedWriter[K, V](
     blockManager: BlockManager,
     taskMemoryManager: TaskMemoryManager,
     handle: SerializedShuffleHandle[K, V],
@@ -143,6 +143,7 @@ class ThreadedUnsafeThreadedWriter[K: ClassTag, V: ClassTag](
 
   val serBuffer = new MyByteArrayOutputStream(4*1024*1024)
   val serOutputStream = serializer.serializeStream(serBuffer)
+  //private val OBJECT_CLASS_TAG: ClassTag[K] = ClassTag[Object]()
 
   override def write(records: Iterator[Product2[K, V]]): Unit = {
     records.foreach { record =>
@@ -156,8 +157,8 @@ class ThreadedUnsafeThreadedWriter[K: ClassTag, V: ClassTag](
     val key = record._1
     val partitionId = partitioner.getPartition(key)
     serBuffer.reset()
-    serOutputStream.writeKey(key)
-    serOutputStream.writeValue(record._2)
+    serOutputStream.writeKey[Object](key.asInstanceOf[Object])
+    serOutputStream.writeValue[Object](record._2.asInstanceOf[Object])
     serOutputStream.flush
     val serializedRecordSize = serBuffer.size
     sorter.insertRecord(serBuffer.getBuf, 0 /*FIXME: Platform.BYTE_ARRAY_OFFSET*/,
@@ -780,10 +781,8 @@ abstract class RapidsShuffleInternalManagerBase(conf: SparkConf, val isDriver: B
   }
 
   override def getWriter[K, V](
-      handle: ShuffleHandle,
-      mapId: Long,
-      context: TaskContext,
-      metricsReporter: ShuffleWriteMetricsReporter): ShuffleWriter[K, V] = {
+    handle: ShuffleHandle, mapId: Long, context: TaskContext, 
+    metricsReporter: ShuffleWriteMetricsReporter): ShuffleWriter[K, V] = {
     handle match {
       case gpu: GpuShuffleHandle[_, _] =>
         registerGpuShuffle(handle.shuffleId)
@@ -797,13 +796,18 @@ abstract class RapidsShuffleInternalManagerBase(conf: SparkConf, val isDriver: B
           server,
           gpu.dependency.metrics)
       case other => other match {
-        case bpsh: BypassMergeSortShuffleHandle[K, V] =>
+        case _: BypassMergeSortShuffleHandle[_, _] =>
           new ThreadedWriter[K, V](
-            blockManager, bpsh, mapId, conf, metricsReporter, execComponents.get)
-        case serh: SerializedShuffleHandle[K, V] =>
+            blockManager, 
+            other.asInstanceOf[BypassMergeSortShuffleHandle[K, V]], mapId, 
+            conf, 
+            metricsReporter, 
+            execComponents.get)
+        case _: SerializedShuffleHandle[_, _] =>
           new ThreadedUnsafeThreadedWriter[K, V](
             blockManager, TaskContext.get().taskMemoryManager(),
-            serh, mapId, conf, metricsReporter, execComponents.get)
+            other.asInstanceOf[SerializedShuffleHandle[K, V]], 
+            mapId, conf, metricsReporter, execComponents.get)
       }
     }
   }
