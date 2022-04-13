@@ -41,6 +41,7 @@ import org.apache.spark.sql.execution.metric.SQLMetric
 import org.apache.spark.sql.rapids.shims.GpuShuffleBlockResolver
 import org.apache.spark.sql.vectorized.ColumnarBatch
 import org.apache.spark.storage._
+import org.apache.spark.unsafe.Platform
 
 import java.util
 import scala.collection.mutable
@@ -153,6 +154,7 @@ class ThreadedUnsafeThreadedWriter[K, V](
   }
 
   private def insertRecordIntoSorter(record: Product2[K, V]): Unit = {
+    val nv = new NvtxRange("writing  to stream", NvtxColor.RED)
     // per thread ? => so N SerOutputStreams
     val key = record._1
     val partitionId = partitioner.getPartition(key)
@@ -160,9 +162,16 @@ class ThreadedUnsafeThreadedWriter[K, V](
     serOutputStream.writeKey[Object](key.asInstanceOf[Object])
     serOutputStream.writeValue[Object](record._2.asInstanceOf[Object])
     serOutputStream.flush
+    nv.close()
+
+    val nv2 = new NvtxRange("insert into sorter", NvtxColor.ORANGE)
     val serializedRecordSize = serBuffer.size
-    sorter.insertRecord(serBuffer.getBuf, 0 /*FIXME: Platform.BYTE_ARRAY_OFFSET*/,
-      serializedRecordSize, partitionId)
+    sorter.insertRecord(
+      serBuffer.getBuf,
+      Platform.BYTE_ARRAY_OFFSET,
+      serializedRecordSize,
+      partitionId)
+    nv2.close()
   }
 
   private var mapStatus: Option[MapStatus] = None
