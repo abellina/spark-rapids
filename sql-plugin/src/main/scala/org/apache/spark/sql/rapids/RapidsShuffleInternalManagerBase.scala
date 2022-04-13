@@ -796,10 +796,15 @@ abstract class RapidsShuffleInternalManagerBase(conf: SparkConf, val isDriver: B
           RapidsBufferCatalog.getDeviceStorage,
           server,
           gpu.dependency.metrics)
-      case other =>
-        new ThreadedWriter[K,V](
-          blockManager, handle.asInstanceOf[BypassMergeSortShuffleHandle[K,V]],
-          mapId, conf, metricsReporter, execComponents.get)
+      case other => other match {
+        case bpsh: BypassMergeSortShuffleHandle[K, V] =>
+          new ThreadedWriter[K, V](
+            blockManager, bpsh, mapId, conf, metricsReporter, execComponents.get)
+        case serh: SerializedShuffleHandle[K, V] =>
+          new ThreadedUnsafeThreadedWriter[K, V](
+            blockManager, TaskContext.get().taskMemoryManager(),
+            serh, mapId, conf, metricsReporter, execComponents.get)
+      }
     }
   }
 
