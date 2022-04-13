@@ -132,8 +132,10 @@ class ThreadedUnsafeThreadedWriter[K, V](
   val serializer = dep.serializer.newInstance()
   val partitioner = dep.partitioner
   val taskContext = TaskContext.get
+
   val sorter = new RapidsShuffleExternalSorter(
-    taskMemoryManager, blockManager, taskContext, 4*1024*1024,
+    taskMemoryManager, blockManager, taskContext,
+    sparkConf.getSizeAsBytes("spark.shuffle.sort.initialBufferSize").toInt,
     numPartitions, sparkConf, writeMetrics)
 
   /** Subclass of ByteArrayOutputStream that exposes `buf` directly. */
@@ -142,15 +144,21 @@ class ThreadedUnsafeThreadedWriter[K, V](
     def getBuf: Array[Byte] = buf
   }
 
-  val serBuffer = new MyByteArrayOutputStream(4*1024*1024)
+  val serBuffer = new MyByteArrayOutputStream(1024*1024)
   val serOutputStream = serializer.serializeStream(serBuffer)
   //private val OBJECT_CLASS_TAG: ClassTag[K] = ClassTag[Object]()
 
   override def write(records: Iterator[Product2[K, V]]): Unit = {
-    records.foreach { record =>
-      insertRecordIntoSorter(record)
+    try {
+      records.foreach { record =>
+        insertRecordIntoSorter(record)
+      }
+      closeAndWriteOutput()
+    } finally {
+      if (sorter != null) {
+        sorter.cleanupResources()
+      }
     }
-    closeAndWriteOutput()
   }
 
   private def insertRecordIntoSorter(record: Product2[K, V]): Unit = {
@@ -177,7 +185,7 @@ class ThreadedUnsafeThreadedWriter[K, V](
   private var mapStatus: Option[MapStatus] = None
 
   private def closeAndWriteOutput(): Unit = {
-    //val spills = sorter.closeAndGetSpills()
+    val spills = sorter.closeAndGetSpills()
     //val partitionLengths = mergeSpills(spills)
     //mapStatus = Some(MapStatus(blockManager.shuffleServerId, partitionLengths, mapId))
   }
