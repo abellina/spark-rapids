@@ -33,15 +33,17 @@ import org.apache.spark.internal.config.SHUFFLE_UNSAFE_FAST_MERGE_ENABLE
 import org.apache.spark.io.{CompressionCodec, NioBufferedFileInputStream}
 import org.apache.spark.memory.TaskMemoryManager
 import org.apache.spark.network.buffer.ManagedBuffer
+import org.apache.spark.network.util.LimitedInputStream
 import org.apache.spark.scheduler.MapStatus
 import org.apache.spark.shuffle.{ShuffleWriter, _}
 import org.apache.spark.shuffle.api._
-import org.apache.spark.shuffle.sort.{BypassMergeSortShuffleHandle, RapidsShuffleExternalSorter, SerializedShuffleHandle, SortShuffleManager, UnsafeShuffleWriter}
+import org.apache.spark.shuffle.sort.{BypassMergeSortShuffleHandle, RapidsShuffleExternalSorter, RapidsSpillInfo, SerializedShuffleHandle, SortShuffleManager, UnsafeShuffleWriter}
 import org.apache.spark.sql.execution.metric.SQLMetric
 import org.apache.spark.sql.rapids.shims.GpuShuffleBlockResolver
 import org.apache.spark.sql.vectorized.ColumnarBatch
 import org.apache.spark.storage._
 import org.apache.spark.unsafe.Platform
+import org.sparkproject.guava.io.{ByteStreams, Closeables}
 
 import java.util
 import scala.collection.mutable
@@ -123,7 +125,8 @@ class ThreadedUnsafeThreadedWriter[K, V](
     mapId: Long,
     sparkConf: SparkConf,
     writeMetrics: ShuffleWriteMetricsReporter,
-    shuffleExecutorComponents: ShuffleExecutorComponents) extends ShuffleWriter [K,V] with Logging {
+    shuffleExecutorComponents: ShuffleExecutorComponents)
+   extends ShuffleWriter [K,V] with Logging {
 
   val numPartitions = handle.dependency.partitioner.numPartitions
   // TODO: check that numPartitions <= MAX_SHUFFLE_OUTPUT_PARTITIONS_FOR_SERIALIZED_MODE
@@ -185,71 +188,103 @@ class ThreadedUnsafeThreadedWriter[K, V](
 
   private def closeAndWriteOutput(): Unit = {
     val spills = sorter.closeAndGetSpills()
-    //val partitionLengths = mergeSpills(spills)
+    val partitionLengths = mergeSpills(spills)
     //mapStatus = Some(MapStatus(blockManager.shuffleServerId, partitionLengths, mapId))
   }
+
+  /**
+   * Merge zero or more spill files together, choosing the fastest merging strategy based on the
+   * number of spills and the IO compression codec.
+   *
+   * @return the partition lengths in the merged file.
+   */
+  private def mergeSpills(spills: Array[RapidsSpillInfo]): Array[Long] = {
+    var partitionLengths: Array[Long] = null
+    if (spills.length == 0) {
+      val mapWriter =
+        shuffleExecutorComponents.createMapOutputWriter(
+          shuffleId, mapId, partitioner.numPartitions)
+      return mapWriter.commitAllPartitions().getPartitionLengths
+    }
+    else if (spills.length == 1) {
+      //val maybeSingleFileWriter =
+      //  shuffleExecutorComponents.createSingleFileMapOutputWriter(shuffleId, mapId)
+      //if (maybeSingleFileWriter.isPresent) {
+      //  // Here, we don't need to perform any metrics updates because the bytes written to this
+      //  // output file would have already been counted as shuffle bytes written.
+      //  partitionLengths = spills(0).partitionLengths
+      //  // FIXME: logInfo("Merge shuffle spills for mapId {} with length {}", mapId, partitionLengths.length)
+      //  //  maybeSingleFileWriter.get.transferMapSpillFile(
+      //  //    spills(0).file, partitionLengths, sorter.getChecksums)
+      //}
+      partitionLengths = mergeSpillsUsingStandardWriter(spills)
+    }
+    else partitionLengths = mergeSpillsUsingStandardWriter(spills)
+    partitionLengths
+  }
+
   val transferToEnabled = true
 
-  //private def mergeSpillsUsingStandardWriter(spills: Array[SpillInfo]): Array[Long] = {
-  //  var partitionLengths: Array[Long] = null
-  //  val compressionEnabled: Boolean = true
-  //  val compressionCodec = CompressionCodec.createCodec(sparkConf)
-  //  val fastMergeEnabled: Boolean = sparkConf.get(SHUFFLE_UNSAFE_FAST_MERGE_ENABLE)
-  //  val fastMergeIsSupported =
-  //    !(compressionEnabled) ||
-  //      CompressionCodec.supportsConcatenationOfSerializedStreams(compressionCodec)
-  //  logInfo("supports compressed concatenated merge")
+  private def mergeSpillsUsingStandardWriter(spills: Array[RapidsSpillInfo]): Array[Long] = {
+    var partitionLengths: Array[Long] = null
+    val compressionEnabled: Boolean = true
+    val compressionCodec = CompressionCodec.createCodec(sparkConf)
+    val fastMergeEnabled: Boolean = sparkConf.get(SHUFFLE_UNSAFE_FAST_MERGE_ENABLE)
+    val fastMergeIsSupported =
+      !(compressionEnabled) ||
+        CompressionCodec.supportsConcatenationOfSerializedStreams(compressionCodec)
+    logInfo("supports compressed concatenated merge")
 
-  //  val encryptionEnabled: Boolean = blockManager.serializerManager.encryptionEnabled
-  //  val mapWriter: ShuffleMapOutputWriter =
-  //    shuffleExecutorComponents.createMapOutputWriter(
-  //      shuffleId, mapId, partitioner.numPartitions)
+    val encryptionEnabled: Boolean = blockManager.serializerManager.encryptionEnabled
+    val mapWriter: ShuffleMapOutputWriter =
+      shuffleExecutorComponents.createMapOutputWriter(
+        shuffleId, mapId, partitioner.numPartitions)
 
-  //  try { // There are multiple spills to merge, so none of these spill files' lengths were counted
-  //    // towards our shuffle write count or shuffle write time. If we use the slow merge path,
-  //    // then the final output file's size won't necessarily be equal to the sum of the spill
-  //    // files' sizes. To guard against this case, we look at the output file's actual size when
-  //    // computing shuffle bytes written.
-  //    //
-  //    // We allow the individual merge methods to report their own IO times since different merge
-  //    // strategies use different IO techniques.  We count IO during merge towards the shuffle
-  //    // write time, which appears to be consistent with the "not bypassing merge-sort" branch in
-  //    // ExternalSorter.
-  //    if (fastMergeEnabled && fastMergeIsSupported) {
-  //      // Compression is disabled or we are using an IO compression codec that supports
-  //      // decompression of concatenated compressed streams, so we can perform a fast spill merge
-  //      // that doesn't need to interpret the spilled bytes.
-  //      if (transferToEnabled && !(encryptionEnabled)) {
-  //        logInfo("Using transferTo-based fast merge")
-  //        mergeSpillsWithTransferTo(spills, mapWriter)
-  //      } else {
-  //        logInfo("Using fileStream-based fast merge")
-  //        mergeSpillsWithFileStream(spills, mapWriter, null)
-  //      }
-  //    }
-  //    else {
-  //      logInfo("Using slow merge")
-  //      mergeSpillsWithFileStream(spills, mapWriter, compressionCodec)
-  //    }
-  //    // When closing an UnsafeShuffleExternalSorter that has already spilled once but also has
-  //    // in-memory records, we write out the in-memory records to a file but do not count that
-  //    // final write as bytes spilled (instead, it's accounted as shuffle write). The merge needs
-  //    // to be counted as shuffle write, but this will lead to double-counting of the final
-  //    // SpillInfo's bytes.
-  //    writeMetrics.decBytesWritten(spills(spills.length - 1).file.length)
-  //    partitionLengths = mapWriter.commitAllPartitions().getPartitionLengths
-  //  } catch {
-  //    case e: Exception =>
-  //      try mapWriter.abort(e)
-  //      catch {
-  //        case e2: Exception =>
-  //          logWarning("Failed to abort writing the map output.", e2)
-  //          e.addSuppressed(e2)
-  //      }
-  //      throw e
-  //  }
-  //  return partitionLengths
-  //}
+    try { // There are multiple spills to merge, so none of these spill files' lengths were counted
+      // towards our shuffle write count or shuffle write time. If we use the slow merge path,
+      // then the final output file's size won't necessarily be equal to the sum of the spill
+      // files' sizes. To guard against this case, we look at the output file's actual size when
+      // computing shuffle bytes written.
+      //
+      // We allow the individual merge methods to report their own IO times since different merge
+      // strategies use different IO techniques.  We count IO during merge towards the shuffle
+      // write time, which appears to be consistent with the "not bypassing merge-sort" branch in
+      // ExternalSorter.
+      if (fastMergeEnabled && fastMergeIsSupported) {
+        // Compression is disabled or we are using an IO compression codec that supports
+        // decompression of concatenated compressed streams, so we can perform a fast spill merge
+        // that doesn't need to interpret the spilled bytes.
+        //if (transferToEnabled && !(encryptionEnabled)) {
+        //  logInfo("Using transferTo-based fast merge")
+        //  mergeSpillsWithTransferTo(spills, mapWriter)
+        //} else {
+          logInfo("Using fileStream-based fast merge")
+          mergeSpillsWithFileStream(spills, mapWriter, null)
+       // }
+      }
+      else {
+        logInfo("Using slow merge")
+        mergeSpillsWithFileStream(spills, mapWriter, compressionCodec)
+      }
+      // When closing an UnsafeShuffleExternalSorter that has already spilled once but also has
+      // in-memory records, we write out the in-memory records to a file but do not count that
+      // final write as bytes spilled (instead, it's accounted as shuffle write). The merge needs
+      // to be counted as shuffle write, but this will lead to double-counting of the final
+      // SpillInfo's bytes.
+      writeMetrics.decBytesWritten(spills(spills.length - 1).file.length)
+      partitionLengths = mapWriter.commitAllPartitions().getPartitionLengths
+    } catch {
+      case e: Exception =>
+        try mapWriter.abort(e)
+        catch {
+          case e2: Exception =>
+            logWarning("Failed to abort writing the map output.", e2)
+            e.addSuppressed(e2)
+        }
+        throw e
+    }
+    partitionLengths
+  }
 
   /**
    * Merges spill files using Java FileStreams. This code path is typically slower than
@@ -267,70 +302,70 @@ class ThreadedUnsafeThreadedWriter[K, V](
    * @param compressionCodec the IO compression codec, or null if shuffle compression is disabled.
    * @return the partition lengths in the merged file.
    */
-  class SpillInfo (val numPartitions: Int, val file: File, val blockId: TempShuffleBlockId) {
-    val partitionLengths = new Array[Long](numPartitions)
-  }
 
-  //private def mergeSpillsWithFileStream(
-  //    spills: Array[SpillInfo],
-  //    mapWriter: ShuffleMapOutputWriter,
-  //    compressionCodec: CompressionCodec): Unit = {
-  //  logDebug("Merge shuffle spills with FileStream for mapId {}", mapId)
-  //  val numPartitions: Int = partitioner.numPartitions
-  //  val spillInputStreams: Array[InputStream] = new Array[InputStream](spills.length)
-  //  var threwException: Boolean = true
-  //  try {
-  //    for (i <- 0 until spills.length) {
-  //      spillInputStreams(i) =
-  //        new NioBufferedFileInputStream(spills(i).file, inputBufferSizeInBytes)
-  //      // Only convert the partitionLengths when debug level is enabled.
-  //      logDebug("Partition lengths for mapId {} in Spill {}: {}",
-  //        mapId, i, util.Arrays.toString(spills(i).partitionLengths))
-  //    }
-  //    for (partition <- 0 until numPartitions) {
-  //      var copyThrewException: Boolean = true
-  //      val writer: ShufflePartitionWriter = mapWriter.getPartitionWriter(partition)
-  //      var partitionOutput: OutputStream = writer.openStream
-  //      try {
-  //        partitionOutput = new TimeTrackingOutputStream(writeMetrics, partitionOutput)
-  //        partitionOutput = blockManager.serializerManager.wrapForEncryption(partitionOutput)
-  //        if (compressionCodec != null) {
-  //          partitionOutput = compressionCodec.compressedOutputStream(partitionOutput)
-  //        }
-  //        for (i <- 0 until spills.length) {
-  //          val partitionLengthInSpill: Long = spills(i).partitionLengths(partition)
-  //          if (partitionLengthInSpill > 0) {
-  //            var partitionInputStream: InputStream = null
-  //            var copySpillThrewException: Boolean = true
-  //            try {
-  //              partitionInputStream = new LimitedInputStream(spillInputStreams(i), partitionLengthInSpill, false)
-  //              partitionInputStream = blockManager.serializerManager.wrapForEncryption(partitionInputStream)
-  //              if (compressionCodec != null) {
-  //                partitionInputStream = compressionCodec.compressedInputStream(partitionInputStream)
-  //              }
-  //              ByteStreams.copy(partitionInputStream, partitionOutput)
-  //              copySpillThrewException = false
-  //            } finally {
-  //              Closeables.close(partitionInputStream, copySpillThrewException)
-  //            }
-  //          }
-  //        }
-  //        copyThrewException = false
-  //      } finally {
-  //        Closeables.close(partitionOutput, copyThrewException)
-  //      }
-  //      val numBytesWritten: Long = writer.getNumBytesWritten
-  //      writeMetrics.incBytesWritten(numBytesWritten)
-  //    }
-  //    threwException = false
-  //  } finally {
-  //    // To avoid masking exceptions that caused us to prematurely enter the finally block, only
-  //    // throw exceptions during cleanup if threwException == false.
-  //    for (stream <- spillInputStreams) {
-  //      Closeables.close(stream, threwException)
-  //    }
-  //  }
-  //}
+  private def mergeSpillsWithFileStream(
+      spills: Array[RapidsSpillInfo],
+      mapWriter: ShuffleMapOutputWriter,
+      compressionCodec: CompressionCodec): Unit = {
+    logDebug(s"Merge shuffle spills with FileStream for mapId $mapId")
+    val numPartitions: Int = partitioner.numPartitions
+    val spillInputStreams: Array[InputStream] = new Array[InputStream](spills.length)
+    var threwException: Boolean = true
+    try {
+      for (i <- 0 until spills.length) {
+        spillInputStreams(i) =
+          new NioBufferedFileInputStream(spills(i).file, 1024*1024)
+        // Only convert the partitionLengths when debug level is enabled.
+        //logDebug("Partition lengths for mapId {} in Spill {}: {}",
+        //  mapId, i, util.Arrays.toString(spills(i).partitionLengths))
+      }
+      for (partition <- 0 until numPartitions) {
+        var copyThrewException: Boolean = true
+        val writer: ShufflePartitionWriter = mapWriter.getPartitionWriter(partition)
+        var partitionOutput: OutputStream = writer.openStream
+        try {
+          partitionOutput = new TimeTrackingOutputStream(writeMetrics, partitionOutput)
+          partitionOutput = blockManager.serializerManager.wrapForEncryption(partitionOutput)
+          if (compressionCodec != null) {
+            partitionOutput = compressionCodec.compressedOutputStream(partitionOutput)
+          }
+          for (i <- 0 until spills.length) {
+            val partitionLengthInSpill: Long = spills(i).partitionLengths(partition)
+            if (partitionLengthInSpill > 0) {
+              var partitionInputStream: InputStream = null
+              var copySpillThrewException: Boolean = true
+              try {
+                partitionInputStream =
+                  new LimitedInputStream(spillInputStreams(i), partitionLengthInSpill, false)
+                partitionInputStream =
+                  blockManager.serializerManager.wrapForEncryption(partitionInputStream)
+                if (compressionCodec != null) {
+                  partitionInputStream =
+                    compressionCodec.compressedInputStream(partitionInputStream)
+                }
+                ByteStreams.copy(partitionInputStream, partitionOutput)
+                copySpillThrewException = false
+              } finally {
+                Closeables.close(partitionInputStream, copySpillThrewException)
+              }
+            }
+          }
+          copyThrewException = false
+        } finally {
+          Closeables.close(partitionOutput, copyThrewException)
+        }
+        val numBytesWritten: Long = writer.getNumBytesWritten
+        writeMetrics.incBytesWritten(numBytesWritten)
+      }
+      threwException = false
+    } finally {
+      // To avoid masking exceptions that caused us to prematurely enter the finally block, only
+      // throw exceptions during cleanup if threwException == false.
+      for (stream <- spillInputStreams) {
+        Closeables.close(stream, threwException)
+      }
+    }
+  }
 
   ///**
   // * Merges spill files by using NIO's transferTo to concatenate spill partitions' bytes.

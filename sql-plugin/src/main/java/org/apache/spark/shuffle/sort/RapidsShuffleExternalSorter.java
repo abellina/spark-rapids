@@ -21,7 +21,6 @@ import javax.annotation.Nullable;
 import java.io.File;
 import java.io.IOException;
 import java.util.LinkedList;
-import java.util.zip.Checksum;
 
 import org.apache.spark.SparkException;
 import scala.Tuple2;
@@ -98,7 +97,7 @@ public class RapidsShuffleExternalSorter extends MemoryConsumer {
      */
     private final LinkedList<MemoryBlock> allocatedPages = new LinkedList<>();
 
-    private final LinkedList<SpillInfo> spills = new LinkedList<>();
+    private final LinkedList<RapidsSpillInfo> spills = new LinkedList<>();
 
     /** Peak memory used by this sorter so far, in bytes. **/
     private long peakMemoryUsedBytes;
@@ -180,7 +179,7 @@ public class RapidsShuffleExternalSorter extends MemoryConsumer {
                 blockManager.diskBlockManager().createTempShuffleBlock();
         final File file = spilledFileInfo._2();
         final TempShuffleBlockId blockId = spilledFileInfo._1();
-        final SpillInfo spillInfo = new SpillInfo(numPartitions, file, blockId);
+        final RapidsSpillInfo spillInfo = new RapidsSpillInfo(numPartitions, file, blockId);
 
         // Unfortunately, we need a serializer instance in order to construct a DiskBlockObjectWriter.
         // Our write path doesn't actually use this serializer (since we end up calling the `write()`
@@ -329,7 +328,7 @@ public class RapidsShuffleExternalSorter extends MemoryConsumer {
             inMemSorter.free();
             inMemSorter = null;
         }
-        for (SpillInfo spill : spills) {
+        for (RapidsSpillInfo spill : spills) {
             if (spill.file.exists() && !spill.file.delete()) {
                 logger.error("Unable to delete spill file {}", spill.file.getPath());
             }
@@ -425,7 +424,7 @@ public class RapidsShuffleExternalSorter extends MemoryConsumer {
      * @return metadata for the spill files written by this sorter. If no records were ever inserted
      *         into this sorter, then this will return an empty array.
      */
-    public SpillInfo[] closeAndGetSpills() throws IOException {
+    public RapidsSpillInfo[] closeAndGetSpills() throws IOException {
         if (inMemSorter != null) {
             // Do not count the final file towards the spill count.
             writeSortedFile(true);
@@ -433,7 +432,7 @@ public class RapidsShuffleExternalSorter extends MemoryConsumer {
             inMemSorter.free();
             inMemSorter = null;
         }
-        return spills.toArray(new SpillInfo[spills.size()]);
+        return spills.toArray(new RapidsSpillInfo[spills.size()]);
     }
 
 }
