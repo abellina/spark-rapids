@@ -134,8 +134,7 @@ class ThreadedUnsafeThreadedWriter[K, V](
   val taskContext = TaskContext.get
 
   val sorter = new RapidsShuffleExternalSorter(
-    taskMemoryManager, blockManager, taskContext,
-    sparkConf.getSizeAsBytes("spark.shuffle.sort.initialBufferSize").toInt,
+    taskMemoryManager, blockManager, taskContext, 4096,
     numPartitions, sparkConf, writeMetrics)
 
   /** Subclass of ByteArrayOutputStream that exposes `buf` directly. */
