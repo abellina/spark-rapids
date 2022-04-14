@@ -314,7 +314,7 @@ class ThreadedUnsafeThreadedWriter[K, V](
     try {
       for (i <- 0 until spills.length) {
         spillInputStreams(i) =
-          new NioBufferedFileInputStream(spills(i).file, 1024*1024)
+          new NioBufferedFileInputStream(spills(i).file, (1.4*1024).toInt)
         // Only convert the partitionLengths when debug level is enabled.
         //logDebug("Partition lengths for mapId {} in Spill {}: {}",
         //  mapId, i, util.Arrays.toString(spills(i).partitionLengths))
