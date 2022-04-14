@@ -467,7 +467,9 @@ class ThreadedWriter[K, V](
     val scheduledWrites = new AtomicLong(0L)
     val doneQueue = new ArrayBuffer[FileSegment]()
     val r = new NvtxRange("foreach", NvtxColor.DARK_GREEN)
-    records.foreach { case (key, value) =>
+    records.foreach { record =>
+      val key = record._1
+      val value = record._2
       val reducePartitionId = handle.dependency.partitioner.getPartition(key)
       logDebug(s"Writing $reducePartitionId from ${TaskContext.get().taskAttemptId()}")
       scheduledWrites.incrementAndGet()
