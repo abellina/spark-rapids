@@ -143,6 +143,7 @@ class ThreadedUnsafeThreadedWriter[K, V](
   /** Subclass of ByteArrayOutputStream that exposes `buf` directly. */
   class MyByteArrayOutputStream(override val size: Int)
     extends ByteArrayOutputStream(size) {
+    def getSize() = super.size()
     def getBuf: Array[Byte] = buf
   }
 
@@ -175,7 +176,7 @@ class ThreadedUnsafeThreadedWriter[K, V](
     nv.close()
 
     val nv2 = new NvtxRange("insert into sorter", NvtxColor.ORANGE)
-    val serializedRecordSize = serBuffer.size
+    val serializedRecordSize = serBuffer.getSize()
     logInfo(s"size: ${serializedRecordSize}")
     sorter.insertRecord(
       serBuffer.getBuf,
