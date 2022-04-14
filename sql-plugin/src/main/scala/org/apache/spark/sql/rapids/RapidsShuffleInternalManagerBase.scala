@@ -171,11 +171,12 @@ class ThreadedUnsafeThreadedWriter[K, V](
     serBuffer.reset()
     serOutputStream.writeKey[Object](key.asInstanceOf[Object])
     serOutputStream.writeValue[Object](record._2.asInstanceOf[Object])
-    serOutputStream.flush
+    serOutputStream.flush()
     nv.close()
 
     val nv2 = new NvtxRange("insert into sorter", NvtxColor.ORANGE)
     val serializedRecordSize = serBuffer.size
+    logInfo(s"size: ${serializedRecordSize}")
     sorter.insertRecord(
       serBuffer.getBuf,
       Platform.BYTE_ARRAY_OFFSET,
@@ -259,7 +260,7 @@ class ThreadedUnsafeThreadedWriter[K, V](
         //  mergeSpillsWithTransferTo(spills, mapWriter)
         //} else {
           logInfo("Using fileStream-based fast merge")
-          mergeSpillsWithFileStream(spills, mapWriter, null)
+          mergeSpillsWithFileStream(spills, mapWriter, compressionCodec)
        // }
       }
       else {
@@ -307,7 +308,7 @@ class ThreadedUnsafeThreadedWriter[K, V](
       spills: Array[RapidsSpillInfo],
       mapWriter: ShuffleMapOutputWriter,
       compressionCodec: CompressionCodec): Unit = {
-    logDebug(s"Merge shuffle spills with FileStream for mapId $mapId")
+    logInfo(s"Merge shuffle spills with FileStream for mapId $mapId")
     val numPartitions: Int = partitioner.numPartitions
     val spillInputStreams: Array[InputStream] = new Array[InputStream](spills.length)
     var threwException: Boolean = true
