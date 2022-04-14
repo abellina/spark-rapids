@@ -189,7 +189,7 @@ class ThreadedUnsafeThreadedWriter[K, V](
   private def closeAndWriteOutput(): Unit = {
     val spills = sorter.closeAndGetSpills()
     val partitionLengths = mergeSpills(spills)
-    //mapStatus = Some(MapStatus(blockManager.shuffleServerId, partitionLengths, mapId))
+    mapStatus = Some(MapStatus(blockManager.shuffleServerId, partitionLengths, mapId))
   }
 
   /**
