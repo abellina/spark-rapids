@@ -21,7 +21,6 @@ import java.nio.channels.FileChannel
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.{Callable, ConcurrentHashMap, ExecutorService, Executors, Future, LinkedBlockingQueue}
 import java.util.{Optional, Random}
-
 import ai.rapids.cudf.{NvtxColor, NvtxRange}
 import com.nvidia.spark.rapids._
 import com.nvidia.spark.rapids.format.TableMeta
@@ -46,9 +45,9 @@ import org.apache.spark.sql.vectorized.ColumnarBatch
 import org.apache.spark.storage._
 import org.apache.spark.unsafe.Platform
 import org.sparkproject.guava.io.{ByteStreams, Closeables}
-import java.util
 
-import org.apache.spark.serializer.{Serializer, SerializerManager}
+import java.util
+import org.apache.spark.serializer.{Serializer, SerializerInstance, SerializerManager}
 import org.apache.spark.util.collection.ExternalSorter
 import org.apache.spark.util.{CompletionIterator, Utils}
 
@@ -111,7 +110,7 @@ object RapidsShuffleInternalManagerBase extends Logging {
   lazy val pools = new mutable.HashMap[Int, Pool]()
 
   def queueTask(part: Int, task: () => Unit): Unit = {
-    logDebug(s"$part: queueing task at ${part % numPools}")
+    logWarning(s"$part: queueing task at ${part % numPools}")
     pools.get(part % numPools).get.offer(task)
   }
 
@@ -540,13 +539,13 @@ class ThreadedWriter[K, V](
     val r5 = new NvtxRange("write partitioned by map", NvtxColor.GREEN)
     partWriters.foreach { case (_, file, partWriter) =>
       if (file.exists()) {
-        val maybeOutputChannel: Optional[WritableByteChannelWrapper] =
-          partWriter.openChannelWrapper()
-        if (maybeOutputChannel.isPresent) {
-          writePartitionedDataWithChannel(file, maybeOutputChannel.get())
-        } else {
+        //val maybeOutputChannel: Optional[WritableByteChannelWrapper] =
+        //  partWriter.openChannelWrapper()
+        //if (maybeOutputChannel.isPresent) {
+        //  writePartitionedDataWithChannel(file, maybeOutputChannel.get())
+        // } else {
           writePartitionedDataWithStream(file, partWriter)
-        }
+        //}
       }
     }
     r5.close()
@@ -629,9 +628,69 @@ class ThreadedReader[K, C](
     doBatchFetch
   }
 
+  class ParallelDeserializerIterator(
+      streams: Iterator[(BlockId, InputStream)],
+      serializer: Serializer) extends Iterator[(Any, Any)] {
+    val inFlight = new AtomicLong(0L)
+    val queued = new LinkedBlockingQueue[(Any, Any)]
+
+    override def hasNext: Boolean = queued.synchronized {
+      streams.hasNext || !queued.isEmpty || inFlight.get() > 0
+    }
+
+    val serializers =
+      (0 until RapidsShuffleInternalManagerBase.numPools)
+        .map(_ => serializer.newInstance()).toArray
+
+    def deserialize(serializerInstance: SerializerInstance, n: (BlockId, InputStream)): Unit = {
+      val deserStream = serializerInstance.deserializeStream(n._2)
+      queued.synchronized {
+        // could be really bad if consumer is slow
+        try {
+          val deserIter = deserStream.asKeyValueIterator
+          while (deserIter.hasNext) {
+            queued.offer(deserIter.next)
+          }
+          inFlight.decrementAndGet()
+          queued.notifyAll()
+        } catch {
+          case t: Throwable => 
+            logError("error", t)
+            throw t
+        }
+      }
+    }
+
+    override def next(): (Any, Any) = queued.synchronized {
+      require(hasNext, "called next on an empty iterator")
+      RapidsShuffleInternalManagerBase.startPools()
+      // queue all of it?
+      while(streams.hasNext) {
+        inFlight.incrementAndGet()
+        val n = streams.next()
+        val blockIdHashCode = n._1.hashCode()
+        val slot = Math.abs(blockIdHashCode % RapidsShuffleInternalManagerBase.numPools)
+        val tc = TaskContext.get()
+        RapidsShuffleInternalManagerBase.queueTask(slot, () => {
+          // needed bc this is a different thread
+          TaskContext.setTaskContext(tc)
+          deserialize(serializers(slot), n)
+        })
+      }
+      logInfo("done queuing tasks")
+      while (queued.isEmpty) {
+        queued.wait()
+      }
+      val res = queued.take()
+      logInfo(s"Returning ${res}")
+      res
+    }
+  }
+
+
   /** Read the combined key-values for this reduce task */
   override def read(): Iterator[Product2[K, C]] = {
-    val wrappedStreams = new ShuffleBlockFetcherIterator(
+    val wrappedStreams: Iterator[(BlockId, InputStream)] = new ShuffleBlockFetcherIterator(
       context,
       blockManager.blockStoreClient,
       blockManager,
@@ -647,15 +706,21 @@ class ThreadedReader[K, C](
       readMetrics,
       fetchContinuousBlocksInBatch).toCompletionIterator
 
-    val serializerInstance = dep.serializer.newInstance()
+    //val serializerInstance = dep.serializer.newInstance()
+
+    // need a "ParallelizedDesrializerIterator"
+    // it will submit deserialization tasks in parallel and queue results
+    // until the caller is ready to call next
+
+    val recordIter = new ParallelDeserializerIterator(wrappedStreams, dep.serializer)
 
     // Create a key/value iterator for each stream
-    val recordIter = wrappedStreams.flatMap { case (blockId, wrappedStream) =>
-      // Note: the asKeyValueIterator below wraps a key/value iterator inside of a
-      // NextIterator. The NextIterator makes sure that close() is called on the
-      // underlying InputStream when all records have been read.
-      serializerInstance.deserializeStream(wrappedStream).asKeyValueIterator
-    }
+    //val recordIter: Iterator[(Any, Any)] = wrappedStreams.flatMap { case (blockId, wrappedStream) =>
+    //  // Note: the asKeyValueIterator below wraps a key/value iterator inside of a
+    //  // NextIterator. The NextIterator makes sure that close() is called on the
+    //  // underlying InputStream when all records have been read.
+    //  serializerInstance.deserializeStream(wrappedStream).asKeyValueIterator
+    //}
 
     // Update the context task metrics for each record read.
     val metricIter = CompletionIterator[(Any, Any), Iterator[(Any, Any)]](
