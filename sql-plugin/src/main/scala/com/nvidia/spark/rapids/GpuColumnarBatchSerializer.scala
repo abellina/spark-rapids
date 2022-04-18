@@ -145,11 +145,11 @@ private class GpuColumnarBatchSerializerInstance(dataSize: GpuMetric) extends Se
         new Iterator[(Int, ColumnarBatch)] with Arm {
           var toBeReturned: Option[ColumnarBatch] = None
 
-          TaskContext.get().addTaskCompletionListener[Unit]((_: TaskContext) => {
-            toBeReturned.foreach(_.close())
-            toBeReturned = None
-            dIn.close()
-          })
+         //TaskContext.get().addTaskCompletionListener[Unit]((_: TaskContext) => {
+         // toBeReturned.foreach(_.close())
+         // toBeReturned = None
+         // dIn.close()
+         //})
 
           def tryReadNext(): Option[ColumnarBatch] = {
             withResource(new NvtxRange("Read Batch", NvtxColor.YELLOW)) { _ =>
@@ -167,7 +167,8 @@ private class GpuColumnarBatchSerializerInstance(dataSize: GpuMetric) extends Se
                 }
               } else {
                 // at EOF
-                dIn.close()
+                // TODO: this causes the issue!!!
+                //dIn.close()
                 None
               }
             }

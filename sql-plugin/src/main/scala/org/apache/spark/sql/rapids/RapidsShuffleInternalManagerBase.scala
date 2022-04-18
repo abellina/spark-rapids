@@ -25,6 +25,7 @@ import ai.rapids.cudf.{NvtxColor, NvtxRange}
 import com.nvidia.spark.rapids._
 import com.nvidia.spark.rapids.format.TableMeta
 import com.nvidia.spark.rapids.shuffle.{RapidsShuffleRequestHandler, RapidsShuffleServer, RapidsShuffleTransport}
+import org.apache.spark.executor.TaskMetrics
 
 import scala.collection.mutable.{ArrayBuffer, ListBuffer}
 import org.apache.spark.shuffle.api.metadata.MapOutputCommitMessage
@@ -33,8 +34,10 @@ import org.apache.spark.internal.{Logging, config}
 import org.apache.spark.internal.config.SHUFFLE_UNSAFE_FAST_MERGE_ENABLE
 import org.apache.spark.io.{CompressionCodec, NioBufferedFileInputStream}
 import org.apache.spark.memory.TaskMemoryManager
+import org.apache.spark.metrics.source.Source
 import org.apache.spark.network.buffer.ManagedBuffer
 import org.apache.spark.network.util.LimitedInputStream
+import org.apache.spark.resource.ResourceInformation
 import org.apache.spark.scheduler.MapStatus
 import org.apache.spark.shuffle.{ShuffleWriter, _}
 import org.apache.spark.shuffle.api._
@@ -49,8 +52,9 @@ import org.sparkproject.guava.io.{ByteStreams, Closeables}
 import java.util
 import org.apache.spark.serializer.{Serializer, SerializerInstance, SerializerManager}
 import org.apache.spark.util.collection.ExternalSorter
-import org.apache.spark.util.{CompletionIterator, Utils}
+import org.apache.spark.util.{AccumulatorV2, CompletionIterator, TaskCompletionListener, TaskFailureListener, Utils}
 
+import java.nio.ByteBuffer
 import scala.collection.mutable
 import scala.reflect.{ClassTag, classTag}
 
@@ -110,7 +114,7 @@ object RapidsShuffleInternalManagerBase extends Logging {
   lazy val pools = new mutable.HashMap[Int, Pool]()
 
   def queueTask(part: Int, task: () => Unit): Unit = {
-    logWarning(s"$part: queueing task at ${part % numPools}")
+    //logWarning(s"$part: queueing task at ${part % numPools}")
     pools.get(part % numPools).get.offer(task)
   }
 
@@ -644,45 +648,43 @@ class ThreadedReader[K, C](
 
     def deserialize(serializerInstance: SerializerInstance, n: (BlockId, InputStream)): Unit = {
       val deserStream = serializerInstance.deserializeStream(n._2)
-      queued.synchronized {
-        // could be really bad if consumer is slow
-        try {
-          val deserIter = deserStream.asKeyValueIterator
+      // could be really bad if consumer is slow
+      try {
+        val deserIter = deserStream.asKeyValueIterator
+        // queued and inflight need to be updated in the lock?
+        queued.synchronized {
           while (deserIter.hasNext) {
-            queued.offer(deserIter.next)
+            queued.add(deserIter.next())
           }
           inFlight.decrementAndGet()
-          queued.notifyAll()
-        } catch {
-          case t: Throwable => 
-            logError("error", t)
-            throw t
         }
+      } catch {
+        case t: Throwable =>
+          logError("error", t)
+          throw t
       }
     }
 
-    override def next(): (Any, Any) = queued.synchronized {
-      require(hasNext, "called next on an empty iterator")
-      RapidsShuffleInternalManagerBase.startPools()
-      // queue all of it?
-      while(streams.hasNext) {
-        inFlight.incrementAndGet()
-        val n = streams.next()
-        val blockIdHashCode = n._1.hashCode()
-        val slot = Math.abs(blockIdHashCode % RapidsShuffleInternalManagerBase.numPools)
-        val tc = TaskContext.get()
-        RapidsShuffleInternalManagerBase.queueTask(slot, () => {
-          // needed bc this is a different thread
-          TaskContext.setTaskContext(tc)
-          deserialize(serializers(slot), n)
-        })
-      }
-      logInfo("done queuing tasks")
-      while (queued.isEmpty) {
-        queued.wait()
+    override def next(): (Any, Any) = {
+      if (streams.hasNext) {
+        queued.synchronized {
+          require(hasNext, "called next on an empty iterator")
+          RapidsShuffleInternalManagerBase.startPools()
+
+          // queue all of it?
+          while (streams.hasNext) {
+            inFlight.incrementAndGet()
+            val n = streams.next()
+            val slot = Math.abs(n._1.hashCode() % RapidsShuffleInternalManagerBase.numPools)
+            RapidsShuffleInternalManagerBase.queueTask(slot, () => {
+              deserialize(serializers(slot), n)
+            })
+          }
+        }
       }
       val res = queued.take()
-      logInfo(s"Returning ${res}")
+      logDebug(
+        s"done queuing tasks: ${queued.size()} -- ${inFlight.get} -- ${streams.hasNext} --- hasNext? ${hasNext}")
       res
     }
   }
@@ -690,12 +692,24 @@ class ThreadedReader[K, C](
 
   /** Read the combined key-values for this reduce task */
   override def read(): Iterator[Product2[K, C]] = {
+    val myStreamWrapper =
+      (block: BlockId, inputStream: InputStream) => {
+        val wrapped = serializerManager.wrapStream(block, inputStream)
+        new InputStream {
+          override def read() = wrapped.read()
+          override def close() = {
+            logInfo("IS attempted to close...")
+          }
+        }
+      }
+
     val wrappedStreams: Iterator[(BlockId, InputStream)] = new ShuffleBlockFetcherIterator(
       context,
       blockManager.blockStoreClient,
       blockManager,
       blocksByAddress,
-      serializerManager.wrapStream,
+      myStreamWrapper,
+      //serializerManager.wrapStream,
       // Note: we use getSizeAsMb when no suffix is provided for backwards compatibility
       SparkEnv.get.conf.get(config.REDUCER_MAX_SIZE_IN_FLIGHT) * 1024 * 1024,
       SparkEnv.get.conf.get(config.REDUCER_MAX_REQS_IN_FLIGHT),
@@ -704,7 +718,7 @@ class ThreadedReader[K, C](
       SparkEnv.get.conf.get(config.SHUFFLE_DETECT_CORRUPT),
       SparkEnv.get.conf.get(config.SHUFFLE_DETECT_CORRUPT_MEMORY),
       readMetrics,
-      fetchContinuousBlocksInBatch).toCompletionIterator
+      fetchContinuousBlocksInBatch)//.toCompletionIterator
 
     //val serializerInstance = dep.serializer.newInstance()
 
