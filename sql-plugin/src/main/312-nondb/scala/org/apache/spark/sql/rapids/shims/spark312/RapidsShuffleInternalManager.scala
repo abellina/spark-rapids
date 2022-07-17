@@ -21,6 +21,7 @@ import org.apache.spark.shuffle._
 import org.apache.spark.shuffle.api.{ShuffleExecutorComponents, ShuffleMapOutputWriter}
 import org.apache.spark.shuffle.sort.BypassMergeSortShuffleHandle
 import org.apache.spark.sql.rapids.{ProxyRapidsShuffleInternalManagerBase, RapidsShuffleInternalManagerBase, RapidsShuffleThreadedWriter, RapidsShuffleWriterShimHelper}
+import org.apache.spark.sql.rapids.shims.RapidsShuffleThreadedWriter312
 import org.apache.spark.storage.BlockManager
 
 /**
@@ -41,21 +42,6 @@ class RapidsShuffleInternalManager(conf: SparkConf, isDriver: Boolean)
       metrics: ShuffleReadMetricsReporter): ShuffleReader[K, C] = {
     getReaderInternal(handle, startMapIndex, endMapIndex, startPartition, endPartition, context,
       metrics)
-  }
-
-  class RapidsShuffleThreadedWriter312[K, V](
-    blockManager: BlockManager,
-    handle: BypassMergeSortShuffleHandle[K, V],
-    mapId: Long,
-    sparkConf: SparkConf,
-    writeMetrics: ShuffleWriteMetricsReporter,
-    shuffleExecutorComponents: ShuffleExecutorComponents)
-      extends RapidsShuffleThreadedWriter[K, V](blockManager, handle, mapId, sparkConf,
-        writeMetrics, shuffleExecutorComponents) {
-
-    override def commitAllPartitions(writer: ShuffleMapOutputWriter): Array[Long] = {
-      writer.commitAllPartitions().getPartitionLengths
-    }
   }
 
   private lazy val env = SparkEnv.get

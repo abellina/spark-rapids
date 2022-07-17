@@ -16,10 +16,11 @@
 
 package org.apache.spark.sql.rapids.shims.spark313
 
-import org.apache.spark.{SparkConf, TaskContext}
+import org.apache.spark.{SparkConf, SparkEnv, TaskContext}
 import org.apache.spark.shuffle._
 import org.apache.spark.shuffle.sort.BypassMergeSortShuffleHandle
 import org.apache.spark.sql.rapids.{ProxyRapidsShuffleInternalManagerBase, RapidsShuffleInternalManagerBase}
+import org.apache.spark.sql.rapids.shims.RapidsShuffleThreadedWriter312
 
 /**
  * A shuffle manager optimized for the RAPIDS Plugin For Apache Spark.
@@ -39,6 +40,9 @@ class RapidsShuffleInternalManager(conf: SparkConf, isDriver: Boolean)
     getReaderInternal(handle, startMapIndex, endMapIndex, startPartition, endPartition, context,
       metrics)
   }
+
+  private lazy val env = SparkEnv.get
+  private lazy val blockManager = env.blockManager
 
   override def getWriter[K, V](
       handle: ShuffleHandle,

@@ -23,6 +23,7 @@ import org.apache.spark.shuffle._
 import org.apache.spark.shuffle.api.{ShuffleExecutorComponents, ShuffleMapOutputWriter}
 import org.apache.spark.shuffle.sort.BypassMergeSortShuffleHandle
 import org.apache.spark.sql.rapids.{GpuShuffleHandle, ProxyRapidsShuffleInternalManagerBase, RapidsCachingWriter, RapidsShuffleInternalManagerBase, RapidsShuffleThreadedWriter, RapidsShuffleWriterShimHelper}
+import org.apache.spark.sql.rapids.shims.RapidsShuffleThreadedWriter320
 import org.apache.spark.storage.{BlockManager, DiskBlockObjectWriter}
 
 /**
@@ -43,38 +44,6 @@ class RapidsShuffleInternalManager(conf: SparkConf, isDriver: Boolean)
       metrics: ShuffleReadMetricsReporter): ShuffleReader[K, C] = {
     getReaderInternal(handle, startMapIndex, endMapIndex, startPartition, endPartition, context,
       metrics)
-  }
-
-  class RapidsShuffleThreadedWriter320[K, V](
-    blockManager: BlockManager,
-    handle: BypassMergeSortShuffleHandle[K, V],
-    mapId: Long,
-    sparkConf: SparkConf,
-    writeMetrics: ShuffleWriteMetricsReporter,
-    shuffleExecutorComponents: ShuffleExecutorComponents)
-      extends RapidsShuffleThreadedWriter[K, V](blockManager, handle, mapId, sparkConf,
-        writeMetrics, shuffleExecutorComponents)
-      with org.apache.spark.shuffle.checksum.ShuffleChecksumSupport {
-    // Spark 3.2.0+ computes checksums per map partition as it writes the
-    // temporary files to disk. They are stored in a Checksum array.
-    private val checksums =
-      createPartitionChecksums(handle.dependency.partitioner.numPartitions, sparkConf)
-
-    // Partition lengths, used for MapStatus, but also exposed in Spark 3.2.0+
-    private var myPartitionLengths: Array[Long] = null
-
-    override def setChecksumIfNeeded(writer: DiskBlockObjectWriter, partition: Int): Unit = {
-      writer.setChecksum(checksums(partition))
-    }
-
-    override def getPartitionLengths(): Array[Long] = myPartitionLengths
-
-    override def commitAllPartitions(writer: ShuffleMapOutputWriter): Array[Long] = {
-      myPartitionLengths =
-        writer.commitAllPartitions(getChecksumValues(checksums))
-          .getPartitionLengths
-      myPartitionLengths
-    }
   }
 
   private lazy val env = SparkEnv.get
