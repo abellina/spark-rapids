@@ -40,10 +40,11 @@ class RapidsShuffleInternalManager(conf: SparkConf, isDriver: Boolean)
       metrics)
   }
 
-  override def getWriter[K, V](handle: ShuffleHandle,
-                               mapId: Long,
-                               context: TaskContext,
-                               metricsReporter: ShuffleWriteMetricsReporter): ShuffleWriter[K, V] = {
+  override def getWriter[K, V](
+      handle: ShuffleHandle,
+      mapId: Long,
+      context: TaskContext,
+      metricsReporter: ShuffleWriteMetricsReporter): ShuffleWriter[K, V] = {
     handle match {
       case _: BypassMergeSortShuffleHandle[_, _] =>
         new RapidsShuffleThreadedWriter312[K, V](
