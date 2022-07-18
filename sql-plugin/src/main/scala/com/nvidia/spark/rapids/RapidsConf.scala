@@ -1125,7 +1125,6 @@ object RapidsConf {
         "running with a single executor and UCX is not installed, for short-circuit cached " +
         "shuffle (for testing purposes). Set to \"MULTI_THREADED\" for an experimental mode that " +
         "uses a thread pool to speed up shuffle writes without needing UCX.")
-    .internal()
     .stringConf
     .createWithDefault("UCX")
 
