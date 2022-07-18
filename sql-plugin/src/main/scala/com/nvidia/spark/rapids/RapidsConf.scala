@@ -1119,14 +1119,15 @@ object RapidsConf {
     .booleanConf
     .createWithDefault(true)
 
-  val SHUFFLE_TRANSPORT_ENABLE = conf("spark.rapids.shuffle.transport.enabled")
-    .doc("Enable the RAPIDS Shuffle Transport for accelerated shuffle. By default, this " +
-        "requires UCX to be installed in the system. Consider setting to false if running with " +
-        "a single executor and UCX is not available, for short-circuit cached shuffle " +
-        "(i.e. for testing purposes)")
+  val SHUFFLE_MANAGER_MODE = conf("spark.rapids.shuffle.mode")
+    .doc("RAPIDS Shuffle Manager mode. The default mode is " +
+        "\"UCX\", which has to be installed in the system. Consider setting to \"CACHE_ONLY\" if " +
+        "running with a single executor and UCX is not installed, for short-circuit cached " +
+        "shuffle (for testing purposes). Set to \"MULTI_THREADED\" for an experimental mode that " +
+        "uses a thread pool to speed up shuffle writes without needing UCX.")
     .internal()
-    .booleanConf
-    .createWithDefault(true)
+    .stringConf
+    .createWithDefault("UCX")
 
   val SHUFFLE_TRANSPORT_EARLY_START = conf("spark.rapids.shuffle.transport.earlyStart")
     .doc("Enable early connection establishment for RAPIDS Shuffle")
@@ -1260,6 +1261,12 @@ object RapidsConf {
     .internal()
     .bytesConf(ByteUnit.BYTE)
     .createWithDefault(64 * 1024)
+
+  val SHUFFLE_MULTI_THREADED_WRITER_THREADS =
+    conf("spark.rapids.shuffle.multiThreaded.writer.threads")
+      .doc("The number of threads to use for writing shuffle blocks per executor.")
+      .integerConf
+      .createWithDefault(128)
 
   // ALLUXIO CONFIGS
 
@@ -1446,10 +1453,6 @@ object RapidsConf {
       "to the CPU.")
     .booleanConf
     .createWithDefault(value = true)
-
-  val SHUFFLE_THREADS = conf("spark.rapids.shuffle.threads")
-    .integerConf
-    .createWithDefault(128)
 
   private def printSectionHeader(category: String): Unit =
     println(s"\n### $category")
@@ -1834,7 +1837,7 @@ class RapidsConf(conf: Map[String, String]) extends Logging {
 
   lazy val shuffleManagerEnabled: Boolean = get(SHUFFLE_MANAGER_ENABLED)
 
-  lazy val shuffleTransportEnabled: Boolean = get(SHUFFLE_TRANSPORT_ENABLE)
+  lazy val shuffleManagerMode: String = get(SHUFFLE_MANAGER_MODE)
 
   lazy val shuffleTransportClassName: String = get(SHUFFLE_TRANSPORT_CLASS_NAME)
 
@@ -1881,7 +1884,7 @@ class RapidsConf(conf: Map[String, String]) extends Logging {
 
   lazy val shuffleCompressionMaxBatchMemory: Long = get(SHUFFLE_COMPRESSION_MAX_BATCH_MEMORY)
 
-  lazy val shuffleThreads: Int = get(SHUFFLE_THREADS)
+  lazy val shuffleMultiThreadedWriterThreads: Int = get(SHUFFLE_MULTI_THREADED_WRITER_THREADS)
 
   lazy val shimsProviderOverride: Option[String] = get(SHIMS_PROVIDER_OVERRIDE)
 

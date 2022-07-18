@@ -64,6 +64,11 @@ class GpuShuffleEnv(rapidsConf: RapidsConf) extends Logging {
 }
 
 object GpuShuffleEnv extends Logging {
+  def isUCXShuffleAndEarlyStart(conf: RapidsConf): Boolean = {
+    conf.shuffleManagerMode.equalsIgnoreCase("UCX") &&
+      conf.shuffleTransportEarlyStart
+  }
+
   val RAPIDS_SHUFFLE_CLASS: String = ShimLoader.getRapidsShuffleManagerClass
   val RAPIDS_SHUFFLE_INTERNAL: String = ShimLoader.getRapidsShuffleInternalClass
 
@@ -127,7 +132,7 @@ object GpuShuffleEnv extends Logging {
 
   def shouldUseRapidsShuffle(conf: RapidsConf): Boolean = {
     conf.shuffleManagerEnabled &&
-      conf.shuffleThreads == 0 &&
+      conf.shuffleManagerMode != "MULTI_THREADED" &&
         isRapidsShuffleAvailable(conf)
   }
 

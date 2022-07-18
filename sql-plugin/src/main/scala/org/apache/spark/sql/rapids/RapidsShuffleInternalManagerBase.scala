@@ -80,13 +80,17 @@ object RapidsShuffleInternalManagerBase extends Logging {
     case other => other
   }
 
-  class Pool(tid: Int) {
+  /**
+   * A single-thread + queue used to compute a series of tasks serially.
+   * Used to compose a map of slots that can run independent of each other.
+   */
+  private class Slot {
     val tasks = new LinkedBlockingQueue[() => Unit]()
     val p = Executors.newSingleThreadExecutor()
     def offer(task: () => Unit): Unit = {
       tasks.offer(task)
     }
-    val exec = p.submit[Unit](() => {
+    p.submit[Unit](() => {
       while (true) {
         val t = tasks.take()
         t()
@@ -94,23 +98,26 @@ object RapidsShuffleInternalManagerBase extends Logging {
     })
   }
 
-  var numPools: Int = 128
+  // "slots" are a thread + queue thin wrapper that carries
+  private var numSlots: Int = 0
+  private lazy val slots = new mutable.HashMap[Int, Slot]()
 
-  lazy val pools = new mutable.HashMap[Int, Pool]()
+  // used by callers to obtain a unique slot
+  private val slotNumber = new AtomicInteger(0)
 
-  def queueTask(part: Int, task: () => Unit): Unit = {
-    pools(part % numPools).offer(task)
+  def queueTask(slot: Int, task: () => Unit): Unit = {
+    slots(slot % numSlots).offer(task)
   }
 
-  def startPoolsIfNeeded(): Unit = synchronized  {
-    if (pools.isEmpty) {
-      (0 until numPools).foreach { i  =>
-        pools.put(i, new Pool(i)) }
+  def startThreadPoolIfNeeded(numConfiguredThreads: Int): Unit = synchronized {
+    if (slots.isEmpty) {
+      numSlots = numConfiguredThreads
+      (0 until numSlots).foreach { i  =>
+        slots.put(i, new Slot)) }
     }
   }
 
-  // used to place partition writers in the task pool in a pseudo-random thread
-  val slotNumber = new AtomicInteger(0)
+  def getNextSlot: Int = Math.abs(slotNumber.incrementAndGet())
 }
 
 trait RapidsShuffleWriterShimHelper {
@@ -138,8 +145,6 @@ abstract class RapidsShuffleThreadedWriterBase[K, V](
         with RapidsShuffleWriterShimHelper
         with Arm
         with Logging {
-
-  logInfo(s"Starting threaded writer for ${mapId} and ${handle}")
 
   private var myMapStatus: Option[MapStatus] = None
 
@@ -170,7 +175,7 @@ abstract class RapidsShuffleThreadedWriterBase[K, V](
           // Places writer objects at round robin slot numbers apriori
           // this choice is for simplicity but likely needs to change so that
           // we can handle skew better
-          val slotNumber = Math.abs(RapidsShuffleInternalManagerBase.slotNumber.incrementAndGet())
+          val slotNumber = RapidsShuffleInternalManagerBase.getNextSlot
           diskBlockObjectWriters.put(i, (slotNumber, writer))
         }
 
@@ -439,16 +444,16 @@ abstract class RapidsShuffleInternalManagerBase(conf: SparkConf, val isDriver: B
 
   private val rapidsConf = new RapidsConf(conf)
 
-  if (!isDriver && rapidsConf.shuffleThreads > 0) {
-    RapidsShuffleInternalManagerBase.numPools = rapidsConf.shuffleThreads
-    RapidsShuffleInternalManagerBase.startPoolsIfNeeded()
+  if (!isDriver && rapidsConf.shuffleManagerMode == "MULTI_THREADED") {
+    RapidsShuffleInternalManagerBase.startThreadPoolIfNeeded(
+      rapidsConf.shuffleMultiThreadedWriterThreads)
   }
 
   protected val wrapped = new SortShuffleManager(conf)
 
   private[this] val transportEnabledMessage =
-    if (!rapidsConf.shuffleTransportEnabled || rapidsConf.shuffleThreads > 0) {
-      if (rapidsConf.shuffleThreads == 0) {
+    if (rapidsConf.shuffleManagerMode != "UCX") {
+      if (rapidsConf.shuffleManagerMode == "CACHE_ONLY") {
         "Transport disabled (local cached blocks only)"
       } else {
         "Transport disabled (threaded shuffle writer)"
@@ -481,7 +486,7 @@ abstract class RapidsShuffleInternalManagerBase(conf: SparkConf, val isDriver: B
       logWarning(s"Rapids Shuffle Plugin is falling back to SortShuffleManager " +
           s"because: ${fallThroughReasons.mkString(", ")}")
     }
-    if (rapidsConf.shuffleThreads > 0) {
+    if (rapidsConf.shuffleManagerMode == "MULTI_THREADED") {
       fallThroughReasons += "Using the threaded shuffle writer"
     }
     fallThroughReasons.nonEmpty
@@ -507,7 +512,7 @@ abstract class RapidsShuffleInternalManagerBase(conf: SparkConf, val isDriver: B
   }
 
   private[this] lazy val transport: Option[RapidsShuffleTransport] = {
-    if (rapidsConf.shuffleTransportEnabled && !isDriver && rapidsConf.shuffleThreads == 0) {
+    if (rapidsConf.shuffleManagerMode != "MULTI_THREADED" && !isDriver) {
       Some(RapidsShuffleTransport.makeTransport(blockManager.shuffleServerId, rapidsConf))
     } else {
       None
@@ -515,7 +520,7 @@ abstract class RapidsShuffleInternalManagerBase(conf: SparkConf, val isDriver: B
   }
 
   private[this] lazy val server: Option[RapidsShuffleServer] = {
-    if (rapidsConf.shuffleTransportEnabled && !isDriver && rapidsConf.shuffleThreads == 0) {
+    if (rapidsConf.shuffleManagerMode != "MULTI_THREADED" && !isDriver) {
       val catalog = getCatalogOrThrow
       val requestHandler = new RapidsShuffleRequestHandler() {
         override def acquireShuffleBuffer(tableId: Int): RapidsBuffer = {
