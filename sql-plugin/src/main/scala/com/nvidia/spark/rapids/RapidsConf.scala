@@ -1266,7 +1266,7 @@ object RapidsConf {
     conf("spark.rapids.shuffle.multiThreaded.writer.threads")
       .doc("The number of threads to use for writing shuffle blocks per executor.")
       .integerConf
-      .createWithDefault(128)
+      .createWithDefault(20)
 
   // ALLUXIO CONFIGS
 
