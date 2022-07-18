@@ -437,7 +437,7 @@ abstract class RapidsShuffleInternalManagerBase(conf: SparkConf, val isDriver: B
  *
  * TODO name does not match its function anymore
  */
-trait VisibleShuffleManager {
+trait RapidsShuffleManagerLike {
   def isDriver: Boolean
   def initialize: Unit
 }
@@ -450,10 +450,10 @@ trait VisibleShuffleManager {
  * @param conf
  * @param isDriver
  */
-abstract class ProxyRapidsShuffleInternalManagerBase(
+class ProxyRapidsShuffleInternalManagerBase(
     conf: SparkConf,
     override val isDriver: Boolean
-) extends VisibleShuffleManager with Proxy {
+) extends RapidsShuffleManagerLike with Proxy {
 
   // touched in the plugin code after the shim initialization
   // is complete
@@ -477,6 +477,19 @@ abstract class ProxyRapidsShuffleInternalManagerBase(
       metrics: ShuffleWriteMetricsReporter
   ): ShuffleWriter[K, V] = {
     self.getWriter(handle, mapId, context, metrics)
+  }
+
+  def getReader[K, C](
+      handle: ShuffleHandle,
+      startMapIndex: Int,
+      endMapIndex: Int,
+      startPartition: Int,
+      endPartition: Int,
+      context: TaskContext,
+      metrics: ShuffleReadMetricsReporter): ShuffleReader[K, C] = {
+    self.getReader(handle,
+      startMapIndex, endMapIndex, startPartition, endPartition,
+      context, metrics)
   }
 
   def registerShuffle[K, V, C](
