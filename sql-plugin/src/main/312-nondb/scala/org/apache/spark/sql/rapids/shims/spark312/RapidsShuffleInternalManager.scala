@@ -20,8 +20,8 @@ import org.apache.spark.{SparkConf, SparkEnv, TaskContext}
 import org.apache.spark.shuffle._
 import org.apache.spark.shuffle.api.{ShuffleExecutorComponents, ShuffleMapOutputWriter}
 import org.apache.spark.shuffle.sort.BypassMergeSortShuffleHandle
-import org.apache.spark.sql.rapids.{ProxyRapidsShuffleInternalManagerBase, RapidsShuffleInternalManagerBase, RapidsShuffleThreadedWriter, RapidsShuffleWriterShimHelper}
-import org.apache.spark.sql.rapids.shims.RapidsShuffleThreadedWriter312
+import org.apache.spark.sql.rapids.{ProxyRapidsShuffleInternalManagerBase, RapidsShuffleInternalManagerBase, RapidsShuffleThreadedWriterBase, RapidsShuffleWriterShimHelper}
+import org.apache.spark.sql.rapids.shims.RapidsShuffleThreadedWriter
 import org.apache.spark.storage.BlockManager
 
 /**
@@ -54,7 +54,7 @@ class RapidsShuffleInternalManager(conf: SparkConf, isDriver: Boolean)
       metricsReporter: ShuffleWriteMetricsReporter): ShuffleWriter[K, V] = {
     handle match {
       case _: BypassMergeSortShuffleHandle[_, _] =>
-        new RapidsShuffleThreadedWriter312[K, V](
+        new RapidsShuffleThreadedWriter[K, V](
           blockManager,
           handle.asInstanceOf[BypassMergeSortShuffleHandle[K, V]],
           mapId,

@@ -20,16 +20,16 @@ import org.apache.spark.SparkConf
 import org.apache.spark.shuffle.ShuffleWriteMetricsReporter
 import org.apache.spark.shuffle.api.{ShuffleExecutorComponents, ShuffleMapOutputWriter}
 import org.apache.spark.shuffle.sort.BypassMergeSortShuffleHandle
-import org.apache.spark.sql.rapids.RapidsShuffleThreadedWriter
+import org.apache.spark.sql.rapids.RapidsShuffleThreadedWriterBase
 import org.apache.spark.storage.BlockManager
 
-class RapidsShuffleThreadedWriter312[K, V](blockManager: BlockManager,
+class RapidsShuffleThreadedWriter[K, V](blockManager: BlockManager,
                                            handle: BypassMergeSortShuffleHandle[K, V],
                                            mapId: Long,
                                            sparkConf: SparkConf,
                                            writeMetrics: ShuffleWriteMetricsReporter,
                                            shuffleExecutorComponents: ShuffleExecutorComponents)
-  extends RapidsShuffleThreadedWriter[K, V](blockManager, handle, mapId, sparkConf,
+  extends RapidsShuffleThreadedWriterBase[K, V](blockManager, handle, mapId, sparkConf,
     writeMetrics, shuffleExecutorComponents) {
 
   override def commitAllPartitions(writer: ShuffleMapOutputWriter): Array[Long] = {

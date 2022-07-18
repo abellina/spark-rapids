@@ -129,7 +129,7 @@ trait RapidsShuffleWriterShimHelper {
       "commitAllPartitions must be implemented by subclasses of this trait")
 }
 
-abstract class RapidsShuffleThreadedWriter[K, V](
+abstract class RapidsShuffleThreadedWriterBase[K, V](
     blockManager: BlockManager,
     handle: BypassMergeSortShuffleHandle[K, V],
     mapId: Long,

@@ -20,7 +20,7 @@ import org.apache.spark.{SparkConf, SparkEnv, TaskContext}
 import org.apache.spark.shuffle._
 import org.apache.spark.shuffle.sort.BypassMergeSortShuffleHandle
 import org.apache.spark.sql.rapids.{ProxyRapidsShuffleInternalManagerBase, RapidsShuffleInternalManagerBase}
-import org.apache.spark.sql.rapids.shims.RapidsShuffleThreadedWriter320
+import org.apache.spark.sql.rapids.shims.RapidsShuffleThreadedWriter
 
 /**
  * A shuffle manager optimized for the RAPIDS Plugin For Apache Spark.
@@ -52,7 +52,7 @@ class RapidsShuffleInternalManager(conf: SparkConf, isDriver: Boolean)
       metricsReporter: ShuffleWriteMetricsReporter): ShuffleWriter[K, V] = {
     handle match {
       case _: BypassMergeSortShuffleHandle[_, _] =>
-        new RapidsShuffleThreadedWriter320[K, V](
+        new RapidsShuffleThreadedWriter[K, V](
           blockManager,
           handle.asInstanceOf[BypassMergeSortShuffleHandle[K, V]],
           mapId,
