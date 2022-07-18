@@ -148,6 +148,7 @@ abstract class RapidsShuffleThreadedWriterBase[K, V](
   private val partitioner = dep.partitioner
   private val numPartitions = partitioner.numPartitions
   private val serializer = dep.serializer.newInstance()
+  private val transferToEnabled = sparkConf.getBoolean("spark.file.transferTo", true)
 
   override def write(records: Iterator[Product2[K, V]]): Unit = {
     withResource(new NvtxRange("ThreadedWriter.write", NvtxColor.RED)) { _ =>
@@ -175,7 +176,6 @@ abstract class RapidsShuffleThreadedWriterBase[K, V](
 
         // we call write on every writer for every record in parallel
         val scheduledWrites = new AtomicLong(0L)
-        val doneQueue = new ArrayBuffer[FileSegment]()
         records.foreach { record =>
           val key = record._1
           val value = record._2
@@ -185,71 +185,64 @@ abstract class RapidsShuffleThreadedWriterBase[K, V](
 
           // we close batches actively in the `records` iterator as we get the next batch
           // this makes sure it is kept alive while a task is able to handle it.
-          val cb = if (value.isInstanceOf[ColumnarBatch]) {
-            val cb = value.asInstanceOf[ColumnarBatch]
-            (0 until cb.numCols()).foreach {
-              c => cb.column(c).asInstanceOf[SlicedGpuColumnVector].getBase.incRefCount()
-            }
-            cb
-          } else {
-            null
+          val cb = value match {
+            case columnarBatch: ColumnarBatch =>
+              SlicedGpuColumnVector.incRefCount(columnarBatch)
+            case _ =>
+              null
           }
 
           RapidsShuffleInternalManagerBase.queueTask(slot, () => {
-            if (key == null) {
-              logWarning("NULL KEY??")
-            } else {
-              try {
-                myWriter.write(key, value)
-              } catch {
-                case e: Throwable => logError("Error writing", e)
-              }
-              if (cb != null) {
-                (0 until cb.numCols()).foreach {
-                  c => cb.column(c).asInstanceOf[SlicedGpuColumnVector].close()
-                }
-              }
+            withResource(cb) { _ =>
+              myWriter.write(key, value)
             }
-            doneQueue.synchronized {
+            synchronized {
               scheduledWrites.decrementAndGet()
-              doneQueue.notifyAll()
+              notifyAll()
             }
           })
         }
 
         withResource(new NvtxRange("WaitingForWrites", NvtxColor.PURPLE)) { _ =>
-          doneQueue.synchronized {
+          synchronized {
             while (scheduledWrites.get() > 0) {
-              doneQueue.wait()
+              wait()
             }
           }
         }
-        // this is similar to Spark
+
+        // after all temporary shuffle writes are done, we need to produce a single
+        // file (shuffle_[map_id]_0) which is done during this commit phase
         withResource(new NvtxRange("CommitShuffle", NvtxColor.RED)) { _ =>
           // per reduce partition
           var offset = 0L
           val segments = (0 until numPartitions).map {
             reducePartitionId =>
-              val segment = diskBlockObjectWriters(reducePartitionId)._2.commitAndGet()
-              val file = segment.file
-              val res = (reducePartitionId, file, offset)
-              offset += segment.length
-              res
+              withResource(diskBlockObjectWriters(reducePartitionId)._2) { writer =>
+                val segment = writer.commitAndGet()
+                val file = segment.file
+                val res = (reducePartitionId, file, offset)
+                offset += segment.length
+                res
+              }
           }
 
           segments.foreach { case (reducePartitionId, file, offset) =>
             val partWriter = mapOutputWriter.getPartitionWriter(reducePartitionId)
             if (file.exists()) {
-              val maybeOutputChannel: Optional[WritableByteChannelWrapper] =
-                partWriter.openChannelWrapper()
-              if (maybeOutputChannel.isPresent) {
-                writePartitionedDataWithChannel(file, maybeOutputChannel.get(), offset)
+              if (transferToEnabled) {
+                val maybeOutputChannel: Optional[WritableByteChannelWrapper] =
+                  partWriter.openChannelWrapper()
+                if (maybeOutputChannel.isPresent) {
+                  writePartitionedDataWithChannel(file, maybeOutputChannel.get(), offset)
+                } else {
+                  writePartitionedDataWithStream(file, partWriter)
+                }
               } else {
                 writePartitionedDataWithStream(file, partWriter)
               }
               file.delete()
             }
-            diskBlockObjectWriters(reducePartitionId)._2.close()
           }
 
           val partLengths = commitAllPartitions(mapOutputWriter)
