@@ -113,7 +113,8 @@ object RapidsShuffleInternalManagerBase extends Logging {
     if (slots.isEmpty) {
       numSlots = numConfiguredThreads
       (0 until numSlots).foreach { i  =>
-        slots.put(i, new Slot)) }
+        slots.put(i, new Slot)
+      }
     }
   }
 
