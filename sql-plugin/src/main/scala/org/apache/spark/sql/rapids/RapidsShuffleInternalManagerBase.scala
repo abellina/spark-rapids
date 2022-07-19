@@ -208,7 +208,7 @@ class RapidsCachingWriter[K, V](
  *       `ShuffleManager` and `SortShuffleManager` classes. When configuring
  *       Apache Spark to use the RAPIDS shuffle manager,
  */
-abstract class RapidsShuffleInternalManagerBase(conf: SparkConf, val isDriver: Boolean)
+class RapidsShuffleInternalManagerBase(conf: SparkConf, val isDriver: Boolean)
     extends ShuffleManager with RapidsShuffleHeartbeatHandler with Logging {
 
   def getServerId: BlockManagerId = server.fold(blockManager.blockManagerId)(_.getId)
@@ -357,7 +357,7 @@ abstract class RapidsShuffleInternalManagerBase(conf: SparkConf, val isDriver: B
     }
   }
 
-  def getReaderInternal[K, C](
+  override def getReader[K, C](
       handle: ShuffleHandle,
       startMapIndex: Int,
       endMapIndex: Int,
@@ -464,7 +464,7 @@ class ProxyRapidsShuffleInternalManagerBase(
   // the manager. This is called from both the driver and executor.
   // In the driver, it's mostly to display information on how to enable/disable the manager,
   // in the executor, the UCXShuffleTransport starts and allocates memory at this time.
-  def initialize: Unit = self
+  override def initialize: Unit = self
 
   //
   // Signatures unchanged since 3.0.1 follow
