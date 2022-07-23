@@ -16,32 +16,33 @@
 
 package org.apache.spark.sql.rapids
 
-import java.io.{File, FileInputStream}
-import java.util.Optional
-import java.util.concurrent.{Callable, ExecutionException, Executors, Future}
-import java.util.concurrent.atomic.AtomicInteger
+import java.io.{EOFException, File, FileInputStream, InputStream}
+import java.util.{Optional, Random}
+import java.util.concurrent.{Callable, ExecutionException, Executors, Future, LinkedBlockingQueue}
+import java.util.concurrent.atomic.{AtomicInteger, AtomicLong}
 
 import scala.collection.mutable
 import scala.collection.mutable.{ArrayBuffer, ListBuffer}
-
 import ai.rapids.cudf.{NvtxColor, NvtxRange}
 import com.nvidia.spark.rapids._
 import com.nvidia.spark.rapids.format.TableMeta
 import com.nvidia.spark.rapids.shuffle.{RapidsShuffleRequestHandler, RapidsShuffleServer, RapidsShuffleTransport}
-
-import org.apache.spark.{ShuffleDependency, SparkConf, SparkEnv, TaskContext}
+import org.apache.spark.{InterruptibleIterator, MapOutputTracker, ShuffleDependency, SparkConf, SparkEnv, TaskContext}
 import org.apache.spark.executor.ShuffleWriteMetrics
-import org.apache.spark.internal.{config, Logging}
+import org.apache.spark.internal.{Logging, config}
+import org.apache.spark.io.CompressionCodec
 import org.apache.spark.network.buffer.ManagedBuffer
 import org.apache.spark.scheduler.MapStatus
+import org.apache.spark.serializer.{DeserializationStream, Serializer, SerializerManager}
 import org.apache.spark.shuffle.{ShuffleWriter, _}
 import org.apache.spark.shuffle.api._
 import org.apache.spark.shuffle.sort.{BypassMergeSortShuffleHandle, SortShuffleManager}
 import org.apache.spark.sql.execution.metric.SQLMetric
 import org.apache.spark.sql.rapids.shims.GpuShuffleBlockResolver
 import org.apache.spark.sql.vectorized.ColumnarBatch
-import org.apache.spark.storage._
-import org.apache.spark.util.Utils
+import org.apache.spark.storage.{RapidsShuffleBlockFetcherIterator, _}
+import org.apache.spark.util.collection.ExternalSorter
+import org.apache.spark.util.{CompletionIterator, Utils}
 
 class GpuShuffleHandle[K, V](
     val wrapped: ShuffleHandle,
@@ -398,6 +399,272 @@ abstract class RapidsShuffleThreadedWriterBase[K, V](
       }
     } finally {
       diskBlockObjectWriters.clear()
+    }
+  }
+}
+
+class RapidsShuffleThreadedReader[K, C](
+    handle: BaseShuffleHandle[K, _, C],
+    blocksByAddress: Iterator[(BlockManagerId, Seq[(BlockId, Long, Int)])],
+    context: TaskContext,
+    readMetrics: ShuffleReadMetricsReporter,
+    shuffleReaderThreads: Int,
+    serializerManager: SerializerManager = SparkEnv.get.serializerManager,
+    blockManager: BlockManager = SparkEnv.get.blockManager,
+    mapOutputTracker: MapOutputTracker = SparkEnv.get.mapOutputTracker,
+    shouldBatchFetch: Boolean = false)
+  extends ShuffleReader[K, C] with Logging with Arm {
+
+  private val dep = handle.dependency
+
+  private def fetchContinuousBlocksInBatch: Boolean = {
+    val conf = SparkEnv.get.conf
+    val serializerRelocatable = dep.serializer.supportsRelocationOfSerializedObjects
+    val compressed = conf.get(config.SHUFFLE_COMPRESS)
+    val codecConcatenation = if (compressed) {
+      CompressionCodec.supportsConcatenationOfSerializedStreams(CompressionCodec.createCodec(conf))
+    } else {
+      true
+    }
+    val useOldFetchProtocol = conf.get(config.SHUFFLE_USE_OLD_FETCH_PROTOCOL)
+    // SPARK-34790: Fetching continuous blocks in batch is incompatible with io encryption.
+    val ioEncryption = conf.get(config.IO_ENCRYPTION_ENABLED)
+
+    val doBatchFetch = shouldBatchFetch && serializerRelocatable &&
+      (!compressed || codecConcatenation) && !useOldFetchProtocol && !ioEncryption
+    if (shouldBatchFetch && !doBatchFetch) {
+      logDebug("The feature tag of continuous shuffle block fetching is set to true, but " +
+        "we can not enable the feature because other conditions are not satisfied. " +
+        s"Shuffle compress: $compressed, serializer relocatable: $serializerRelocatable, " +
+        s"codec concatenation: $codecConcatenation, use old shuffle fetch protocol: " +
+        s"$useOldFetchProtocol, io encryption: $ioEncryption.")
+    }
+    doBatchFetch
+  }
+
+  class ParallelDeserializerIterator(
+                                      streams: Iterator[(BlockId, ManagedBuffer, InputStream)],
+                                      serializer: Serializer,
+                                      streamWrapper: (BlockId, InputStream) => InputStream)
+    extends Iterator[(Any, Any)] with Arm {
+    val inFlight = new AtomicLong(0L)
+    val queued = new LinkedBlockingQueue[(Any, Any)]
+
+    override def hasNext: Boolean = queued.synchronized {
+      streams.hasNext || !queued.isEmpty || inFlight.get() > 0
+    }
+
+    val serializerInstance = serializer.newInstance()
+
+    def deserialize(deserStream: DeserializationStream): Unit = {
+      // could be really bad if consumer is slow
+      var count = 0
+      try {
+        // queued and inflight need to be updated in the lock?
+        var finished = false
+
+        // highest level
+        withResource(new NvtxRange("reader.deser", NvtxColor.DARK_GREEN)) { _ =>
+          val results = new ArrayBuffer[(Any, Any)]()
+          while (!finished) {
+            try {
+              val r = (deserStream.readKey[Any](), deserStream.readValue[Any]())
+              results.append(r)
+              count = count + 1
+            } catch {
+              case eof: EOFException =>
+                finished = true
+            }
+          }
+          queued.synchronized {
+            results.foreach(queued.add)
+            inFlight.decrementAndGet()
+          }
+        }
+      } catch {
+        case t: Throwable =>
+          logError(s"error: got ${count}", t)
+          throw t
+      }
+    }
+
+    var toClose = new ArrayBuffer[AutoCloseable]()
+    val rnd = new Random()
+
+    TaskContext.get().addTaskCompletionListener[Unit](_ => {
+      if (toClose.nonEmpty) {
+        logWarning(s"CLOSING AT TASK COMPLETION ${toClose.size}")
+        toClose.foreach(_.close())
+      }
+    })
+
+    override def next(): (Any, Any) = {
+      if (streams.hasNext) {
+        queued.synchronized {
+          require(hasNext, "called next on an empty iterator")
+
+          // queue all of it?
+          while (streams.hasNext) {
+            val (blockId, managedBuffer, inputStream) = streams.next()
+            // n is  (BlockId, BufferReleasingInputStream)
+            inFlight.incrementAndGet()
+
+            val slot = RapidsShuffleInternalManagerBase.getNextSlot
+
+            // TODO: bring back toClose
+            toClose.append(() => {
+              managedBuffer.release()
+            })
+            toClose.append(inputStream)
+
+            def runIt(): Unit = {
+              withResource(new NvtxRange("reader.deser", NvtxColor.DARK_GREEN)) { _ =>
+                managedBuffer.retain() // TODO: weird
+                // JCudfSerialization
+                val deserStream = serializerInstance.deserializeStream(inputStream)
+                val it = deserStream.asKeyValueIterator
+                val res = new ArrayBuffer[(Any, Any)]()
+                while (it.hasNext) {
+                  res.append(it.next())
+                }
+                queued.synchronized {
+                  res.foreach(queued.offer)
+                  inFlight.decrementAndGet()
+                  managedBuffer.release()
+                }
+              }
+            }
+
+            if (shuffleReaderThreads > 0) {
+              RapidsShuffleInternalManagerBase.queueTask(slot, () => {
+                runIt()
+              })
+            } else {
+              runIt()
+            }
+          }
+        }
+      }
+      val res = queued.take()
+      if (!hasNext) {
+        logInfo(s"closing ${toClose.size} streams")
+        toClose.foreach(_.close)
+        toClose.clear()
+      }
+      res
+    }
+  }
+
+  /** Read the combined key-values for this reduce task */
+  override def read(): Iterator[Product2[K, C]] = {
+    val myStreamWrapper =
+      (block: BlockId, inputStream: InputStream) => {
+        val wrapped = serializerManager.wrapStream(block, inputStream)
+        new InputStream {
+          override def read() = {
+            // lowest level
+            withResource(new NvtxRange("wrap.read", NvtxColor.ORANGE)) { _ =>
+              wrapped.read()
+            }
+          }
+
+          override def close() = {
+            withResource(new NvtxRange("wrap.close", NvtxColor.RED)) { _ =>
+              wrapped.close()
+              inputStream.close()
+            }
+          }
+        }
+      }
+
+    val wrappedStreams = new RapidsShuffleBlockFetcherIterator(
+      context,
+      blockManager.blockStoreClient,
+      blockManager,
+      blocksByAddress,
+      myStreamWrapper,
+      //serializerManager.wrapStream,
+      // Note: we use getSizeAsMb when no suffix is provided for backwards compatibility
+      SparkEnv.get.conf.get(config.REDUCER_MAX_SIZE_IN_FLIGHT) * 1024 * 1024,
+      SparkEnv.get.conf.get(config.REDUCER_MAX_REQS_IN_FLIGHT),
+      SparkEnv.get.conf.get(config.REDUCER_MAX_BLOCKS_IN_FLIGHT_PER_ADDRESS),
+      SparkEnv.get.conf.get(config.MAX_REMOTE_BLOCK_SIZE_FETCH_TO_MEM),
+      SparkEnv.get.conf.get(config.SHUFFLE_DETECT_CORRUPT),
+      SparkEnv.get.conf.get(config.SHUFFLE_DETECT_CORRUPT_MEMORY),
+      readMetrics,
+      fetchContinuousBlocksInBatch)
+
+    //val serializerInstance = dep.serializer.newInstance()
+
+    // need a "ParallelizedDesrializerIterator"
+    // it will submit deserialization tasks in parallel and queue results
+    // until the caller is ready to call next
+
+
+    val recordIter = new ParallelDeserializerIterator(
+      wrappedStreams, dep.serializer, myStreamWrapper)
+
+    // Create a key/value iterator for each stream
+    //val recordIter: Iterator[(Any, Any)] =
+    // wrappedStreams.flatMap { case (blockId, wrappedStream) =>
+    //  // Note: the asKeyValueIterator below wraps a key/value iterator inside of a
+    //  // NextIterator. The NextIterator makes sure that close() is called on the
+    //  // underlying InputStream when all records have been read.
+    //  serializerInstance.deserializeStream(wrappedStream).asKeyValueIterator
+    //}
+
+    // Update the context task metrics for each record read.
+    val metricIter = CompletionIterator[(Any, Any), Iterator[(Any, Any)]](
+      recordIter.map { record =>
+        readMetrics.incRecordsRead(1)
+        record
+      },
+      context.taskMetrics().mergeShuffleReadMetrics())
+
+    // An interruptible iterator must be used here in order to support task cancellation
+    val interruptibleIter = new InterruptibleIterator[(Any, Any)](context, metricIter)
+
+    val aggregatedIter: Iterator[Product2[K, C]] = if (dep.aggregator.isDefined) {
+      if (dep.mapSideCombine) {
+        // We are reading values that are already combined
+        val combinedKeyValuesIterator = interruptibleIter.asInstanceOf[Iterator[(K, C)]]
+        dep.aggregator.get.combineCombinersByKey(combinedKeyValuesIterator, context)
+      } else {
+        // We don't know the value type, but also don't care -- the dependency *should*
+        // have made sure its compatible w/ this aggregator, which will convert the value
+        // type to the combined type C
+        val keyValuesIterator = interruptibleIter.asInstanceOf[Iterator[(K, Nothing)]]
+        dep.aggregator.get.combineValuesByKey(keyValuesIterator, context)
+      }
+    } else {
+      interruptibleIter.asInstanceOf[Iterator[Product2[K, C]]]
+    }
+
+    // Sort the output if there is a sort ordering defined.
+    val resultIter = dep.keyOrdering match {
+      case Some(keyOrd: Ordering[K]) =>
+        // Create an ExternalSorter to sort the data.
+        val sorter =
+          new ExternalSorter[K, C, C](context, ordering = Some(keyOrd), serializer = dep.serializer)
+        sorter.insertAll(aggregatedIter)
+        context.taskMetrics().incMemoryBytesSpilled(sorter.memoryBytesSpilled)
+        context.taskMetrics().incDiskBytesSpilled(sorter.diskBytesSpilled)
+        context.taskMetrics().incPeakExecutionMemory(sorter.peakMemoryUsedBytes)
+        // Use completion callback to stop sorter if task was finished/cancelled.
+        context.addTaskCompletionListener[Unit](_ => {
+          sorter.stop()
+        })
+        CompletionIterator[Product2[K, C], Iterator[Product2[K, C]]](sorter.iterator, sorter.stop())
+      case None =>
+        aggregatedIter
+    }
+
+    resultIter match {
+      case _: InterruptibleIterator[Product2[K, C]] => resultIter
+      case _ =>
+        // Use another interruptible iterator here to support task cancellation as aggregator
+        // or(and) sorter may have consumed previous interruptible iterator.
+        new InterruptibleIterator[Product2[K, C]](context, resultIter)
     }
   }
 }
@@ -762,6 +1029,21 @@ abstract class RapidsShuffleInternalManagerBase(conf: SparkConf, val isDriver: B
           transport,
           getCatalogOrThrow,
           gpu.dependency.sparkTypes)
+      case other if rapidsConf.isMultiThreadedShuffleManagerMode =>
+        val nvtxRange = new NvtxRange("getMapSizesByExecId", NvtxColor.CYAN)
+        val blocksByAddress = try {
+          SparkEnv.get.mapOutputTracker.getMapSizesByExecutorId(other.shuffleId,
+            startMapIndex, endMapIndex, startPartition, endPartition)
+        } finally {
+          nvtxRange.close()
+        }
+        new RapidsShuffleThreadedReader(
+          handle = other.asInstanceOf[BaseShuffleHandle[K,C,C]],
+          blocksByAddress,
+          context,
+          metrics,
+          shuffleReaderThreads = rapidsConf.shuffleMultiThreadedWriterThreads,
+          shouldBatchFetch = true)
       case other =>
         val shuffleHandle = RapidsShuffleInternalManagerBase.unwrapHandle(other)
         wrapped.getReader(shuffleHandle, startMapIndex, endMapIndex, startPartition,
