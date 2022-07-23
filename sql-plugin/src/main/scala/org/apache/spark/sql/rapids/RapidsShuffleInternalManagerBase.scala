@@ -32,7 +32,7 @@ import org.apache.spark.internal.{Logging, config}
 import org.apache.spark.io.CompressionCodec
 import org.apache.spark.network.buffer.ManagedBuffer
 import org.apache.spark.scheduler.MapStatus
-import org.apache.spark.serializer.{DeserializationStream, Serializer, SerializerInstance, SerializerManager}
+import org.apache.spark.serializer.{DeserializationStream, Serializer, SerializerManager}
 import org.apache.spark.shuffle.{ShuffleWriter, _}
 import org.apache.spark.shuffle.api._
 import org.apache.spark.shuffle.sort.{BypassMergeSortShuffleHandle, SortShuffleManager}
@@ -407,7 +407,7 @@ abstract class RapidsShuffleThreadedWriterBase[K, V](
   }
 }
 
-class ThreadedReader[K, C](
+class RapidsShuffleThreadedReader[K, C](
     handle: BaseShuffleHandle[K, _, C],
     blocksByAddress: Iterator[(BlockManagerId, Seq[(BlockId, Long, Int)])],
     context: TaskContext,
@@ -475,11 +475,9 @@ class ThreadedReader[K, C](
               val r = (deserStream.readKey[Any](), deserStream.readValue[Any]())
               results.append(r)
               count = count + 1
-              //logInfo(s"GOT ${count}: ${r}")
             } catch {
               case eof: EOFException =>
                 finished = true
-              //logError(s"EOF: count = ${count} ${eof}")
             }
           }
           queued.synchronized {
@@ -511,16 +509,12 @@ class ThreadedReader[K, C](
 
           // queue all of it?
           while (streams.hasNext) {
-            inFlight.incrementAndGet()
-            // n is  (BlockId, BufferReleasingInputStream)
-
-            val slot = if (shuffleReaderThreads == 0) {
-              0
-            } else {
-              Math.abs(rnd.nextInt() % shuffleReaderThreads)
-            }
-
             val (blockId, managedBuffer, inputStream) = streams.next()
+            // n is  (BlockId, BufferReleasingInputStream)
+            inFlight.incrementAndGet()
+
+            val slot = RapidsShuffleInternalManagerBase.getNextSlot
+
             // TODO: bring back toClose
             toClose.append(() => {
               managedBuffer.release()
@@ -529,20 +523,13 @@ class ThreadedReader[K, C](
 
             def runIt(): Unit = {
               withResource(new NvtxRange("reader.deser", NvtxColor.DARK_GREEN)) { _ =>
-                val ser = serializers(slot)
-                managedBuffer.retain()
-                val deserStream = queued.synchronized {
-                  val res = ser.deserializeStream(inputStream)
-                  toClose.append(res)
-                  res
-                }
-
+                managedBuffer.retain() // TODO: weird
+                val deserStream = serializerInstance.deserializeStream(inputStream)
                 val it = deserStream.asKeyValueIterator
                 val res = new ArrayBuffer[(Any, Any)]()
                 while (it.hasNext) {
                   res.append(it.next())
                 }
-
                 queued.synchronized {
                   res.foreach(queued.offer)
                   inFlight.decrementAndGet()
@@ -558,20 +545,10 @@ class ThreadedReader[K, C](
             } else {
               runIt()
             }
-
-            // toClose.append(deserStream)
-            // toClose.append(n._2)
-            //logInfo(s"Sending ${shuffleBlockId} to slot ${deserStream}")
-
-            //RapidsShuffleInternalManagerBase.queueTask(slot, () => {
-            //deserialize(ser, deserStream)
-            //})
           }
         }
       }
       val res = queued.take()
-      //logInfo(
-      //  s"done queuing tasks: ${queued.size()} -- ${inFlight.get} -- ${streams.hasNext} --- hasNext? ${hasNext}")
       if (!hasNext) {
         logInfo(s"closing ${toClose.size} streams")
         toClose.foreach(_.close)
@@ -631,7 +608,8 @@ class ThreadedReader[K, C](
       wrappedStreams, dep.serializer, myStreamWrapper)
 
     // Create a key/value iterator for each stream
-    //val recordIter: Iterator[(Any, Any)] = wrappedStreams.flatMap { case (blockId, wrappedStream) =>
+    //val recordIter: Iterator[(Any, Any)] =
+    // wrappedStreams.flatMap { case (blockId, wrappedStream) =>
     //  // Note: the asKeyValueIterator below wraps a key/value iterator inside of a
     //  // NextIterator. The NextIterator makes sure that close() is called on the
     //  // underlying InputStream when all records have been read.
@@ -1054,6 +1032,21 @@ abstract class RapidsShuffleInternalManagerBase(conf: SparkConf, val isDriver: B
           transport,
           getCatalogOrThrow,
           gpu.dependency.sparkTypes)
+      case other if rapidsConf.isMultiThreadedShuffleManagerMode =>
+        val nvtxRange = new NvtxRange("getMapSizesByExecId", NvtxColor.CYAN)
+        val blocksByAddress = try {
+          SparkEnv.get.mapOutputTracker.getMapSizesByExecutorId(other.shuffleId,
+            startMapIndex, endMapIndex, startPartition, endPartition)
+        } finally {
+          nvtxRange.close()
+        }
+        new RapidsShuffleThreadedReader(
+          handle = other.asInstanceOf[BaseShuffleHandle[K,C,C]],
+          blocksByAddress,
+          context,
+          metrics,
+          shuffleReaderThreads = rapidsConf.shuffleMultiThreadedWriterThreads,
+          shouldBatchFetch = true)
       case other =>
         val shuffleHandle = RapidsShuffleInternalManagerBase.unwrapHandle(other)
         wrapped.getReader(shuffleHandle, startMapIndex, endMapIndex, startPartition,
