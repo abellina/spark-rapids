@@ -26,7 +26,6 @@ import ai.rapids.cudf.{HostColumnVector, HostMemoryBuffer, JCudfSerialization, N
 import ai.rapids.cudf.JCudfSerialization.SerializedTableHeader
 import com.nvidia.spark.rapids.RapidsPluginImplicits._
 
-import org.apache.spark.TaskContext
 import org.apache.spark.serializer.{DeserializationStream, SerializationStream, Serializer, SerializerInstance}
 import org.apache.spark.sql.types.NullType
 import org.apache.spark.sql.vectorized.ColumnarBatch
@@ -145,11 +144,11 @@ private class GpuColumnarBatchSerializerInstance(dataSize: GpuMetric) extends Se
         new Iterator[(Int, ColumnarBatch)] with Arm {
           var toBeReturned: Option[ColumnarBatch] = None
 
-          TaskContext.get().addTaskCompletionListener[Unit]((_: TaskContext) => {
-            toBeReturned.foreach(_.close())
-            toBeReturned = None
-            dIn.close()
-          })
+         //TaskContext.get().addTaskCompletionListener[Unit]((_: TaskContext) => {
+         //  toBeReturned.foreach(_.close())
+         //  toBeReturned = None
+         //  dIn.close()
+         //})
 
           def tryReadNext(): Option[ColumnarBatch] = {
             withResource(new NvtxRange("Read Batch", NvtxColor.YELLOW)) { _ =>

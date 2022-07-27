@@ -524,6 +524,7 @@ class RapidsShuffleThreadedReader[K, C](
             def runIt(): Unit = {
               withResource(new NvtxRange("reader.deser", NvtxColor.DARK_GREEN)) { _ =>
                 managedBuffer.retain() // TODO: weird
+                // JCudfSerialization
                 val deserStream = serializerInstance.deserializeStream(inputStream)
                 val it = deserStream.asKeyValueIterator
                 val res = new ArrayBuffer[(Any, Any)]()
