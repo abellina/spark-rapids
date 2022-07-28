@@ -174,7 +174,17 @@ abstract class GpuShuffleExchangeExecBase(
   lazy val readMetrics =
     SQLShuffleReadMetricsReporter.createShuffleReadMetrics(sparkContext)
   override lazy val additionalMetrics : Map[String, GpuMetric] = Map(
-    "dataSize" -> createSizeMetric(ESSENTIAL_LEVEL,"data size")
+    "dataSize" -> createSizeMetric(ESSENTIAL_LEVEL,"data size"),
+    "dataReadSize" -> createSizeMetric(ESSENTIAL_LEVEL, "data read size"),
+    "rapidsShuffleSerializationTime" ->
+        createNanoTimingMetric(ESSENTIAL_LEVEL,"rs. serialization time"),
+    "rapidsShuffleDeserializationTime" ->
+        createNanoTimingMetric(ESSENTIAL_LEVEL,"rs. deserialization time"),
+    "rapidsShuffleReadTime" ->
+        createNanoTimingMetric(ESSENTIAL_LEVEL,"rs. shuffle read time"),
+    "rapidsShuffleWriteTime" ->
+        createNanoTimingMetric(ESSENTIAL_LEVEL,"rs. shuffle write time"),
+    "ioTime" -> createNanoTimingMetric(ESSENTIAL_LEVEL,"io time")
   ) ++ GpuMetric.wrap(readMetrics) ++ GpuMetric.wrap(writeMetrics)
 
   // Spark doesn't report totalTime for this operator so we override metrics

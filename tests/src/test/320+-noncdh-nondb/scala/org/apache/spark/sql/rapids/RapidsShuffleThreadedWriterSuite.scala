@@ -38,7 +38,6 @@ import org.apache.spark.network.util.LimitedInputStream
 import org.apache.spark.serializer.{JavaSerializer, SerializerInstance, SerializerManager}
 import org.apache.spark.shuffle.IndexShuffleBlockResolver
 import org.apache.spark.shuffle.api.ShuffleExecutorComponents
-import org.apache.spark.shuffle.sort.BypassMergeSortShuffleHandle
 import org.apache.spark.shuffle.sort.io.LocalDiskShuffleExecutorComponents
 import org.apache.spark.sql.rapids.shims.RapidsShuffleThreadedWriter
 import org.apache.spark.storage.{BlockId, BlockManager, DiskBlockManager, DiskBlockObjectWriter, ShuffleChecksumBlockId, ShuffleDataBlockId, ShuffleIndexBlockId, TempShuffleBlockId}
@@ -138,7 +137,7 @@ class RapidsShuffleThreadedWriterSuite extends FunSuite
     .set("spark.app.id", "sampleApp")
   private val temporaryFilesCreated: mutable.Buffer[File] = new ArrayBuffer[File]()
   private val blockIdToFileMap: mutable.Map[BlockId, File] = new mutable.HashMap[BlockId, File]
-  private var shuffleHandle: BypassMergeSortShuffleHandle[Int, Int] = _
+  private var shuffleHandle: ShuffleHandleWithMetrics[Int, Int, Int] = _
 
   RapidsShuffleInternalManagerBase.startThreadPoolIfNeeded(2)
 
@@ -148,10 +147,8 @@ class RapidsShuffleThreadedWriterSuite extends FunSuite
     tempDir = Utils.createTempDir()
     outputFile = File.createTempFile("shuffle", null, tempDir)
     taskMetrics = new TaskMetrics
-    shuffleHandle = new BypassMergeSortShuffleHandle[Int, Int](
-      shuffleId = 0,
-      dependency = dependency
-    )
+    shuffleHandle = new ShuffleHandleWithMetrics[Int, Int, Int](
+      0, Map.empty, dependency)
     when(dependency.partitioner).thenReturn(new HashPartitioner(7))
     when(dependency.serializer).thenReturn(new JavaSerializer(conf))
     when(dependencyBad.partitioner).thenReturn(new HashPartitioner(7))
@@ -369,9 +366,10 @@ class RapidsShuffleThreadedWriterSuite extends FunSuite
           (5, new BadSerializable(5))) ++
           (10 until 100000).iterator.map(x => (2, new BadSerializable(x)))
 
-      val shuffleHandle = new BypassMergeSortShuffleHandle[Int, BadSerializable](
-        shuffleId = 0,
-        dependency = dependencyBad
+      val shuffleHandle = new ShuffleHandleWithMetrics[Int, BadSerializable, BadSerializable](
+        0,
+        Map.empty,
+        dependencyBad
       )
       val writer = new RapidsShuffleThreadedWriter[Int, BadSerializable](
         blockManager,

@@ -387,7 +387,7 @@ class Profiler(hadoopConf: Configuration, appArgs: ProfileArgs) extends Logging 
         appsSum.flatMap(_.rapidsJar).sortBy(_.appIndex),
         appsSum.flatMap(_.sqlMetrics).sortBy(_.appIndex),
         appsSum.flatMap(_.jsMetAgg).sortBy(_.appIndex),
-        appsSum.flatMap(_.sqlTaskAggMetrics).sortBy(_.appIndex),
+        appsSum.flatMap(_.sqlTaskAggMetrics).sortBy(_.sqlId),
         appsSum.flatMap(_.durAndCpuMet).sortBy(_.appIndex),
         appsSum.flatMap(_.skewInfo).sortBy(_.appIndex),
         appsSum.flatMap(_.failedTasks).sortBy(_.appIndex),

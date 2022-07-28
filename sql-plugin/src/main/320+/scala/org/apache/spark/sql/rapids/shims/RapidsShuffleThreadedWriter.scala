@@ -17,10 +17,10 @@
 package org.apache.spark.sql.rapids.shims
 
 import org.apache.spark.SparkConf
+
 import org.apache.spark.shuffle.ShuffleWriteMetricsReporter
 import org.apache.spark.shuffle.api.{ShuffleExecutorComponents, ShuffleMapOutputWriter}
-import org.apache.spark.shuffle.sort.BypassMergeSortShuffleHandle
-import org.apache.spark.sql.rapids.RapidsShuffleThreadedWriterBase
+import org.apache.spark.sql.rapids.{RapidsShuffleThreadedWriterBase, ShuffleHandleWithMetrics}
 import org.apache.spark.storage.{BlockManager, DiskBlockObjectWriter}
 
 object RapidsShuffleThreadedWriter {
@@ -31,7 +31,7 @@ object RapidsShuffleThreadedWriter {
 
 class RapidsShuffleThreadedWriter[K, V](
     blockManager: BlockManager,
-    handle: BypassMergeSortShuffleHandle[K, V],
+    handle: ShuffleHandleWithMetrics[K, V, V],
     mapId: Long,
     sparkConf: SparkConf,
     writeMetrics: ShuffleWriteMetricsReporter,

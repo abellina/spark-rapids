@@ -2,6 +2,7 @@ META-INF/DEPENDENCIES
 META-INF/LICENSE
 META-INF/NOTICE
 META-INF/maven/**
+com/nvidia/spark/rapids/Arm*
 com/nvidia/spark/ExclusiveModeGpuDiscoveryPlugin*
 com/nvidia/spark/GpuCachedBatchSerializer*
 com/nvidia/spark/ParquetCachedBatchSerializer*
@@ -29,5 +30,7 @@ com/nvidia/spark/rapids/SparkShims*
 com/nvidia/spark/udf/Plugin*
 org/apache/spark/sql/rapids/ProxyRapidsShuffleInternalManagerBase*
 org/apache/spark/sql/rapids/RapidsShuffleManagerLike*
+org/apache/spark/sql/rapids/execution/SerializeConcatHostBuffersDeserializeBatch*
+org/apache/spark/sql/rapids/execution/SerializeBatchDeserializeHostBuffer*
 rapids/*.py
 rapids4spark-version-info.properties

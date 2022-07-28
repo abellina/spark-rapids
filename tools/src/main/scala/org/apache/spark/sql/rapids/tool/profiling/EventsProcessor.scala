@@ -18,12 +18,13 @@ package org.apache.spark.sql.rapids.tool.profiling
 
 import java.util.concurrent.TimeUnit.NANOSECONDS
 
+import scala.collection.mutable
 import scala.collection.mutable.ArrayBuffer
 import scala.util.control.NonFatal
 
 import com.nvidia.spark.rapids.tool.profiling._
-
 import org.apache.spark.TaskFailedReason
+
 import org.apache.spark.internal.Logging
 import org.apache.spark.scheduler._
 import org.apache.spark.sql.execution.ui.{SparkListenerSQLAdaptiveExecutionUpdate, SparkListenerSQLAdaptiveSQLMetricUpdates, SparkListenerSQLExecutionStart}
@@ -195,6 +196,34 @@ class EventsProcessor(app: ApplicationInfo) extends EventProcessorBase[Applicati
         event.reason.toString
     }
 
+    val metricsOfInterest = Set[String](
+      "rs. deserialization time",
+      "rs. serialization time",
+      "rs. shuffle read time",
+      "rs. shuffle write time",
+      "io time",
+      "data size",
+      "data read size")
+
+    val accumulatorMap = new mutable.HashMap[String, Long]()
+    event.taskInfo.accumulables
+        .filter(a => metricsOfInterest.contains(a.name.getOrElse("")))
+        .foreach { a =>
+          val key = a.name.get
+          val value = a.update.getOrElse(0L).asInstanceOf[String].toLong
+          val prior = accumulatorMap.getOrElse(key, 0L)
+          accumulatorMap.put(key, prior + value)
+        }
+
+    val shuffleExtraMetrics = ShuffleExtraMetrics(
+      accumulatorMap.getOrElse("rs. deserialization time", 0L),
+      accumulatorMap.getOrElse("rs. serialization time", 0L),
+      accumulatorMap.getOrElse("rs. shuffle read time", 0L),
+      accumulatorMap.getOrElse("rs. shuffle write time", 0L),
+      accumulatorMap.getOrElse("io time", 0L),
+      accumulatorMap.getOrElse("data size", 0L),
+      accumulatorMap.getOrElse("data read size", 0L))
+
     val thisTask = TaskCase(
       event.stageId,
       event.stageAttemptId,
@@ -234,7 +263,8 @@ class EventsProcessor(app: ApplicationInfo) extends EventProcessorBase[Applicati
       event.taskMetrics.inputMetrics.bytesRead,
       event.taskMetrics.inputMetrics.recordsRead,
       event.taskMetrics.outputMetrics.bytesWritten,
-      event.taskMetrics.outputMetrics.recordsWritten
+      event.taskMetrics.outputMetrics.recordsWritten,
+      shuffleExtraMetrics
     )
     app.taskEnd += thisTask
   }

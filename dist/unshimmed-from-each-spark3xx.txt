@@ -1,6 +1,9 @@
+com/nvidia/spark/rapids/Arm*
 com/nvidia/spark/rapids/*/RapidsShuffleManager*
 com/nvidia/spark/rapids/AvroProvider.class
 com/nvidia/spark/rapids/HiveProvider.class
 com/nvidia/spark/rapids/IcebergProvider.class
 org/apache/spark/sql/rapids/shims/*/ProxyRapidsShuffleInternalManager*
+org/apache/spark/sql/rapids/execution/SerializeConcatHostBuffersDeserializeBatch*
+org/apache/spark/sql/rapids/execution/SerializeBatchDeserializeHostBuffer*
 spark-*-info.properties

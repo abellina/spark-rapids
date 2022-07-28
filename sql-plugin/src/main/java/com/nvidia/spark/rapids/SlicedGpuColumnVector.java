@@ -58,6 +58,15 @@ public class SlicedGpuColumnVector extends ColumnVector {
     return batch;
   }
 
+  public static long getHostDataSize(ColumnarBatch batch) {
+    long hostDataSize = 0;
+    for (int i = 0; i < batch.numCols(); i++) {
+      hostDataSize +=
+          ((SlicedGpuColumnVector)batch.column(i)).getBase().getHostMemorySize();
+    }
+    return hostDataSize;
+  }
+
   @Override
   public boolean hasNull() {
     // This is a hack, we don't really know...

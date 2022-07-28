@@ -255,7 +255,7 @@ class Analysis(apps: Seq[ApplicationInfo]) {
 
             // set this here, so make sure we don't get it again until later
             sqlCase.sqlCpuTimePercent = execCPURatio
-           
+
             val (durSum, durMax, durMin, durAvg) = getDurations(tasksInSQL)
             Some(SQLTaskAggMetricsProfileResult(app.index,
               app.appId,
@@ -293,7 +293,14 @@ class Analysis(apps: Seq[ApplicationInfo]) {
               tasksInSQL.map(_.sr_totalBytesRead).sum,
               tasksInSQL.map(_.sw_bytesWritten).sum,
               tasksInSQL.map(_.sw_recordsWritten).sum,
-              tasksInSQL.map(_.sw_writeTime).sum
+              tasksInSQL.map(_.sw_writeTime).sum,
+              tasksInSQL.map(_.shuffleExtraMetrics.ioTimeNs).sum,
+              tasksInSQL.map(_.shuffleExtraMetrics.dataSizeBytes).sum,
+              tasksInSQL.map(_.shuffleExtraMetrics.dataReadSizeBytes).sum,
+              tasksInSQL.map(_.shuffleExtraMetrics.deserializationTimeNs).sum,
+              tasksInSQL.map(_.shuffleExtraMetrics.serializationTimeNs).sum,
+              tasksInSQL.map(_.shuffleExtraMetrics.shuffleReadtimeNs).sum,
+              tasksInSQL.map(_.shuffleExtraMetrics.shuffleWriteTimeNs).sum
             ))
           }
         }
@@ -331,8 +338,6 @@ class Analysis(apps: Seq[ApplicationInfo]) {
     }
   }
 
-  private case class AverageStageInfo(avgDuration: Double, avgShuffleReadBytes: Double)
-
   def shuffleSkewCheck(): Seq[ShuffleSkewProfileResult] = {
     val allRows = apps.flatMap { app =>
       val tasksPerStageAttempt = app.taskEnd.groupBy { tc =>
@@ -342,15 +347,27 @@ class Analysis(apps: Seq[ApplicationInfo]) {
         val sumDuration = tcArr.map(_.duration).sum
         val avgDuration = ToolUtils.calculateAverage(sumDuration, tcArr.size, 2)
         val sumShuffleReadBytes = tcArr.map(_.sr_totalBytesRead).sum
+        val sumShuffleWriteBytes = tcArr.map(_.sw_bytesWritten).sum
         val avgShuffleReadBytes = ToolUtils.calculateAverage(sumShuffleReadBytes, tcArr.size, 2)
-        ((sId, saId), AverageStageInfo(avgDuration, avgShuffleReadBytes))
+        val avgShuffleWriteBytes= ToolUtils.calculateAverage(sumShuffleWriteBytes, tcArr.size, 2)
+        val avgShuffleWriteTime = ToolUtils.calculateAverage(
+          tcArr.map(_.sw_writeTime).sum, tcArr.size, 2)// millis
+        val avgShuffleReadTime = ToolUtils.calculateAverage(
+          tcArr.map(_.sr_fetchWaitTime).sum, tcArr.size, 2)// millis
+        ((sId, saId),
+            AverageStageInfo(
+              avgDuration,
+              avgShuffleReadBytes,
+              avgShuffleWriteBytes,
+              avgShuffleReadTime,
+              avgShuffleWriteTime))
       }
 
       val tasksWithSkew = app.taskEnd.filter { tc =>
         val avgShuffleDur = avgsStageInfos.get((tc.stageId, tc.stageAttemptId))
         avgShuffleDur match {
           case Some(avg) =>
-            (tc.sr_totalBytesRead > 3 * avg.avgShuffleReadBytes) &&
+            (tc.duration > 1000) &&
               (tc.sr_totalBytesRead > 100 * 1024 * 1024)
           case None => false
         }
@@ -362,11 +379,24 @@ class Analysis(apps: Seq[ApplicationInfo]) {
 
       tasksWithSkew.map { tc =>
         val avgShuffleDur = avgsStageInfos.get((tc.stageId, tc.stageAttemptId))
+        //val desc = app.sqlIdToInfo(tc.sqlId).description
         avgShuffleDur match {
           case Some(avg) =>
-            Some(ShuffleSkewProfileResult(app.index, tc.stageId, tc.stageAttemptId,
-              tc.taskId, tc.attempt, tc.duration, avg.avgDuration, tc.sr_totalBytesRead,
-              avg.avgShuffleReadBytes, tc.peakExecutionMemory, tc.successful, tc.endReason))
+            Some(
+              ShuffleSkewProfileResult(
+                app.index,
+                tc.stageId,
+                tc.stageAttemptId,
+                tc.taskId,
+                tc.attempt,
+                tc.duration,
+                avg,
+                tc.sr_fetchWaitTime,
+                tc.sw_writeTime,
+                tc.sr_totalBytesRead,
+                tc.peakExecutionMemory,
+                tc.successful,
+                tc.endReason))
           case None =>
             None
         }

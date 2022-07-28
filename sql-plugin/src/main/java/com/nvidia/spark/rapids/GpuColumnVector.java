@@ -1070,6 +1070,35 @@ public class GpuColumnVector extends GpuColumnVectorBase {
     return (int) cudfCv.getNullCount();
   }
 
+  public static long getMemoryUsed(ColumnarBatch batch) {
+    long sum = 0;
+    if (batch.numCols() > 0) {
+      if (batch.column(0) instanceof WithTableBuffer) {
+        WithTableBuffer wtb = (WithTableBuffer) batch.column(0);
+        sum += wtb.getTableBuffer().getLength();
+      } else {
+        HashSet<Long> found = new HashSet<>();
+        for (int i = 0; i < batch.numCols(); i++) {
+          ColumnVector cv = batch.column(i);
+          if (cv instanceof GpuColumnVector) {
+            ai.rapids.cudf.ColumnVector gpuCv = ((GpuColumnVector) cv).getBase();
+            long id = gpuCv.getNativeView();
+            if (found.add(id)) {
+              sum += gpuCv.getDeviceMemorySize();
+            }
+          } else if (cv instanceof SerializedTableColumn) {
+            if (batch.numCols() > 1) {
+              throw new IllegalStateException("serialized tables must have 1 column");
+            }
+            sum += (((SerializedTableColumn) cv).hostBuffer().getLength());
+            return sum;
+          }
+        }
+      }
+    }
+    return sum;
+  }
+
   public static long getTotalDeviceMemoryUsed(ColumnarBatch batch) {
     long sum = 0;
     if (batch.numCols() > 0) {
