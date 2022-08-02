@@ -149,6 +149,7 @@ abstract class GpuShuffleExchangeExecBase(
     child: SparkPlan) extends Exchange with ShimUnaryExecNode with GpuExec {
   import GpuMetric._
 
+
   private lazy val useGPUShuffle = {
     gpuOutputPartitioning match {
       case gpuPartitioning: GpuPartitioning => gpuPartitioning.usesGPUShuffle

@@ -54,4 +54,5 @@ case class GpuShuffleExchangeExec(
       rowCount = Some(metrics("numOutputRows").value)
     )
   }
+
 }

@@ -194,6 +194,12 @@ abstract class RapidsShuffleThreadedWriterBase[K, V](
         with Arm
         with Logging {
 
+
+  private val p = Executors.newSingleThreadExecutor(new ThreadFactoryBuilder()
+      .setNameFormat(s"shuffle-writer-helper-$mapId")
+      .setDaemon(true)
+      .build())
+
   private var myMapStatus: Option[MapStatus] = None
 
   private val dep: ShuffleDependency[K, V, V] = handle.dependency
@@ -221,8 +227,11 @@ abstract class RapidsShuffleThreadedWriterBase[K, V](
           mapId,
           numPartitions)
         try {
-          val partLengths = if (!records.hasNext) {
-            commitAllPartitions(mapOutputWriter, true /*empty checksum*/)
+          if (!records.hasNext) {
+            logInfo(s"No records... ${TaskContext.get().taskAttemptId()}")
+            val partLengths = commitAllPartitions(mapOutputWriter, true /*empty checksum*/)
+            myMapStatus = Some(MapStatus(blockManager.shuffleServerId, partLengths, mapId,
+              deferCommit=false))
           } else {
             // per reduce partition id
             // open all the writers ahead of time (Spark does this already)
@@ -288,9 +297,31 @@ abstract class RapidsShuffleThreadedWriterBase[K, V](
                 }
               }
             }
-            writePartitionedData(mapOutputWriter)
+
+            val segments = (0 until numPartitions).map { reducePartitionId =>
+              withResource(diskBlockObjectWriters(reducePartitionId)._2) { writer =>
+                val segment = writer.commitAndGet()
+                (reducePartitionId, segment.file, segment.length)
+              }
+            }
+
+            logInfo(s"Scheduling task on ${p}")
+            val tid = TaskContext.get().taskAttemptId()
+            p.execute(() => {
+              try {
+                logInfo("Before writing deferred task commit")
+                writePartitionedData(mapOutputWriter, segments)
+                myMapStatus.foreach(_.doComplete)
+                logInfo(s"done with complete for ${mapId} ${tid}")
+              } catch {
+                case t: Throwable =>
+                  logError("Exception writing", t)
+              }
+            })
+            val partLengths = segments.map(s => s._3).toArray
+            myMapStatus = Some(
+              MapStatus(blockManager.shuffleServerId, partLengths, mapId, deferCommit=true))
           }
-          myMapStatus = Some(MapStatus(blockManager.shuffleServerId, partLengths, mapId))
         } catch {
           // taken directly from BypassMergeSortShuffleWriter
           case e: Exception =>
@@ -307,21 +338,13 @@ abstract class RapidsShuffleThreadedWriterBase[K, V](
     }
   }
 
-  def writePartitionedData(mapOutputWriter: ShuffleMapOutputWriter): Array[Long] = {
+  def writePartitionedData(mapOutputWriter: ShuffleMapOutputWriter, 
+      segments:Seq[(Int, File, Long)]): Array[Long] = {
     // after all temporary shuffle writes are done, we need to produce a single
     // file (shuffle_[map_id]_0) which is done during this commit phase
     withResource(new NvtxRange("CommitShuffle", NvtxColor.RED)) { _ =>
-      // per reduce partition
-      val segments = (0 until numPartitions).map {
-        reducePartitionId =>
-          withResource(diskBlockObjectWriters(reducePartitionId)._2) { writer =>
-            val segment = writer.commitAndGet()
-            (reducePartitionId, segment.file)
-          }
-      }
-
       val writeStartTime = System.nanoTime()
-      segments.foreach { case (reducePartitionId, file) =>
+      segments.foreach { case (reducePartitionId, file, lengths) =>
         val partWriter = mapOutputWriter.getPartitionWriter(reducePartitionId)
         if (file.exists()) {
           if (transferToEnabled) {
