@@ -638,31 +638,15 @@ case class SQLDurationExecutorTimeProfileResult(appIndex: Int, appId: String, sq
   }
 }
 
-case class AverageStageInfo(
-    avgDuration: Double,
-    avgShuffleReadBytes: Double,
-    avgShuffleWriteBytes: Double,
-    avgShuffleReadTime: Double,
-    avgShuffleWriteTime: Double)
+case class AverageStageInfo(avgDuration: Double, avgShuffleReadBytes: Double)
 
 case class ShuffleSkewProfileResult(appIndex: Int, stageId: Long, stageAttemptId: Long,
-    taskId: Long, taskAttemptId: Long, taskDuration: Long, avg: AverageStageInfo,
-    taskShuffleReadTime: Double, taskShuffleWriteTime: Double,
-    taskShuffleReadMB: Long, taskPeakMemoryMB: Long,
+    taskId: Long, taskAttemptId: Long, taskDuration: Long, avgDuration: Double,
+    taskShuffleReadMB: Long, avgShuffleReadMB: Double, taskPeakMemoryMB: Long,
     successful: Boolean, reason: String) extends ProfileResult {
   override val outputHeaders = Seq("appIndex", "stageId", "stageAttemptId", "taskId", "attempt",
-    "taskDurationSec",
-    "avgDurationSec",
-    "avgShuffleReadBytesMB",
-    "avgShuffleWriteBytesMB",
-    "avgShuffleReadTimeSec",
-    "avgShuffleWriteTimeSec",
-    "taskShuffleReadTimeSec",
-    "taskShuffleWriteTimeSec",
-    "taskShuffleReadMB",
-    "taskPeakMemoryMB",
-    "successful",
-    "reason")
+    "taskDurationSec", "avgDurationSec", "taskShuffleReadMB", "avgShuffleReadMB",
+    "taskPeakMemoryMB", "successful", "reason")
 
   override def convertToSeq: Seq[String] = {
     Seq(appIndex.toString,
@@ -671,14 +655,9 @@ case class ShuffleSkewProfileResult(appIndex: Int, stageId: Long, stageAttemptId
       taskId.toString,
       taskAttemptId.toString,
       f"${taskDuration.toDouble / 1000}%1.2f",
-      f"${avg.avgDuration/ 1000}%1.4f",
-      f"${avg.avgShuffleReadBytes / 1024 / 1024}%1.2f",
-      f"${avg.avgShuffleWriteBytes / 1024 / 1024}%1.2f",
-      f"${avg.avgShuffleReadTime/1000}%1.4f",
-      f"${avg.avgShuffleWriteTime/1000}%1.4f",
-      f"${taskShuffleReadTime/1000}%1.4f",
-      f"${taskShuffleWriteTime/1000}%1.4f",
+      f"${avgDuration / 1000}%1.1f",
       f"${taskShuffleReadMB.toDouble / 1024 / 1024}%1.2f",
+      f"${avgShuffleReadMB / 1024 / 1024}%1.2f",
       f"${taskPeakMemoryMB.toDouble / 1024 / 1024}%1.2f",
       successful.toString,
       ProfileUtils.truncateFailureStr(reason))

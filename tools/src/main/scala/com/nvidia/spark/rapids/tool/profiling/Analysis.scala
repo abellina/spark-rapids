@@ -347,27 +347,16 @@ class Analysis(apps: Seq[ApplicationInfo]) {
         val sumDuration = tcArr.map(_.duration).sum
         val avgDuration = ToolUtils.calculateAverage(sumDuration, tcArr.size, 2)
         val sumShuffleReadBytes = tcArr.map(_.sr_totalBytesRead).sum
-        val sumShuffleWriteBytes = tcArr.map(_.sw_bytesWritten).sum
         val avgShuffleReadBytes = ToolUtils.calculateAverage(sumShuffleReadBytes, tcArr.size, 2)
-        val avgShuffleWriteBytes= ToolUtils.calculateAverage(sumShuffleWriteBytes, tcArr.size, 2)
-        val avgShuffleWriteTime = ToolUtils.calculateAverage(
-          tcArr.map(_.sw_writeTime).sum, tcArr.size, 2)// millis
-        val avgShuffleReadTime = ToolUtils.calculateAverage(
-          tcArr.map(_.sr_fetchWaitTime).sum, tcArr.size, 2)// millis
         ((sId, saId),
-            AverageStageInfo(
-              avgDuration,
-              avgShuffleReadBytes,
-              avgShuffleWriteBytes,
-              avgShuffleReadTime,
-              avgShuffleWriteTime))
+            AverageStageInfo(avgDuration, avgShuffleReadBytes))
       }
 
       val tasksWithSkew = app.taskEnd.filter { tc =>
         val avgShuffleDur = avgsStageInfos.get((tc.stageId, tc.stageAttemptId))
         avgShuffleDur match {
           case Some(avg) =>
-            (tc.duration > 1000) &&
+            (tc.sr_totalBytesRead > 3 * avg.avgShuffleReadBytes) &&
               (tc.sr_totalBytesRead > 100 * 1024 * 1024)
           case None => false
         }
@@ -382,21 +371,9 @@ class Analysis(apps: Seq[ApplicationInfo]) {
         //val desc = app.sqlIdToInfo(tc.sqlId).description
         avgShuffleDur match {
           case Some(avg) =>
-            Some(
-              ShuffleSkewProfileResult(
-                app.index,
-                tc.stageId,
-                tc.stageAttemptId,
-                tc.taskId,
-                tc.attempt,
-                tc.duration,
-                avg,
-                tc.sr_fetchWaitTime,
-                tc.sw_writeTime,
-                tc.sr_totalBytesRead,
-                tc.peakExecutionMemory,
-                tc.successful,
-                tc.endReason))
+            Some(ShuffleSkewProfileResult(app.index, tc.stageId, tc.stageAttemptId,
+              tc.taskId, tc.attempt, tc.duration, avg.avgDuration, tc.sr_totalBytesRead,
+              avg.avgShuffleReadBytes, tc.peakExecutionMemory, tc.successful, tc.endReason))
           case None =>
             None
         }
