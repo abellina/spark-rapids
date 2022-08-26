@@ -234,6 +234,7 @@ abstract class RapidsShuffleThreadedWriterBase[K, V](
   private val metrics = handle.metrics
   private val serializationTimeMetric: SQLMetric = metrics("rapidsShuffleSerializationTime")
   private val shuffleWriteTimeMetric: SQLMetric = metrics("rapidsShuffleWriteTime")
+  private val shuffleCombineTimeMetric: SQLMetric = metrics("rapidsShuffleCombineTime")
   private val ioTimeMetric: SQLMetric = metrics("ioTime")
   //private val uncompressedSizeMetric: SQLMetric = metrics("dataSize")
   private val dep: ShuffleDependency[K, V, V] = handle.dependency
@@ -341,28 +342,19 @@ abstract class RapidsShuffleThreadedWriterBase[K, V](
                 writeFutures.foreach(_.cancel(true /*ok to interrupt*/))
               }
             }
+            val combineTimeStart = System.nanoTime()
             val pl = writePartitionedData(mapOutputWriter)
+            val combineTimeNs = System.nanoTime() - combineTimeStart
 
             // writeTime is the amount of time it took to push bytes through the stream
             // minus the amount of time it took to get the batch from the upstream execs
             val writeTimeNs = (System.nanoTime() - writeTimeStart) - computeTime
 
-            // ioTime: we know when we started writing and we know when we finished,
-            // so we have the upper bound on this.
-            // If we get an encode and io parallel time, we could do an estimate on average
-            // of where the split is (say 70% encode and 30% io), then we could say:
-            // ioTime = overallTime * .3 and encodeTime = overallTime * .7
-            // this could be obscured by long waits
-
-            // At this point, Spark has also timed the amount of time it took to write
+            // At this point, Spark has timed the amount of time it took to write
             // to disk (the IO, per write).
             val ioTimeNs =
               writeMetrics.asInstanceOf[ThreadSafeShuffleWriteMetricsReporter].getWriteTime
 
-            // zero-out what spark has so far, to replace with our own
-            //writeMetrics.incWriteTime(-1 * ioTimeNs)
-            val totalWriteTimeNs = openTimeNs + writeTimeNs
-            // writeMetrics.incWriteTime(totalWriteTimeNs)
             writeMetrics.incWriteTime(openTimeNs) // as regular Spark does
 
             // serializationTime is the time spent compressing/encoding batches that wasn't
@@ -371,19 +363,10 @@ abstract class RapidsShuffleThreadedWriterBase[K, V](
             val serializationPct =
               (totalPerRecordWriteTime.toDouble - ioTimeNs)/ totalPerRecordWriteTime
             val serializationTime = (serializationPct * totalPerRecordWriteTime).toLong
-            if (serializationTime< 0) {
-              throw new IllegalStateException(
-                s"serialzationPct ${serializationPct}, serializationTime ${serializationTime}, " +
-                  s"totalPerRecordWriteTime ${totalPerRecordWriteTime}, " +
-                  s"ioTime ${ioTimeNs}")
-            }
-
             serializationTimeMetric += serializationTime
             shuffleWriteTimeMetric += (openTimeNs + writeTimeNs)
-            // ioTime makes sense when we divide compressed size / ioTime. This is the effective bandwidth
-            // per task.
+            shuffleCombineTimeMetric += combineTimeNs
             ioTimeMetric += ioTimeNs
-            //uncompressedSizeMetric += uncompressedSize
             pl
           }
           myMapStatus = Some(MapStatus(blockManager.shuffleServerId, partLengths, mapId))
@@ -417,6 +400,45 @@ abstract class RapidsShuffleThreadedWriterBase[K, V](
       }
 
       val writeStartTime = System.nanoTime()
+      //case class Request(file: File, offset: Long, length: Long, targetOffset: Long)
+      //val totalFileLength = segments.map(_._2.length()).sum
+      //val numTasks = Math.ceil(totalFileLength.toDouble / (1L * 1024 * 1024)).toLong
+      //val amountPerTask = Math.max(1, Math.ceil(totalFileLength.toDouble / numTasks).toLong)
+      //var amountLeft = totalFileLength
+      //var amountLeftInTask = amountPerTask
+      //var targetOffset = 0L
+      //var task = 0
+      //val requestPerTask = new mutable.HashMap[Int, ArrayBuffer[Request]]()
+      //val segmentsToInspect = segments.iterator
+      //while (amountLeft > 0) {
+      //  while (segmentsToInspect.hasNext) {
+      //    val seg = segmentsToInspect.next()
+      //    var segSizeLeft = seg._2.length()
+      //    var segOffset = 0L
+      //    while (segSizeLeft > 0 && amountLeftInTask > 0) {
+      //      val reqLength = Math.min(segSizeLeft, amountLeftInTask)
+      //      val req = Request(seg._2, segOffset, reqLength, targetOffset)
+      //      segSizeLeft -= reqLength
+      //      segOffset += reqLength
+      //      targetOffset += reqLength
+      //      amountLeftInTask -= reqLength
+      //      amountLeft -= reqLength
+      //      if (!requestPerTask.contains(task)) {
+      //        requestPerTask.put(task, new ArrayBuffer[Request]())
+      //      }
+      //      requestPerTask(task) += req
+      //      if (amountLeftInTask <= 0) {
+      //        task += 1
+      //        amountLeftInTask = amountPerTask
+      //      }
+      //    }
+      //    if (amountLeftInTask <= 0) {
+      //      task += 1
+      //      amountLeftInTask = amountPerTask
+      //    }
+      //  }
+      //}
+
       segments.foreach { case (reducePartitionId, file) =>
         val partWriter = mapOutputWriter.getPartitionWriter(reducePartitionId)
         if (file.exists()) {

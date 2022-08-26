@@ -281,10 +281,13 @@ case class TaskStageAccumCase(
     isInternal: Boolean)
 
 case class ShuffleExtraMetrics(
+    bufferTimeNs: Long,
+    taskDeserializationTimeMs: Long,
     deserializationTimeNs: Long,
     serializationTimeNs: Long,
     shuffleReadtimeNs: Long,
     shuffleWriteTimeNs: Long,
+    shuffleCombineTimeNs: Long,
     ioTimeNs: Long, // write io time
     dataSizeBytes: Long, // uncompressed write size
     dataReadSizeBytes: Long // uncompressed read size
@@ -496,13 +499,16 @@ case class SQLTaskAggMetricsProfileResult(
     swBytesWrittenSum: Long,
     swRecordsWrittenSum: Long,
     swWriteTimeSum: Long,
+    bufferTimeNsSum: Long,
+    taskDeserializationTimeMsSum: Long,
     writeIoTimeNsSum: Long,
     dataSizeBytesSum: Long,
     dataReadSizeBytesSum: Long,
     deserializationTimeNsSum: Long,
     serializationTimeNsSum: Long,
     rapidsShuffleReadTimeNsSum: Long,
-    rapidsShuffleWriteTimeNsSum: Long) extends ProfileResult {
+    rapidsShuffleWriteTimeNsSum: Long,
+    rapidsShuffleCombineTimeNsSum: Long) extends ProfileResult {
 
   override val outputHeaders = Seq(
     "appIndex",
@@ -521,6 +527,7 @@ case class SQLTaskAggMetricsProfileResult(
     "shuffle_read_uncompressed",
 
     "shuffle_write_time",
+    "shuffle_write_combine_time",
     "shuffle_write_ser_time",
     "shuffle_write_io_time",
     "shuffle_write_ser_bw",
@@ -532,7 +539,11 @@ case class SQLTaskAggMetricsProfileResult(
     "shuffle_read_io_time",
     "shuffle_read_deser_bw",
     "shuffle_read_io_bw",
-    "shuffle_read_eff_bw")
+    "shuffle_read_eff_bw",
+
+    "buffer_sum",
+    "task_deser_time_sum"
+  )
 
   val durStr = duration match {
     case Some(dur) => dur.toString
@@ -555,6 +566,10 @@ case class SQLTaskAggMetricsProfileResult(
       TimeUnit.NANOSECONDS.toMillis(rapidsShuffleReadTimeNsSum)
     val rapidsShuffleWriteTimeMsSum =
       TimeUnit.NANOSECONDS.toMillis(rapidsShuffleWriteTimeNsSum)
+    val rapidsShuffleCombineTimeMsSum =
+      TimeUnit.NANOSECONDS.toMillis(rapidsShuffleCombineTimeNsSum)
+    val bufferTimeMsSum =
+      TimeUnit.NANOSECONDS.toMillis(bufferTimeNsSum)
 
     val shuffleSumMs = rapidsShuffleWriteTimeMsSum + rapidsShuffleReadTimeMsSum
 
@@ -593,6 +608,7 @@ case class SQLTaskAggMetricsProfileResult(
       f"${shuffleReadUncompressedMB}%1.2f",
 
       rapidsShuffleWriteTimeMsSum.toString,
+      rapidsShuffleCombineTimeMsSum.toString,
       serializationTimeMsSum.toString,
       writeIoTimeMsSum.toString,
       f"${serializationBw}%1.2f",
@@ -604,7 +620,10 @@ case class SQLTaskAggMetricsProfileResult(
       readIoTimeMsSum.toString,
       f"${deserializationBw}%1.2f",
       f"${readIOBw}%1.2f",
-      f"${shuffleReadBw}%1.2f")
+      f"${shuffleReadBw}%1.2f",
+
+      bufferTimeMsSum.toString,
+      taskDeserializationTimeMsSum.toString)
   }
 }
 

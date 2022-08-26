@@ -294,13 +294,16 @@ class Analysis(apps: Seq[ApplicationInfo]) {
               tasksInSQL.map(_.sw_bytesWritten).sum,
               tasksInSQL.map(_.sw_recordsWritten).sum,
               tasksInSQL.map(_.sw_writeTime).sum,
+              tasksInSQL.map(_.shuffleExtraMetrics.bufferTimeNs).sum,
+              tasksInSQL.map(_.shuffleExtraMetrics.taskDeserializationTimeMs).sum,
               tasksInSQL.map(_.shuffleExtraMetrics.ioTimeNs).sum,
               tasksInSQL.map(_.shuffleExtraMetrics.dataSizeBytes).sum,
               tasksInSQL.map(_.shuffleExtraMetrics.dataReadSizeBytes).sum,
               tasksInSQL.map(_.shuffleExtraMetrics.deserializationTimeNs).sum,
               tasksInSQL.map(_.shuffleExtraMetrics.serializationTimeNs).sum,
               tasksInSQL.map(_.shuffleExtraMetrics.shuffleReadtimeNs).sum,
-              tasksInSQL.map(_.shuffleExtraMetrics.shuffleWriteTimeNs).sum
+              tasksInSQL.map(_.shuffleExtraMetrics.shuffleWriteTimeNs).sum,
+              tasksInSQL.map(_.shuffleExtraMetrics.shuffleCombineTimeNs).sum
             ))
           }
         }

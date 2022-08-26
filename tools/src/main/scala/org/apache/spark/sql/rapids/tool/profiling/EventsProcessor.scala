@@ -16,6 +16,7 @@
 
 package org.apache.spark.sql.rapids.tool.profiling
 
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.TimeUnit.NANOSECONDS
 
 import scala.collection.mutable
@@ -23,8 +24,8 @@ import scala.collection.mutable.ArrayBuffer
 import scala.util.control.NonFatal
 
 import com.nvidia.spark.rapids.tool.profiling._
-
 import org.apache.spark.TaskFailedReason
+
 import org.apache.spark.internal.Logging
 import org.apache.spark.scheduler._
 import org.apache.spark.sql.execution.ui.{SparkListenerSQLAdaptiveExecutionUpdate, SparkListenerSQLAdaptiveSQLMetricUpdates, SparkListenerSQLExecutionStart}
@@ -197,29 +198,61 @@ class EventsProcessor(app: ApplicationInfo) extends EventProcessorBase[Applicati
     }
 
     val metricsOfInterest = Set[String](
+      "buffer time",
       "rs. deserialization time",
       "rs. serialization time",
       "rs. shuffle read time",
       "rs. shuffle write time",
+      "rs. shuffle combine time",
       "io time",
       "data size",
-      "data read size")
+      "data read size",
+      "internal.metrics.executorRunTime",
+      "internal.metrics.executorDeserializeTime")
 
     val accumulatorMap = new mutable.HashMap[String, Long]()
+
+    // we are getting the metrics from the task's accumulable.
+    // these contain the task's contribution to the time per accumulator in `update`.
+    // there can be more than one accumulable with the same name, if the task touches
+    // several accumulables that are instantiated per Exec node (e.g. "op time" may be there
+    // more than once, and so could be "shuffle read time")
     event.taskInfo.accumulables
         .filter(a => metricsOfInterest.contains(a.name.getOrElse("")))
         .foreach { a =>
           val key = a.name.get
-          val value = a.update.getOrElse(0L).asInstanceOf[String].toLong
-          val prior = accumulatorMap.getOrElse(key, 0L)
-          accumulatorMap.put(key, prior + value)
+          val value = a.update match {
+            case a: Some[Any] =>
+              val u = a.get
+              u match {
+                case b: String => Some(b.toLong)
+                case l: Long => Some(l)
+                case _ => None
+              }
+            case _ => // ignore
+              None
+          }
+          value.foreach { v =>
+            val prior = accumulatorMap.getOrElse(key, 0L)
+            accumulatorMap.put(key, prior + v)
+          }
         }
 
+    if (accumulatorMap.contains("buffer time")) {
+      if (accumulatorMap.getOrElse("internal.metrics.executorRunTime", 0L) <
+          TimeUnit.NANOSECONDS.toMillis(accumulatorMap.getOrElse("buffer time", 0L))) {
+        println(accumulatorMap)
+      }
+    }
+
     val shuffleExtraMetrics = ShuffleExtraMetrics(
+      accumulatorMap.getOrElse("buffer time", 0L),
+      accumulatorMap.getOrElse("internal.metrics.executorDeserializeTime", 0L),
       accumulatorMap.getOrElse("rs. deserialization time", 0L),
       accumulatorMap.getOrElse("rs. serialization time", 0L),
       accumulatorMap.getOrElse("rs. shuffle read time", 0L),
       accumulatorMap.getOrElse("rs. shuffle write time", 0L),
+      accumulatorMap.getOrElse("rs. shuffle combine time", 0L),
       accumulatorMap.getOrElse("io time", 0L),
       accumulatorMap.getOrElse("data size", 0L),
       accumulatorMap.getOrElse("data read size", 0L))

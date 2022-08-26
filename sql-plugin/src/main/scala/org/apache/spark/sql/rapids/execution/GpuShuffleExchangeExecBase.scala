@@ -184,6 +184,8 @@ abstract class GpuShuffleExchangeExecBase(
         createNanoTimingMetric(ESSENTIAL_LEVEL,"rs. shuffle read time"),
     "rapidsShuffleWriteTime" ->
         createNanoTimingMetric(ESSENTIAL_LEVEL,"rs. shuffle write time"),
+    "rapidsShuffleCombineTime" ->
+        createNanoTimingMetric(ESSENTIAL_LEVEL,"rs. shuffle combine time"),
     "ioTime" -> createNanoTimingMetric(ESSENTIAL_LEVEL,"io time")
   ) ++ GpuMetric.wrap(readMetrics) ++ GpuMetric.wrap(writeMetrics)
 
