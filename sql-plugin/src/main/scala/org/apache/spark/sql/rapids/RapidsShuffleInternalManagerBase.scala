@@ -585,86 +585,89 @@ class RapidsShuffleThreadedReader[K, C](
     }
 
     val serializerInstance = serializer.newInstance()
-
+    var currentStreamStream: Iterator[(Any, Any)] = null
 
     override def next(): (Any, Any) = {
-      // incorporate timings w.r.t the task
       var fetchTime = 0L
       var readBlocked = 0L
       var waitTime = 0L
-      withResource(
-        new NvtxRange("ParallelDeserializerIterator.next", NvtxColor.CYAN)) { _ =>
-        if (streams.hasNext) {
-          withResource(
+      if (readerThreads == 1) {
+        // make a new iterator
+      } else {
+        withResource(
+          new NvtxRange("ParallelDeserializerIterator.next", NvtxColor.CYAN)) { _ =>
+          if (streams.hasNext) {
+            withResource(
               new NvtxRange("ParallelDeserializerIterator.queueAll", NvtxColor.YELLOW)) { _ =>
-            require(hasNext, "called next on an empty iterator")
-            // drain what we have queued
-            var amountToDrain = Math.max(streams.resultCount, 1)
-            val fetchTimeStart = System.nanoTime()
+              require(hasNext, "called next on an empty iterator")
+              // drain what we have queued
+              var amountToDrain = Math.max(streams.resultCount, 1)
+              val fetchTimeStart = System.nanoTime()
 
-            while (amountToDrain > 0 && streams.hasNext) {
-              amountToDrain -= 1
-              // fetch block time accounts for time spent waiting for streams.next()
-              val readBlockedStart = System.nanoTime()
-              val (blockId, inputStream) = streams.next()
-              readBlocked += System.nanoTime() - readBlockedStart
-              // n is  (BlockId, BufferReleasingInputStream)
-              val slot = RapidsShuffleInternalManagerBase.getNextReadSlot
+              while (amountToDrain > 0 && streams.hasNext) {
+                amountToDrain -= 1
+                // fetch block time accounts for time spent waiting for streams.next()
+                val readBlockedStart = System.nanoTime()
+                val (blockId, inputStream) = streams.next()
+                readBlocked += System.nanoTime() - readBlockedStart
+                // n is  (BlockId, BufferReleasingInputStream)
+                val slot = RapidsShuffleInternalManagerBase.getNextReadSlot
 
-              def runIt(it: Iterator[(Any, Any)]): Unit = {
-                try {
-                  // JCudfSerialization
-                  while (it.hasNext) {
-                    queued.offer(it.next())
+                def runIt(it: Iterator[(Any, Any)]): Unit = {
+                  try {
+                    // JCudfSerialization
+                    while (it.hasNext) {
+                      queued.offer(it.next())
+                    }
+                  } catch {
+                    case t: Throwable =>
+                      logError("Error in runIt", t)
+                      throw t
                   }
-                } catch {
-                  case t: Throwable =>
-                    logError("Error in runIt", t)
-                    throw t
                 }
-              }
 
-              withResource(
-                new NvtxRange("ParallelDeserializerIterator.queuetask", NvtxColor.PURPLE)) { _ =>
-                val deserStream = serializerInstance.deserializeStream(inputStream)
-                val it = deserStream.asKeyValueIterator
-                if (readerThreads == 1) {
-                  runIt(it) // run in the same thread
-                } else {
-                  futures += RapidsShuffleInternalManagerBase.queueReadTask(slot, () => {
-                    runIt(it)
-                  })
+                withResource(
+                  new NvtxRange("ParallelDeserializerIterator.queuetask", NvtxColor.PURPLE)) { _ =>
+                  val deserStream = serializerInstance.deserializeStream(inputStream)
+                  val it = deserStream.asKeyValueIterator
+                  if (readerThreads == 1) {
+                    runIt(it) // run in the same thread
+                  } else {
+                    futures += RapidsShuffleInternalManagerBase.queueReadTask(slot, () => {
+                      runIt(it)
+                    })
+                  }
                 }
               }
+              // keep track of the overall metric which includes blocked time
+              fetchTime += System.nanoTime() - fetchTimeStart
             }
-            // keep track of the overall metric which includes blocked time
-            fetchTime += System.nanoTime() - fetchTimeStart
           }
-        }
-        if (futures.nonEmpty) {
-          withResource(new NvtxRange("deser_wait", NvtxColor.CYAN)) { _ =>
-            val waitTimeStart = System.nanoTime()
-            futures.dequeue().get // wait for a future if we have one
-            waitTime += System.nanoTime() - waitTimeStart
+          if (futures.nonEmpty) {
+            withResource(new NvtxRange("deser_wait", NvtxColor.CYAN)) { _ =>
+              val waitTimeStart = System.nanoTime()
+              futures.dequeue().get // wait for a future if we have one
+              waitTime += System.nanoTime() - waitTimeStart
+            }
+          } // else all futures have completed.
+          // then we have some queued
+          val res = queued.take()
+          val uncompressedSize = res match {
+            case (_, cb: ColumnarBatch) => GpuColumnVector.getMemoryUsed(cb)
+            case _ => 0
           }
-        } // else all futures have completed.
-        // then we have some queued
-        val res = queued.take()
-        val uncompressedSize = res match {
-          case (_, cb: ColumnarBatch) => GpuColumnVector.getMemoryUsed(cb)
-          case _ => 0
+          if (!hasNext) {
+            shuffleReadRange.close()
+          }
+          // incorporate the deserialization time into the fetch wait
+          val deserTime = (fetchTime - readBlocked) + waitTime
+          if (sqlMetrics.nonEmpty) {
+            sqlMetrics("rapidsShuffleDeserializationTime") += deserTime //ns
+            sqlMetrics("rapidsShuffleReadTime") += (deserTime + waitTime + readBlocked) //ns
+            sqlMetrics("dataReadSize") += uncompressedSize
+          }
+          res
         }
-        if (!hasNext) {
-          shuffleReadRange.close()
-        }
-        // incorporate the deserialization time into the fetch wait
-        val deserTime = (fetchTime - readBlocked) + waitTime
-        if (sqlMetrics.nonEmpty) {
-          sqlMetrics("rapidsShuffleDeserializationTime") += deserTime //ns
-          sqlMetrics("rapidsShuffleReadTime") += (deserTime + waitTime + readBlocked) //ns
-          sqlMetrics("dataReadSize") += uncompressedSize
-        }
-        res
       }
     }
   }
@@ -1123,7 +1126,7 @@ class RapidsShuffleInternalManagerBase(conf: SparkConf, val isDriver: Boolean)
             case gpuDep: GpuShuffleDependency[K, C, C] =>
               new ShuffleHandleWithMetrics(
                 baseHandle.shuffleId, gpuDep.metrics, baseHandle.dependency)
-            case _ => // a fallen-back exchange
+            case other => // a fallen-back exchange
                baseHandle
           }
 
