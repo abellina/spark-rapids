@@ -590,6 +590,39 @@ class RapidsShuffleThreadedReader[K, C](
     extends Iterator[(Any, Any)] with Arm {
     val queued = new LinkedBlockingQueue[(Any, Any)]
     var futures = new mutable.Queue[Future[Unit]]()
+
+    val serializerInstance = serializer.newInstance()
+    var currentStreamStream: Iterator[(Any, Any)] = null
+
+    var readBlocked: Long = 0
+    var fetchTime: Long = 0
+    var waitTime = 0L
+
+    val fallbackIter: Iterator[(Any, Any)] = if (readerThreads == 1) {
+      // this is the non-optimized case, where we add metrics to capture the blocked
+      // time and the deserialization time as part of the shuffle read time.
+      new Iterator[(Any, Any)]() {
+        private var currentIter: Iterator[(Any, Any)] = _
+        override def hasNext: Boolean = streams.hasNext || (
+            currentIter != null && currentIter.hasNext)
+
+        override def next(): (Any, Any) = {
+          val fetchTimeStart = System.nanoTime()
+          if (currentIter == null || !currentIter.hasNext) {
+            val readBlockedStart = System.nanoTime()
+            val (_, stream) = streams.next()
+            readBlocked += System.nanoTime() - readBlockedStart
+            currentIter = serializerInstance.deserializeStream(stream).asKeyValueIterator
+          }
+          val res = currentIter.next()
+          fetchTime += System.nanoTime() - fetchTimeStart
+          res
+        }
+      }
+    } else {
+      null
+    }
+
     override def hasNext: Boolean = {
       if (fallbackIter != null) {
         fallbackIter.hasNext
@@ -598,39 +631,9 @@ class RapidsShuffleThreadedReader[K, C](
       }
     }
 
-    val serializerInstance = serializer.newInstance()
-    var currentStreamStream: Iterator[(Any, Any)] = null
-
-    var fallbackIter: Iterator[(Any, Any)] = null
-
-    var readBlocked: Long = 0
-    var fetchTime: Long = 0
-    var waitTime = 0L
     override def next(): (Any, Any) = {
       withResource(new NvtxRange("ParallelDeserializerIterator.next", NvtxColor.CYAN)) { _ =>
-        val res = if (readerThreads == 1) {
-          // this is the non-optimized case, where we add metrics to capture the blocked
-          // time and the deserialization time as part of the shuffle read time.
-          if (fallbackIter == null) {
-            fallbackIter = new Iterator[(Any, Any)]() {
-              private var currentIter: Iterator[(Any, Any)] = _
-              override def hasNext: Boolean = streams.hasNext || (
-                  currentIter != null && currentIter.hasNext)
-
-              override def next(): (Any, Any) = {
-                val fetchTimeStart = System.nanoTime()
-                if (currentIter == null || !currentIter.hasNext) {
-                  val readBlockedStart = System.nanoTime()
-                  val (_, stream) = streams.next()
-                  readBlocked += System.nanoTime() - readBlockedStart
-                  currentIter = serializerInstance.deserializeStream(stream).asKeyValueIterator
-                }
-                val res = currentIter.next()
-                fetchTime += System.nanoTime() - fetchTimeStart
-                res
-              }
-            }
-          }
+        val res = if (fallbackIter != null) {
           fallbackIter.next()
         } else {
           popFromStreamsIfAvailable()

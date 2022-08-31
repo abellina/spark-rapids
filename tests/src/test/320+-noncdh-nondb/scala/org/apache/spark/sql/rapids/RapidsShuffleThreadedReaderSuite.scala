@@ -112,95 +112,101 @@ class RapidsShuffleThreadedReaderSuite extends FunSuite with LocalSparkContext {
    * This test makes sure that, when data is read from a HashShuffleReader, the underlying
    * ManagedBuffers that contain the data are eventually released.
    */
-  test("read() releases resources on completion") {
-    val testConf = new SparkConf(false)
-    // Create a SparkContext as a convenient way of setting SparkEnv (needed because some of the
-    // shuffle code calls SparkEnv.get()).
-    sc = new SparkContext("local", "test", testConf)
-
-    val reduceId = 15
-    val shuffleId = 22
-    val numMaps = 6
-    val keyValuePairsPerMap = 10
-    val serializer = new JavaSerializer(testConf)
-
-    // Make a mock BlockManager that will return RecordingManagedByteBuffers of data, so that we
-    // can ensure retain() and release() are properly called.
-    val blockManager = mock(classOf[BlockManager])
-
-    // Create a buffer with some randomly generated key-value pairs to use as the shuffle data
-    // from each mappers (all mappers return the same shuffle data).
-    val byteOutputStream = new ByteArrayOutputStream()
-    val serializationStream = serializer.newInstance().serializeStream(byteOutputStream)
-    (0 until keyValuePairsPerMap).foreach { i =>
-      serializationStream.writeKey(i)
-      serializationStream.writeValue(2*i)
-    }
-
-    // Setup the mocked BlockManager to return RecordingManagedBuffers.
-    val localBlockManagerId = BlockManagerId("test-client", "test-client", 1)
-    when(blockManager.blockManagerId).thenReturn(localBlockManagerId)
-    val buffers = (0 until numMaps).map { mapId =>
-      // Create a ManagedBuffer with the shuffle data.
-      val nioBuffer = new NioManagedBuffer(ByteBuffer.wrap(byteOutputStream.toByteArray))
-      val managedBuffer = new RecordingManagedBuffer(nioBuffer)
-
-      // Setup the blockManager mock so the buffer gets returned when the shuffle code tries to
-      // fetch shuffle data.
-      val shuffleBlockId = ShuffleBlockId(shuffleId, mapId, reduceId)
-      when(blockManager.getLocalBlockData(meq(shuffleBlockId))).thenReturn(managedBuffer)
-      managedBuffer
-    }
-
-    // Make a mocked MapOutputTracker for the shuffle reader to use to determine what
-    // shuffle data to read.
-    val mapOutputTracker = mock(classOf[MapOutputTracker])
-    when(mapOutputTracker.getMapSizesByExecutorId(
-      shuffleId, 0, numMaps, reduceId, reduceId + 1)).thenReturn {
-      // Test a scenario where all data is local, to avoid creating a bunch of additional mocks
-      // for the code to read data over the network.
-      val shuffleBlockIdsAndSizes = (0 until numMaps).map { mapId =>
-        val shuffleBlockId = ShuffleBlockId(shuffleId, mapId, reduceId)
-        (shuffleBlockId, byteOutputStream.size().toLong, mapId)
+  Seq(1, 2).foreach { numReaderThreads =>
+    test(s"read() releases resources on completion - numThreads=$numReaderThreads") {
+      if (numReaderThreads > 1) {
+        RapidsShuffleInternalManagerBase.startThreadPoolIfNeeded(numReaderThreads)
       }
-      Seq((localBlockManagerId, shuffleBlockIdsAndSizes)).iterator
-    }
+      val testConf = new SparkConf(false)
+      // Create a SparkContext as a convenient way of setting SparkEnv (needed because some of the
+      // shuffle code calls SparkEnv.get()).
+      sc = new SparkContext("local", "test", testConf)
 
-    // Create a mocked shuffle handle to pass into HashShuffleReader.
-    val shuffleHandle = {
-      val dependency = mock(classOf[ShuffleDependency[Int, Int, Int]])
-      when(dependency.serializer).thenReturn(serializer)
-      when(dependency.aggregator).thenReturn(None)
-      when(dependency.keyOrdering).thenReturn(None)
-      new BypassMergeSortShuffleHandle(shuffleId, dependency)
-    }
+      val reduceId = 15
+      val shuffleId = 22
+      val numMaps = 6
+      val keyValuePairsPerMap = 10
+      val serializer = new JavaSerializer(testConf)
 
-    val serializerManager = new SerializerManager(
-      serializer,
-      new SparkConf()
-        .set(config.SHUFFLE_COMPRESS, false)
-        .set(config.SHUFFLE_SPILL_COMPRESS, false))
+      // Make a mock BlockManager that will return RecordingManagedByteBuffers of data, so that we
+      // can ensure retain() and release() are properly called.
+      val blockManager = mock(classOf[BlockManager])
 
-    val taskContext = TaskContext.empty()
-    val metrics = taskContext.taskMetrics.createTempShuffleReadMetrics()
-    val blocksByAddress = mapOutputTracker.getMapSizesByExecutorId(
-      shuffleId, 0, numMaps, reduceId, reduceId + 1)
-    val shuffleReader = new RapidsShuffleThreadedReader(
-      shuffleHandle,
-      blocksByAddress,
-      taskContext,
-      metrics,
-      serializerManager,
-      blockManager,
-      readerThreads=1)
+      // Create a buffer with some randomly generated key-value pairs to use as the shuffle data
+      // from each mappers (all mappers return the same shuffle data).
+      val byteOutputStream = new ByteArrayOutputStream()
+      val serializationStream = serializer.newInstance().serializeStream(byteOutputStream)
+      (0 until keyValuePairsPerMap).foreach { i =>
+        serializationStream.writeKey(i)
+        serializationStream.writeValue(2 * i)
+      }
 
-    assert(shuffleReader.read().length === keyValuePairsPerMap * numMaps)
+      // Setup the mocked BlockManager to return RecordingManagedBuffers.
+      val localBlockManagerId = BlockManagerId("test-client", "test-client", 1)
+      when(blockManager.blockManagerId).thenReturn(localBlockManagerId)
+      val buffers = (0 until numMaps).map { mapId =>
+        // Create a ManagedBuffer with the shuffle data.
+        val nioBuffer = new NioManagedBuffer(ByteBuffer.wrap(byteOutputStream.toByteArray))
+        val managedBuffer = new RecordingManagedBuffer(nioBuffer)
 
-    // Calling .length above will have exhausted the iterator; make sure that exhausting the
-    // iterator caused retain and release to be called on each buffer.
-    buffers.foreach { buffer =>
-      assert(buffer.callsToRetain === 1)
-      assert(buffer.callsToRelease === 1)
+        // Setup the blockManager mock so the buffer gets returned when the shuffle code tries to
+        // fetch shuffle data.
+        val shuffleBlockId = ShuffleBlockId(shuffleId, mapId, reduceId)
+        when(blockManager.getLocalBlockData(meq(shuffleBlockId))).thenReturn(managedBuffer)
+        managedBuffer
+      }
+
+      // Make a mocked MapOutputTracker for the shuffle reader to use to determine what
+      // shuffle data to read.
+      val mapOutputTracker = mock(classOf[MapOutputTracker])
+      when(mapOutputTracker.getMapSizesByExecutorId(
+        shuffleId, 0, numMaps, reduceId, reduceId + 1)).thenReturn {
+        // Test a scenario where all data is local, to avoid creating a bunch of additional mocks
+        // for the code to read data over the network.
+        val shuffleBlockIdsAndSizes = (0 until numMaps).map { mapId =>
+          val shuffleBlockId = ShuffleBlockId(shuffleId, mapId, reduceId)
+          (shuffleBlockId, byteOutputStream.size().toLong, mapId)
+        }
+        Seq((localBlockManagerId, shuffleBlockIdsAndSizes)).iterator
+      }
+
+      // Create a mocked shuffle handle to pass into HashShuffleReader.
+      val shuffleHandle = {
+        val dependency = mock(classOf[ShuffleDependency[Int, Int, Int]])
+        when(dependency.serializer).thenReturn(serializer)
+        when(dependency.aggregator).thenReturn(None)
+        when(dependency.keyOrdering).thenReturn(None)
+        new BypassMergeSortShuffleHandle(shuffleId, dependency)
+      }
+
+      val serializerManager = new SerializerManager(
+        serializer,
+        new SparkConf()
+            .set(config.SHUFFLE_COMPRESS, false)
+            .set(config.SHUFFLE_SPILL_COMPRESS, false))
+
+      val taskContext = TaskContext.empty()
+      val metrics = taskContext.taskMetrics.createTempShuffleReadMetrics()
+      val blocksByAddress = mapOutputTracker.getMapSizesByExecutorId(
+        shuffleId, 0, numMaps, reduceId, reduceId + 1)
+
+      val shuffleReader = new RapidsShuffleThreadedReader(
+        shuffleHandle,
+        blocksByAddress,
+        taskContext,
+        metrics,
+        serializerManager,
+        blockManager,
+        readerThreads = numReaderThreads)
+
+      assert(shuffleReader.read().length === keyValuePairsPerMap * numMaps)
+
+      // Calling .length above will have exhausted the iterator; make sure that exhausting the
+      // iterator caused retain and release to be called on each buffer.
+      buffers.foreach { buffer =>
+        assert(buffer.callsToRetain === 1)
+        assert(buffer.callsToRelease === 1)
+      }
     }
   }
 }
