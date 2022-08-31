@@ -288,13 +288,11 @@ object GpuShuffledHashJoinExec extends Arm {
         (builtBatch, streamIter)
       } else {
         val dataTypes = buildOutput.map(_.dataType).toArray
-        val buildSideRange = new NvtxRange("build_side_fetch", NvtxColor.CYAN)
         val hostConcatIter = new HostShuffleCoalesceIterator(bufferedBuildIterator,
           hostTargetBatchSize, dataTypes, coalesceMetricsMap)
         withResource(hostConcatIter) { _ =>
           closeOnExcept(hostConcatIter.next()) { hostConcatResult =>
             if (!hostConcatIter.hasNext()) {
-              buildSideRange.close()
               // add the time it took to fetch that first host-side build batch
               buildTime += System.nanoTime() - startTime
               // Optimal case, we drained the build iterator and we didn't have a prior

@@ -355,7 +355,8 @@ abstract class RapidsShuffleThreadedWriterBase[K, V](
             val ioTimeNs =
               writeMetrics.asInstanceOf[ThreadSafeShuffleWriteMetricsReporter].getWriteTime
 
-            writeMetrics.incWriteTime(openTimeNs) // as regular Spark does
+            // add openTime which is also done by Spark
+            writeMetrics.incWriteTime(openTimeNs)
 
             // serializationTime is the time spent compressing/encoding batches that wasn't
             // counted in the ioTime
@@ -363,10 +364,12 @@ abstract class RapidsShuffleThreadedWriterBase[K, V](
             val serializationPct =
               (totalPerRecordWriteTime.toDouble - ioTimeNs)/ totalPerRecordWriteTime
             val serializationTime = (serializationPct * totalPerRecordWriteTime).toLong
+
+            // update metrics, note that we expect them to be relative to the task
             serializationTimeMetric += serializationTime
             shuffleWriteTimeMetric += (openTimeNs + writeTimeNs)
             shuffleCombineTimeMetric += combineTimeNs
-            ioTimeMetric += ioTimeNs
+            ioTimeMetric += ((1-serializationPct) * totalPerRecordWriteTime).toLong
             pl
           }
           myMapStatus = Some(MapStatus(blockManager.shuffleServerId, partLengths, mapId))
@@ -400,45 +403,6 @@ abstract class RapidsShuffleThreadedWriterBase[K, V](
       }
 
       val writeStartTime = System.nanoTime()
-      //case class Request(file: File, offset: Long, length: Long, targetOffset: Long)
-      //val totalFileLength = segments.map(_._2.length()).sum
-      //val numTasks = Math.ceil(totalFileLength.toDouble / (1L * 1024 * 1024)).toLong
-      //val amountPerTask = Math.max(1, Math.ceil(totalFileLength.toDouble / numTasks).toLong)
-      //var amountLeft = totalFileLength
-      //var amountLeftInTask = amountPerTask
-      //var targetOffset = 0L
-      //var task = 0
-      //val requestPerTask = new mutable.HashMap[Int, ArrayBuffer[Request]]()
-      //val segmentsToInspect = segments.iterator
-      //while (amountLeft > 0) {
-      //  while (segmentsToInspect.hasNext) {
-      //    val seg = segmentsToInspect.next()
-      //    var segSizeLeft = seg._2.length()
-      //    var segOffset = 0L
-      //    while (segSizeLeft > 0 && amountLeftInTask > 0) {
-      //      val reqLength = Math.min(segSizeLeft, amountLeftInTask)
-      //      val req = Request(seg._2, segOffset, reqLength, targetOffset)
-      //      segSizeLeft -= reqLength
-      //      segOffset += reqLength
-      //      targetOffset += reqLength
-      //      amountLeftInTask -= reqLength
-      //      amountLeft -= reqLength
-      //      if (!requestPerTask.contains(task)) {
-      //        requestPerTask.put(task, new ArrayBuffer[Request]())
-      //      }
-      //      requestPerTask(task) += req
-      //      if (amountLeftInTask <= 0) {
-      //        task += 1
-      //        amountLeftInTask = amountPerTask
-      //      }
-      //    }
-      //    if (amountLeftInTask <= 0) {
-      //      task += 1
-      //      amountLeftInTask = amountPerTask
-      //    }
-      //  }
-      //}
-
       segments.foreach { case (reducePartitionId, file) =>
         val partWriter = mapOutputWriter.getPartitionWriter(reducePartitionId)
         if (file.exists()) {
@@ -584,21 +548,17 @@ class RapidsShuffleThreadedReader[K, C](
     doBatchFetch
   }
 
-  class ParallelDeserializerIterator(
+  class RapidsShuffleThreadedBlockIterator(
       streams: RapidsShuffleBlockFetcherIterator,
       serializer: Serializer)
     extends Iterator[(Any, Any)] with Arm {
-    val queued = new LinkedBlockingQueue[(Any, Any)]
-    var futures = new mutable.Queue[Future[Unit]]()
-
-    val serializerInstance = serializer.newInstance()
-    var currentStreamStream: Iterator[(Any, Any)] = null
-
-    var readBlocked: Long = 0
-    var fetchTime: Long = 0
-    var waitTime = 0L
-
-    val fallbackIter: Iterator[(Any, Any)] = if (readerThreads == 1) {
+    private val queued = new LinkedBlockingQueue[(Any, Any)]
+    private val futures = new mutable.Queue[Future[Unit]]()
+    private val serializerInstance = serializer.newInstance()
+    private var readBlockedTime: Long = 0L
+    private var fetchTime: Long = 0L
+    private var waitTime: Long = 0L
+    private val fallbackIter: Iterator[(Any, Any)] = if (readerThreads == 1) {
       // this is the non-optimized case, where we add metrics to capture the blocked
       // time and the deserialization time as part of the shuffle read time.
       new Iterator[(Any, Any)]() {
@@ -611,7 +571,7 @@ class RapidsShuffleThreadedReader[K, C](
           if (currentIter == null || !currentIter.hasNext) {
             val readBlockedStart = System.nanoTime()
             val (_, stream) = streams.next()
-            readBlocked += System.nanoTime() - readBlockedStart
+            readBlockedTime += System.nanoTime() - readBlockedStart
             currentIter = serializerInstance.deserializeStream(stream).asKeyValueIterator
           }
           val res = currentIter.next()
@@ -633,12 +593,12 @@ class RapidsShuffleThreadedReader[K, C](
 
     override def next(): (Any, Any) = {
       withResource(new NvtxRange("ParallelDeserializerIterator.next", NvtxColor.CYAN)) { _ =>
-        val res = if (fallbackIter != null) {
+        val result = if (fallbackIter != null) {
           fallbackIter.next()
         } else {
           popFromStreamsIfAvailable()
           if (futures.nonEmpty) {
-            withResource(new NvtxRange("deser_wait", NvtxColor.CYAN)) { _ =>
+            withResource(new NvtxRange("BatchWait", NvtxColor.CYAN)) { _ =>
               val waitTimeStart = System.nanoTime()
               futures.dequeue().get // wait for a future if we have one
               waitTime += System.nanoTime() - waitTimeStart
@@ -647,19 +607,19 @@ class RapidsShuffleThreadedReader[K, C](
           // then we have some queued
           queued.take()
         }
-        val uncompressedSize = res match {
+        val uncompressedSize = result match {
           case (_, cb: ColumnarBatch) => GpuColumnVector.getMemoryUsed(cb)
           case _ => 0
         }
 
         // incorporate the deserialization time into the fetch wait
-        val deserTime = (fetchTime - readBlocked) + waitTime
+        val deserTime = (fetchTime - readBlockedTime) + waitTime
 
         // if at the end, update sqlMetrics
         if (!hasNext) {
           if (sqlMetrics.nonEmpty) {
             sqlMetrics("rapidsShuffleDeserializationTime") += deserTime //ns
-            sqlMetrics("rapidsShuffleReadTime") += (deserTime + waitTime + readBlocked) //ns
+            sqlMetrics("rapidsShuffleReadTime") += (deserTime + waitTime + readBlockedTime) //ns
             sqlMetrics("dataReadSize") += uncompressedSize
           }
         }
@@ -669,7 +629,7 @@ class RapidsShuffleThreadedReader[K, C](
           shuffleReadRange.close()
           shuffleReadRange = null
         }
-        res
+        result
       }
     }
 
@@ -687,7 +647,7 @@ class RapidsShuffleThreadedReader[K, C](
             // fetch block time accounts for time spent waiting for streams.next()
             val readBlockedStart = System.nanoTime()
             val (_, inputStream) = streams.next()
-            readBlocked += System.nanoTime() - readBlockedStart
+            readBlockedTime += System.nanoTime() - readBlockedStart
             // n is  (BlockId, BufferReleasingInputStream)
             val slot = RapidsShuffleInternalManagerBase.getNextReadSlot
 
@@ -731,7 +691,7 @@ class RapidsShuffleThreadedReader[K, C](
       readMetrics,
       fetchContinuousBlocksInBatch)
 
-    val recordIter = new ParallelDeserializerIterator(wrappedStreams, dep.serializer)
+    val recordIter = new RapidsShuffleThreadedBlockIterator(wrappedStreams, dep.serializer)
 
     // Update the context task metrics for each record read.
     val metricIter = CompletionIterator[(Any, Any), Iterator[(Any, Any)]](
@@ -1110,7 +1070,7 @@ class RapidsShuffleInternalManagerBase(conf: SparkConf, val isDriver: Boolean)
     }
   }
 
-  // default implementation, to be overwritten by shim-specific manager
+  // this is overriden by shim-specific RapidsShuffleInternalManagers
   def getMapSizes[K, C](
       baseHandle: BaseShuffleHandle[K, C, C],
       startMapIndex: Int,
@@ -1143,13 +1103,8 @@ class RapidsShuffleInternalManagerBase(conf: SparkConf, val isDriver: Boolean)
               + s"dependency ${gpu.dependency.keyOrdering.get}, this is not supported.")
         }
 
-        val nvtxRange = new NvtxRange("getMapSizesByExecId", NvtxColor.CYAN)
-        val blocksByAddress = try {
-          SparkEnv.get.mapOutputTracker.getMapSizesByExecutorId(gpu.shuffleId,
-            startMapIndex, endMapIndex, startPartition, endPartition)
-          } finally {
-            nvtxRange.close()
-          }
+        val (blocksByAddress, _) =
+          getMapSizes(gpu, startMapIndex, endMapIndex, startPartition, endPartition)
 
         new RapidsCachingReader(rapidsConf, localBlockManagerId,
           blocksByAddress,
@@ -1158,25 +1113,26 @@ class RapidsShuffleInternalManagerBase(conf: SparkConf, val isDriver: Boolean)
           transport,
           getCatalogOrThrow,
           gpu.dependency.sparkTypes)
-      case other if
+      case baseHandle: BaseShuffleHandle[K, C, C] if
           rapidsConf.isMultiThreadedShuffleManagerMode
             && rapidsConf.shuffleMultiThreadedReaderThreads > 0 =>
-        val baseHandle = other.asInstanceOf[BaseShuffleHandle[K, C, C]]
-        val (blocksByAddress, canEnableBatchFetch) = getMapSizes(
-          baseHandle,
-          startMapIndex,
-          endMapIndex,
-          startPartition,
-          endPartition)
+
+        val (blocksByAddress, canEnableBatchFetch) =
+          getMapSizes(baseHandle, startMapIndex, endMapIndex, startPartition, endPartition)
 
         val maybeHandleWithMetrics: ShuffleHandle =
           baseHandle.dependency match {
             case gpuDep: GpuShuffleDependency[K, C, C] =>
               new ShuffleHandleWithMetrics(
                 baseHandle.shuffleId, gpuDep.metrics, baseHandle.dependency)
-            case other => // a fallen-back exchange
+            case _ => // a fallen-back exchange
                baseHandle
           }
+
+        // this is from Spark, it is a bit convoluted on why we have both booleans
+        // TODO: explain it
+        val canUseBatchFetch =
+          SortShuffleManager.canUseBatchFetch(startPartition, endPartition, context)
 
         new RapidsShuffleThreadedReader(
           maybeHandleWithMetrics,
@@ -1184,10 +1140,8 @@ class RapidsShuffleInternalManagerBase(conf: SparkConf, val isDriver: Boolean)
           context,
           metrics,
           readerThreads = rapidsConf.shuffleMultiThreadedReaderThreads,
-          shouldBatchFetch =
-            canEnableBatchFetch &&
-                SortShuffleManager.canUseBatchFetch(startPartition, endPartition, context),
-          )
+          shouldBatchFetch = canEnableBatchFetch && canUseBatchFetch)
+
       case other =>
         val shuffleHandle = RapidsShuffleInternalManagerBase.unwrapHandle(other)
         wrapped.getReader(shuffleHandle, startMapIndex, endMapIndex, startPartition,
