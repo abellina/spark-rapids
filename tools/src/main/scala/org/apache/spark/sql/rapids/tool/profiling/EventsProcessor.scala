@@ -198,6 +198,7 @@ class EventsProcessor(app: ApplicationInfo) extends EventProcessorBase[Applicati
     }
 
     val metricsOfInterest = Set[String](
+      "internal.metrics.input.bytesRead",
       "buffer time",
       "rs. deserialization time",
       "rs. serialization time",
@@ -246,6 +247,7 @@ class EventsProcessor(app: ApplicationInfo) extends EventProcessorBase[Applicati
     }
 
     val shuffleExtraMetrics = ShuffleExtraMetrics(
+      accumulatorMap.getOrElse("internal.metrics.input.bytesRead", 0L),
       accumulatorMap.getOrElse("buffer time", 0L),
       accumulatorMap.getOrElse("internal.metrics.executorDeserializeTime", 0L),
       accumulatorMap.getOrElse("rs. deserialization time", 0L),

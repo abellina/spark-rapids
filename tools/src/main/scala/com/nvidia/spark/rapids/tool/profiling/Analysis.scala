@@ -294,6 +294,7 @@ class Analysis(apps: Seq[ApplicationInfo]) {
               tasksInSQL.map(_.sw_bytesWritten).sum,
               tasksInSQL.map(_.sw_recordsWritten).sum,
               tasksInSQL.map(_.sw_writeTime).sum,
+              tasksInSQL.map(_.shuffleExtraMetrics.inputBytesRead).sum,
               tasksInSQL.map(_.shuffleExtraMetrics.bufferTimeNs).sum,
               tasksInSQL.map(_.shuffleExtraMetrics.taskDeserializationTimeMs).sum,
               tasksInSQL.map(_.shuffleExtraMetrics.ioTimeNs).sum,

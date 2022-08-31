@@ -281,6 +281,7 @@ case class TaskStageAccumCase(
     isInternal: Boolean)
 
 case class ShuffleExtraMetrics(
+    inputBytesRead: Long,
     bufferTimeNs: Long,
     taskDeserializationTimeMs: Long,
     deserializationTimeNs: Long,
@@ -499,6 +500,7 @@ case class SQLTaskAggMetricsProfileResult(
     swBytesWrittenSum: Long,
     swRecordsWrittenSum: Long,
     swWriteTimeSum: Long,
+    inputBytesRead: Long,
     bufferTimeNsSum: Long,
     taskDeserializationTimeMsSum: Long,
     writeIoTimeNsSum: Long,
@@ -541,6 +543,7 @@ case class SQLTaskAggMetricsProfileResult(
     "shuffle_read_io_bw",
     "shuffle_read_eff_bw",
 
+    "input_bytes_read",
     "buffer_sum",
     "task_deser_time_sum"
   )
@@ -570,6 +573,8 @@ case class SQLTaskAggMetricsProfileResult(
       TimeUnit.NANOSECONDS.toMillis(rapidsShuffleCombineTimeNsSum)
     val bufferTimeMsSum =
       TimeUnit.NANOSECONDS.toMillis(bufferTimeNsSum)
+
+    val inputBytesReadMB = inputBytesRead.toDouble / 1024 / 1024
 
     val shuffleSumMs = rapidsShuffleWriteTimeMsSum + rapidsShuffleReadTimeMsSum
 
@@ -622,6 +627,7 @@ case class SQLTaskAggMetricsProfileResult(
       f"${readIOBw}%1.2f",
       f"${shuffleReadBw}%1.2f",
 
+      f"${inputBytesReadMB}%1.2f",
       bufferTimeMsSum.toString,
       taskDeserializationTimeMsSum.toString)
   }
