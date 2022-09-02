@@ -508,8 +508,8 @@ class RapidsShuffleThreadedReader[K, C](
     serializerManager: SerializerManager = SparkEnv.get.serializerManager,
     blockManager: BlockManager = SparkEnv.get.blockManager,
     mapOutputTracker: MapOutputTracker = SparkEnv.get.mapOutputTracker,
-    readerThreads: Int = 0,
-    shouldBatchFetch: Boolean = false)
+    shouldBatchFetch: Boolean = false,
+    numReaderThreads: Int = 0)
   extends ShuffleReader[K, C] with Logging with Arm {
 
   private val (dep, sqlMetrics: Map[String, SQLMetric]) = {
@@ -569,7 +569,7 @@ class RapidsShuffleThreadedReader[K, C](
     private var readBlockedTime: Long = 0L
     private var fetchTime: Long = 0L
     private var waitTime: Long = 0L
-    private val fallbackIter: Iterator[(Any, Any)] = if (readerThreads == 1) {
+    private val fallbackIter: Iterator[(Any, Any)] = if (numReaderThreads == 1) {
       // this is the non-optimized case, where we add metrics to capture the blocked
       // time and the deserialization time as part of the shuffle read time.
       new Iterator[(Any, Any)]() {
@@ -1161,8 +1161,8 @@ class RapidsShuffleInternalManagerBase(conf: SparkConf, val isDriver: Boolean)
           blocksByAddress,
           context,
           metrics,
-          readerThreads = rapidsConf.shuffleMultiThreadedReaderThreads,
-          shouldBatchFetch = canEnableBatchFetch && canUseBatchFetch)
+          shouldBatchFetch = canEnableBatchFetch && canUseBatchFetch,
+          numReaderThreads = rapidsConf.shuffleMultiThreadedReaderThreads)
 
       case other =>
         val shuffleHandle = RapidsShuffleInternalManagerBase.unwrapHandle(other)

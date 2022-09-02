@@ -197,7 +197,7 @@ class RapidsShuffleThreadedReaderSuite extends FunSuite with LocalSparkContext {
         metrics,
         serializerManager,
         blockManager,
-        readerThreads = numReaderThreads)
+        numReaderThreads = numReaderThreads)
 
       assert(shuffleReader.read().length === keyValuePairsPerMap * numMaps)
 
