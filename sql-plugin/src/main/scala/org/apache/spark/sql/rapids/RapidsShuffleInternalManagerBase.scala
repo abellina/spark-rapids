@@ -607,8 +607,9 @@ class RapidsShuffleThreadedReader[K, C](
           // then we have some queued
           queued.take()
         }
+
         val uncompressedSize = result match {
-          case (_, cb: ColumnarBatch) => GpuColumnVector.getMemoryUsed(cb)
+          case (_, cb: ColumnarBatch) => SerializedTableColumn.getMemoryUsed(cb)
           case _ => 0
         }
 
@@ -1113,9 +1114,16 @@ class RapidsShuffleInternalManagerBase(conf: SparkConf, val isDriver: Boolean)
           transport,
           getCatalogOrThrow,
           gpu.dependency.sparkTypes)
-      case baseHandle: BaseShuffleHandle[K, C, C] if
+      case other: ShuffleHandle if
           rapidsConf.isMultiThreadedShuffleManagerMode
             && rapidsConf.shuffleMultiThreadedReaderThreads > 0 =>
+        // we enable a multi-threaded reader in the case where we have 1 or
+        // more threads and we have enbled the MULTITHREADED shuffle mode.
+        // We special case the threads=1 case in the reader to behave like regular
+        // spark, but this allows us to add extra metrics that Spark normally
+        // doesn't look at while materializing blocks.
+
+        val baseHandle = other.asInstanceOf[BaseShuffleHandle[K, C, C]]
 
         val (blocksByAddress, canEnableBatchFetch) =
           getMapSizes(baseHandle, startMapIndex, endMapIndex, startPartition, endPartition)
@@ -1125,12 +1133,13 @@ class RapidsShuffleInternalManagerBase(conf: SparkConf, val isDriver: Boolean)
             case gpuDep: GpuShuffleDependency[K, C, C] =>
               new ShuffleHandleWithMetrics(
                 baseHandle.shuffleId, gpuDep.metrics, baseHandle.dependency)
-            case _ => // a fallen-back exchange
+            case _ => // this a fallen-back Exchange and not a GpuColumnarExchange
                baseHandle
           }
 
-        // this is from Spark, it is a bit convoluted on why we have both booleans
-        // TODO: explain it
+        // We want to use batch fetch in the non-push shuffle case. Spark
+        // checks for a config to see if batch fetch is enabled (this check), and
+        // it also checks when getting map status from the MapOutputTracker.
         val canUseBatchFetch =
           SortShuffleManager.canUseBatchFetch(startPartition, endPartition, context)
 

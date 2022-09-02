@@ -271,4 +271,17 @@ object SerializedTableColumn {
     val column = new SerializedTableColumn(header, hostBuffer)
     new ColumnarBatch(Array(column), header.getNumRows)
   }
+
+  def getMemoryUsed(batch: ColumnarBatch): Long = {
+    var sum: Long = 0
+    if (batch.numCols == 1) {
+      val cv = batch.column(0)
+      cv match {
+        case serializedTableColumn: SerializedTableColumn =>
+          sum += serializedTableColumn.hostBuffer.getLength
+        case _ =>
+      }
+    }
+    sum
+  }
 }
