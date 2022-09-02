@@ -93,7 +93,8 @@ class ThreadSafeShuffleWriteMetricsReporter(val wrapped: ShuffleWriteMetricsRepo
   extends ShuffleWriteMetrics {
 
   def getWriteTime: Long = synchronized {
-    TaskContext.get.taskMetrics().shuffleWriteMetrics.writeTime
+    super.writeTime
+    //TaskContext.get.taskMetrics().shuffleWriteMetrics.writeTime
   }
 
   override private[spark] def incBytesWritten(v: Long): Unit = synchronized {
