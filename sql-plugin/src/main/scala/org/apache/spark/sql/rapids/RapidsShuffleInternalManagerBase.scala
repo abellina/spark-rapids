@@ -157,7 +157,7 @@ object RapidsShuffleInternalManagerBase extends Logging {
   private val readerSlotNumber= new AtomicInteger(0)
 
   /**
-   * Send a task to a specific slot.
+   * Send a task to a specific write slot.
    * @param slotNum the slot to submit to
    * @param task a task to execute
    * @note there must not be an uncaught exception while calling
@@ -167,6 +167,13 @@ object RapidsShuffleInternalManagerBase extends Logging {
     writerSlots(slotNum % numWriterSlots).offer(task)
   }
 
+  /**
+   * Send a task to a specific read slot.
+   * @param slotNum the slot to submit to
+   * @param task a task to execute
+   * @note there must not be an uncaught exception while calling
+   *      `task`.
+   */
   def queueReadTask[T](slotNum: Int, task: Callable[T]): Future[T] = {
     readerSlots(slotNum % numWriterSlots).offer(task)
   }
@@ -366,18 +373,14 @@ abstract class RapidsShuffleThreadedWriterBase[K, V](
             // serializationTime is the time spent compressing/encoding batches that wasn't
             // counted in the ioTime
             val totalPerRecordWriteTime = recordWriteTime.get() + ioTimeNs
-            val serializationPct =
-              (totalPerRecordWriteTime.toDouble - ioTimeNs)/ totalPerRecordWriteTime
-
-            // we then approximate that serialization time is the percentage
-            // calculated above * the task-relative write time.
-            val serializationTime = (serializationPct * writeTimeNs).toLong
+            val ioRatio = (ioTimeNs.toDouble/totalPerRecordWriteTime)
+            val serializationRatio = 1.0 - ioRatio
 
             // update metrics, note that we expect them to be relative to the task
-            serializationTimeMetric += serializationTime
+            ioTimeMetric += (ioRatio * writeTimeNs).toLong
+            serializationTimeMetric += (serializationRatio * writeTimeNs).toLong
             shuffleWriteTimeMetric += (openTimeNs + writeTimeNs)
             shuffleCombineTimeMetric += combineTimeNs
-            ioTimeMetric += ((1-serializationPct) * totalPerRecordWriteTime).toLong
             pl
           }
           myMapStatus = Some(MapStatus(blockManager.shuffleServerId, partLengths, mapId))
