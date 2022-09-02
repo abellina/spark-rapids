@@ -236,7 +236,6 @@ abstract class RapidsShuffleThreadedWriterBase[K, V](
   private val shuffleWriteTimeMetric: SQLMetric = metrics("rapidsShuffleWriteTime")
   private val shuffleCombineTimeMetric: SQLMetric = metrics("rapidsShuffleCombineTime")
   private val ioTimeMetric: SQLMetric = metrics("ioTime")
-  //private val uncompressedSizeMetric: SQLMetric = metrics("dataSize")
   private val dep: ShuffleDependency[K, V, V] = handle.dependency
   private val shuffleId = dep.shuffleId
   private val partitioner = dep.partitioner
@@ -350,20 +349,28 @@ abstract class RapidsShuffleThreadedWriterBase[K, V](
             // minus the amount of time it took to get the batch from the upstream execs
             val writeTimeNs = (System.nanoTime() - writeTimeStart) - computeTime
 
+            // add openTime which is also done by Spark, and we are counting
+            // in the ioTime later
+            writeMetrics.incWriteTime(openTimeNs)
+
             // At this point, Spark has timed the amount of time it took to write
-            // to disk (the IO, per write).
+            // to disk (the IO, per write). But note that when we look at the
+            // multi threaded case, this metric is now no longer task-time.
+            // Users need to look at "rs. shuffle write time" (shuffleWriteTimeMetric),
+            // which does its own calculation at the task-thread level.
+            // We use ioTimeNs, however, to get an approximation of serialization time.
             val ioTimeNs =
               writeMetrics.asInstanceOf[ThreadSafeShuffleWriteMetricsReporter].getWriteTime
-
-            // add openTime which is also done by Spark
-            writeMetrics.incWriteTime(openTimeNs)
 
             // serializationTime is the time spent compressing/encoding batches that wasn't
             // counted in the ioTime
             val totalPerRecordWriteTime = recordWriteTime.get() + ioTimeNs
             val serializationPct =
               (totalPerRecordWriteTime.toDouble - ioTimeNs)/ totalPerRecordWriteTime
-            val serializationTime = (serializationPct * totalPerRecordWriteTime).toLong
+
+            // we then approximate that serialization time is the percentage
+            // calculated above * the task-relative write time.
+            val serializationTime = (serializationPct * writeTimeNs).toLong
 
             // update metrics, note that we expect them to be relative to the task
             serializationTimeMetric += serializationTime
