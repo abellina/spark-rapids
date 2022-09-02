@@ -500,7 +500,7 @@ abstract class RapidsShuffleThreadedWriterBase[K, V](
 }
 
 class RapidsShuffleThreadedReader[K, C](
-    handle: ShuffleHandle,
+    handle: ShuffleHandleWithMetrics[K, C, C],
     blocksByAddress: Iterator[(BlockManagerId, Seq[(BlockId, Long, Int)])],
     context: TaskContext,
     readMetrics: ShuffleReadMetricsReporter,
@@ -511,15 +511,10 @@ class RapidsShuffleThreadedReader[K, C](
     numReaderThreads: Int = 0)
   extends ShuffleReader[K, C] with Logging with Arm {
 
-  private val (dep, sqlMetrics: Map[String, SQLMetric]) = {
-    handle match {
-      case withMetrics: ShuffleHandleWithMetrics[K, C, C] =>
-        (withMetrics.dependency, withMetrics.metrics)
-      case other: BypassMergeSortShuffleHandle[K, C] =>
-        (other.dependency, Map.empty[String, SQLMetric])
-      case _ => throw new IllegalStateException("Unexpected shuffle handle")
-    }
-  }
+  private val sqlMetrics = handle.metrics
+  private val deserializationTimeNs = sqlMetrics("rapidsShuffleDeserializationTime")
+  private val shuffleReadTimeNs = sqlMetrics("rapidsShuffleReadTime")
+  private val dataReadSize = sqlMetrics("dataReadSize")
 
   private var shuffleReadRange: NvtxRange =
     new NvtxRange("ThreadedReader.read", NvtxColor.PURPLE)
@@ -630,13 +625,9 @@ class RapidsShuffleThreadedReader[K, C](
         val deserTime = (fetchTime - readBlockedTime) + waitTime
 
         // if at the end, update sqlMetrics
-        if (!hasNext) {
-          if (sqlMetrics.nonEmpty) {
-            sqlMetrics("rapidsShuffleDeserializationTime") += deserTime //ns
-            sqlMetrics("rapidsShuffleReadTime") += (deserTime + waitTime + readBlockedTime) //ns
-            sqlMetrics("dataReadSize") += uncompressedSize
-          }
-        }
+        deserializationTimeNs += deserTime
+        shuffleReadTimeNs += (deserTime + waitTime + readBlockedTime)
+        dataReadSize += uncompressedSize
 
         // if this is the last call, close our range
         if (!hasNext) {
@@ -723,6 +714,7 @@ class RapidsShuffleThreadedReader[K, C](
     // An interruptible iterator must be used here in order to support task cancellation
     val interruptibleIter = new InterruptibleIterator[(Any, Any)](context, metricIter)
 
+    val dep = handle.dependency
     val aggregatedIter: Iterator[Product2[K, C]] = if (dep.aggregator.isDefined) {
       if (dep.mapSideCombine) {
         // We are reading values that are already combined
@@ -1143,35 +1135,40 @@ class RapidsShuffleInternalManagerBase(conf: SparkConf, val isDriver: Boolean)
         // We special case the threads=1 case in the reader to behave like regular
         // spark, but this allows us to add extra metrics that Spark normally
         // doesn't look at while materializing blocks.
-
         val baseHandle = other.asInstanceOf[BaseShuffleHandle[K, C, C]]
 
-        val (blocksByAddress, canEnableBatchFetch) =
-          getMapSizes(baseHandle, startMapIndex, endMapIndex, startPartition, endPartition)
+        // we check that the dependency is a `GpuShuffleDependency` and if not
+        // we go back to the regular path (e.g. is a GpuColumnarExchange?)
+        // TODO: it may make sense to expand this code (and the writer code) to include
+        //   regular Exchange nodes. For now this is being conservative and a few changes
+        //   would need to be made to deal with missing metrics, for example, for a regular
+        //   Exchange node.
+        baseHandle.dependency match {
+          case gpuDep: GpuShuffleDependency[K, C, C] =>
+            val (blocksByAddress, canEnableBatchFetch) =
+              getMapSizes(baseHandle, startMapIndex, endMapIndex, startPartition, endPartition)
 
-        val maybeHandleWithMetrics: ShuffleHandle =
-          baseHandle.dependency match {
-            case gpuDep: GpuShuffleDependency[K, C, C] =>
-              new ShuffleHandleWithMetrics(
-                baseHandle.shuffleId, gpuDep.metrics, baseHandle.dependency)
-            case _ => // this a fallen-back Exchange and not a GpuColumnarExchange
-               baseHandle
-          }
+            // We want to use batch fetch in the non-push shuffle case. Spark
+            // checks for a config to see if batch fetch is enabled (this check), and
+            // it also checks when getting (potentially merged) map status from
+            // the MapOutputTracker.
+            val canUseBatchFetch =
+            SortShuffleManager.canUseBatchFetch(startPartition, endPartition, context)
 
-        // We want to use batch fetch in the non-push shuffle case. Spark
-        // checks for a config to see if batch fetch is enabled (this check), and
-        // it also checks when getting map status from the MapOutputTracker.
-        val canUseBatchFetch =
-          SortShuffleManager.canUseBatchFetch(startPartition, endPartition, context)
-
-        new RapidsShuffleThreadedReader(
-          maybeHandleWithMetrics,
-          blocksByAddress,
-          context,
-          metrics,
-          shouldBatchFetch = canEnableBatchFetch && canUseBatchFetch,
-          numReaderThreads = rapidsConf.shuffleMultiThreadedReaderThreads)
-
+            val shuffleHandleWithMetrics = new ShuffleHandleWithMetrics(
+              baseHandle.shuffleId, gpuDep.metrics, baseHandle.dependency)
+            new RapidsShuffleThreadedReader(
+              shuffleHandleWithMetrics,
+              blocksByAddress,
+              context,
+              metrics,
+              shouldBatchFetch = canEnableBatchFetch && canUseBatchFetch,
+              numReaderThreads = rapidsConf.shuffleMultiThreadedReaderThreads)
+          case _ =>
+            val shuffleHandle = RapidsShuffleInternalManagerBase.unwrapHandle(other)
+            wrapped.getReader(shuffleHandle, startMapIndex, endMapIndex, startPartition,
+              endPartition, context, metrics)
+        }
       case other =>
         val shuffleHandle = RapidsShuffleInternalManagerBase.unwrapHandle(other)
         wrapped.getReader(shuffleHandle, startMapIndex, endMapIndex, startPartition,
