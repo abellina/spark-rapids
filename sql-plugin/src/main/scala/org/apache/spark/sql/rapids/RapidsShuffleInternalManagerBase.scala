@@ -18,17 +18,20 @@ package org.apache.spark.sql.rapids
 
 import java.io.{File, FileInputStream}
 import java.util.Optional
-import java.util.concurrent.{Callable, ExecutionException, Executors, Future, LinkedBlockingQueue, ThreadPoolExecutor}
+import java.util.concurrent.{Callable, ExecutionException, Executors, Future, LinkedBlockingQueue}
 import java.util.concurrent.atomic.{AtomicInteger, AtomicLong}
+
 import scala.collection.mutable
 import scala.collection.mutable.{ArrayBuffer, ListBuffer}
+
 import ai.rapids.cudf.{NvtxColor, NvtxRange}
 import com.nvidia.spark.rapids._
 import com.nvidia.spark.rapids.format.TableMeta
 import com.nvidia.spark.rapids.shuffle.{RapidsShuffleRequestHandler, RapidsShuffleServer, RapidsShuffleTransport}
+
 import org.apache.spark.{InterruptibleIterator, MapOutputTracker, ShuffleDependency, SparkConf, SparkEnv, TaskContext}
 import org.apache.spark.executor.ShuffleWriteMetrics
-import org.apache.spark.internal.{Logging, config}
+import org.apache.spark.internal.{config, Logging}
 import org.apache.spark.io.CompressionCodec
 import org.apache.spark.network.buffer.ManagedBuffer
 import org.apache.spark.scheduler.MapStatus
@@ -119,14 +122,15 @@ object RapidsShuffleInternalManagerBase extends Logging {
   /**
    * "slots" are a thread + queue thin wrapper that is used
    * to execute tasks that need to be done in sequentially.
-   * This is done such that the threaded shuffle writer posts
-   * tasks that are for writer_i, and that writer is guaranteed
-   * to be written to sequentially, but writer_j may end up
-   * in a different slot, and could perform its work in parallel.
+   * This is done such that the threaded shuffle posts
+   * tasks that are for writer_i, or reader_i, which are
+   * guaranteed to be processed sequentially for that writer or reader.
+   * Writers/readers that land in a different slot are working independently
+   * and could perform their work in parallel.
    * @param slotNum this slot's unique number only used to name its executor
    */
   private class Slot(slotNum: Int, slotType: String) {
-    private val p = Executors.newFixedThreadPool(1, new ThreadFactoryBuilder()
+    private val p = Executors.newSingleThreadExecutor(new ThreadFactoryBuilder()
         .setNameFormat(s"rapids-shuffle-$slotType-$slotNum")
         .setDaemon(true)
         .build())
@@ -136,27 +140,20 @@ object RapidsShuffleInternalManagerBase extends Logging {
     }
 
     def shutdownNow(): Unit = p.shutdownNow()
-
-    def queueSize(): Int = {
-      p match {
-        case tpe: ThreadPoolExecutor =>
-          tpe.getQueue.size()
-        case _ => -1
-      }
-    }
   }
 
   // this is set by the executor on startup, when the MULTITHREADED
-  // shuffle mode is utilized, as per this config:
+  // shuffle mode is utilized, as per these configs:
   //   spark.rapids.shuffle.multiThreaded.writer.threads
-  var numSlots: Int = 0
-  private lazy val slots = new mutable.HashMap[Int, Slot]()
-  private lazy val readSlots = new mutable.HashMap[Int, Slot]()
+  //   spark.rapids.shuffle.multiThreaded.reader.threads
+  private var numWriterSlots: Int = 0
+  private var numReaderSlots: Int = 0
+  private lazy val writerSlots = new mutable.HashMap[Int, Slot]()
+  private lazy val readerSlots = new mutable.HashMap[Int, Slot]()
 
   // used by callers to obtain a unique slot
-  private val slotNumber = new AtomicInteger(0)
-
-  private val readSlotNumber= new AtomicInteger(0)
+  private val writerSlotNumber = new AtomicInteger(0)
+  private val readerSlotNumber= new AtomicInteger(0)
 
   /**
    * Send a task to a specific slot.
@@ -165,39 +162,41 @@ object RapidsShuffleInternalManagerBase extends Logging {
    * @note there must not be an uncaught exception while calling
    *      `task`.
    */
-  def queueTask[T](slotNum: Int, task: Callable[T]): Future[T] = {
-    slots(slotNum % numSlots).offer(task)
+  def queueWriteTask[T](slotNum: Int, task: Callable[T]): Future[T] = {
+    writerSlots(slotNum % numWriterSlots).offer(task)
   }
 
   def queueReadTask[T](slotNum: Int, task: Callable[T]): Future[T] = {
-    readSlots(slotNum % numSlots).offer(task)
+    readerSlots(slotNum % numWriterSlots).offer(task)
   }
 
-  def startThreadPoolIfNeeded(numConfiguredThreads: Int): Unit = synchronized {
-    numSlots = numConfiguredThreads
-    if (slots.isEmpty) {
-      (0 until numSlots).foreach { slotNum =>
-        slots.put(slotNum, new Slot(slotNum, "writer"))
+  def startThreadPoolIfNeeded(
+      numWriterThreads: Int,
+      numReaderThreads: Int): Unit = synchronized {
+    numWriterSlots = numWriterThreads
+    numReaderSlots = numReaderThreads
+    if (writerSlots.isEmpty) {
+      (0 until numWriterSlots).foreach { slotNum =>
+        writerSlots.put(slotNum, new Slot(slotNum, "writer"))
       }
     }
-    if (readSlots.isEmpty) {
-      (0 until numSlots).foreach { slotNum =>
-        readSlots.put(slotNum, new Slot(slotNum, "reader"))
+    if (readerSlots.isEmpty) {
+      (0 until numReaderSlots).foreach { slotNum =>
+        readerSlots.put(slotNum, new Slot(slotNum, "reader"))
       }
     }
   }
 
   def stopThreadPool(): Unit = synchronized {
-    slots.values.foreach(_.shutdownNow())
-    slots.clear()
+    writerSlots.values.foreach(_.shutdownNow())
+    writerSlots.clear()
 
-    readSlots.values.foreach(_.shutdownNow())
-    readSlots.clear()
+    readerSlots.values.foreach(_.shutdownNow())
+    readerSlots.clear()
   }
 
-  def getNextSlot: Int = Math.abs(slotNumber.incrementAndGet())
-
-  def getNextReadSlot: Int = Math.abs(readSlotNumber.incrementAndGet())
+  def getNextWriterSlot: Int = Math.abs(writerSlotNumber.incrementAndGet())
+  def getNextReaderSlot: Int = Math.abs(readerSlotNumber.incrementAndGet())
 }
 
 trait RapidsShuffleWriterShimHelper {
@@ -225,7 +224,8 @@ abstract class RapidsShuffleThreadedWriterBase[K, V](
     mapId: Long,
     sparkConf: SparkConf,
     writeMetrics: ShuffleWriteMetricsReporter,
-    shuffleExecutorComponents: ShuffleExecutorComponents)
+    shuffleExecutorComponents: ShuffleExecutorComponents,
+    numWriterThreads: Int)
       extends ShuffleWriter[K, V]
         with RapidsShuffleWriterShimHelper
         with Arm
@@ -277,7 +277,7 @@ abstract class RapidsShuffleThreadedWriterBase[K, V](
               // Places writer objects at round robin slot numbers apriori
               // this choice is for simplicity but likely needs to change so that
               // we can handle skew better
-              val slotNum = RapidsShuffleInternalManagerBase.getNextSlot
+              val slotNum = RapidsShuffleInternalManagerBase.getNextWriterSlot
               diskBlockObjectWriters.put(i, (slotNum, writer))
             }
             openTimeNs = System.nanoTime() - openStartTime
@@ -298,7 +298,7 @@ abstract class RapidsShuffleThreadedWriterBase[K, V](
               val reducePartitionId: Int = partitioner.getPartition(key)
               val (slotNum, myWriter) = diskBlockObjectWriters(reducePartitionId)
 
-              if (RapidsShuffleInternalManagerBase.numSlots == 1) {
+              if (numWriterThreads == 1) {
                 val recordWriteTimeStart = System.nanoTime()
                 myWriter.write(key, value)
                 recordWriteTime.getAndAdd(System.nanoTime() - recordWriteTimeStart)
@@ -313,7 +313,7 @@ abstract class RapidsShuffleThreadedWriterBase[K, V](
                   case _ =>
                     null
                 }
-                writeFutures += RapidsShuffleInternalManagerBase.queueTask(slotNum, () => {
+                writeFutures += RapidsShuffleInternalManagerBase.queueWriteTask(slotNum, () => {
                   withResource(cb) { _ =>
                     val recordWriteTimeStart = System.nanoTime()
                     myWriter.write(key, value)
@@ -657,7 +657,7 @@ class RapidsShuffleThreadedReader[K, C](
             val (_, inputStream) = streams.next()
             readBlockedTime += System.nanoTime() - readBlockedStart
             // n is  (BlockId, BufferReleasingInputStream)
-            val slot = RapidsShuffleInternalManagerBase.getNextReadSlot
+            val slot = RapidsShuffleInternalManagerBase.getNextReaderSlot
 
             def runIt(it: Iterator[(Any, Any)]): Unit = {
               try {
@@ -921,7 +921,8 @@ class RapidsShuffleInternalManagerBase(conf: SparkConf, val isDriver: Boolean)
 
   if (!isDriver && rapidsConf.isMultiThreadedShuffleManagerMode) {
     RapidsShuffleInternalManagerBase.startThreadPoolIfNeeded(
-      rapidsConf.shuffleMultiThreadedWriterThreads)
+      rapidsConf.shuffleMultiThreadedWriterThreads,
+      rapidsConf.shuffleMultiThreadedReaderThreads)
   }
 
   protected val wrapped = new SortShuffleManager(conf)
@@ -1069,7 +1070,8 @@ class RapidsShuffleInternalManagerBase(conf: SparkConf, val isDriver: Boolean)
               mapId,
               conf,
               new ThreadSafeShuffleWriteMetricsReporter(metricsReporter),
-              execComponents.get)
+              execComponents.get,
+              rapidsConf.shuffleMultiThreadedWriterThreads)
           case _ =>
             wrapped.getWriter(handle, mapId, context, metricsReporter)
         }

@@ -28,14 +28,16 @@ class RapidsShuffleThreadedWriter[K, V](
     mapId: Long,
     sparkConf: SparkConf,
     writeMetrics: ShuffleWriteMetricsReporter,
-    shuffleExecutorComponents: ShuffleExecutorComponents)
+    shuffleExecutorComponents: ShuffleExecutorComponents,
+    numWriterThreads: Int)
   extends RapidsShuffleThreadedWriterBase[K, V](
     blockManager,
     handle,
     mapId,
     sparkConf,
     writeMetrics,
-    shuffleExecutorComponents) {
+    shuffleExecutorComponents,
+    numWriterThreads) {
 
   // emptyChecksums: unused in versions of Spark before 3.2.0
   override def doCommitAllPartitions(

@@ -35,10 +35,17 @@ class RapidsShuffleThreadedWriter[K, V](
     mapId: Long,
     sparkConf: SparkConf,
     writeMetrics: ShuffleWriteMetricsReporter,
-    shuffleExecutorComponents: ShuffleExecutorComponents)
-  extends RapidsShuffleThreadedWriterBase[K, V](blockManager, handle, mapId, sparkConf,
-    writeMetrics, shuffleExecutorComponents)
-    with org.apache.spark.shuffle.checksum.ShuffleChecksumSupport {
+    shuffleExecutorComponents: ShuffleExecutorComponents,
+    numWriterThreads: Int)
+  extends RapidsShuffleThreadedWriterBase[K, V](
+    blockManager,
+    handle,
+    mapId,
+    sparkConf,
+    writeMetrics,
+    shuffleExecutorComponents,
+    numWriterThreads)
+      with org.apache.spark.shuffle.checksum.ShuffleChecksumSupport {
 
   // Spark 3.2.0+ computes checksums per map partition as it writes the
   // temporary files to disk. They are stored in a Checksum array.
