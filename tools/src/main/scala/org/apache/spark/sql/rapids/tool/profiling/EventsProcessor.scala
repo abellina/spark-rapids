@@ -205,7 +205,7 @@ class EventsProcessor(app: ApplicationInfo) extends EventProcessorBase[Applicati
       "rs. shuffle read time",
       "rs. shuffle write time",
       "rs. shuffle combine time",
-      "io time",
+      "rs. shuffle write io time",
       "data size",
       "data read size",
       "internal.metrics.executorRunTime",
