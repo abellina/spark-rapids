@@ -263,7 +263,6 @@ abstract class RapidsShuffleThreadedWriterBase[K, V](
   override def write(records: Iterator[Product2[K, V]]): Unit = {
     withResource(new NvtxRange("ThreadedWriter.write", NvtxColor.RED)) { _ =>
       withResource(new NvtxRange("compute", NvtxColor.GREEN)) { _ =>
-        var errorOcurred: Throwable = null
         val mapOutputWriter = shuffleExecutorComponents.createMapOutputWriter(
           shuffleId,
           mapId,
@@ -293,7 +292,7 @@ abstract class RapidsShuffleThreadedWriterBase[K, V](
             // we call write on every writer for every record in parallel
             val writeFutures = new mutable.Queue[Future[Unit]]
             val writeTimeStart: Long = System.nanoTime()
-            var recordWriteTime: AtomicLong = new AtomicLong(0L)
+            val recordWriteTime: AtomicLong = new AtomicLong(0L)
             var computeTime: Long = 0L
             var uncompressedSize: Long = 0L
             while (records.hasNext) {
@@ -560,7 +559,7 @@ class RapidsShuffleThreadedReader[K, C](
   }
 
   class RapidsShuffleThreadedBlockIterator(
-      streams: RapidsShuffleBlockFetcherIterator,
+      fetcherIterator: RapidsShuffleBlockFetcherIterator,
       serializer: Serializer)
     extends Iterator[(Any, Any)] with Arm {
     private val queued = new LinkedBlockingQueue[(Any, Any)]
@@ -574,14 +573,14 @@ class RapidsShuffleThreadedReader[K, C](
       // time and the deserialization time as part of the shuffle read time.
       new Iterator[(Any, Any)]() {
         private var currentIter: Iterator[(Any, Any)] = _
-        override def hasNext: Boolean = streams.hasNext || (
+        override def hasNext: Boolean = fetcherIterator.hasNext || (
             currentIter != null && currentIter.hasNext)
 
         override def next(): (Any, Any) = {
           val fetchTimeStart = System.nanoTime()
           if (currentIter == null || !currentIter.hasNext) {
             val readBlockedStart = System.nanoTime()
-            val (_, stream) = streams.next()
+            val (_, stream) = fetcherIterator.next()
             readBlockedTime += System.nanoTime() - readBlockedStart
             currentIter = serializerInstance.deserializeStream(stream).asKeyValueIterator
           }
@@ -598,7 +597,7 @@ class RapidsShuffleThreadedReader[K, C](
       if (fallbackIter != null) {
         fallbackIter.hasNext
       } else {
-        streams.hasNext || futures.nonEmpty || queued.size() > 0
+        fetcherIterator.hasNext || futures.nonEmpty || queued.size() > 0
       }
     }
 
@@ -607,21 +606,24 @@ class RapidsShuffleThreadedReader[K, C](
         val result = if (fallbackIter != null) {
           fallbackIter.next()
         } else {
-          popFromStreamsIfAvailable()
+          popFetchedIfAvailable()
           if (futures.nonEmpty) {
             withResource(new NvtxRange("BatchWait", NvtxColor.CYAN)) { _ =>
               val waitTimeStart = System.nanoTime()
-              futures.dequeue().get // wait for a future if we have one
+              futures.dequeue().get // wait for one future
               waitTime += System.nanoTime() - waitTimeStart
             }
-          } // else all futures have completed.
-          // then we have some queued
+          }
+          // We either have added futures and so will have items queued
+          // or we already exhausted the fetchIterator and are just waiting
+          // for our futures to finish. Either way, it's safe to block
+          // here while we wait.
           queued.take()
         }
 
         val uncompressedSize = result match {
           case (_, cb: ColumnarBatch) => SerializedTableColumn.getMemoryUsed(cb)
-          case _ => 0
+          case _ => 0 // TODO: do we need to handle other types here?
         }
 
         // incorporate the deserialization time into the fetch wait
@@ -645,43 +647,49 @@ class RapidsShuffleThreadedReader[K, C](
       }
     }
 
-    def popFromStreamsIfAvailable(): Unit = {
-      if (streams.hasNext) {
+    private def popFetchedIfAvailable(): Unit = {
+      // If fetcherIterator is not exhausted, we try and get as many
+      // ready results.
+      if (fetcherIterator.hasNext) {
         withResource(
           new NvtxRange("ParallelDeserializerIterator.queueAll", NvtxColor.YELLOW)) { _ =>
           require(hasNext, "called next on an empty iterator")
-          // drain what we have queued
-          var amountToDrain = Math.max(streams.resultCount, 1)
+
+          // `resultCount` is exposed from the fetcher iterator and if non-zero,
+          // it means that there are pending results that need to be handled.
+          // We max with 1, because there could be a race condition where
+          // we are trying to get a batch and we haven't received any results
+          // yet, we need to block on the fetch for this case so we have
+          // something to return.
+          var amountToDrain = Math.max(fetcherIterator.resultCount, 1)
           val fetchTimeStart = System.nanoTime()
 
-          while (amountToDrain > 0 && streams.hasNext) {
+          // We drain fetched results. That is, we push decode tasks
+          // onto our queue until the results in the fetcher iterator
+          // are all dequeued (the ones that were completed up until now).
+          while (amountToDrain > 0 && fetcherIterator.hasNext) {
             amountToDrain -= 1
             // fetch block time accounts for time spent waiting for streams.next()
             val readBlockedStart = System.nanoTime()
-            val (_, inputStream) = streams.next()
+            val (_, inputStream) = fetcherIterator.next()
             readBlockedTime += System.nanoTime() - readBlockedStart
             // n is  (BlockId, BufferReleasingInputStream)
             val slot = RapidsShuffleInternalManagerBase.getNextReaderSlot
-
-            def runIt(it: Iterator[(Any, Any)]): Unit = {
-              try {
-                // JCudfSerialization
-                while (it.hasNext) {
-                  queued.offer(it.next())
-                }
-              } catch {
-                case t: Throwable =>
-                  logError("Error in runIt", t)
-                  throw t
-              }
-            }
 
             withResource(
               new NvtxRange("ParallelDeserializerIterator.queuetask", NvtxColor.PURPLE)) { _ =>
               val deserStream = serializerInstance.deserializeStream(inputStream)
               val it = deserStream.asKeyValueIterator
               futures += RapidsShuffleInternalManagerBase.queueReadTask(slot, () => {
-                runIt(it)
+                try {
+                  while (it.hasNext) {
+                    queued.offer(it.next())
+                  }
+                } catch {
+                  case t: Throwable =>
+                    logError("Error in runIt", t)
+                    throw t
+                }
               })
             }
           }
