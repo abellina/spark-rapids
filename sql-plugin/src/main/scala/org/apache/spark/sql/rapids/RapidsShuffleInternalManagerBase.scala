@@ -512,6 +512,7 @@ class RapidsShuffleThreadedReader[K, C](
   extends ShuffleReader[K, C] with Logging with Arm {
 
   private val sqlMetrics = handle.metrics
+  private val dep = handle.dependency
   private val deserializationTimeNs = sqlMetrics("rapidsShuffleDeserializationTime")
   private val shuffleReadTimeNs = sqlMetrics("rapidsShuffleReadTime")
   private val dataReadSize = sqlMetrics("dataReadSize")
@@ -714,7 +715,6 @@ class RapidsShuffleThreadedReader[K, C](
     // An interruptible iterator must be used here in order to support task cancellation
     val interruptibleIter = new InterruptibleIterator[(Any, Any)](context, metricIter)
 
-    val dep = handle.dependency
     val aggregatedIter: Iterator[Product2[K, C]] = if (dep.aggregator.isDefined) {
       if (dep.mapSideCombine) {
         // We are reading values that are already combined

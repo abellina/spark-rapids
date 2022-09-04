@@ -17,7 +17,6 @@
 package org.apache.spark.sql.rapids.shims
 
 import org.apache.spark.SparkConf
-
 import org.apache.spark.shuffle.ShuffleWriteMetricsReporter
 import org.apache.spark.shuffle.api.{ShuffleExecutorComponents, ShuffleMapOutputWriter}
 import org.apache.spark.sql.rapids.{RapidsShuffleThreadedWriterBase, ShuffleHandleWithMetrics}

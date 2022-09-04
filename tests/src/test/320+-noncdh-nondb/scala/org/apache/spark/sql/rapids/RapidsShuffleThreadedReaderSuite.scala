@@ -24,9 +24,7 @@ import org.mockito.ArgumentMatchers.{eq => meq}
 import org.mockito.Mockito.{mock, when}
 import org.scalatest.{BeforeAndAfterAll, BeforeAndAfterEach, FunSuite, Suite}
 
-import org.apache.spark.resource.ResourceProfile
 import org.apache.spark._
-
 import org.apache.spark.internal.config
 import org.apache.spark.network.buffer.{ManagedBuffer, NioManagedBuffer}
 import org.apache.spark.resource.ResourceProfile

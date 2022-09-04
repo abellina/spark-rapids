@@ -29,8 +29,8 @@ import scala.util.{Failure, Success}
 
 import io.netty.util.internal.OutOfDirectMemoryError
 import org.roaringbitmap.RoaringBitmap
-import org.apache.spark.{MapOutputTracker, SparkEnv, TaskContext}
 
+import org.apache.spark.{MapOutputTracker, SparkEnv, TaskContext}
 import org.apache.spark.MapOutputTracker.SHUFFLE_PUSH_MAP_ID
 import org.apache.spark.SparkException
 import org.apache.spark.internal.{config, Logging}
