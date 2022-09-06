@@ -16,12 +16,9 @@
 
 package org.apache.spark.sql.rapids.shims.spark321db
 
-import ai.rapids.cudf.{NvtxColor, NvtxRange}
-
-import org.apache.spark.{SparkConf, SparkEnv}
+import org.apache.spark.SparkConf
 import org.apache.spark.shuffle._
 import org.apache.spark.sql.rapids.{ProxyRapidsShuffleInternalManagerBase, RapidsShuffleInternalManagerBase}
-import org.apache.spark.storage.{BlockId, BlockManagerId}
 
 /**
  * A shuffle manager optimized for the RAPIDS Plugin For Apache Spark.
@@ -29,27 +26,7 @@ import org.apache.spark.storage.{BlockId, BlockManagerId}
  *       `ShuffleManager` and `SortShuffleManager` classes.
  */
 class RapidsShuffleInternalManager(conf: SparkConf, isDriver: Boolean)
-    extends RapidsShuffleInternalManagerBase(conf, isDriver) {
-  override def getMapSizes[K, C](
-      handle: BaseShuffleHandle[K, C, C],
-      startMapIndex: Int,
-      endMapIndex: Int,
-      startPartition: Int,
-      endPartition: Int): (Iterator[(BlockManagerId, Seq[(BlockId, Long, Int)])], Boolean) = {
-    val shuffleId = handle.shuffleId
-    withResource(new NvtxRange("getMapSizesByExecId", NvtxColor.CYAN)) { _ =>
-      if (handle.dependency.shuffleMergeEnabled) {
-        val res = SparkEnv.get.mapOutputTracker.getPushBasedShuffleMapSizesByExecutorId(
-          handle.shuffleId, startMapIndex, endMapIndex, startPartition, endPartition)
-        (res.iter, res.enableBatchFetch)
-      } else {
-        val address = SparkEnv.get.mapOutputTracker.getMapSizesByExecutorId(
-          handle.shuffleId, startMapIndex, endMapIndex, startPartition, endPartition)
-        (address, true)
-      }
-    }
-  }
-}
+    extends RapidsShuffleInternalManagerBase(conf, isDriver)
 
 class ProxyRapidsShuffleInternalManager(conf: SparkConf, isDriver: Boolean)
     extends ProxyRapidsShuffleInternalManagerBase(conf, isDriver)

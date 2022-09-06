@@ -7,10 +7,18 @@ nav_order: 5
 # RAPIDS Shuffle Manager
 
 The RAPIDS Shuffle Manager is an implementation of the `ShuffleManager` interface in Apache Spark
-that allows custom mechanisms to exchange shuffle data. It has two components: a spillable cache,
-and a transport that can utilize Remote Direct Memory Access (RDMA) and high-bandwidth transfers
-within a node that has multiple GPUs. This is possible because the plugin utilizes
-[Unified Communication X (UCX)](https://www.openucx.org/) as its transport.
+that allows custom mechanisms to exchange shuffle data. We currently expose two modes of operation:
+UCX and Multi Threaded. 
+
+## Multi Threaded Mode
+
+
+## UCX Mode
+
+It has two components: a spillable cache, and a transport that can utilize Remote Direct Memory 
+Access (RDMA) and high-bandwidth transfers within a node that has multiple GPUs. This is possible 
+because the plugin utilizes [Unified Communication X (UCX)](https://www.openucx.org/) as its 
+transport.
 
 - **Spillable cache**: This store keeps GPU data close by where it was produced in device memory,
 but can spill in the following cases:
