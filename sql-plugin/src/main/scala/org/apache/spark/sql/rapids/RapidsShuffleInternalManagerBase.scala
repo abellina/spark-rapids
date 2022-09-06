@@ -527,14 +527,17 @@ class RapidsShuffleThreadedReader[K, C](
   private var shuffleReadRange: NvtxRange =
     new NvtxRange("ThreadedReader.read", NvtxColor.PURPLE)
 
-  Option(TaskContext.get()).foreach {
-      _.addTaskCompletionListener[Unit]( _ => {
-      // should not be needed, but just in case
-      if (shuffleReadRange != null) {
-        shuffleReadRange.close()
-      }
-    })
+  private def closeShuffleReadRange(): Unit = {
+    if (shuffleReadRange != null) {
+      shuffleReadRange.close()
+      shuffleReadRange = null
+    }
   }
+
+  Option(TaskContext.get()).foreach {_.addTaskCompletionListener[Unit]( _ => {
+    // should not be needed, but just in case
+    closeShuffleReadRange()
+  })}
 
   private def fetchContinuousBlocksInBatch: Boolean = {
     val conf = SparkEnv.get.conf
@@ -646,8 +649,7 @@ class RapidsShuffleThreadedReader[K, C](
 
         // if this is the last call, close our range
         if (!hasNext) {
-          shuffleReadRange.close()
-          shuffleReadRange = null
+          closeShuffleReadRange()
         }
         result
       }
