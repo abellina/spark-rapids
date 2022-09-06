@@ -255,7 +255,6 @@ class Analysis(apps: Seq[ApplicationInfo]) {
 
             // set this here, so make sure we don't get it again until later
             sqlCase.sqlCpuTimePercent = execCPURatio
-
             val (durSum, durMax, durMin, durAvg) = getDurations(tasksInSQL)
             Some(SQLTaskAggMetricsProfileResult(app.index,
               app.appId,
