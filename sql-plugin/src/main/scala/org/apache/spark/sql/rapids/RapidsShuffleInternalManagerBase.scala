@@ -243,7 +243,7 @@ abstract class RapidsShuffleThreadedWriterBase[K, V](
   private val serializationTimeMetric: SQLMetric = metrics("rapidsShuffleSerializationTime")
   private val shuffleWriteTimeMetric: SQLMetric = metrics("rapidsShuffleWriteTime")
   private val shuffleCombineTimeMetric: SQLMetric = metrics("rapidsShuffleCombineTime")
-  private val ioTimeMetric: SQLMetric = metrics("ioTime")
+  private val ioTimeMetric: SQLMetric = metrics("rapidsShuffleWriteIoTime")
   private val dep: ShuffleDependency[K, V, V] = handle.dependency
   private val shuffleId = dep.shuffleId
   private val partitioner = dep.partitioner
