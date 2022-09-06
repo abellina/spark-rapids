@@ -234,7 +234,8 @@ class EventsProcessor(app: ApplicationInfo) extends EventProcessorBase[Applicati
       event.taskMetrics.inputMetrics.bytesRead,
       event.taskMetrics.inputMetrics.recordsRead,
       event.taskMetrics.outputMetrics.bytesWritten,
-      event.taskMetrics.outputMetrics.recordsWritten)
+      event.taskMetrics.outputMetrics.recordsWritten
+    )
     app.taskEnd += thisTask
   }
 

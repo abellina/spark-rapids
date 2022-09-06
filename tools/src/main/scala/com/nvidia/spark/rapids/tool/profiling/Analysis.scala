@@ -255,6 +255,7 @@ class Analysis(apps: Seq[ApplicationInfo]) {
 
             // set this here, so make sure we don't get it again until later
             sqlCase.sqlCpuTimePercent = execCPURatio
+
             val (durSum, durMax, durMin, durAvg) = getDurations(tasksInSQL)
             Some(SQLTaskAggMetricsProfileResult(app.index,
               app.appId,
@@ -291,7 +292,8 @@ class Analysis(apps: Seq[ApplicationInfo]) {
               tasksInSQL.map(_.sr_remoteBytesReadToDisk).sum,
               tasksInSQL.map(_.sr_totalBytesRead).sum,
               tasksInSQL.map(_.sw_bytesWritten).sum,
-              tasksInSQL.map(_.sw_recordsWritten).sum
+              tasksInSQL.map(_.sw_recordsWritten).sum,
+              tasksInSQL.map(_.sw_writeTime).sum
             ))
           }
         }
@@ -329,7 +331,7 @@ class Analysis(apps: Seq[ApplicationInfo]) {
     }
   }
 
-  case class AverageStageInfo(avgDuration: Double, avgShuffleReadBytes: Double)
+  private case class AverageStageInfo(avgDuration: Double, avgShuffleReadBytes: Double)
 
   def shuffleSkewCheck(): Seq[ShuffleSkewProfileResult] = {
     val allRows = apps.flatMap { app =>
