@@ -17,7 +17,6 @@
 package com.nvidia.spark.rapids.tool.profiling
 
 import java.util.Date
-import java.util.concurrent.TimeUnit
 
 import scala.collection.Map
 
@@ -280,20 +279,6 @@ case class TaskStageAccumCase(
     update: Option[Long],
     isInternal: Boolean)
 
-case class ShuffleExtraMetrics(
-    inputBytesRead: Long,
-    bufferTimeNs: Long,
-    taskDeserializationTimeMs: Long,
-    deserializationTimeNs: Long,
-    serializationTimeNs: Long,
-    shuffleReadtimeNs: Long,
-    shuffleWriteTimeNs: Long,
-    shuffleCombineTimeNs: Long,
-    ioTimeNs: Long, // write io time
-    dataSizeBytes: Long, // uncompressed write size
-    dataReadSizeBytes: Long // uncompressed read size
-)
-
 // Note: sr = Shuffle Read; sw = Shuffle Write
 case class TaskCase(
     stageId: Int,
@@ -334,8 +319,7 @@ case class TaskCase(
     input_bytesRead: Long,
     input_recordsRead: Long,
     output_bytesWritten: Long,
-    output_recordsWritten: Long,
-    shuffleExtraMetrics: ShuffleExtraMetrics)
+    output_recordsWritten: Long)
 
 case class UnsupportedSQLPlan(sqlID: Long, nodeID: Long, nodeName: String,
     nodeDesc: String, reason: String)
@@ -492,61 +476,26 @@ case class SQLTaskAggMetricsProfileResult(
     resultSizeMax: Long,
     srFetchWaitTimeSum: Long,
     srLocalBlocksFetchedSum: Long,
-    srLocalBytesReadSum: Long,
+    srcLocalBytesReadSum: Long,
     srRemoteBlocksFetchSum: Long,
     srRemoteBytesReadSum: Long,
     srRemoteBytesReadToDiskSum: Long,
     srTotalBytesReadSum: Long,
     swBytesWrittenSum: Long,
     swRecordsWrittenSum: Long,
-    swWriteTimeSum: Long,
-    inputBytesRead: Long,
-    bufferTimeNsSum: Long,
-    taskDeserializationTimeMsSum: Long,
-    writeIoTimeNsSum: Long,
-    dataSizeBytesSum: Long,
-    dataReadSizeBytesSum: Long,
-    deserializationTimeNsSum: Long,
-    serializationTimeNsSum: Long,
-    rapidsShuffleReadTimeNsSum: Long,
-    rapidsShuffleWriteTimeNsSum: Long,
-    rapidsShuffleCombineTimeNsSum: Long) extends ProfileResult {
+    swWriteTimeSum: Long) extends ProfileResult {
 
-  override val outputHeaders = Seq(
-    "appIndex",
-    "appID",
-    "sqlID",
-    "description",
-    "numTasks",
-    "Duration",
-    "duration_sum",
-    "shuffle_sum",
-    "shuffle_time_pct",
-
-    "shuffle_written_compressed",
-    "shuffle_read_compressed",
-    "shuffle_written_uncompressed",
-    "shuffle_read_uncompressed",
-
-    "shuffle_write_time",
-    "shuffle_write_combine_time",
-    "shuffle_write_ser_time",
-    "shuffle_write_io_time",
-    "shuffle_write_ser_bw",
-    "shuffle_write_io_bw",
-    "shuffle_write_eff_bw",
-
-    "shuffle_read_time",
-    "shuffle_read_deser_time",
-    "shuffle_read_io_time",
-    "shuffle_read_deser_bw",
-    "shuffle_read_io_bw",
-    "shuffle_read_eff_bw",
-
-    "input_bytes_read",
-    "buffer_sum",
-    "task_deser_time_sum"
-  )
+  override val outputHeaders = Seq("appIndex", "appID", "sqlID", "description", "numTasks",
+    "Duration", "executorCPUTime", "executorRunTime", "executorCPURatio",
+    "diskBytesSpilled_sum", "duration_sum", "duration_max", "duration_min",
+    "duration_avg", "executorCPUTime_sum", "executorDeserializeCPUTime_sum",
+    "executorDeserializeTime_sum", "executorRunTime_sum", "input_bytesRead_sum",
+    "input_recordsRead_sum", "jvmGCTime_sum", "memoryBytesSpilled_sum",
+    "output_bytesWritten_sum", "output_recordsWritten_sum", "peakExecutionMemory_max",
+    "resultSerializationTime_sum", "resultSize_max", "sr_fetchWaitTime_sum",
+    "sr_localBlocksFetched_sum", "sr_localBytesRead_sum", "sr_remoteBlocksFetched_sum",
+    "sr_remoteBytesRead_sum", "sr_remoteBytesReadToDisk_sum", "sr_totalBytesRead_sum",
+    "sw_bytesWritten_sum", "sw_recordsWritten_sum", "sw_writeTime_sum")
 
   val durStr = duration match {
     case Some(dur) => dur.toString
@@ -554,82 +503,43 @@ case class SQLTaskAggMetricsProfileResult(
   }
 
   override def convertToSeq: Seq[String] = {
-    val shuffleWriteCompressedMB = swBytesWrittenSum.toDouble/1024/1024
-    val shuffleReadCompressedMB = srTotalBytesReadSum.toDouble/1024/1024
-    val shuffleWriteUncompressedMB = dataSizeBytesSum.toDouble/1024/1024
-    val shuffleReadUncompressedMB = dataReadSizeBytesSum.toDouble/1024/1024
-
-    val deserializationTimeMsSum =
-      TimeUnit.NANOSECONDS.toMillis(deserializationTimeNsSum).toDouble
-    val serializationTimeMsSum =
-      TimeUnit.NANOSECONDS.toMillis(serializationTimeNsSum).toDouble
-    val writeIoTimeMsSum =
-      TimeUnit.NANOSECONDS.toMillis(writeIoTimeNsSum).toDouble
-    val rapidsShuffleReadTimeMsSum =
-      TimeUnit.NANOSECONDS.toMillis(rapidsShuffleReadTimeNsSum)
-    val rapidsShuffleWriteTimeMsSum =
-      TimeUnit.NANOSECONDS.toMillis(rapidsShuffleWriteTimeNsSum)
-    val rapidsShuffleCombineTimeMsSum =
-      TimeUnit.NANOSECONDS.toMillis(rapidsShuffleCombineTimeNsSum)
-    val bufferTimeMsSum =
-      TimeUnit.NANOSECONDS.toMillis(bufferTimeNsSum)
-
-    val inputBytesReadMB = inputBytesRead.toDouble / 1024 / 1024
-
-    val shuffleSumMs = rapidsShuffleWriteTimeMsSum + rapidsShuffleReadTimeMsSum
-
-    val shufflePct = 100 - (100.0 * (durationSum.toDouble - shuffleSumMs)/durationSum)
-    val readIoTimeMsSum = rapidsShuffleReadTimeMsSum - deserializationTimeMsSum
-
-    // MB/sec
-    val shuffleWriteBw =
-      shuffleWriteCompressedMB/(rapidsShuffleWriteTimeMsSum.toDouble/1000)
-
-    val shuffleReadBw =
-      shuffleReadUncompressedMB/(rapidsShuffleReadTimeMsSum.toDouble/1000)
-
-    val serializationBw = shuffleWriteUncompressedMB/(serializationTimeMsSum/1000)
-    val ioBW = shuffleWriteCompressedMB/(writeIoTimeMsSum/1000)
-
-    val deserializationBw = shuffleReadUncompressedMB/(deserializationTimeMsSum/1000)
-    val readIOBw = shuffleReadCompressedMB/(readIoTimeMsSum/1000)
-    if (serializationTimeMsSum < 0){
-      println(s"negative serialization time for ${description} ${serializationTimeMsSum}")
-    }
-
     Seq(appIndex.toString,
       appId,
       sqlId.toString,
       description,
       numTasks.toString,
       durStr,
+      executorCpuTime.toString,
+      executorRunTime.toString,
+      executorCpuRatio.toString,
+      diskBytesSpilledSum.toString,
       durationSum.toString,
-      shuffleSumMs.toString,
-      f"${shufflePct}%1.2f",
-
-      f"${shuffleWriteCompressedMB}%1.2f",
-      f"${shuffleReadCompressedMB}%1.2f",
-      f"${shuffleWriteUncompressedMB}%1.2f",
-      f"${shuffleReadUncompressedMB}%1.2f",
-
-      rapidsShuffleWriteTimeMsSum.toString,
-      rapidsShuffleCombineTimeMsSum.toString,
-      serializationTimeMsSum.toString,
-      writeIoTimeMsSum.toString,
-      f"${serializationBw}%1.2f",
-      f"${ioBW}%1.2f",
-      f"${shuffleWriteBw}%1.2f",
-
-      rapidsShuffleReadTimeMsSum.toString,
-      deserializationTimeMsSum.toString,
-      readIoTimeMsSum.toString,
-      f"${deserializationBw}%1.2f",
-      f"${readIOBw}%1.2f",
-      f"${shuffleReadBw}%1.2f",
-
-      f"${inputBytesReadMB}%1.2f",
-      bufferTimeMsSum.toString,
-      taskDeserializationTimeMsSum.toString)
+      durationMax.toString,
+      durationMin.toString,
+      durationAvg.toString,
+      executorCPUTimeSum.toString,
+      executorDeserializeCpuTimeSum.toString,
+      executorDeserializeTimeSum.toString,
+      executorRunTimeSum.toString,
+      inputBytesReadSum.toString,
+      inputRecordsReadSum.toString,
+      jvmGCTimeSum.toString,
+      memoryBytesSpilledSum.toString,
+      outputBytesWrittenSum.toString,
+      outputRecordsWrittenSum.toString,
+      peakExecutionMemoryMax.toString,
+      resultSerializationTimeSum.toString,
+      resultSizeMax.toString,
+      srFetchWaitTimeSum.toString,
+      srLocalBlocksFetchedSum.toString,
+      srcLocalBytesReadSum.toString,
+      srRemoteBlocksFetchSum.toString,
+      srRemoteBytesReadSum.toString,
+      srRemoteBytesReadToDiskSum.toString,
+      srTotalBytesReadSum.toString,
+      swBytesWrittenSum.toString,
+      swRecordsWrittenSum.toString,
+      swWriteTimeSum.toString)
   }
 }
 
@@ -662,8 +572,6 @@ case class SQLDurationExecutorTimeProfileResult(appIndex: Int, appId: String, sq
       appDurStr, potentialStr, execCpuTimePercent)
   }
 }
-
-case class AverageStageInfo(avgDuration: Double, avgShuffleReadBytes: Double)
 
 case class ShuffleSkewProfileResult(appIndex: Int, stageId: Long, stageAttemptId: Long,
     taskId: Long, taskAttemptId: Long, taskDuration: Long, avgDuration: Double,
