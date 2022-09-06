@@ -175,7 +175,7 @@ object RapidsShuffleInternalManagerBase extends Logging {
    *      `task`.
    */
   def queueReadTask[T](slotNum: Int, task: Callable[T]): Future[T] = {
-    readerSlots(slotNum % numWriterSlots).offer(task)
+    readerSlots(slotNum % numReaderSlots).offer(task)
   }
 
   def startThreadPoolIfNeeded(
