@@ -507,7 +507,8 @@ abstract class RapidsShuffleThreadedReaderBase[K, C](
     blockManager: BlockManager = SparkEnv.get.blockManager,
     mapOutputTracker: MapOutputTracker = SparkEnv.get.mapOutputTracker,
     canUseBatchFetch: Boolean = false,
-    numReaderThreads: Int = 0)
+    numReaderThreads: Int = 0,
+    maxBytesInFlight: Long = 1024L * 1024 * 1024)
   extends ShuffleReader[K, C] with Logging with Arm {
 
   case class GetMapSizesResult(
@@ -615,7 +616,6 @@ abstract class RapidsShuffleThreadedReaderBase[K, C](
 
     override def next(): (Any, Any) = {
       withResource(new NvtxRange("ParallelDeserializerIterator.next", NvtxColor.CYAN)) { _ =>
-        logInfo(s"inFlight: ${inFlight}")
         val result = if (fallbackIter != null) {
           fallbackIter.next()
         } else {
@@ -627,7 +627,6 @@ abstract class RapidsShuffleThreadedReaderBase[K, C](
               waitTime = System.nanoTime() - waitTimeStart
             }
           }
-          logInfo(s"inFlight now is: ${inFlight}")
           // We either have added futures and so will have items queued
           // or we already exhausted the fetchIterator and are just waiting
           // for our futures to finish. Either way, it's safe to block
@@ -664,7 +663,7 @@ abstract class RapidsShuffleThreadedReaderBase[K, C](
 
     private var currentIt: SerializedBatchIterator = null
     private var inFlight: Long = 0L
-    private var limit: Long = 1024L * 1024 * 1024
+    private var limit: Long = maxBytesInFlight
 
     private def popFetchedIfAvailable(): Unit = {
       def doIt(nextSize: Long, it: SerializedBatchIterator): Unit = {
@@ -672,10 +671,21 @@ abstract class RapidsShuffleThreadedReaderBase[K, C](
         val slot = RapidsShuffleInternalManagerBase.getNextReaderSlot
         futures += RapidsShuffleInternalManagerBase.queueReadTask(slot, () => {
           try {
+            var count = 0
+            var newNextSize = 0L
+            var otherBatchSizes = 0L
             while (it.hasNext) {
-              queued.offer(it.next())
+              //if (newNextSize + inFlight < limit) {
+                inFlight += newNextSize
+                otherBatchSizes += newNextSize
+                queued.offer(it.next())
+                count = count + 1
+                newNextSize = it.tryReadNextHeader().map(_.getDataLen).getOrElse(0L)
+              //} else {
+              //  // didNotFit, need to contend for a counter
+              //}
             }
-            inFlight
+            nextSize //+ otherBatchSizes
           } catch {
             case t: Throwable =>
               logError("Error in runIt", t)
@@ -688,8 +698,9 @@ abstract class RapidsShuffleThreadedReaderBase[K, C](
       if (currentIt != null) {
         // we had tried to pop something, but we couldn't.
         val nextSize = currentIt.tryReadNextHeader().map(_.getDataLen).getOrElse(0L)
-        if (inFlight == 0 || inFlight + nextSize < limit) {
-          doIt(inFlight, currentIt)
+        if (inFlight == 0 || (inFlight + nextSize) < limit) {
+          logInfo(s"Ok it fits now ${inFlight}; ${inFlight + nextSize}")
+          doIt(nextSize, currentIt)
           currentIt = null
         }
       } else {
@@ -711,7 +722,8 @@ abstract class RapidsShuffleThreadedReaderBase[K, C](
             // onto our queue until the results in the fetcher iterator
             // are all dequeued (the ones that were completed up until now).
             readBlockedTime = 0
-            while (amountToDrain > 0 && fetcherIterator.hasNext) {
+            var didNotFit = false
+            while (amountToDrain > 0 && fetcherIterator.hasNext && !didNotFit) {
               amountToDrain -= 1
               // fetch block time accounts for time spent waiting for streams.next()
               val readBlockedStart = System.nanoTime()
@@ -725,8 +737,10 @@ abstract class RapidsShuffleThreadedReaderBase[K, C](
                 val deserStream = serializerInstance.deserializeStream(inputStream)
                 val it = deserStream.asKeyValueIterator.asInstanceOf[SerializedBatchIterator]
                 val nextSize = it.tryReadNextHeader().map(_.getDataLen).getOrElse(0L)
-                if (nextSize + inFlight > limit) {
+                if (inFlight > 0 && nextSize + inFlight > limit) {
+                  logInfo(s"does not fit ${inFlight + nextSize} > limit")
                   currentIt = it
+                  didNotFit = true
                 } else {
                   doIt(nextSize, it)
                 }
@@ -1203,7 +1217,8 @@ class RapidsShuffleInternalManagerBase(conf: SparkConf, val isDriver: Boolean)
               context,
               metrics,
               canUseBatchFetch = canUseBatchFetch,
-              numReaderThreads = rapidsConf.shuffleMultiThreadedReaderThreads)
+              numReaderThreads = rapidsConf.shuffleMultiThreadedReaderThreads,
+              maxBytesInFlight = rapidsConf.shuffleMaxInFlight)
           case _ =>
             val shuffleHandle = RapidsShuffleInternalManagerBase.unwrapHandle(other)
             wrapped.getReader(shuffleHandle, startMapIndex, endMapIndex, startPartition,

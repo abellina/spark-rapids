@@ -1299,6 +1299,12 @@ object RapidsConf {
     .bytesConf(ByteUnit.BYTE)
     .createWithDefault(64 * 1024)
 
+  val SHUFFLE_MAX_IN_FLIGHT = 
+    conf("spark.rapids.shuffle.maxInFlight")
+      .doc("The amount max bytes in flight")
+      .bytesConf(ByteUnit.BYTE)
+      .createWithDefault(1024 * 1024 * 1024)
+
   val SHUFFLE_MULTITHREADED_WRITER_THREADS =
     conf("spark.rapids.shuffle.multiThreaded.writer.threads")
       .doc("The number of threads to use for writing shuffle blocks per executor. There " +
@@ -1972,6 +1978,8 @@ class RapidsConf(conf: Map[String, String]) extends Logging {
   lazy val shuffleCompressionLz4ChunkSize: Long = get(SHUFFLE_COMPRESSION_LZ4_CHUNK_SIZE)
 
   lazy val shuffleCompressionMaxBatchMemory: Long = get(SHUFFLE_COMPRESSION_MAX_BATCH_MEMORY)
+
+  lazy val shuffleMaxInFlight: Long = get(SHUFFLE_MAX_IN_FLIGHT)
 
   lazy val shuffleMultiThreadedWriterThreads: Int = get(SHUFFLE_MULTITHREADED_WRITER_THREADS)
 

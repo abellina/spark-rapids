@@ -129,7 +129,7 @@ class RapidsShuffleThreadedReaderSuite
 
         // Create a mocked shuffle handle to pass into HashShuffleReader.
         val shuffleHandle = {
-          val dependency = mock(classOf[ShuffleDependency[Int, Int, Int]])
+          val dependency = mock(classOf[GpuShuffleDependency[Int, Int, Int]])
           when(dependency.serializer).thenReturn(serializer)
           when(dependency.aggregator).thenReturn(None)
           when(dependency.keyOrdering).thenReturn(None)

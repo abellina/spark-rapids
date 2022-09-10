@@ -140,9 +140,9 @@ class RapidsShuffleThreadedWriterSuite extends FunSuite
   @Mock(answer = RETURNS_SMART_NULLS) private var diskBlockManager: DiskBlockManager = _
   @Mock(answer = RETURNS_SMART_NULLS) private var taskContext: TaskContext = _
   @Mock(answer = RETURNS_SMART_NULLS) private var blockResolver: TestIndexShuffleBlockResolver = _
-  @Mock(answer = RETURNS_SMART_NULLS) private var dependency: ShuffleDependency[Int, Int, Int] = _
+  @Mock(answer = RETURNS_SMART_NULLS) private var dependency: GpuShuffleDependency[Int, Int, Int] = _
   @Mock(answer = RETURNS_SMART_NULLS)
-    private var dependencyBad: ShuffleDependency[Int, BadSerializable, BadSerializable] = _
+    private var dependencyBad: GpuShuffleDependency[Int, BadSerializable, BadSerializable] = _
 
   private var taskMetrics: TaskMetrics = _
   private var tempDir: File = _

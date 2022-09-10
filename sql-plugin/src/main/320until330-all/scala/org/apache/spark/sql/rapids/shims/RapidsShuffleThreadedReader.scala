@@ -36,7 +36,8 @@ class RapidsShuffleThreadedReader[K, C] (
     blockManager: BlockManager = SparkEnv.get.blockManager,
     mapOutputTracker: MapOutputTracker = SparkEnv.get.mapOutputTracker,
     canUseBatchFetch: Boolean = false,
-    numReaderThreads: Int = 0)
+    numReaderThreads: Int = 0,
+    maxBytesInFlight: Long = 1024L * 1024 * 1024)
     extends RapidsShuffleThreadedReaderBase[K, C](
       handle,
       context,
@@ -45,7 +46,8 @@ class RapidsShuffleThreadedReader[K, C] (
       blockManager = blockManager,
       mapOutputTracker = mapOutputTracker,
       canUseBatchFetch = canUseBatchFetch,
-      numReaderThreads = numReaderThreads) {
+      numReaderThreads = numReaderThreads,
+      maxBytesInFlight = maxBytesInFlight) {
 
   override protected def getMapSizes: GetMapSizesResult = {
     val shuffleId = handle.shuffleId
