@@ -574,7 +574,7 @@ abstract class RapidsShuffleThreadedReaderBase[K, C](
       serializer: GpuColumnarBatchSerializer)
     extends Iterator[(Any, Any)] with Arm {
     private val queued = new LinkedBlockingQueue[(Any, Any)]
-    private val futures = new mutable.Queue[Future[Long]]()
+    private val futures = new mutable.Queue[Future[Unit]]()
     private val serializerInstance = serializer.newInstance()
     private var readBlockedTime: Long = 0L
     private var fetchTime: Long = 0L
@@ -623,7 +623,7 @@ abstract class RapidsShuffleThreadedReaderBase[K, C](
           if (futures.nonEmpty) {
             withResource(new NvtxRange("BatchWait", NvtxColor.CYAN)) { _ =>
               val waitTimeStart = System.nanoTime()
-              inFlight -= futures.dequeue().get // wait for one future
+              futures.dequeue().get // wait for one future
               waitTime = System.nanoTime() - waitTimeStart
             }
           }
@@ -664,10 +664,43 @@ abstract class RapidsShuffleThreadedReaderBase[K, C](
     private var currentIt: SerializedBatchIterator = null
     private var inFlight: Long = 0L
     private var limit: Long = maxBytesInFlight
+    private val inFlightMonitor = new Object
+
+    def acquire(sz: Long): Boolean = inFlightMonitor.synchronized {
+      if (sz == 0) {
+        true
+      } else {
+        if (inFlight == 0 || sz + inFlight < limit) {
+          inFlight += sz
+          true
+        } else {
+          false
+        }
+      }
+    }
+
+    def blockingAcquire[T](sz: Long)(body: => T): Unit = {
+      if (acquire(sz)) {
+        body
+        release(sz)
+      } else {
+        inFlightMonitor.synchronized {
+          while (!acquire(sz)) {
+            inFlightMonitor.wait()
+          }
+        }
+        body
+        release(sz)
+      }
+    }
+
+    def release(sz: Long): Unit = inFlightMonitor.synchronized {
+      inFlight -= sz
+      inFlightMonitor.notifyAll()
+    }
 
     private def popFetchedIfAvailable(): Unit = {
       def doIt(nextSize: Long, it: SerializedBatchIterator): Unit = {
-        inFlight += nextSize
         val slot = RapidsShuffleInternalManagerBase.getNextReaderSlot
         futures += RapidsShuffleInternalManagerBase.queueReadTask(slot, () => {
           try {
@@ -675,17 +708,15 @@ abstract class RapidsShuffleThreadedReaderBase[K, C](
             var newNextSize = 0L
             var otherBatchSizes = 0L
             while (it.hasNext) {
-              //if (newNextSize + inFlight < limit) {
-                inFlight += newNextSize
-                otherBatchSizes += newNextSize
+              blockingAcquire(newNextSize) {
                 queued.offer(it.next())
                 count = count + 1
+                if (count == 1){
+                  release(nextSize) // release the head size
+                }
                 newNextSize = it.tryReadNextHeader().map(_.getDataLen).getOrElse(0L)
-              //} else {
-              //  // didNotFit, need to contend for a counter
-              //}
+              }
             }
-            nextSize //+ otherBatchSizes
           } catch {
             case t: Throwable =>
               logError("Error in runIt", t)
@@ -698,7 +729,7 @@ abstract class RapidsShuffleThreadedReaderBase[K, C](
       if (currentIt != null) {
         // we had tried to pop something, but we couldn't.
         val nextSize = currentIt.tryReadNextHeader().map(_.getDataLen).getOrElse(0L)
-        if (inFlight == 0 || (inFlight + nextSize) < limit) {
+        if (acquire(nextSize)) {
           logInfo(s"Ok it fits now ${inFlight}; ${inFlight + nextSize}")
           doIt(nextSize, currentIt)
           currentIt = null
@@ -737,12 +768,12 @@ abstract class RapidsShuffleThreadedReaderBase[K, C](
                 val deserStream = serializerInstance.deserializeStream(inputStream)
                 val it = deserStream.asKeyValueIterator.asInstanceOf[SerializedBatchIterator]
                 val nextSize = it.tryReadNextHeader().map(_.getDataLen).getOrElse(0L)
-                if (inFlight > 0 && nextSize + inFlight > limit) {
+                if (acquire(nextSize)) {
+                  doIt(nextSize, it)
+                } else {
                   logInfo(s"does not fit ${inFlight + nextSize} > limit")
                   currentIt = it
                   didNotFit = true
-                } else {
-                  doIt(nextSize, it)
                 }
               }
             }

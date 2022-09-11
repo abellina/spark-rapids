@@ -44,19 +44,23 @@ class SerializedBatchIterator(dIn: DataInputStream)
   })
 
   def tryReadNextHeader(): Option[SerializedTableHeader] = {
-    if (nextHeader.isEmpty) {
-      withResource(new NvtxRange("Read Header", NvtxColor.YELLOW)) { _ =>
-        val header = new SerializedTableHeader(dIn)
-        if (header.wasInitialized) {
-          nextHeader = Some(header)
-        } else {
-          dIn.close()
-          streamClosed = true
-          nextHeader = None
+    if (streamClosed){
+      None
+    } else {
+      if (nextHeader.isEmpty) {
+        withResource(new NvtxRange("Read Header", NvtxColor.YELLOW)) { _ =>
+          val header = new SerializedTableHeader(dIn)
+          if (header.wasInitialized) {
+            nextHeader = Some(header)
+          } else {
+            dIn.close()
+            streamClosed = true
+            nextHeader = None
+          }
         }
       }
+      nextHeader
     }
-    nextHeader
   }
 
   def tryReadNext(): Option[ColumnarBatch] = {
