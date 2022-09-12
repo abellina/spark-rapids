@@ -18,17 +18,20 @@ package org.apache.spark.sql.rapids
 
 import java.io.{File, FileInputStream}
 import java.util.Optional
-import java.util.concurrent.{Callable, ConcurrentHashMap, ExecutionException, Executors, Future, LinkedBlockingQueue}
+import java.util.concurrent.{Callable, ExecutionException, Executors, Future, LinkedBlockingQueue}
 import java.util.concurrent.atomic.{AtomicInteger, AtomicLong}
+
 import scala.collection.mutable
 import scala.collection.mutable.{ArrayBuffer, ListBuffer}
+
 import ai.rapids.cudf.{NvtxColor, NvtxRange}
 import com.nvidia.spark.rapids._
 import com.nvidia.spark.rapids.format.TableMeta
 import com.nvidia.spark.rapids.shuffle.{RapidsShuffleRequestHandler, RapidsShuffleServer, RapidsShuffleTransport}
+
 import org.apache.spark.{InterruptibleIterator, MapOutputTracker, ShuffleDependency, SparkConf, SparkEnv, TaskContext}
 import org.apache.spark.executor.ShuffleWriteMetrics
-import org.apache.spark.internal.{Logging, config}
+import org.apache.spark.internal.{config, Logging}
 import org.apache.spark.io.CompressionCodec
 import org.apache.spark.network.buffer.ManagedBuffer
 import org.apache.spark.scheduler.MapStatus
@@ -573,7 +576,7 @@ abstract class RapidsShuffleThreadedReaderBase[K, C](
       serializer: GpuColumnarBatchSerializer)
     extends Iterator[(Any, Any)] with Arm {
     private val queued = new LinkedBlockingQueue[(Any, Any)]
-    private val futures = new mutable.Queue[Future[Unit]]()
+    private val futures = new mutable.Queue[Future[Option[BlockState]]]()
     private val serializerInstance = serializer.newInstance()
     private var readBlockedTime: Long = 0L
     private var fetchTime: Long = 0L
@@ -608,12 +611,33 @@ abstract class RapidsShuffleThreadedReaderBase[K, C](
       if (fallbackIter != null) {
         fallbackIter.hasNext
       } else {
-        currentIt != null ||
+        !pendingIts.isEmpty ||
           fetcherIterator.hasNext || futures.nonEmpty || queued.size() > 0
       }
     }
 
+    case class BlockState(blockId: BlockId,
+                          it: SerializedBatchIterator) {
+      private var _bytesDeserializedSoFar: Long = 0L
+      def getNextBatchSize: Long = it.tryReadNextHeader().getOrElse(0L)
+      def addDeserializedBytes(deserBytes: Long) = {
+        _bytesDeserializedSoFar += deserBytes
+        logInfo(s"[$blockId] Deserialized so far ${_bytesDeserializedSoFar}")
+      }
+
+      def bytesDeserializedSoFar: Long = {
+        _bytesDeserializedSoFar
+      }
+    }
+
+
+    private val pendingIts =
+      new HashedPriorityQueue[BlockState]((b1: BlockState, b2: BlockState) => {
+        java.lang.Long.compare(b1.bytesDeserializedSoFar, b2.bytesDeserializedSoFar)
+      })
+
     override def next(): (Any, Any) = {
+      require(hasNext, "called next on an empty iterator")
       withResource(new NvtxRange("ParallelDeserializerIterator.next", NvtxColor.CYAN)) { _ =>
         val result = if (fallbackIter != null) {
           fallbackIter.next()
@@ -622,10 +646,22 @@ abstract class RapidsShuffleThreadedReaderBase[K, C](
           if (futures.nonEmpty) {
             withResource(new NvtxRange("BatchWait", NvtxColor.CYAN)) { _ =>
               val waitTimeStart = System.nanoTime()
-              futures.dequeue().get // wait for one future
+              val pending = futures.dequeue().get // wait for one future
               waitTime = System.nanoTime() - waitTimeStart
+
+              pending match {
+                case Some(BlockState(blockId, batchIter)) =>
+                  pendingIts.offer(BlockState(blockId, batchIter))
+                case _ => // done
+              }
             }
           }
+
+          if (!pendingIts.isEmpty) {
+            // if we had pending iterators, we should try to see if now one can be handled
+            popFetchedIfAvailable()
+          }
+
           // We either have added futures and so will have items queued
           // or we already exhausted the fetchIterator and are just waiting
           // for our futures to finish. Either way, it's safe to block
@@ -660,9 +696,8 @@ abstract class RapidsShuffleThreadedReaderBase[K, C](
       }
     }
 
-    private var currentIt: SerializedBatchIterator = null
     private var inFlight: Long = 0L
-    private var limit: Long = maxBytesInFlight
+    private val limit: Long = maxBytesInFlight
     private val inFlightMonitor = new Object
 
     def acquire(sz: Long): Boolean = inFlightMonitor.synchronized {
@@ -698,33 +733,26 @@ abstract class RapidsShuffleThreadedReaderBase[K, C](
       inFlightMonitor.notifyAll()
     }
 
-    class IteratorAndResults(val blockId: BlockId, val it: SerializedBatchIterator) {
-      val results: ArrayBuffer[(Int, ColumnarBatch)] = new ArrayBuffer[(Int, ColumnarBatch)]
-    }
-
-    private var pendingIts = new ConcurrentHashMap[BlockId, IteratorAndResults]()
-
-    private def deserializeTask(nextSize: Long, state: IteratorAndResults): futures.type = {
+    private def deserializeTask(blockState: BlockState): Unit = {
       val slot = RapidsShuffleInternalManagerBase.getNextReaderSlot
       futures += RapidsShuffleInternalManagerBase.queueReadTask(slot, () => {
         try {
-          var currentSizeToPop = nextSize
-          var continue = true
-          while (state.it.hasNext && continue) {
-            state.results.append(state.it.next())
-            release(currentSizeToPop) // release the head size
-            currentSizeToPop = state.it.tryReadNextHeader().getOrElse(0L)
-            if (!acquire(currentSizeToPop)) {
-              pendingIts.put(state.blockId, state)
-              continue = false
-            }
+          var currentBatchSize = blockState.getNextBatchSize
+          var didFit = true
+          val batchIter = blockState.it
+          while (batchIter.hasNext && didFit) {
+            val batch = batchIter.next()
+            queued.offer(batch)
+            blockState.addDeserializedBytes(currentBatchSize)
+            release(currentBatchSize)
+            // peek at the next batch
+            currentBatchSize = blockState.getNextBatchSize
+            didFit = acquire(currentBatchSize)
           }
-          // done?
-          if (!state.it.hasNext) {
-            // need something to make this atomic
-            while (state.results.nonEmpty) {
-              queued.offer(state.results.remove(0))
-            }
+          if (!didFit) {
+            Some(blockState)
+          } else {
+            None // no further batches
           }
         } catch {
           case t: Throwable =>
@@ -739,23 +767,20 @@ abstract class RapidsShuffleThreadedReaderBase[K, C](
       // ready results.
       if (!pendingIts.isEmpty) {
         var continue = true
-        val keys = pendingIts.keys().asIterator()
-        while(keys.hasNext && continue) {
-          val firstPendingBlock = pendingIts.get(keys.next())
+        while(pendingIts.size() > 0 && continue) {
+          val blockState = pendingIts.peek()
           // check if we can handle the head batch now
-          val nextSize = firstPendingBlock.it.tryReadNextHeader().getOrElse(0L)
-          if (acquire(nextSize)) {
+          if (acquire(blockState.getNextBatchSize)) {
             // kick off deserialization task
-            logInfo(s"Ok it fits now ${inFlight}; ${inFlight + nextSize}")
-            deserializeTask(nextSize, pendingIts.remove(firstPendingBlock.blockId))
+            pendingIts.remove(blockState)
+            deserializeTask(blockState)
+          } else {
+            continue = false
           }
         }
       } else {
         if (fetcherIterator.hasNext) {
-          withResource(
-            new NvtxRange("queueFetched", NvtxColor.YELLOW)) { _ =>
-            require(hasNext, "called next on an empty iterator")
-
+          withResource(new NvtxRange("queueFetched", NvtxColor.YELLOW)) { _ =>
             // `resultCount` is exposed from the fetcher iterator and if non-zero,
             // it means that there are pending results that need to be handled.
             // We max with 1, because there could be a race condition where
@@ -769,8 +794,8 @@ abstract class RapidsShuffleThreadedReaderBase[K, C](
             // onto our queue until the results in the fetcher iterator
             // are all dequeued (the ones that were completed up until now).
             readBlockedTime = 0
-            var didNotFit = false
-            while (amountToDrain > 0 && fetcherIterator.hasNext && !didNotFit) {
+            var didFit = true
+            while (amountToDrain > 0 && fetcherIterator.hasNext && didFit) {
               amountToDrain -= 1
               // fetch block time accounts for time spent waiting for streams.next()
               val readBlockedStart = System.nanoTime()
@@ -778,19 +803,18 @@ abstract class RapidsShuffleThreadedReaderBase[K, C](
               readBlockedTime += System.nanoTime() - readBlockedStart
 
               val deserStream = serializerInstance.deserializeStream(inputStream)
-              val it = deserStream.asKeyValueIterator.asInstanceOf[SerializedBatchIterator]
-              // get the next known data size
-              val nextSize = it.tryReadNextHeader().getOrElse(0L)
-              val state = new IteratorAndResults(blockId, it)
-              if (acquire(nextSize)) {
+              val batchIter = deserStream.asKeyValueIterator.asInstanceOf[SerializedBatchIterator]
+              val blockState = BlockState(blockId, batchIter)
+              // get the next known batch size (there could be multiple batches)
+              if (acquire(blockState.getNextBatchSize)) {
                 // we can fit at least the first batch in this block
                 // kick of a deserialization task
-                deserializeTask(nextSize, state)
+                deserializeTask(blockState)
               } else {
-                // first batch didn't fit, put iterator aside, and return
-                logInfo(s"does not fit ${inFlight + nextSize} > $limit")
-                pendingIts.put(blockId, state)
-                didNotFit = true
+                // first batch didn't fit, put iterator aside and stop asking for results
+                // from the fetcher
+                pendingIts.offer(blockState)
+                didFit = false
               }
             }
             // keep track of the overall metric which includes blocked time
