@@ -43,7 +43,7 @@ class SerializedBatchIterator(dIn: DataInputStream)
     dIn.close()
   })
 
-  def tryReadNextHeader(): Option[SerializedTableHeader] = {
+  def tryReadNextHeader(): Option[Long] = {
     if (streamClosed){
       None
     } else {
@@ -59,7 +59,7 @@ class SerializedBatchIterator(dIn: DataInputStream)
           }
         }
       }
-      nextHeader
+      nextHeader.map(_.getDataLen)
     }
   }
 
