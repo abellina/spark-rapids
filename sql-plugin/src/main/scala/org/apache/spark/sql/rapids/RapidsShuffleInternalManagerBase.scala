@@ -618,11 +618,13 @@ abstract class RapidsShuffleThreadedReaderBase[K, C](
 
     case class BlockState(blockId: BlockId,
                           it: SerializedBatchIterator) {
+      private var _count : Long = 0L
       private var _bytesDeserializedSoFar: Long = 0L
       def getNextBatchSize: Long = it.tryReadNextHeader().getOrElse(0L)
       def addDeserializedBytes(deserBytes: Long) = {
         _bytesDeserializedSoFar += deserBytes
-        logInfo(s"[$blockId] Deserialized so far ${_bytesDeserializedSoFar}")
+        _count += 1
+        logInfo(s"[$blockId] Deserialized so far ${_bytesDeserializedSoFar} -- count ${_count}")
       }
 
       def bytesDeserializedSoFar: Long = {
