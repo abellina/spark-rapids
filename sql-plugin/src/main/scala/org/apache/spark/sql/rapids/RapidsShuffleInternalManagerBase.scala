@@ -640,21 +640,24 @@ abstract class RapidsShuffleThreadedReaderBase[K, C](
       }
     }
 
-    case class BlockState(blockId: BlockId, batchIter: SerializedBatchIterator) {
-      private var _bytesDeserializedSoFar: Long = 0L
-      def getNextBatchSize: Long = batchIter.tryReadNextHeader().getOrElse(0L)
-      def addDeserializedBytes(deserBytes: Long): Unit = synchronized {
-        _bytesDeserializedSoFar += deserBytes
-      }
+    case class BlockState(blockId: BlockId, batchIter: SerializedBatchIterator)
+      extends Iterator[(Any, Any)] {
+      private var nextBatchSize = batchIter.tryReadNextHeader().getOrElse(0L)
 
-      def bytesDeserializedSoFar: Long = synchronized {
-        _bytesDeserializedSoFar
+      def getNextBatchSize: Long = nextBatchSize
+
+      override def hasNext: Boolean = batchIter.hasNext
+
+      override def next(): (Any, Any) = {
+        val nextBatch = batchIter.next()
+        nextBatchSize = batchIter.tryReadNextHeader().getOrElse(0L)
+        nextBatch
       }
     }
 
     private val pendingIts =
       new HashedPriorityQueue[BlockState]((b1: BlockState, b2: BlockState) => {
-        java.lang.Long.compare(b1.bytesDeserializedSoFar, b2.bytesDeserializedSoFar)
+        java.lang.Long.compare(b1.getNextBatchSize, b2.getNextBatchSize)
       })
 
     override def next(): (Any, Any) = {
@@ -728,11 +731,9 @@ abstract class RapidsShuffleThreadedReaderBase[K, C](
       futures += RapidsShuffleInternalManagerBase.queueReadTask(slot, () => {
         var currentBatchSize = blockState.getNextBatchSize
         var didFit = true
-        val batchIter = blockState.batchIter
-        while (batchIter.hasNext && didFit) {
-          val batch = batchIter.next()
+        while (blockState.hasNext && didFit) {
+          val batch = blockState.next()
           queued.offer(batch)
-          blockState.addDeserializedBytes(currentBatchSize)
           limiter.release(currentBatchSize)
           // peek at the next batch
           currentBatchSize = blockState.getNextBatchSize
@@ -754,6 +755,7 @@ abstract class RapidsShuffleThreadedReaderBase[K, C](
         var i = 0
         while(pendingIts.size() > 0 && continue) {
           val blockState = pendingIts.peek()
+          logInfo(s"pending size=${pendingIts.size()}, head's next batch is: ${blockState.getNextBatchSize} B")
           i = i + 1
           // check if we can handle the head batch now
           if (limiter.acquire(blockState.getNextBatchSize)) {
