@@ -635,7 +635,7 @@ abstract class RapidsShuffleThreadedReaderBase[K, C](
       if (fallbackIter != null) {
         fallbackIter.hasNext
       } else {
-        !pendingIts.isEmpty ||
+        pendingIts.nonEmpty ||
           fetcherIterator.hasNext || futures.nonEmpty || queued.size() > 0
       }
     }
@@ -655,10 +655,7 @@ abstract class RapidsShuffleThreadedReaderBase[K, C](
       }
     }
 
-    private val pendingIts =
-      new HashedPriorityQueue[BlockState]((b1: BlockState, b2: BlockState) => {
-        java.lang.Long.compare(b1.getNextBatchSize, b2.getNextBatchSize)
-      })
+    private val pendingIts = new ArrayBuffer[BlockState]()
 
     override def next(): (Any, Any) = {
       require(hasNext, "called next on an empty iterator")
@@ -677,8 +674,8 @@ abstract class RapidsShuffleThreadedReaderBase[K, C](
 
               // if the future returned a block state, we have more work to do
               pending match {
-                case Some(BlockState(blockId, batchIter)) =>
-                  pendingIts.offer(BlockState(blockId, batchIter))
+                case Some(leftOver@BlockState(_, _)) =>
+                  pendingIts.append(leftOver)
                 case _ => // done
               }
             }
@@ -750,17 +747,14 @@ abstract class RapidsShuffleThreadedReaderBase[K, C](
     private def popFetchedIfAvailable(): Unit = {
       // If fetcherIterator is not exhausted, we try and get as many
       // ready results.
-      if (!pendingIts.isEmpty) {
+      if (pendingIts.nonEmpty) {
         var continue = true
-        var i = 0
-        while(pendingIts.size() > 0 && continue) {
-          val blockState = pendingIts.peek()
-          logInfo(s"pending size=${pendingIts.size()}, head's next batch is: ${blockState.getNextBatchSize} B")
-          i = i + 1
+        while(pendingIts.nonEmpty && continue) {
+          val blockState = pendingIts(0)
           // check if we can handle the head batch now
           if (limiter.acquire(blockState.getNextBatchSize)) {
             // kick off deserialization task
-            pendingIts.remove(blockState)
+            pendingIts.remove(0)
             deserializeTask(blockState)
           } else {
             continue = false
@@ -801,7 +795,7 @@ abstract class RapidsShuffleThreadedReaderBase[K, C](
               } else {
                 // first batch didn't fit, put iterator aside and stop asking for results
                 // from the fetcher
-                pendingIts.offer(blockState)
+                pendingIts.append(blockState)
                 didFit = false
               }
             }
