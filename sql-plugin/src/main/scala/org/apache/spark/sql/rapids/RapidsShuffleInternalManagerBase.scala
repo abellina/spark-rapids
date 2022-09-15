@@ -322,9 +322,12 @@ abstract class RapidsShuffleThreadedWriterBase[K, V](
                 }
                 writeFutures += RapidsShuffleInternalManagerBase.queueWriteTask(slotNum, () => {
                   withResource(cb) { _ =>
-                    val recordWriteTimeStart = System.nanoTime()
-                    myWriter.write(key, value)
-                    recordWriteTime.getAndAdd(System.nanoTime() - recordWriteTimeStart)
+                    withResource(
+                        new NvtxRange(s"write ${myWriter.blockId}", NvtxColor.CYAN)) { _ =>
+                      val recordWriteTimeStart = System.nanoTime()
+                      myWriter.write(key, value)
+                      recordWriteTime.getAndAdd(System.nanoTime() - recordWriteTimeStart)
+                    }
                   }
                 })
               }
