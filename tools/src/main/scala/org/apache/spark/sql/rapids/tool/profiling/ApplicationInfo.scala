@@ -189,7 +189,7 @@ class ApplicationInfo(
     hadoopConf: Configuration,
     eLogInfo: EventLogInfo,
     val index: Int)
-  extends AppBase(Some(eLogInfo), Some(hadoopConf)) with Logging {
+  extends AppBase(Option(eLogInfo), Some(hadoopConf)) with Logging {
 
   // executorId to executor info
   val executorIdToInfo = new HashMap[String, ExecutorInfoClass]()

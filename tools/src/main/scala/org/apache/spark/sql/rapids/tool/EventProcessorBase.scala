@@ -315,7 +315,7 @@ abstract class EventProcessorBase[T <: AppBase](app: T) extends SparkListener wi
       None,
       None,
       None,
-      ProfileUtils.isPluginEnabled(event.properties.asScala) || app.gpuMode
+      app.gpuMode || ProfileUtils.isPluginEnabled(event.properties.asScala)
     )
     app.jobIdToInfo.put(event.jobId, thisJob)
     sqlID.foreach(app.jobIdToSqlID(event.jobId) = _)

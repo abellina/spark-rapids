@@ -16,8 +16,10 @@
 
 package org.apache.spark.sql.rapids.tool.profiling
 
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.TimeUnit.NANOSECONDS
 
+import scala.collection.mutable
 import scala.collection.mutable.ArrayBuffer
 import scala.util.control.NonFatal
 
@@ -195,6 +197,68 @@ class EventsProcessor(app: ApplicationInfo) extends EventProcessorBase[Applicati
         event.reason.toString
     }
 
+    val metricsOfInterest = Set[String](
+      "internal.metrics.input.bytesRead",
+      "buffer time",
+      "rs. deserialization time",
+      "rs. serialization time",
+      "rs. shuffle read time",
+      "rs. shuffle write time",
+      "rs. shuffle combine time",
+      "rs. shuffle write io time",
+      "data size",
+      "data read size",
+      "internal.metrics.executorRunTime",
+      "internal.metrics.executorDeserializeTime")
+
+    val accumulatorMap = new mutable.HashMap[String, Long]()
+
+    // we are getting the metrics from the task's accumulable.
+    // these contain the task's contribution to the time per accumulator in `update`.
+    // there can be more than one accumulable with the same name, if the task touches
+    // several accumulables that are instantiated per Exec node (e.g. "op time" may be there
+    // more than once, and so could be "shuffle read time")
+    event.taskInfo.accumulables
+        .filter(a => metricsOfInterest.contains(a.name.getOrElse("")))
+        .foreach { a =>
+          val key = a.name.get
+          val value = a.update match {
+            case a: Some[Any] =>
+              val u = a.get
+              u match {
+                case b: String => Some(b.toLong)
+                case l: Long => Some(l)
+                case _ => None
+              }
+            case _ => // ignore
+              None
+          }
+          value.foreach { v =>
+            val prior = accumulatorMap.getOrElse(key, 0L)
+            accumulatorMap.put(key, prior + v)
+          }
+        }
+
+    if (accumulatorMap.contains("buffer time")) {
+      if (accumulatorMap.getOrElse("internal.metrics.executorRunTime", 0L) <
+          TimeUnit.NANOSECONDS.toMillis(accumulatorMap.getOrElse("buffer time", 0L))) {
+        println(accumulatorMap)
+      }
+    }
+
+    val shuffleExtraMetrics = ShuffleExtraMetrics(
+      accumulatorMap.getOrElse("internal.metrics.input.bytesRead", 0L),
+      accumulatorMap.getOrElse("buffer time", 0L),
+      accumulatorMap.getOrElse("internal.metrics.executorDeserializeTime", 0L),
+      accumulatorMap.getOrElse("rs. deserialization time", 0L),
+      accumulatorMap.getOrElse("rs. serialization time", 0L),
+      accumulatorMap.getOrElse("rs. shuffle read time", 0L),
+      accumulatorMap.getOrElse("rs. shuffle write time", 0L),
+      accumulatorMap.getOrElse("rs. shuffle combine time", 0L),
+      accumulatorMap.getOrElse("rs. shuffle write io time", 0L),
+      accumulatorMap.getOrElse("data size", 0L),
+      accumulatorMap.getOrElse("data read size", 0L))
+
     val thisTask = TaskCase(
       event.stageId,
       event.stageAttemptId,
@@ -234,7 +298,8 @@ class EventsProcessor(app: ApplicationInfo) extends EventProcessorBase[Applicati
       event.taskMetrics.inputMetrics.bytesRead,
       event.taskMetrics.inputMetrics.recordsRead,
       event.taskMetrics.outputMetrics.bytesWritten,
-      event.taskMetrics.outputMetrics.recordsWritten
+      event.taskMetrics.outputMetrics.recordsWritten,
+      shuffleExtraMetrics
     )
     app.taskEnd += thisTask
   }

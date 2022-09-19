@@ -16,12 +16,14 @@
 package org.apache.spark.sql
 
 import java.io.File
-
 import org.apache.spark.SparkConf
+import org.apache.spark.executor.TaskMetrics
 import org.apache.spark.io.CompressionCodec
+import org.apache.spark.scheduler.{AccumulableInfo, TaskInfo}
 import org.apache.spark.util.Utils
 
 object TrampolineUtil {
+
   /** Shuts down and cleans up any existing Spark session */
   def cleanupAnyExistingSession(): Unit = SparkSession.cleanupAnyExistingSession()
 
@@ -38,4 +40,12 @@ object TrampolineUtil {
 
   def createCodec(conf: SparkConf, codecName: String) =
     CompressionCodec.createCodec(conf, codecName)
+
+  def makeEmptyTaskMetrics(): TaskMetrics = {
+    TaskMetrics.empty
+  }
+
+  def setAccumulablesInTaskInfo(ti: TaskInfo, accInfos: Seq[AccumulableInfo]): Unit = {
+    ti.setAccumulables(accInfos)
+  }
 }

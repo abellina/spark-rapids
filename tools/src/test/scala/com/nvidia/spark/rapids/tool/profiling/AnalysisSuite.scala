@@ -17,14 +17,19 @@
 package com.nvidia.spark.rapids.tool.profiling
 
 import java.io.File
-
 import com.nvidia.spark.rapids.tool.ToolTestUtils
+import org.apache.spark.Success
+import org.apache.spark.scheduler.{AccumulableInfo, SparkListenerJobStart, SparkListenerTaskEnd, SparkListenerTaskStart, StageInfo, TaskInfo, TaskLocality}
+import org.apache.spark.sql.execution.ui.SparkListenerSQLExecutionStart
 import org.scalatest.FunSuite
-
-import org.apache.spark.sql.SparkSession
+import org.apache.spark.sql.{SparkSession, TrampolineUtil}
+import org.apache.spark.sql.rapids.tool.profiling.ApplicationInfo
 import org.apache.spark.sql.types._
+import org.scalatest.mockito.MockitoSugar
 
-class AnalysisSuite extends FunSuite {
+import java.util.Properties
+
+class AnalysisSuite extends FunSuite with MockitoSugar {
 
   lazy val sparkSession = {
     SparkSession
@@ -137,5 +142,62 @@ class AnalysisSuite extends FunSuite {
     val sqlDurAndCpu = analysis.sqlMetricsAggregationDurationAndCpuTime()
     val containsDs = sqlDurAndCpu.filter(_.containsDataset === true)
     assert(containsDs.size == 1)
+  }
+
+  def runMockQuery(ai: ApplicationInfo,
+                   metrics: Seq[(String, Long)]): Unit = {
+    val ti = new TaskInfo(1, 1, 1, 1, "exec1", "host1", TaskLocality.ANY, false)
+    ti.finishTime = 2
+
+    val props = new Properties()
+    props.put("spark.sql.execution.id", "1")
+
+    val stageInfo =
+      new StageInfo(1, 1, "stage 1", 1, Seq.empty, Seq.empty, "", resourceProfileId = 1)
+
+    ai.processEvent(
+      SparkListenerJobStart(1, 0, stageInfo :: Nil, props))
+
+    ai.processEvent(
+      SparkListenerSQLExecutionStart(1, "Query 1", "my query", null, null, 0))
+
+    ai.processEvent(
+      SparkListenerTaskStart(1, 1, ti))
+
+    TrampolineUtil.setAccumulablesInTaskInfo(
+      ti, metrics.zipWithIndex.map { case ((name, update), ix) =>
+        AccumulableInfo(ix, Some(name), Some(update), value = None,
+          internal = false, countFailedValues = false)
+      })
+
+    ai.processEvent(
+      SparkListenerTaskEnd(1, 1, "ShuffleMapTask", Success, ti, null,
+        TrampolineUtil.makeEmptyTaskMetrics()))
+  }
+
+  test("consumes shuffle metrics") {
+    val ai = new ApplicationInfo(null, null, 0)
+    ai.gpuMode = true
+
+    val metrics = Seq(
+      ("rs. shuffle write time", 1000L), ("rs. shuffle write time", 1000L),
+      ("rs. shuffle read time", 1500L), ("rs. shuffle read time", 1500L),
+      ("rs. shuffle combine time", 250L), ("rs. shuffle combine time", 750L),
+      ("rs. shuffle write io time", 250L), ("rs. shuffle write io time", 250L),
+      ("rs. serialization time", 250L), ("rs. serialization time", 250L),
+      ("rs. deserialization time", 1L), ("rs. deserialization time", 999L))
+
+    runMockQuery(ai, metrics)
+
+    val analysis = new Analysis(ai :: Nil)
+    val sqlMetricsAgg :: _ = analysis.sqlMetricsAggregation()
+
+    assertResult(2000)(sqlMetricsAgg.rapidsShuffleWriteTimeNsSum)
+    assertResult(1000)(sqlMetricsAgg.rapidsShuffleCombineTimeNsSum)
+    assertResult(500)(sqlMetricsAgg.rapidsShuffleWriteIoTimeNsSum)
+    assertResult(500)(sqlMetricsAgg.rapidsShuffleSerializationTimeNsSum)
+
+    assertResult(3000)(sqlMetricsAgg.rapidsShuffleReadTimeNsSum)
+    assertResult(1000)(sqlMetricsAgg.rapidsShuffleDeserializationTimeNsSum)
   }
 }
