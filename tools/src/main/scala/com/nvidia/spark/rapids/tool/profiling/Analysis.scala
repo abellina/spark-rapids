@@ -255,7 +255,6 @@ class Analysis(apps: Seq[ApplicationInfo]) {
 
             // set this here, so make sure we don't get it again until later
             sqlCase.sqlCpuTimePercent = execCPURatio
-
             val (durSum, durMax, durMin, durAvg) = getDurations(tasksInSQL)
             Some(SQLTaskAggMetricsProfileResult(app.index,
               app.appId,
@@ -343,6 +342,8 @@ class Analysis(apps: Seq[ApplicationInfo]) {
     }
   }
 
+  private case class AverageStageInfo(avgDuration: Double, avgShuffleReadBytes: Double)
+
   def shuffleSkewCheck(): Seq[ShuffleSkewProfileResult] = {
     val allRows = apps.flatMap { app =>
       val tasksPerStageAttempt = app.taskEnd.groupBy { tc =>
@@ -353,8 +354,7 @@ class Analysis(apps: Seq[ApplicationInfo]) {
         val avgDuration = ToolUtils.calculateAverage(sumDuration, tcArr.size, 2)
         val sumShuffleReadBytes = tcArr.map(_.sr_totalBytesRead).sum
         val avgShuffleReadBytes = ToolUtils.calculateAverage(sumShuffleReadBytes, tcArr.size, 2)
-        ((sId, saId),
-            AverageStageInfo(avgDuration, avgShuffleReadBytes))
+        ((sId, saId), AverageStageInfo(avgDuration, avgShuffleReadBytes))
       }
 
       val tasksWithSkew = app.taskEnd.filter { tc =>
@@ -373,7 +373,7 @@ class Analysis(apps: Seq[ApplicationInfo]) {
 
       tasksWithSkew.map { tc =>
         val avgShuffleDur = avgsStageInfos.get((tc.stageId, tc.stageAttemptId))
-        //val desc = app.sqlIdToInfo(tc.sqlId).description
+        val desc = app.sqlIdToInfo(tc.sqlId).description
         avgShuffleDur match {
           case Some(avg) =>
             Some(ShuffleSkewProfileResult(app.index, tc.stageId, tc.stageAttemptId,
