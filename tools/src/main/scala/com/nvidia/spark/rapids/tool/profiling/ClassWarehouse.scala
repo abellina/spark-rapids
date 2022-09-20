@@ -665,8 +665,6 @@ case class SQLDurationExecutorTimeProfileResult(appIndex: Int, appId: String, sq
   }
 }
 
-case class AverageStageInfo(avgDuration: Double, avgShuffleReadBytes: Double)
-
 case class ShuffleSkewProfileResult(appIndex: Int, stageId: Long, stageAttemptId: Long,
     taskId: Long, taskAttemptId: Long, taskDuration: Long, avgDuration: Double,
     taskShuffleReadMB: Long, avgShuffleReadMB: Double, taskPeakMemoryMB: Long,
@@ -696,7 +694,6 @@ case class RapidsPropertyProfileResult(key: String, outputHeadersIn: Seq[String]
 
   override val outputHeaders: Seq[String] = outputHeadersIn
   override def convertToSeq: Seq[String] = rows
-
 }
 
 case class CompareProfileResults(outputHeadersIn: Seq[String],
