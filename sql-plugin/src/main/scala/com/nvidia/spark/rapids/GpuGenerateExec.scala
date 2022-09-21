@@ -278,13 +278,25 @@ abstract class GpuExplodeBase extends GpuUnevaluableUnaryExpression with GpuGene
     val (explodeColOutputSize, estimatedOutputRows) = withResource(
       vectors(generatorOffset).getChildColumnView(0)) { listValues =>
       val totalSize = listValues.getDeviceMemorySize
-      val totalCount = listValues.getRowCount
+      // get the number of elements in the array child
+      var totalCount = listValues.getRowCount
+      // when we are not calculating an explode_outer, we subtract
+      // the number of nulls found within the lists, because we won't generate
+      // rows for these null array elements.
+      if (!outer) {
+        totalCount -= listValues.getNullCount
+      }
       (totalSize.toDouble, totalCount.toDouble)
     }
     // input size of columns to be repeated during exploding
     val repeatColsInputSize = vectors.slice(0, generatorOffset).map(_.getDeviceMemorySize).sum
+
+    val explodeColNulls = vectors(generatorOffset).getNullCount
+    // these are the number of rows we are going to be repeating since the array
+    // itself is null, and there is nothing to explode otherwise.
+    val nonNullInputRows = inputRows - explodeColNulls
     // estimated output size of repeated columns
-    val repeatColsOutputSize = repeatColsInputSize * estimatedOutputRows / inputRows
+    val repeatColsOutputSize = repeatColsInputSize * estimatedOutputRows / nonNullInputRows
     // estimated total output size
     val estimatedOutputSizeBytes = explodeColOutputSize + repeatColsOutputSize
     // how may splits will we need to keep the output size under the target size
