@@ -261,7 +261,8 @@ abstract class RapidsShuffleThreadedWriterBase[K, V](
    */
   private var stopping = false
 
-  val diskBlockObjectWriters = new mutable.HashMap[Int, (Int, DiskBlockObjectWriter)]()
+  val diskBlockObjectWriters = new mutable.HashMap[Int, DiskBlockObjectWriter]()
+  val writerSlots = new mutable.HashMap[Int, Int]()
 
   override def write(records: Iterator[Product2[K, V]]): Unit = {
     withResource(new NvtxRange("ThreadedWriter.write", NvtxColor.RED)) { _ =>
@@ -284,11 +285,7 @@ abstract class RapidsShuffleThreadedWriterBase[K, V](
                 blockId, file, serializer, fileBufferSize, writeMetrics)
               setChecksumIfNeeded(writer, i) // spark3.2.0+
 
-              // Places writer objects at round robin slot numbers apriori
-              // this choice is for simplicity but likely needs to change so that
-              // we can handle skew better
-              val slotNum = RapidsShuffleInternalManagerBase.getNextWriterSlot
-              diskBlockObjectWriters.put(i, (slotNum, writer))
+              diskBlockObjectWriters.put(i, writer)
             }
             openTimeNs = System.nanoTime() - openStartTime
 
@@ -305,7 +302,13 @@ abstract class RapidsShuffleThreadedWriterBase[K, V](
               val key = record._1
               val value = record._2
               val reducePartitionId: Int = partitioner.getPartition(key)
-              val (slotNum, myWriter) = diskBlockObjectWriters(reducePartitionId)
+              val myWriter = diskBlockObjectWriters(reducePartitionId)
+
+              // Places writer objects at round robin slot numbers
+              // this choice is for simplicity but likely needs to change so that
+              // we can handle skew better
+              val slotNum = writerSlots.getOrElseUpdate(reducePartitionId,
+                RapidsShuffleInternalManagerBase.getNextWriterSlot)
 
               if (numWriterThreads == 1) {
                 val recordWriteTimeStart = System.nanoTime()
@@ -408,7 +411,7 @@ abstract class RapidsShuffleThreadedWriterBase[K, V](
       // per reduce partition
       val segments = (0 until numPartitions).map {
         reducePartitionId =>
-          withResource(diskBlockObjectWriters(reducePartitionId)._2) { writer =>
+          withResource(diskBlockObjectWriters(reducePartitionId)) { writer =>
             val segment = writer.commitAndGet()
             (reducePartitionId, segment.file)
           }
@@ -491,7 +494,7 @@ abstract class RapidsShuffleThreadedWriterBase[K, V](
   private def cleanupTempData(): Unit = {
     // The map task failed, so delete our output data.
     try {
-      diskBlockObjectWriters.values.foreach { case (_, writer) =>
+      diskBlockObjectWriters.values.foreach { writer =>
         val file = writer.revertPartialWritesAndClose()
         if (!file.delete()) logError(s"Error while deleting file ${file.getAbsolutePath()}")
       }
