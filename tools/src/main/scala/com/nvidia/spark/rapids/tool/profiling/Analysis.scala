@@ -367,13 +367,8 @@ class Analysis(apps: Seq[ApplicationInfo]) {
         }
       }
 
-      val groupedTasks = tasksWithSkew.groupBy { tc =>
-        (tc.stageId, tc.stageAttemptId)
-      }
-
       tasksWithSkew.map { tc =>
         val avgShuffleDur = avgsStageInfos.get((tc.stageId, tc.stageAttemptId))
-        val desc = app.sqlIdToInfo(tc.sqlId).description
         avgShuffleDur match {
           case Some(avg) =>
             Some(ShuffleSkewProfileResult(app.index, tc.stageId, tc.stageAttemptId,
