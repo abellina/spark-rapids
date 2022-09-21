@@ -16,12 +16,15 @@
 
 package com.nvidia.spark.rapids
 
+import java.util.UUID
+
 import scala.collection.mutable.ArrayBuffer
 
 import ai.rapids.cudf.{ColumnVector, ContiguousTable, NvtxColor, Table}
 import com.nvidia.spark.rapids.shims.{ShimExpression, ShimUnaryExecNode}
-
 import org.apache.spark.TaskContext
+
+import org.apache.spark.internal.Logging
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.expressions.{Attribute, AttributeSet, Expression, Generator, ReplicateRows}
@@ -193,10 +196,12 @@ case class GpuReplicateRows(children: Seq[Expression]) extends GpuGenerator with
 
     val schema = GpuColumnVector.extractTypes(inputBatch)
 
-    withResource(GpuColumnVector.from(inputBatch)) { table =>
-      val replicateVector = table.getColumn(generatorOffset)
-      withResource(table.repeat(replicateVector)) { replicatedTable =>
-        GpuColumnVector.from(replicatedTable, schema)
+    withResource(inputBatch) { _ =>
+      withResource(GpuColumnVector.from(inputBatch)) { table =>
+        val replicateVector = table.getColumn(generatorOffset)
+        withResource(table.repeat(replicateVector)) { replicatedTable =>
+          GpuColumnVector.from(replicatedTable, schema)
+        }
       }
     }
   }
@@ -235,7 +240,8 @@ case class GpuReplicateRows(children: Seq[Expression]) extends GpuGenerator with
   }
 }
 
-abstract class GpuExplodeBase extends GpuUnevaluableUnaryExpression with GpuGenerator {
+abstract class GpuExplodeBase extends GpuUnevaluableUnaryExpression
+    with GpuGenerator with Logging {
 
   /** The position of an element within the collection should also be returned. */
   def position: Boolean
@@ -293,6 +299,11 @@ abstract class GpuExplodeBase extends GpuUnevaluableUnaryExpression with GpuGene
     val numSplitsForTargetRow = math.ceil(estimatedOutputRows / Int.MaxValue).toInt
     // how may splits will we need to keep exploding working safely
     val numSplits = numSplitsForTargetSize max numSplitsForTargetRow
+    logInfo(s"We estimate ${numSplits} splits, and output " +
+        s"should be ${estimatedOutputSizeBytes} Bytes with " +
+        s"num rows ${estimatedOutputRows}. " +
+        s"explodeColOutputSize=${explodeColOutputSize} B other cols are " +
+        s"repeatColsOutputSize=${repeatColsOutputSize}")
 
     if (numSplits == 0) Array()
     else GpuBatchUtils.generateSplitIndices(inputRows, numSplits)
@@ -325,18 +336,23 @@ abstract class GpuExplodeBase extends GpuUnevaluableUnaryExpression with GpuGene
   /**
    * A function that will do the explode or position explode
    */
-  private[this] def explodeFun(inputTable: Table, genOffset: Int, outer: Boolean): Table = {
-    if (position) {
-      if (outer) {
-        inputTable.explodeOuterPosition(genOffset)
-      } else {
-        inputTable.explodePosition(genOffset)
-      }
-    } else {
-      if (outer) {
-        inputTable.explodeOuter(genOffset)
-      } else {
-        inputTable.explode(genOffset)
+  private[this] def explodeFun(
+      inputBatch: ColumnarBatch, genOffset: Int, outer: Boolean): Table = {
+    withResource(inputBatch) { _ =>
+      withResource(GpuColumnVector.from(inputBatch)) { inputTable =>
+        if (position) {
+          if (outer) {
+            inputTable.explodeOuterPosition(genOffset)
+          } else {
+            inputTable.explodePosition(genOffset)
+          }
+        } else {
+          if (outer) {
+            inputTable.explodeOuter(genOffset)
+          } else {
+            inputTable.explode(genOffset)
+          }
+        }
       }
     }
   }
@@ -348,21 +364,18 @@ abstract class GpuExplodeBase extends GpuUnevaluableUnaryExpression with GpuGene
     require(inputBatch.numCols() - 1 == generatorOffset,
       s"Internal Error ${getClass.getSimpleName} supports one and only one input attribute.")
     val schema = resultSchema(GpuColumnVector.extractTypes(inputBatch), generatorOffset)
-
-    withResource(GpuColumnVector.from(inputBatch)) { table =>
-      withResource(explodeFun(table, generatorOffset, outer)) { exploded =>
-        child.dataType match {
-          case _: ArrayType =>
-            GpuColumnVector.from(exploded, schema)
-          case MapType(kt, vt, _) =>
-            // We need to pull the key and value of of the struct column
-            withResource(convertMapOutput(exploded, generatorOffset, kt, vt, outer)) { fixed =>
-              GpuColumnVector.from(fixed, schema)
-            }
-          case other =>
-            throw new IllegalArgumentException(
-              s"$other is not supported as explode input right now")
-        }
+    withResource(explodeFun(inputBatch, generatorOffset, outer)) { exploded =>
+      child.dataType match {
+        case _: ArrayType =>
+          GpuColumnVector.from(exploded, schema)
+        case MapType(kt, vt, _) =>
+          // We need to pull the key and value of of the struct column
+          withResource(convertMapOutput(exploded, generatorOffset, kt, vt, outer)) { fixed =>
+            GpuColumnVector.from(fixed, schema)
+          }
+        case other =>
+          throw new IllegalArgumentException(
+            s"$other is not supported as explode input right now")
       }
     }
   }
@@ -586,7 +599,7 @@ case class GpuGenerateExec(
       // With the projected batches and an offset, generators can extract input columns or
       // other required columns separately.
       val projectedInput = GpuProjectExec.project(input, othersProjectList ++ genProjectList)
-      withResource(projectedInput) { projIn =>
+      closeOnExcept(projectedInput) { projIn =>
         // 1. compute split indices of input batch
         val splitIndices = generator.inputSplitIndices(
           projIn,
@@ -595,9 +608,36 @@ case class GpuGenerateExec(
           new RapidsConf(conf).gpuTargetBatchSizeBytes)
         // 2. split up input batch with indices
         makeSplitIterator(projIn, splitIndices).map { splitIn =>
-          withResource(splitIn) { splitIn =>
+          closeOnExcept(splitIn) { splitIn =>
             // 3. apply generation on each (sub)batch
+            val usedIn = GpuColumnVector.getTotalDeviceMemoryUsed(splitIn)
+            val uuid = UUID.randomUUID()
+            //DumpUtils.dumpToParquetFile(splitIn, s"/tmp/incoming_$uuid")
+
+            logInfo(s"For $uuid, Generating using ${splitIn.numRows()}. " +
+                s"${usedIn} incoming.")
             val ret = generator.generate(splitIn, othersProjectList.length, outer)
+
+            val vectors = GpuColumnVector.extractBases(ret)
+
+            val (actualExplodeColOutputSize, actualOutputRows) = withResource(
+              vectors(othersProjectList.length).getChildColumnView(0)) { listValues =>
+              val totalSize = listValues.getDeviceMemorySize
+              val totalCount = listValues.getRowCount
+              (totalSize.toDouble, totalCount.toDouble)
+            }
+
+            val actualRepeatColsOutputSize =
+              vectors.slice(0, othersProjectList.length).map(_.getDeviceMemorySize).sum
+
+            val actualTotal = actualExplodeColOutputSize + actualRepeatColsOutputSize
+
+            //DumpUtils.dumpToParquetFile(ret, s"/tmp/exploded_$uuid")
+            val usedOut = GpuColumnVector.getTotalDeviceMemoryUsed(ret)
+            logInfo(s"Generated ${ret.numRows()} from ${splitIn.numRows()}. " +
+                s"${usedIn} became ${usedOut}. actualTotal=$actualTotal, " +
+                s"actualRepeatColsOutputSize=$actualRepeatColsOutputSize, " +
+                s"actualExplodeColOutputSize=$actualExplodeColOutputSize")
             numOutputBatches += 1
             numOutputRows += ret.numRows()
             ret
@@ -610,19 +650,22 @@ case class GpuGenerateExec(
   private def makeSplitIterator(input: ColumnarBatch,
       splitIndices: Array[Int]): Iterator[ColumnarBatch] = {
     val schema = GpuColumnVector.extractTypes(input)
-
-    if (splitIndices.isEmpty) {
-      withResource(GpuColumnVector.from(input)) { table =>
-        Array(GpuColumnVector.from(table, schema)).iterator
-      }
-    } else {
-      val splitInput = withResource(GpuColumnVector.from(input)) { table =>
-        table.contiguousSplit(splitIndices: _*)
-      }
-      splitInput.zipWithIndex.iterator.map { case (ct, i) =>
-        closeOnExcept(splitInput.slice(i + 1, splitInput.length)) { _ =>
-          withResource(ct) { ct: ContiguousTable =>
-            GpuColumnVector.from(ct.getTable, schema)
+    withResource(input) { _ =>
+      if (splitIndices.isEmpty) {
+        withResource(GpuColumnVector.from(input)) { table =>
+          withResource(table) { _ =>
+            Array(GpuColumnVector.from(table, schema)).iterator
+          }
+        }
+      } else {
+        val splitInput = withResource(GpuColumnVector.from(input)) { table =>
+          table.contiguousSplit(splitIndices: _*)
+        }
+        splitInput.zipWithIndex.iterator.map { case (ct, i) =>
+          closeOnExcept(splitInput.slice(i + 1, splitInput.length)) { _ =>
+            withResource(ct) { ct: ContiguousTable =>
+              GpuColumnVector.from(ct.getTable, schema)
+            }
           }
         }
       }
