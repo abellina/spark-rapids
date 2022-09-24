@@ -17,11 +17,10 @@ package com.nvidia.spark.rapids
 
 import scala.collection.mutable.ArrayBuffer
 
-import com.nvidia.spark.rapids.RapidsPluginImplicits._
+import RapidsPluginImplicits._
 
 /** Implementation of the automatic-resource-management pattern */
 trait Arm {
-
   /** Executes the provided code block and then closes the resource */
   def withResource[T <: AutoCloseable, V](r: T)(block: T => V): V = {
     try {

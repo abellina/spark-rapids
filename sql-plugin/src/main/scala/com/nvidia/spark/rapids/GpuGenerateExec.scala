@@ -20,7 +20,7 @@ import java.util.UUID
 
 import scala.collection.mutable.ArrayBuffer
 
-import ai.rapids.cudf.{ColumnVector, ContiguousTable, NvtxColor, Table}
+import ai.rapids.cudf.{ColumnVector, ContiguousTable, DType, NvtxColor, Table}
 import com.nvidia.spark.rapids.shims.{ShimExpression, ShimUnaryExecNode}
 import org.apache.spark.TaskContext
 
@@ -285,50 +285,91 @@ abstract class GpuExplodeBase extends GpuUnevaluableUnaryExpression
       outer: Boolean,
       targetSizeBytes: Long): (Long, Array[Int]) = {
 
-    val vectors = GpuColumnVector.extractBases(inputBatch)
     val inputRows = inputBatch.numRows()
     if (inputRows == 0) return (0L, Array())
 
+    val vectors = GpuColumnVector.extractBases(inputBatch)
+
+    val repeatTable = new Table(vectors.slice(0, generatorOffset):_*)
+    val explodingColumn = vectors(generatorOffset)
+
+    val arrayElements: ColumnVector = explodingColumn.countElements()
+
+    val perRowRepetition = if (outer) {
+      withResource(explodingColumn.isNull) { isNull =>
+        withResource(arrayElements) { _ => 
+          arrayElements.add(isNull)
+        }
+      }
+    } else {
+      arrayElements
+    }
+
+
+    val rowByteCount = {
+      val bits = withResource(repeatTable) { _.rowBitCount() }
+      val bitsLong = withResource(bits) { _.castTo(DType.INT64) }
+      withResource(bitsLong) { _ =>
+        withResource(ai.rapids.cudf.Scalar.fromLong(8)) { toBytes =>
+          bitsLong.div(toBytes)
+        }
+      }
+    }
+
+    val mult = withResource(rowByteCount) { _ => 
+      withResource(perRowRepetition) { _ =>
+        rowByteCount.mul(perRowRepetition) 
+      }
+    }
+
+    // the sum gets us the overall estimated size of repeating the
+    // non-exploding columns
+    val total = withResource(mult) { _.sum() }
+    val repeatedSizeEstimate = withResource(total){ _.getLong }
+
+    logInfo(s"new estimate: $repeatedSizeEstimate")
+
     // Get the output size in bytes of the column that we are going to explode
     // along with an estimate of how many output rows produced by the explode
-    val (explodeColOutputSize, estimatedOutputRows) = withResource(
-      vectors(generatorOffset).getChildColumnView(0)) { listValues =>
-      val totalSize = listValues.getDeviceMemorySize
-      // get the number of elements in the array child
-      var totalCount = listValues.getRowCount
-      // when we are not calculating an explode_outer, we subtract
-      // the number of nulls found within the lists, because we won't generate
-      // rows for these null array elements.
-      if (!outer) {
-        totalCount -= listValues.getNullCount
+    withResource(explodingColumn.getChildColumnView(0)) { listValues =>
+      val (explodeColOutputSize, estimatedOutputRows) = {
+        val totalSize = explodingColumn.getDeviceMemorySize
+        //val totalSize = withResource(new Table(explodingColumn).rowBitCount()) { bits =>
+        //  val bitsLong = bits.castTo(DType.INT64)
+        //  val bytes = withResource(bitsLong) { _ =>
+        //    withResource(ai.rapids.cudf.Scalar.fromLong(8)) { toBytes =>
+        //      bitsLong.div(toBytes)
+        //    }
+        //  }
+        //  val total = withResource(bytes) { _.sum() }
+        //  withResource(total) { _.getLong }
+        //}
+        // get the number of elements in the array child
+        var totalCount = listValues.getRowCount + listValues.getNullCount
+        // when we are calculating an explode_outer, we need to add to the row count
+        // null rows, as we are going to produce them
+        if (outer) {
+          totalCount += explodingColumn.getNullCount
+        }
+        (totalSize.toDouble, totalCount.toDouble)
       }
-      (totalSize.toDouble, totalCount.toDouble)
+
+      val estimatedOutputSizeBytes = repeatedSizeEstimate + explodeColOutputSize
+      // how may splits will we need to keep the output size under the target size
+      val numSplitsForTargetSize = math.ceil(estimatedOutputSizeBytes / targetSizeBytes).toInt
+      // how may splits will we need to keep the output rows under max value
+      val numSplitsForTargetRow = math.ceil(estimatedOutputRows / Int.MaxValue).toInt
+      // how may splits will we need to keep exploding working safely
+      val numSplits = numSplitsForTargetSize max numSplitsForTargetRow
+      //logInfo(s"We estimate ${numSplits} splits, and output " +
+      //    s"should be ${estimatedOutputSizeBytes/1024/1024} MB with " +
+      //    s"num rows ${estimatedOutputRows}. " +
+      //    s"explodeColOutputSize=${explodeColOutputSize/1024/1024} MB other cols are " +
+      //    s"repeatColsOutputSize=${repeatColsOutputSize/1024/1024} MB")
+
+      (estimatedOutputSizeBytes.toLong, if (numSplits == 0) Array()
+      else GpuBatchUtils.generateSplitIndices(inputRows, numSplits))
     }
-    // input size of columns to be repeated during exploding
-    val repeatColsInputSize = vectors.slice(0, generatorOffset).map(_.getDeviceMemorySize).sum
-
-    val explodeColNulls = vectors(generatorOffset).getNullCount
-    // these are the number of rows we are going to be repeating since the array
-    // itself is null, and there is nothing to explode otherwise.
-    val nonNullInputRows = inputRows - explodeColNulls
-    // estimated output size of repeated columns
-    val repeatColsOutputSize = repeatColsInputSize * estimatedOutputRows / nonNullInputRows
-    // estimated total output size
-    val estimatedOutputSizeBytes = explodeColOutputSize + repeatColsOutputSize
-    // how may splits will we need to keep the output size under the target size
-    val numSplitsForTargetSize = math.ceil(estimatedOutputSizeBytes / targetSizeBytes).toInt
-    // how may splits will we need to keep the output rows under max value
-    val numSplitsForTargetRow = math.ceil(estimatedOutputRows / Int.MaxValue).toInt
-    // how may splits will we need to keep exploding working safely
-    val numSplits = numSplitsForTargetSize max numSplitsForTargetRow
-    //logInfo(s"We estimate ${numSplits} splits, and output " +
-    //    s"should be ${estimatedOutputSizeBytes/1024/1024} MB with " +
-    //    s"num rows ${estimatedOutputRows}. " +
-    //    s"explodeColOutputSize=${explodeColOutputSize/1024/1024} MB other cols are " +
-    //    s"repeatColsOutputSize=${repeatColsOutputSize/1024/1024} MB")
-
-    (estimatedOutputSizeBytes.toLong, if (numSplits == 0) Array()
-    else GpuBatchUtils.generateSplitIndices(inputRows, numSplits))
   }
 
   // Infer result schema of GenerateExec from input schema
@@ -638,13 +679,13 @@ case class GpuGenerateExec(
             val ret = generator.generate(splitIn, othersProjectList.length, outer)
 
             val vectors = GpuColumnVector.extractBases(ret)
-
-            val (actualExplodeColOutputSize, actualOutputRows) = withResource(
-              vectors(othersProjectList.length).getChildColumnView(0)) { listValues =>
-              val totalSize = listValues.getDeviceMemorySize
-              val totalCount = listValues.getRowCount
-              (totalSize.toDouble, totalCount.toDouble)
+            val child = vectors(othersProjectList.length).getChildColumnView(0)
+            if (child != null) {
+              logInfo(s"child size: ${child.getDeviceMemorySize}")
             }
+
+            val actualExplodeColOutputSize  = vectors(othersProjectList.length)
+                .getDeviceMemorySize
 
             val actualRepeatColsOutputSize =
               vectors.slice(0, othersProjectList.length).map(_.getDeviceMemorySize).sum
@@ -652,14 +693,15 @@ case class GpuGenerateExec(
             val actualTotal = actualExplodeColOutputSize + actualRepeatColsOutputSize
 
             val usedOut = GpuColumnVector.getTotalDeviceMemoryUsed(ret)
+
             soFar += usedOut
             logInfo(s"[$uuid][$ix/${splitIndices.length}] " +
                 s"Generated ${ret.numRows()} from ${splitIn.numRows()}. " +
-                s"${usedIn} became ${usedOut}. So far: ${soFar.toDouble/1024/1024}. " +
-                s"Estimated: ${estimatedSize.toDouble/1024/1024} MB, " +
-                s"actualTotal=${actualTotal.toDouble/1024/1024} MB, " +
-                s"actualRepeatColsOutputSize=${actualRepeatColsOutputSize/1024/1024} MB, " +
-                s"actualExplodeColOutputSize=${actualExplodeColOutputSize/1024/1024} MB")
+                s"${usedIn} became ${usedOut}. So far: ${soFar} " +
+                s"Estimated: ${estimatedSize} B, " +
+                s"actualTotal=${actualTotal} B, " +
+                s"actualRepeatColsOutputSize=${actualRepeatColsOutputSize} B, " +
+                s"actualExplodeColOutputSize=${actualExplodeColOutputSize} B")
             numOutputBatches += 1
             numOutputRows += ret.numRows()
             ret
