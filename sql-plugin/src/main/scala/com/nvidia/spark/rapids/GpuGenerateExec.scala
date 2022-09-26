@@ -290,19 +290,30 @@ abstract class GpuExplodeBase extends GpuUnevaluableUnaryExpression
 
     val vectors = GpuColumnVector.extractBases(inputBatch)
 
-    val repeatTable = new Table(vectors.slice(0, generatorOffset):_*)
     val explodingColumn = vectors(generatorOffset)
 
     val arrayElements: ColumnVector = explodingColumn.countElements()
 
     val perRowRepetition = if (outer) {
+      // for outer, empty arrays and null arrays will produce a row
       withResource(GpuScalar.from(1, IntegerType)) { one =>
-        withResource(arrayElements) { _ =>
-          GpuNvl.apply(arrayElements, one)
+        val noNulls = withResource(arrayElements.isNotNull) { isLhsNotNull =>
+          isLhsNotNull.ifElse(arrayElements, one)
+        }
+        withResource(noNulls.greaterOrEqualTo(one)) { isGeOne =>
+          isGeOne.ifElse(noNulls, one)
         }
       }
     } else {
-      arrayElements
+      withResource(GpuScalar.from(0, IntegerType)) { zero =>
+        GpuNvl(arrayElements, zero)
+      }
+    }
+
+    val repeatTable = if (generatorOffset > 0) {
+      new Table()
+    } else {
+      new Table(vectors.slice(0, generatorOffset):_*)
     }
 
     val rowByteCount = {
@@ -315,21 +326,15 @@ abstract class GpuExplodeBase extends GpuUnevaluableUnaryExpression
       }
     }
 
-    val (mult, prefixSum) = withResource(rowByteCount) { _ => 
-      val mult = withResource(perRowRepetition) { _ =>
-        rowByteCount.mul(perRowRepetition) 
+    val prefixSum = withResource(rowByteCount) { _ =>
+      withResource(perRowRepetition) { _ =>
+        withResource(rowByteCount.mul(perRowRepetition)) { _.prefixSum }
       }
-      (mult, mult.prefixSum)
     }
-    logInfo(s"prefixSum vector $prefixSum")
 
-    // the sum gets us the overall estimated size of repeating the
-    // non-exploding columns
-    // TODO: note mult is leaked
-    val total = mult.sum()
-    val repeatedSizeEstimate = withResource(total){ _.getLong }
-
-    logInfo(s"new estimate: $repeatedSizeEstimate")
+    val repeatedSizeEstimate = withResource(prefixSum.copyToHost()) { hc =>
+      hc.getLong(prefixSum.getRowCount - 1)
+    }
 
     // Get the output size in bytes of the column that we are going to explode
     // along with an estimate of how many output rows produced by the explode
@@ -350,10 +355,9 @@ abstract class GpuExplodeBase extends GpuUnevaluableUnaryExpression
       // how may splits will we need to keep the output size under the target size
       val numSplitsForTargetSize = math.ceil(estimatedOutputSizeBytes / targetSizeBytes).toInt
 
-      val lowerBound = withResource(prefixSum){ _ => 
+      val lowerBound = withResource(prefixSum){ _ =>
         withResource(new Table(prefixSum)) { prefixSumTable =>
           val sizePerSplit = (targetSizeBytes.toDouble / numSplitsForTargetSize).toLong
-          logInfo(s"targetSizeBytes=$targetSizeBytes, sizePerSplit=$sizePerSplit, numSplitsForTargetSize=$numSplitsForTargetSize")
           val splitIndices = (0 until numSplitsForTargetSize).map { s =>
             (s * sizePerSplit).toLong
           }
@@ -367,11 +371,11 @@ abstract class GpuExplodeBase extends GpuUnevaluableUnaryExpression
       }
 
       val hostBounds = withResource(lowerBound){ _.copyToHost }
-      val splitIndices = withResource(hostBounds) { _ => 
+      val splitIndices = withResource(hostBounds) { _ =>
         (0 until numSplitsForTargetSize).map { s => 
           hostBounds.getInt(s)
         }
-      }
+      }.distinct // TODO need this?
       // TODO: get prefixes for each split and add them up to get the bytes per split
       logInfo(s"Split indices ${splitIndices} out of ${inputRows}")
 
@@ -379,12 +383,6 @@ abstract class GpuExplodeBase extends GpuUnevaluableUnaryExpression
       val numSplitsForTargetRow = math.ceil(estimatedOutputRows / Int.MaxValue).toInt
       // how may splits will we need to keep exploding working safely
       val numSplits = numSplitsForTargetSize max numSplitsForTargetRow
-      //logInfo(s"We estimate ${numSplits} splits, and output " +
-      //    s"should be ${estimatedOutputSizeBytes/1024/1024} MB with " +
-      //    s"num rows ${estimatedOutputRows}. " +
-      //    s"explodeColOutputSize=${explodeColOutputSize/1024/1024} MB other cols are " +
-      //    s"repeatColsOutputSize=${repeatColsOutputSize/1024/1024} MB")
-
       (estimatedOutputSizeBytes.toLong, if (numSplits == 0) Array()
       else splitIndices.tail.toArray)//GpuBatchUtils.generateSplitIndices(inputRows, numSplits))
     }
