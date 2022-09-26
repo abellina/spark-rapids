@@ -20,7 +20,7 @@ import java.util.UUID
 
 import scala.collection.mutable.ArrayBuffer
 
-import ai.rapids.cudf.{ColumnVector, ContiguousTable, DType, NvtxColor, Table}
+import ai.rapids.cudf.{ColumnVector, ContiguousTable, DType, NvtxColor, OrderByArg, Table}
 import com.nvidia.spark.rapids.shims.{ShimExpression, ShimUnaryExecNode}
 import org.apache.spark.TaskContext
 
@@ -296,15 +296,14 @@ abstract class GpuExplodeBase extends GpuUnevaluableUnaryExpression
     val arrayElements: ColumnVector = explodingColumn.countElements()
 
     val perRowRepetition = if (outer) {
-      withResource(explodingColumn.isNull) { isNull =>
-        withResource(arrayElements) { _ => 
-          arrayElements.add(isNull)
+      withResource(GpuScalar.from(1, IntegerType)) { one =>
+        withResource(arrayElements) { _ =>
+          GpuNvl.apply(arrayElements, one)
         }
       }
     } else {
       arrayElements
     }
-
 
     val rowByteCount = {
       val bits = withResource(repeatTable) { _.rowBitCount() }
@@ -316,15 +315,18 @@ abstract class GpuExplodeBase extends GpuUnevaluableUnaryExpression
       }
     }
 
-    val mult = withResource(rowByteCount) { _ => 
-      withResource(perRowRepetition) { _ =>
+    val (mult, prefixSum) = withResource(rowByteCount) { _ => 
+      val mult = withResource(perRowRepetition) { _ =>
         rowByteCount.mul(perRowRepetition) 
       }
+      (mult, mult.prefixSum)
     }
+    logInfo(s"prefixSum vector $prefixSum")
 
     // the sum gets us the overall estimated size of repeating the
     // non-exploding columns
-    val total = withResource(mult) { _.sum() }
+    // TODO: note mult is leaked
+    val total = mult.sum()
     val repeatedSizeEstimate = withResource(total){ _.getLong }
 
     logInfo(s"new estimate: $repeatedSizeEstimate")
@@ -334,16 +336,6 @@ abstract class GpuExplodeBase extends GpuUnevaluableUnaryExpression
     withResource(explodingColumn.getChildColumnView(0)) { listValues =>
       val (explodeColOutputSize, estimatedOutputRows) = {
         val totalSize = explodingColumn.getDeviceMemorySize
-        //val totalSize = withResource(new Table(explodingColumn).rowBitCount()) { bits =>
-        //  val bitsLong = bits.castTo(DType.INT64)
-        //  val bytes = withResource(bitsLong) { _ =>
-        //    withResource(ai.rapids.cudf.Scalar.fromLong(8)) { toBytes =>
-        //      bitsLong.div(toBytes)
-        //    }
-        //  }
-        //  val total = withResource(bytes) { _.sum() }
-        //  withResource(total) { _.getLong }
-        //}
         // get the number of elements in the array child
         var totalCount = listValues.getRowCount + listValues.getNullCount
         // when we are calculating an explode_outer, we need to add to the row count
@@ -357,6 +349,32 @@ abstract class GpuExplodeBase extends GpuUnevaluableUnaryExpression
       val estimatedOutputSizeBytes = repeatedSizeEstimate + explodeColOutputSize
       // how may splits will we need to keep the output size under the target size
       val numSplitsForTargetSize = math.ceil(estimatedOutputSizeBytes / targetSizeBytes).toInt
+
+      val lowerBound = withResource(prefixSum){ _ => 
+        withResource(new Table(prefixSum)) { prefixSumTable =>
+          val sizePerSplit = (targetSizeBytes.toDouble / numSplitsForTargetSize).toLong
+          logInfo(s"targetSizeBytes=$targetSizeBytes, sizePerSplit=$sizePerSplit, numSplitsForTargetSize=$numSplitsForTargetSize")
+          val splitIndices = (0 until numSplitsForTargetSize).map { s =>
+            (s * sizePerSplit).toLong
+          }
+          logInfo(s"ideal splits ${splitIndices}")
+          withResource(ColumnVector.fromLongs(splitIndices: _*)) { idealBounds =>
+            withResource(new Table(idealBounds)) { idealBoundsTable =>
+              prefixSumTable.lowerBound(idealBoundsTable, OrderByArg.asc(0))
+            }
+          }
+        }
+      }
+
+      val hostBounds = withResource(lowerBound){ _.copyToHost }
+      val splitIndices = withResource(hostBounds) { _ => 
+        (0 until numSplitsForTargetSize).map { s => 
+          hostBounds.getInt(s)
+        }
+      }
+      // TODO: get prefixes for each split and add them up to get the bytes per split
+      logInfo(s"Split indices ${splitIndices} out of ${inputRows}")
+
       // how may splits will we need to keep the output rows under max value
       val numSplitsForTargetRow = math.ceil(estimatedOutputRows / Int.MaxValue).toInt
       // how may splits will we need to keep exploding working safely
@@ -368,7 +386,7 @@ abstract class GpuExplodeBase extends GpuUnevaluableUnaryExpression
       //    s"repeatColsOutputSize=${repeatColsOutputSize/1024/1024} MB")
 
       (estimatedOutputSizeBytes.toLong, if (numSplits == 0) Array()
-      else GpuBatchUtils.generateSplitIndices(inputRows, numSplits))
+      else splitIndices.tail.toArray)//GpuBatchUtils.generateSplitIndices(inputRows, numSplits))
     }
   }
 
