@@ -27,14 +27,7 @@ import org.apache.spark.sql.vectorized.ColumnarBatch
  * RapidsPluginImplicits, adds implicit functions for ColumnarBatch, Seq, Seq[AutoCloseable],
  * and Array[AutoCloseable] that help make resource management easier within the project.
  */
-
 object RapidsPluginImplicits {
-
-  implicit class CloseableImplicits[T<: AutoCloseable](ac: T) {
-    def apply[V](block: T => V): V = {
-      block(ac)
-    }
-  }
 
   implicit class ReallyAGpuExpression(exp: Expression) {
     def columnarEval(batch: ColumnarBatch): Any = {
