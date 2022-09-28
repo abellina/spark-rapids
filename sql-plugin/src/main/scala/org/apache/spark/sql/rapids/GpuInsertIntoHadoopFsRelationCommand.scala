@@ -49,8 +49,7 @@ case class GpuInsertIntoHadoopFsRelationCommand(
     catalogTable: Option[CatalogTable],
     fileIndex: Option[FileIndex],
     outputColumnNames: Seq[String],
-    useStableSort: Boolean,
-    concurrentWriterPartitionFlushSize: Long)
+    useStableSort: Boolean)
   extends GpuDataWritingCommand {
 
   override def runColumnar(sparkSession: SparkSession, child: SparkPlan): Seq[ColumnarBatch] = {
@@ -166,8 +165,7 @@ case class GpuInsertIntoHadoopFsRelationCommand(
           bucketSpec = bucketSpec,
           statsTrackers = Seq(gpuWriteJobStatsTracker(hadoopConf)),
           options = options,
-          useStableSort = useStableSort,
-          concurrentWriterPartitionFlushSize = concurrentWriterPartitionFlushSize)
+          useStableSort = useStableSort)
 
 
       // update metastore partition metadata
