@@ -293,12 +293,9 @@ abstract class GpuExplodeBase extends GpuUnevaluableUnaryExpression with GpuGene
       val bits = withResource(new Table(column: _*)) { tbl =>
         tbl.rowBitCount()
       }
-      val bitsLong = withResource(bits) { _ =>
-        bits.castTo(DType.INT64)
-      }
-      withResource(bitsLong) { _ =>
+      withResource(bits) { _ =>
         withResource(ai.rapids.cudf.Scalar.fromLong(8)) { toBytes =>
-          bitsLong.div(toBytes)
+          bits.trueDiv(toBytes, DType.INT64)
         }
       }
     }
@@ -307,9 +304,10 @@ abstract class GpuExplodeBase extends GpuUnevaluableUnaryExpression with GpuGene
   override def inputSplitIndices(inputBatch: ColumnarBatch,
       generatorOffset: Int, outer: Boolean,
       targetSizeBytes: Long): Array[Int] = {
-
     val inputRows = inputBatch.numRows()
-    if (inputRows == 0) return Array()
+
+    // if the number of input rows is 1 or less, cannot split
+    if (inputRows <= 1) return Array()
 
     val vectors = GpuColumnVector.extractBases(inputBatch)
 
@@ -351,7 +349,6 @@ abstract class GpuExplodeBase extends GpuUnevaluableUnaryExpression with GpuGene
               byteCountBeforeRepetition.mul(perRowRepetition)
             }
           }
-
         val prefixSum = withResource(repeatingByteCount) {
           _.prefixSum
         }
@@ -372,7 +369,7 @@ abstract class GpuExplodeBase extends GpuUnevaluableUnaryExpression with GpuGene
 
           // we need to apply the splits onto repeated size, because the prefixSum
           // is only done for repeated sizes
-          val sizePerSplit = (repeatedSizeEstimate / numSplitsForTargetSize).toLong
+          val sizePerSplit = (repeatedSizeEstimate.toDouble / numSplitsForTargetSize).toLong
           val idealSplits = (1 until numSplitsForTargetSize).map { s =>
             s * sizePerSplit
           }.toArray
@@ -400,7 +397,7 @@ abstract class GpuExplodeBase extends GpuUnevaluableUnaryExpression with GpuGene
                 }
               }
             }
-            logInfo(s"prefixSum=$prefixSumVector, splits=$splits")
+            println(s"ideal=${idealSplits.mkString(",")}, prefixSum=$prefixSumVector, splits=$splits")
 
             // apply distinct in the case of extreme skew, where for example we have all nulls
             // except for 1 row that has all the data.
