@@ -139,7 +139,8 @@ trait GpuGenerator extends GpuUnevaluable {
   def inputSplitIndices(inputBatch: ColumnarBatch,
       generatorOffset: Int,
       outer: Boolean,
-      targetSizeBytes: Long): Array[Int]
+      targetSizeBytes: Long,
+      maxRows: Int = Int.MaxValue): Array[Int]
 
   /**
    * Extract lazy expressions from generator if exists.
@@ -205,7 +206,8 @@ case class GpuReplicateRows(children: Seq[Expression]) extends GpuGenerator with
   override def inputSplitIndices(inputBatch: ColumnarBatch,
       generatorOffset: Int,
       outer: Boolean,
-      targetSizeBytes: Long): Array[Int] = {
+      targetSizeBytes: Long,
+      maxRows: Int = Int.MaxValue): Array[Int] = {
     val vectors = GpuColumnVector.extractBases(inputBatch)
     val inputRows = inputBatch.numRows()
     if (inputRows == 0) return Array()
@@ -224,7 +226,7 @@ case class GpuReplicateRows(children: Seq[Expression]) extends GpuGenerator with
     // how may splits will we need to keep the output size under the target size
     val numSplitsForTargetSize = math.ceil(estimatedOutputSizeBytes / targetSizeBytes).toInt
     // how may splits will we need to keep the output rows under max value
-    val numSplitsForTargetRow = math.ceil(estimatedOutputRows / Int.MaxValue).toInt
+    val numSplitsForTargetRow = math.ceil(estimatedOutputRows / maxRows).toInt
     // how may splits will we need to keep replicateRows working safely
     val numSplits = numSplitsForTargetSize max numSplitsForTargetRow
 
@@ -303,7 +305,8 @@ abstract class GpuExplodeBase extends GpuUnevaluableUnaryExpression with GpuGene
 
   override def inputSplitIndices(inputBatch: ColumnarBatch,
       generatorOffset: Int, outer: Boolean,
-      targetSizeBytes: Long): Array[Int] = {
+      targetSizeBytes: Long,
+      maxRows: Int = Int.MaxValue): Array[Int] = {
     val inputRows = inputBatch.numRows()
 
     // if the number of input rows is 1 or less, cannot split
@@ -324,7 +327,7 @@ abstract class GpuExplodeBase extends GpuUnevaluableUnaryExpression with GpuGene
         // the cases where the parent element has a null array, as we are going to produce
         // these rows.
         if (outer) {
-          totalCount += listValues.getNullCount
+          totalCount += explodingColumn.getNullCount
         }
         (totalSize.toDouble, totalCount.toDouble)
       }
@@ -343,16 +346,25 @@ abstract class GpuExplodeBase extends GpuUnevaluableUnaryExpression with GpuGene
         val perRowRepetition = getPerRowRepetition(explodingColumn, outer)
         val repeatingColumns = vectors.slice(0, generatorOffset)
 
+        // get per row byte count of every column, except the exploding one
+        // NOTE: in the future, we may want to factor in the exploding column size
+        // into this math, if there is skew in the column to explode.
         val repeatingByteCount =
           withResource(getRowByteCount(repeatingColumns)) { byteCountBeforeRepetition =>
             withResource(perRowRepetition) { _ =>
               byteCountBeforeRepetition.mul(perRowRepetition)
             }
           }
+
+        // compute prefix sum of byte sizes, this can be used to find input row
+        // split points at which point the output batch is estimated to be roughly
+        // prefixSum(row) bytes ( + exploding column size for `row`)
         val prefixSum = withResource(repeatingByteCount) {
           _.prefixSum
         }
+
         val splitIndices = withResource(prefixSum) { _ =>
+          // the last element of `repeatedSizeEstimate` is the overall sum
           val repeatedSizeEstimate =
             withResource(prefixSum.subVector((prefixSum.getRowCount - 1).toInt)) { lastRow =>
               withResource(lastRow.copyToHost()) { hc =>
@@ -386,9 +398,9 @@ abstract class GpuExplodeBase extends GpuUnevaluableUnaryExpression with GpuGene
                 }
               }
 
-            val prefixSumVector = withResource(prefixSum.copyToHost()) { hps =>
-              (0 until hps.getRowCount.toInt).map(hps.getLong(_))
-            }
+           //val prefixSumVector = withResource(prefixSum.copyToHost()) { hps =>
+           //  (0 until hps.getRowCount.toInt).map(hps.getLong(_))
+           //}
 
             val splits = withResource(lowerBound) { _ =>
               withResource(lowerBound.copyToHost) { hostBounds =>
@@ -397,11 +409,11 @@ abstract class GpuExplodeBase extends GpuUnevaluableUnaryExpression with GpuGene
                 }
               }
             }
-            println(s"ideal=${idealSplits.mkString(",")}, prefixSum=$prefixSumVector, splits=$splits")
+            //println(s"ideal=${idealSplits.mkString(",")}, prefixSum=$prefixSumVector, splits=$splits")
 
             // apply distinct in the case of extreme skew, where for example we have all nulls
             // except for 1 row that has all the data.
-            splits.distinct.toArray
+            splits.map(x => x+1).distinct.toArray
           }
         }
         splitIndices
@@ -409,7 +421,7 @@ abstract class GpuExplodeBase extends GpuUnevaluableUnaryExpression with GpuGene
     }
 
     // how may splits will we need to keep the output rows under max value
-    val numSplitsForTargetRow = math.ceil(estimatedOutputRows / Int.MaxValue).toInt
+    val numSplitsForTargetRow = math.ceil(estimatedOutputRows / maxRows).toInt
 
     // If the number of splits needed to keep the row limits for cuDF is higher than
     // the splits we found by size, we need to use the row-based splits.
