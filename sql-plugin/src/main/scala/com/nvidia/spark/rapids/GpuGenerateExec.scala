@@ -333,6 +333,7 @@ abstract class GpuExplodeBase extends GpuUnevaluableUnaryExpression with GpuGene
       }
 
     // we know we are going to output at least this much
+    println(s"explodeColOutputSize: ${explodeColOutputSize}, estOutRows: ${estimatedOutputRows}")
     var estimatedOutputSizeBytes = explodeColOutputSize
 
     val splitIndices = if (generatorOffset == 0) {
@@ -398,22 +399,27 @@ abstract class GpuExplodeBase extends GpuUnevaluableUnaryExpression with GpuGene
                 }
               }
 
-           //val prefixSumVector = withResource(prefixSum.copyToHost()) { hps =>
-           //  (0 until hps.getRowCount.toInt).map(hps.getLong(_))
-           //}
+           val prefixSumVector = withResource(prefixSum.copyToHost()) { hps =>
+             (0 until hps.getRowCount.toInt).map(hps.getLong(_))
+           }
 
             val splits = withResource(lowerBound) { _ =>
               withResource(lowerBound.copyToHost) { hostBounds =>
                 (0 until hostBounds.getRowCount.toInt).map { s =>
-                  hostBounds.getInt(s)
+                  // add 1 to the bound because you get the row index of the last
+                  // row at which was smaller or equal to the bound, for example:
+                  // prefixSum=[8, 16, 24, 32]
+                  // if you are looking for a bound of 16, you get index 1. That said, to
+                  // split this, you want the index to be between 16 and 24, so that's index 2.
+                  hostBounds.getInt(s) + 1
                 }
               }
             }
-            //println(s"ideal=${idealSplits.mkString(",")}, prefixSum=$prefixSumVector, splits=$splits")
+            println(s"ideal=${idealSplits.mkString(",")}, prefixSum=$prefixSumVector, splits=$splits")
 
             // apply distinct in the case of extreme skew, where for example we have all nulls
             // except for 1 row that has all the data.
-            splits.map(x => x+1).distinct.toArray
+            splits.distinct.toArray
           }
         }
         splitIndices

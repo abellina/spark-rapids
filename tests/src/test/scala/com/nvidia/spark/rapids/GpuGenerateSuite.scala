@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020-2022, NVIDIA CORPORATION.
+ * Copyright (c) 2022, NVIDIA CORPORATION.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,10 +16,12 @@
 
 package com.nvidia.spark.rapids
 
-import ai.rapids.cudf.{ColumnVector, ContiguousTable, DType, Table}
+import ai.rapids.cudf.{ColumnVector, DType, Table}
 import ai.rapids.cudf.HostColumnVector.{BasicType, ListType}
 
+import scala.collection.mutable.ArrayBuffer
 import java.util
+
 import org.apache.spark.sql.types.{ArrayType, DataType, IntegerType}
 import org.apache.spark.sql.vectorized.ColumnarBatch
 
@@ -29,7 +31,7 @@ class GpuGenerateSuite
   val rapidsConf = new RapidsConf(Map.empty[String, String])
 
   def makeListColumn(numRows: Int, listSize: Int, includeNulls: Boolean): ColumnVector = {
-    val list = util.Arrays.asList((0 until listSize):_*)
+    val list = util.Arrays.asList((0 until listSize): _*)
     val rows = (0 until numRows).map { r =>
       if (includeNulls && r % 2 == 0) {
         null
@@ -78,34 +80,38 @@ class GpuGenerateSuite
   def checkSplits(splits: Array[Int], batch: ColumnarBatch): Unit = {
     withResource(GpuColumnVector.from(batch)) { tbl =>
       var totalRows = 0L
-      val splitted: Array[ContiguousTable] = tbl.contiguousSplit(splits: _*)
-      splitted.foreach { ct =>
-        totalRows += ct.getRowCount
-      }
-      withResource(splitted) { _ =>
-        // `getTable` causes Table to be owned by the `ContiguousTable` class
-        // so they get closed when the `ContiguousTable`s get closed.
-        val concatted = if (splitted.length == 1) {
-          splitted(0).getTable
-        } else {
-          Table.concatenate(splitted.map(_.getTable): _*)
-        }
-
-        // Compare row by row the input vs the concatenated splits
-        withResource(GpuColumnVector.from(batch)) { inputTbl =>
-          assertResult(concatted.getRowCount)(batch.numRows())
-          (0 until batch.numCols()).foreach { c =>
-            withResource(concatted.getColumn(c).copyToHost()) { hostConcatCol =>
-              withResource(inputTbl.getColumn(c).copyToHost()) { hostInputCol =>
-                (0 until batch.numRows()).foreach { r =>
-                  if (hostInputCol.isNull(r)) {
-                    assertResult(true)(hostConcatCol.isNull(r))
-                  } else {
-                    if (hostInputCol.getType == DType.LIST) {
-                      // exploding column
-                      compare(hostInputCol.getList(r), hostConcatCol.getList(r))
+      // because concatenate does not work with 1 Table and I can't incRefCount a Table
+      // this is used to close the concatenated table, which would otherwise be leaked.
+      withResource(new ArrayBuffer[Table]) { tableToClose =>
+        withResource(tbl.contiguousSplit(splits: _*)) { splitted =>
+          splitted.foreach { ct =>
+            totalRows += ct.getRowCount
+          }
+          // `getTable` causes Table to be owned by the `ContiguousTable` class
+          // so they get closed when the `ContiguousTable`s get closed.
+          val concatted = if (splitted.length == 1) {
+            splitted(0).getTable
+          } else {
+            val tbl = Table.concatenate(splitted.map(_.getTable): _*)
+            tableToClose += tbl
+            tbl
+          }
+          // Compare row by row the input vs the concatenated splits
+          withResource(GpuColumnVector.from(batch)) { inputTbl =>
+            assertResult(concatted.getRowCount)(batch.numRows())
+            (0 until batch.numCols()).foreach { c =>
+              withResource(concatted.getColumn(c).copyToHost()) { hostConcatCol =>
+                withResource(inputTbl.getColumn(c).copyToHost()) { hostInputCol =>
+                  (0 until batch.numRows()).foreach { r =>
+                    if (hostInputCol.isNull(r)) {
+                      assertResult(true)(hostConcatCol.isNull(r))
                     } else {
-                      compare(hostInputCol.getInt(r), hostConcatCol.getInt(r))
+                      if (hostInputCol.getType == DType.LIST) {
+                        // exploding column
+                        compare(hostInputCol.getList(r), hostConcatCol.getList(r))
+                      } else {
+                        compare(hostInputCol.getInt(r), hostConcatCol.getInt(r))
+                      }
                     }
                   }
                 }
@@ -134,12 +140,11 @@ class GpuGenerateSuite
     val (inputSize, batch) = makeBatch(numRows = 1)
     withResource(batch) { _ =>
       val e = GpuExplode(null)
-      val target = inputSize / 2
-      var splits = e.inputSplitIndices(batch, 1, false, target)
+      var splits = e.inputSplitIndices(batch, 1, false, 1)
       assertResult(0)(splits.length)
       checkSplits(splits, batch)
 
-      splits = e.inputSplitIndices(batch, generatorOffset = 1 , true, target)
+      splits = e.inputSplitIndices(batch, generatorOffset = 1 , true, 1)
       assertResult(0)(splits.length)
       checkSplits(splits, batch)
     }
@@ -162,11 +167,12 @@ class GpuGenerateSuite
     }
   }
 
-  test("4-row batches split in half") {
+  test("8-row batch splits in half") {
     val (inputSize, batch) = makeBatch(numRows = 8)
     withResource(batch) { _ =>
       val e = GpuExplode(null)
       val target = inputSize/2
+      // here a split at 4 actually means produce two Tables, each with 4 rows.
       var splits = e.inputSplitIndices(batch, 1, false, target)
       assertResult(1)(splits.length)
       assertResult(4)(splits(0))
@@ -213,51 +219,69 @@ class GpuGenerateSuite
       val e = GpuExplode(null)
       // the exploded column should be 4 Bytes * 100 rows * 4 reps per row = 1600 Bytes.
       // 1600 == a single split
-      var splits = e.inputSplitIndices(batch, 0, false, 800, maxRows = 50)
-      assertResult(3)(splits.length)
-      assertResult(25)(splits(0))
-      assertResult(50)(splits(1))
-      assertResult(75)(splits(2))
+      var splits = e.inputSplitIndices(batch, 0, false, 800)
+      assertResult(0)(splits.length)
       checkSplits(splits, batch)
 
       // 800 == 1 splits (2 parts) right down the middle
-      splits = e.inputSplitIndices(batch, 0, false, 400, maxRows = 50)
+      splits = e.inputSplitIndices(batch, 0, false, 400)
+      assertResult(1)(splits.length)
+      assertResult(50)(splits(0))
+      checkSplits(splits, batch)
+
+      // 100 == 8 parts
+      splits = e.inputSplitIndices(batch, 0, false, 200)
       assertResult(3)(splits.length)
       assertResult(25)(splits(0))
       assertResult(50)(splits(1))
       assertResult(75)(splits(2))
-      checkSplits(splits, batch)
-
-      // 100 == 8 parts
-      splits = e.inputSplitIndices(batch, 0, false, 100, maxRows = 50)
-      assertResult(7)(splits.length)
-      assertResult(13)(splits(0))
-      assertResult(25)(splits(1))
-      assertResult(38)(splits(2))
-      assertResult(50)(splits(3))
-      assertResult(63)(splits(4))
-      assertResult(75)(splits(5))
-      assertResult(88)(splits(6))
       checkSplits(splits, batch)
     }
   }
 
   test("outer: test batch with a single exploding column with nulls") {
+    // for outer, size is the same (nulls are assumed not to occupy any space, which is not true)
+    // but number of rows is not the same.
     val (inputSize, batch) = makeBatch(numRows=100, includeRepeatColumn=false, includeNulls=true)
     withResource(batch) { _ =>
       val e = GpuExplode(null)
       // the exploded column should be 4 Bytes * 100 rows * 4 reps per row = 1600 Bytes.
       // 1600 == a single split
       assertResult(0)(
-        e.inputSplitIndices(batch, 0, true, 800, maxRows = 50).length)
+        e.inputSplitIndices(batch, 0, true, 800).length)
 
       // 800 == 1 splits (2 parts) right down the middle
-      var splits = e.inputSplitIndices(batch, 0, true, 400, maxRows = 50)
+      var splits = e.inputSplitIndices(batch, 0, true, 400)
       assertResult(1)(splits.length)
       assertResult(50)(splits(0))
 
       // 400 == 3 splits (4 parts)
-      splits = e.inputSplitIndices(batch, 0, true, 200, maxRows = 50)
+      splits = e.inputSplitIndices(batch, 0, true, 200)
+      assertResult(3)(splits.length)
+      assertResult(25)(splits(0))
+      assertResult(50)(splits(1))
+      assertResult(75)(splits(2))
+    }
+  }
+
+  test("outer: test batch with a single exploding column with nulls limit rows") {
+    // for outer, size is the same (nulls are assumed not to occupy any space, which is not true)
+    // but number of rows is not the same.
+    val (inputSize, batch) = makeBatch(numRows=100, includeRepeatColumn=false, includeNulls=true)
+    withResource(batch) { _ =>
+      val e = GpuExplode(null)
+      // the exploded column should be 4 Bytes * 100 rows * 4 reps per row = 1600 Bytes.
+      // 1600 == a single split
+      assertResult(0)(
+        e.inputSplitIndices(batch, 0, true, 800, maxRows = 250).length)
+
+      // 800 == 1 splits (2 parts) right down the middle
+      var splits = e.inputSplitIndices(batch, 0, true, 800, maxRows = 125)
+      assertResult(1)(splits.length)
+      assertResult(50)(splits(0))
+
+      // 400 == 3 splits (4 parts)
+      splits = e.inputSplitIndices(batch, 0, true, 800, maxRows = 63)
       assertResult(3)(splits.length)
       assertResult(25)(splits(0))
       assertResult(50)(splits(1))
@@ -271,27 +295,24 @@ class GpuGenerateSuite
       val e = GpuExplode(null)
 
       // no splits
-      var splits = e.inputSplitIndices(batch, 1, false, inputSize)
+      var splits = e.inputSplitIndices(batch, 1, false, 3200)
       assertResult(0)(splits.length)
       checkSplits(splits, batch)
 
       // 1600 == 1 splits (2 parts) right down the middle
-      var numParts = 2
-      splits = e.inputSplitIndices(batch, 1, false, inputSize/numParts)
+      splits = e.inputSplitIndices(batch, 1, false, 1600)
       assertResult(1)(splits.length)
       assertResult(50)(splits(0))
       checkSplits(splits, batch)
 
-      numParts = 4
-      splits = e.inputSplitIndices(batch, 1, false, inputSize/numParts)
+      splits = e.inputSplitIndices(batch, 1, false, 800)
       assertResult(3)(splits.length)
       assertResult(25)(splits(0))
       assertResult(50)(splits(1))
       assertResult(75)(splits(2))
       checkSplits(splits, batch)
 
-      numParts = 8
-      splits = e.inputSplitIndices(batch, 1, false, inputSize/numParts)
+      splits = e.inputSplitIndices(batch, 1, false, 400)
       assertResult(7)(splits.length)
       assertResult(13)(splits(0))
       assertResult(25)(splits(1))
@@ -305,7 +326,7 @@ class GpuGenerateSuite
   }
 
   test("test batch with a two a repeating column with nulls") {
-    val (inputSize, batch) = makeBatch(numRows=100, includeNulls = true)
+    val (inputSize, batch) = makeBatch(numRows=100, listSize=2, includeNulls = true)
     withResource(batch) { _ =>
       val e = GpuExplode(null)
       // the exploded column should be 4 Bytes * 100 rows * 4 reps per row = 1600 Bytes.
@@ -322,13 +343,18 @@ class GpuGenerateSuite
       splits = e.inputSplitIndices(batch, 1, false, 400)
       checkSplits(splits, batch)
 
-      // split at every row (rows - 1)
-      splits = e.inputSplitIndices(batch, 1, true, 1)
-      assertResult(splits.length)(50)
+      // we estimate 1000 bytes in this scenario (600 for repeating col, and 400 for exploding)
+      // 1000/16 ~ 63 splits
+      // ~9 bytes per split
+      splits = e.inputSplitIndices(batch, 1, true, 16)
+      println(splits.mkString(","))
+      assertResult(splits.length)(62)
       checkSplits(splits, batch)
 
-      splits = e.inputSplitIndices(batch, 1, false, 1)
-      assertResult(splits.length)(99)
+      // every other row, every split will have 2 rows of input data
+      splits = e.inputSplitIndices(batch, 1, false, 16)
+      println(splits.mkString(","))
+      assertResult(49)(splits.length)
       checkSplits(splits, batch)
     }
   }
