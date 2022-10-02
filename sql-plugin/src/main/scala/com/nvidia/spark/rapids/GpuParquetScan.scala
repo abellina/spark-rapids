@@ -1673,6 +1673,8 @@ class MultiFileParquetPartitionReader(
       Table.readParquet(parseOpts, dataBuffer, 0, dataSize)
     }
 
+    GpuSemaphore.updateMemory(TaskContext.get(), table, metrics(SEMAPHORE_WAIT_TIME))
+
     closeOnExcept(table) { _ =>
       GpuParquetScan.throwIfNeeded(
         table,
@@ -1981,6 +1983,9 @@ class MultiFileCloudParquetPartitionReader(
         metrics(GPU_DECODE_TIME))) { _ =>
         Table.readParquet(parseOpts, hostBuffer, 0, dataSize)
       }
+
+      GpuSemaphore.updateMemory(TaskContext.get(), table, metrics(SEMAPHORE_WAIT_TIME))
+
       closeOnExcept(table) { _ =>
         GpuParquetScan.throwIfNeeded(table, isCorrectInt96RebaseMode, isCorrectRebaseMode,
           hasInt96Timestamps)
@@ -2122,6 +2127,7 @@ class ParquetPartitionReader(
             metrics(GPU_DECODE_TIME))) { _ =>
           Table.readParquet(parseOpts, dataBuffer, 0, dataSize)
         }
+        GpuSemaphore.updateMemory(TaskContext.get(), table, metrics(SEMAPHORE_WAIT_TIME))
         closeOnExcept(table) { _ =>
           GpuParquetScan.throwIfNeeded(table, isCorrectedInt96RebaseMode, isCorrectedRebaseMode,
             hasInt96Timestamps)

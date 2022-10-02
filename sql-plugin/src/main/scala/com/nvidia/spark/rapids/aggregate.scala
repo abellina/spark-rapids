@@ -190,7 +190,8 @@ class GpuHashAggregateIterator(
     metrics: GpuHashAggregateMetrics,
     configuredTargetBatchSize: Long,
     useTieredProject: Boolean)
-    extends Iterator[ColumnarBatch] with Arm with AutoCloseable with Logging {
+    extends MemoryAwareIterator[ColumnarBatch]("aggIter", cbIter)
+      with Arm with AutoCloseable with Logging {
 
   // Partial mode:
   //  1. boundInputReferences: picks column from raw input
@@ -281,8 +282,11 @@ class GpuHashAggregateIterator(
   /** Aggregate all input batches and place the results in the aggregatedBatches queue. */
   private def aggregateInputBatches(): Unit = {
     val aggHelper = new AggHelper(forceMerge = false, useTieredProject = useTieredProject)
+    GpuSemaphore.acquireIfNecessary(TaskContext.get(), metrics.semWaitTime)
+
     while (cbIter.hasNext) {
       withResource(cbIter.next()) { childBatch =>
+
         val isLastInputBatch = GpuColumnVector.isTaggedAsFinalBatch(childBatch)
         withResource(computeAggregate(childBatch, aggHelper)) { aggBatch =>
           val batch = LazySpillableColumnarBatch(aggBatch, metrics.spillCallback, "aggbatch")
@@ -809,6 +813,12 @@ class GpuHashAggregateIterator(
     val opTime = metrics.opTime
     withResource(new NvtxWithMetrics("computeAggregate", NvtxColor.CYAN, computeAggTime,
       opTime)) { _ =>
+      withResource(GpuColumnVector.from(toAggregateBatch)) { tbl =>
+        GpuSemaphore.updateMemory(
+          TaskContext.get(),
+          math.ceil(tbl.getDeviceMemorySize.toDouble / 1024 / 1024).toInt,
+          metrics.semWaitTime)
+      }
       // a pre-processing step required before we go into the cuDF aggregate, in some cases
       // casting and in others creating a struct (MERGE_M2 for instance, requires a struct)
       withResource(helper.preProcess(toAggregateBatch)) { preProcessed =>

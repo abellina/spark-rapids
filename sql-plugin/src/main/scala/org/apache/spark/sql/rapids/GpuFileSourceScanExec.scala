@@ -17,13 +17,11 @@
 package org.apache.spark.sql.rapids
 
 import java.util.concurrent.TimeUnit.NANOSECONDS
-
 import scala.collection.mutable.HashMap
-
-import com.nvidia.spark.rapids.{AlluxioUtils, GpuExec, GpuMetric, GpuOrcMultiFilePartitionReaderFactory, GpuParquetMultiFilePartitionReaderFactory, GpuReadCSVFileFormat, GpuReadFileFormatWithMetrics, GpuReadOrcFileFormat, GpuReadParquetFileFormat, RapidsConf, SparkPlanMeta}
+import com.nvidia.spark.rapids.{AlluxioUtils, Arm, GpuColumnVector, GpuExec, GpuMetric, GpuOrcMultiFilePartitionReaderFactory, GpuParquetMultiFilePartitionReaderFactory, GpuReadCSVFileFormat, GpuReadFileFormatWithMetrics, GpuReadOrcFileFormat, GpuReadParquetFileFormat, GpuSemaphore, MemoryAwareIterator, RapidsConf, SparkPlanMeta}
 import com.nvidia.spark.rapids.shims.{GpuDataSourceRDD, SparkShimImpl}
 import org.apache.hadoop.fs.Path
-
+import org.apache.spark.TaskContext
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.catalyst.{InternalRow, TableIdentifier}
 import org.apache.spark.sql.catalyst.catalog.BucketSpec
@@ -75,7 +73,7 @@ case class GpuFileSourceScanExec(
     disableBucketedScan: Boolean = false,
     queryUsesInputFile: Boolean = false,
     alluxioPathsMap: Option[Map[String, String]])(@transient val rapidsConf: RapidsConf)
-    extends GpuDataSourceScanExec with GpuExec {
+    extends GpuDataSourceScanExec with GpuExec with Arm {
   import GpuMetric._
 
   private val isAlluxioReplacementTaskTime = rapidsConf.isAlluxioReplacementAlgoTaskTime
@@ -434,7 +432,7 @@ case class GpuFileSourceScanExec(
     val numOutputRows = gpuLongMetric(NUM_OUTPUT_ROWS)
     val scanTime = gpuLongMetric("scanTime")
     inputRDD.asInstanceOf[RDD[ColumnarBatch]].mapPartitionsInternal { batches =>
-      new Iterator[ColumnarBatch] {
+      new MemoryAwareIterator[ColumnarBatch]("fileSourceScanExec", batches) {
 
         override def hasNext: Boolean = {
           // The `FileScanRDD` returns an iterator which scans the file during the `hasNext` call.
@@ -446,6 +444,11 @@ case class GpuFileSourceScanExec(
 
         override def next(): ColumnarBatch = {
           val batch = batches.next()
+          withResource(GpuColumnVector.from(batch)) { tbl =>
+            GpuSemaphore.updateMemory(TaskContext.get(),
+              tbl,
+              semaphoreMetrics(SEMAPHORE_WAIT_TIME))
+          }
           numOutputRows += batch.numRows()
           batch
         }

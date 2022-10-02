@@ -263,7 +263,9 @@ abstract class RapidsShuffleThreadedWriterBase[K, V](
 
   val diskBlockObjectWriters = new mutable.HashMap[Int, (Int, DiskBlockObjectWriter)]()
 
-  override def write(records: Iterator[Product2[K, V]]): Unit = {
+  override def write(it: Iterator[Product2[K, V]]): Unit = {
+    val records = new MemoryAwareIterator("writer", it)
+    val requirement = records.getMemoryRequired
     withResource(new NvtxRange("ThreadedWriter.write", NvtxColor.RED)) { _ =>
       withResource(new NvtxRange("compute", NvtxColor.GREEN)) { _ =>
         val mapOutputWriter = shuffleExecutorComponents.createMapOutputWriter(

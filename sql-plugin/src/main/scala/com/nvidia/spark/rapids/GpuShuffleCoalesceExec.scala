@@ -64,9 +64,10 @@ case class GpuShuffleCoalesceExec(child: SparkPlan, targetBatchByteSize: Long)
     val dataTypes = GpuColumnVector.extractTypes(schema)
 
     child.executeColumnar().mapPartitions { iter =>
-      new GpuShuffleCoalesceIterator(
-        new HostShuffleCoalesceIterator(iter, targetSize, dataTypes, metricsMap),
-        dataTypes, metricsMap)
+      new MemoryAwareIterator("shuffleCoalesce",
+        new GpuShuffleCoalesceIterator(
+          new HostShuffleCoalesceIterator(iter, targetSize, dataTypes, metricsMap),
+        dataTypes, metricsMap))
     }
   }
 }

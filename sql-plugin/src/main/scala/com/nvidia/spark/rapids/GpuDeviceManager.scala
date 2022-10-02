@@ -227,12 +227,14 @@ object GpuDeviceManager extends Logging {
     }
   }
 
+  var poolAllocation:Long = 0L
+
   private def initializeRmm(gpuId: Int, rapidsConf: Option[RapidsConf] = None): Unit = {
     if (!Rmm.isInitialized) {
       val conf = rapidsConf.getOrElse(new RapidsConf(SparkEnv.get.conf))
       val info = Cuda.memGetInfo()
 
-      val poolAllocation = computeRmmPoolSize(conf, info)
+      poolAllocation = computeRmmPoolSize(conf, info)
       var init = RmmAllocationMode.CUDA_DEFAULT
       val features = ArrayBuffer[String]()
       if (conf.isPooledMemEnabled) {

@@ -652,7 +652,12 @@ class RowToColumnarIterator(
         // note that TaskContext.get() can return null during unit testing so we wrap it in an
         // option here
         Option(TaskContext.get())
-            .foreach(ctx => GpuSemaphore.acquireIfNecessary(ctx, semaphoreWaitTime))
+            .foreach(ctx => {
+              GpuSemaphore.acquireIfNecessary(ctx, semaphoreWaitTime)
+              GpuSemaphore.updateMemory(ctx,
+                math.ceil(byteCount/1024/1024).toInt, semaphoreWaitTime)
+            })
+
 
         val ret = withResource(new NvtxWithMetrics("RowToColumnar", NvtxColor.GREEN,
           opTime)) { _ =>
@@ -688,7 +693,7 @@ object GeneratedInternalRowToCudfRowIterator extends Logging {
       opTime: GpuMetric,
       numInputRows: GpuMetric,
       numOutputRows: GpuMetric,
-      numOutputBatches: GpuMetric): InternalRowToColumnarBatchIterator = {
+      numOutputBatches: GpuMetric): Iterator[ColumnarBatch] = {
     val ctx = new CodegenContext
     // setup code generation context to use our custom row variable
     val internalRow = ctx.freshName("internalRow")
@@ -856,7 +861,9 @@ object GeneratedInternalRowToCudfRowIterator extends Logging {
     logDebug(s"code for ${schema.mkString(",")}:\n${CodeFormatter.format(code)}")
 
     val (clazz, _) = CodeGenerator.compile(code)
-    clazz.generate(ctx.references.toArray).asInstanceOf[InternalRowToColumnarBatchIterator]
+    val internalRowToBatchIter =
+      clazz.generate(ctx.references.toArray).asInstanceOf[InternalRowToColumnarBatchIterator]
+    new MemoryAwareIterator("r2c", internalRowToBatchIter)
   }
 }
 

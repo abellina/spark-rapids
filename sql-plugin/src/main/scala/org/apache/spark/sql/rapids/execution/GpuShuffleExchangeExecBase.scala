@@ -16,7 +16,6 @@
 
 package org.apache.spark.sql.rapids.execution
 
-import scala.collection.AbstractIterator
 import scala.concurrent.Future
 
 import com.nvidia.spark.rapids._
@@ -299,7 +298,8 @@ object GpuShuffleExchangeExecBase {
     val rddWithPartitionIds: RDD[Product2[Int, ColumnarBatch]] = {
       newRdd.mapPartitions { iter =>
         val getParts = getPartitioned
-        new AbstractIterator[Product2[Int, ColumnarBatch]] {
+        val cbProductIter = new AbstractMemoryAwareIterator[ColumnarBatch, Product2[Int, ColumnarBatch]](
+            "internalShuffle", iter) {
           private var partitioned : Array[(ColumnarBatch, Int)] = _
           private var at = 0
           private val mutablePair = new MutablePair[Int, ColumnarBatch]()
@@ -351,6 +351,8 @@ object GpuShuffleExchangeExecBase {
             mutablePair
           }
         }
+
+        new MemoryAwareIterator("shuffleEx", cbProductIter)
       }
     }
 

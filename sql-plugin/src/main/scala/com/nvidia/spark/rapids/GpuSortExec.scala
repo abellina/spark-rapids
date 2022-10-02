@@ -160,7 +160,8 @@ case class GpuSortEachBatchIterator(
     sortTime: GpuMetric = NoopMetric,
     outputBatches: GpuMetric = NoopMetric,
     outputRows: GpuMetric = NoopMetric,
-    peakDevMemory: GpuMetric = NoopMetric) extends Iterator[ColumnarBatch] with Arm {
+    peakDevMemory: GpuMetric = NoopMetric)
+  extends MemoryAwareIterator[ColumnarBatch]("sortEachBatch", iter) with Arm {
   override def hasNext: Boolean = iter.hasNext
 
   override def next(): ColumnarBatch = {

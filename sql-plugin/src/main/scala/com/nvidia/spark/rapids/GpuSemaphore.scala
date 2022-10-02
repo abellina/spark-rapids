@@ -17,10 +17,8 @@
 package com.nvidia.spark.rapids
 
 import java.util.concurrent.{ConcurrentHashMap, Semaphore}
-
-import ai.rapids.cudf.{NvtxColor, NvtxRange}
+import ai.rapids.cudf.{NvtxColor, NvtxRange, Table}
 import org.apache.commons.lang3.mutable.MutableInt
-
 import org.apache.spark.TaskContext
 import org.apache.spark.internal.Logging
 
@@ -78,6 +76,30 @@ object GpuSemaphore {
   }
 
   /**
+   * Given a task that has acquired the semaphore, this updates the amount of memory
+   * it actually needs (say a scan, which now knows it is outputing X MB).
+   *
+   * If the amount of memory needed is higher than the previous acquisition,
+   * the can wait for the semaphore, otherwise the task will not block.
+   * @param context
+   * @param memoryEstimate
+   */
+  def updateMemory(context: TaskContext, memoryMB: Int, waitMetric: GpuMetric): Unit = {
+    if (enabled && context != null) {
+      getInstance.acquireIfNecessaryMemory(context, memoryMB, waitMetric)
+    }
+  }
+
+  def updateMemory(context: TaskContext, table: Table, waitMetric: GpuMetric): Unit = {
+    if (enabled && context != null) {
+      val memoryMB = math.ceil(table.getDeviceMemorySize.toDouble/1024/1024).toInt
+      getInstance.acquireIfNecessaryMemory(context, memoryMB, waitMetric)
+      // if we couldn't acquire (say if we need more memory than what we had before)...
+      // we have the table... make it spillable, release the semaphore, block
+    }
+  }
+
+  /**
    * Tasks must call this when they are finished using the GPU.
    */
   def releaseIfNecessary(context: TaskContext): Unit = {
@@ -99,26 +121,60 @@ object GpuSemaphore {
 }
 
 private final class GpuSemaphore(tasksPerGpu: Int) extends Logging with Arm {
-  private val semaphore = new Semaphore(tasksPerGpu)
+  private val maxMemoryMB = (GpuDeviceManager.poolAllocation / 1024 / 1024).toInt
+  private val mbPerTask = (maxMemoryMB / tasksPerGpu)
+  private val semaphore = new Semaphore(maxMemoryMB)
   // Map to track which tasks have acquired the semaphore.
-  private val activeTasks = new ConcurrentHashMap[Long, MutableInt]
+  case class TaskInfo(refs: MutableInt, acquiredMB: MutableInt)
+  private val activeTasks = new ConcurrentHashMap[Long, TaskInfo]
+
+  logInfo(s"Semaphore initialized with max=${maxMemoryMB}MB, mbPerTask=${mbPerTask}MB")
 
   def acquireIfNecessary(context: TaskContext, waitMetric: GpuMetric): Unit = {
     withResource(new NvtxWithMetrics("Acquire GPU", NvtxColor.RED, waitMetric)) { _ =>
       val taskAttemptId = context.taskAttemptId()
-      val refs = activeTasks.get(taskAttemptId)
-      if (refs == null || refs.getValue == 0) {
-        logDebug(s"Task $taskAttemptId acquiring GPU")
-        semaphore.acquire()
-        if (refs != null) {
-          refs.increment()
+      val taskInfo = activeTasks.get(taskAttemptId)
+      if (taskInfo == null || taskInfo.refs.getValue == 0) {
+        logInfo(s"Task $taskAttemptId acquiring GPU: mbPerTask: ${mbPerTask}")
+        semaphore.acquire(mbPerTask)
+        logInfo(s"Acquired. Semaphore at ${semaphore.availablePermits()} MB")
+        if (taskInfo != null) {
+          taskInfo.refs.increment()
+          taskInfo.acquiredMB.add(mbPerTask)
         } else {
           // first time this task has been seen
-          activeTasks.put(taskAttemptId, new MutableInt(1))
+          activeTasks.put(taskAttemptId,
+            TaskInfo(new MutableInt(1), new MutableInt(mbPerTask)))
           context.addTaskCompletionListener[Unit](completeTask)
         }
         GpuDeviceManager.initializeFromTask()
       }
+    }
+  }
+
+  def acquireIfNecessaryMemory(
+      context: TaskContext, reqMemoryMB: Int, waitMetric: GpuMetric): Unit = {
+    val memoryMB = math.min(reqMemoryMB, mbPerTask)
+    if (memoryMB < reqMemoryMB) {
+      logWarning(s"Acquiring less memory ($memoryMB instead of ${reqMemoryMB} MB)" +
+        s" due to to small a pool")
+    }
+    withResource(new NvtxWithMetrics("Acquire Mem GPU", NvtxColor.RED, waitMetric)) { _ =>
+      val taskAttemptId = context.taskAttemptId()
+      val taskInfo = activeTasks.get(taskAttemptId)
+      if (taskInfo.acquiredMB.getValue > memoryMB) {
+        // ok, we are going to release some
+        logInfo(s"Task $taskAttemptId releasing from ${taskInfo.acquiredMB.getValue} to $memoryMB")
+        semaphore.release(taskInfo.acquiredMB.getValue - memoryMB)
+        taskInfo.acquiredMB.setValue(memoryMB)
+      } else {
+        // now we need to acquire, we could lock
+        logInfo(s"Task $taskAttemptId ACQUIRING from ${taskInfo.acquiredMB.getValue} to $memoryMB")
+        semaphore.acquire(memoryMB - taskInfo.acquiredMB.getValue)
+        logInfo(s"Task $taskAttemptId ACQUIRED! $memoryMB")
+        taskInfo.acquiredMB.setValue(memoryMB)
+      }
+      GpuDeviceManager.initializeFromTask()
     }
   }
 
@@ -127,10 +183,11 @@ private final class GpuSemaphore(tasksPerGpu: Int) extends Logging with Arm {
     try {
       val taskAttemptId = context.taskAttemptId()
       val refs = activeTasks.get(taskAttemptId)
-      if (refs != null && refs.getValue > 0) {
-        if (refs.decrementAndGet() == 0) {
-          logDebug(s"Task $taskAttemptId releasing GPU")
-          semaphore.release()
+      if (refs != null && refs.refs.getValue > 0) {
+        if (refs.refs.decrementAndGet() == 0) {
+          semaphore.release(refs.acquiredMB.getValue)
+          logInfo(s"Taks $taskAttemptId released ${refs.acquiredMB.getValue}. Semaphore at ${semaphore.availablePermits()} MB")
+          refs.acquiredMB.setValue(0)
         }
       }
     } finally {
@@ -144,9 +201,9 @@ private final class GpuSemaphore(tasksPerGpu: Int) extends Logging with Arm {
     if (refs == null) {
       throw new IllegalStateException(s"Completion of unknown task $taskAttemptId")
     }
-    if (refs.getValue > 0) {
+    if (refs.refs.getValue > 0) {
       logDebug(s"Task $taskAttemptId releasing GPU")
-      semaphore.release()
+      semaphore.release(refs.acquiredMB.getValue)
     }
   }
 

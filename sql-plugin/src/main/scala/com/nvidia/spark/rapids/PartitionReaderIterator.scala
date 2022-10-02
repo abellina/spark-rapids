@@ -27,7 +27,8 @@ import org.apache.spark.sql.vectorized.ColumnarBatch
  * An adaptor class that provides an Iterator interface for a PartitionReader.
  */
 class PartitionReaderIterator(reader: PartitionReader[ColumnarBatch])
-    extends Iterator[ColumnarBatch] with AutoCloseable {
+    extends MemoryAwareIterator[ColumnarBatch]("partReader", null)
+      with AutoCloseable {
   Option(TaskContext.get()).foreach(_.addTaskCompletionListener[Unit](_ => close()))
 
   var hasNextResult: Option[Boolean] = None

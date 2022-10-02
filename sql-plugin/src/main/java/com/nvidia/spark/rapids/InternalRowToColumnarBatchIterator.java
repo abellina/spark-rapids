@@ -173,6 +173,8 @@ public abstract class InternalRowToColumnarBatchIterator implements Iterator<Col
              // optimized version, otherwise the generic one
              Table.convertFromRowsFixedWidthOptimized(cv, rapidsTypes) :
              Table.convertFromRows(cv, rapidsTypes)) {
+      TaskContext tc = TaskContext.get();
+      GpuSemaphore$.MODULE$.updateMemory(tc, tab, semaphoreWaitTime);
       return GpuColumnVector.from(tab, outputTypes);
     }
   }
