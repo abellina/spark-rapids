@@ -22,7 +22,7 @@ import org.apache.commons.lang3.mutable.MutableInt
 import org.apache.spark.TaskContext
 import org.apache.spark.internal.Logging
 
-object GpuSemaphore {
+object GpuSemaphore extends Logging {
   private val enabled = {
     val propstr = System.getProperty("com.nvidia.spark.rapids.semaphore.enabled")
     if (propstr != null) {
@@ -62,6 +62,8 @@ object GpuSemaphore {
     }
   }
 
+  val activeTasks =  new java.util.concurrent.atomic.AtomicInteger(0)
+
   /**
    * Tasks must call this when they begin to use the GPU.
    * If the task has not already acquired the GPU semaphore then it is acquired,
@@ -71,7 +73,9 @@ object GpuSemaphore {
    */
   def acquireIfNecessary(context: TaskContext, waitMetric: GpuMetric): Unit = {
     if (enabled && context != null) {
-      getInstance.acquireIfNecessary(context, waitMetric)
+      if (getInstance.acquireIfNecessary(context, waitMetric)) {
+        logInfo(s"Semaphore ACQUIRED was at: ${activeTasks.getAndIncrement()}")
+      }
     }
   }
 
@@ -104,8 +108,11 @@ object GpuSemaphore {
    */
   def releaseIfNecessary(context: TaskContext): Unit = {
     if (enabled && context != null) {
-      getInstance.releaseIfNecessary(context)
+      if (getInstance.releaseIfNecessary(context)) {
+        logInfo(s"Semaphore RELEASED was at: ${activeTasks.getAndDecrement()}")
+      }
     }
+
   }
 
   /**
@@ -130,7 +137,8 @@ private final class GpuSemaphore(tasksPerGpu: Int) extends Logging with Arm {
 
   logInfo(s"Semaphore initialized with max=${maxMemoryMB}MB, mbPerTask=${mbPerTask}MB")
 
-  def acquireIfNecessary(context: TaskContext, waitMetric: GpuMetric): Unit = {
+  def acquireIfNecessary(context: TaskContext, waitMetric: GpuMetric): Boolean = {
+    var acquired =  false
     withResource(new NvtxWithMetrics("Acquire GPU", NvtxColor.RED, waitMetric)) { _ =>
       val taskAttemptId = context.taskAttemptId()
       val taskInfo = activeTasks.get(taskAttemptId)
@@ -147,9 +155,11 @@ private final class GpuSemaphore(tasksPerGpu: Int) extends Logging with Arm {
             TaskInfo(new MutableInt(1), new MutableInt(mbPerTask)))
           context.addTaskCompletionListener[Unit](completeTask)
         }
+        acquired = true
         GpuDeviceManager.initializeFromTask()
       }
     }
+    acquired
   }
 
   def acquireIfNecessaryMemory(
@@ -178,8 +188,9 @@ private final class GpuSemaphore(tasksPerGpu: Int) extends Logging with Arm {
     }
   }
 
-  def releaseIfNecessary(context: TaskContext): Unit = {
+  def releaseIfNecessary(context: TaskContext): Boolean = {
     val nvtxRange = new NvtxRange("Release GPU", NvtxColor.RED)
+    var released=  false
     try {
       val taskAttemptId = context.taskAttemptId()
       val refs = activeTasks.get(taskAttemptId)
@@ -188,11 +199,13 @@ private final class GpuSemaphore(tasksPerGpu: Int) extends Logging with Arm {
           semaphore.release(refs.acquiredMB.getValue)
           logInfo(s"Taks $taskAttemptId released ${refs.acquiredMB.getValue}. Semaphore at ${semaphore.availablePermits()} MB")
           refs.acquiredMB.setValue(0)
+          released = true
         }
       }
     } finally {
       nvtxRange.close()
     }
+    released
   }
 
   def completeTask(context: TaskContext): Unit = {

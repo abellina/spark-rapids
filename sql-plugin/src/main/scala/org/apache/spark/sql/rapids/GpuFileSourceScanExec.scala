@@ -18,7 +18,7 @@ package org.apache.spark.sql.rapids
 
 import java.util.concurrent.TimeUnit.NANOSECONDS
 import scala.collection.mutable.HashMap
-import com.nvidia.spark.rapids.{AlluxioUtils, Arm, GpuColumnVector, GpuExec, GpuMetric, GpuOrcMultiFilePartitionReaderFactory, GpuParquetMultiFilePartitionReaderFactory, GpuReadCSVFileFormat, GpuReadFileFormatWithMetrics, GpuReadOrcFileFormat, GpuReadParquetFileFormat, GpuSemaphore, MemoryAwareIterator, RapidsConf, SparkPlanMeta}
+import com.nvidia.spark.rapids.{AlluxioUtils, Arm, GpuColumnVector, GpuExec, GpuMetric, GpuOrcMultiFilePartitionReaderFactory, GpuParquetMultiFilePartitionReaderFactory, GpuReadCSVFileFormat, GpuReadFileFormatWithMetrics, GpuReadOrcFileFormat, GpuReadParquetFileFormat, GpuSemaphore, MemoryAwareIterator, NoopMetric, RapidsConf, SparkPlanMeta}
 import com.nvidia.spark.rapids.shims.{GpuDataSourceRDD, SparkShimImpl}
 import org.apache.hadoop.fs.Path
 import org.apache.spark.TaskContext
@@ -447,7 +447,7 @@ case class GpuFileSourceScanExec(
           withResource(GpuColumnVector.from(batch)) { tbl =>
             GpuSemaphore.updateMemory(TaskContext.get(),
               tbl,
-              semaphoreMetrics(SEMAPHORE_WAIT_TIME))
+              NoopMetric)
           }
           numOutputRows += batch.numRows()
           batch

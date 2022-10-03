@@ -813,11 +813,13 @@ class GpuHashAggregateIterator(
     val opTime = metrics.opTime
     withResource(new NvtxWithMetrics("computeAggregate", NvtxColor.CYAN, computeAggTime,
       opTime)) { _ =>
-      withResource(GpuColumnVector.from(toAggregateBatch)) { tbl =>
-        GpuSemaphore.updateMemory(
-          TaskContext.get(),
-          math.ceil(tbl.getDeviceMemorySize.toDouble / 1024 / 1024).toInt,
-          metrics.semWaitTime)
+      if (toAggregateBatch.numCols() > 0) {
+        withResource(GpuColumnVector.from(toAggregateBatch)) { tbl =>
+          GpuSemaphore.updateMemory(
+            TaskContext.get(),
+            math.ceil(tbl.getDeviceMemorySize.toDouble / 1024 / 1024).toInt,
+            metrics.semWaitTime)
+        }
       }
       // a pre-processing step required before we go into the cuDF aggregate, in some cases
       // casting and in others creating a struct (MERGE_M2 for instance, requires a struct)
