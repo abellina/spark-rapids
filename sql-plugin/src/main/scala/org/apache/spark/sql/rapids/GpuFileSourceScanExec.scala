@@ -18,7 +18,7 @@ package org.apache.spark.sql.rapids
 
 import java.util.concurrent.TimeUnit.NANOSECONDS
 import scala.collection.mutable.HashMap
-import com.nvidia.spark.rapids.{AlluxioUtils, Arm, GpuColumnVector, GpuExec, GpuMetric, GpuOrcMultiFilePartitionReaderFactory, GpuParquetMultiFilePartitionReaderFactory, GpuReadCSVFileFormat, GpuReadFileFormatWithMetrics, GpuReadOrcFileFormat, GpuReadParquetFileFormat, GpuSemaphore, MemoryAwareIterator, NoopMetric, RapidsConf, SparkPlanMeta}
+import com.nvidia.spark.rapids.{AbstractMemoryAwareIterator, AlluxioUtils, Arm, GpuColumnVector, GpuExec, GpuMetric, GpuOrcMultiFilePartitionReaderFactory, GpuParquetMultiFilePartitionReaderFactory, GpuReadCSVFileFormat, GpuReadFileFormatWithMetrics, GpuReadOrcFileFormat, GpuReadParquetFileFormat, NoopMetric, RapidsConf, SparkPlanMeta, TargetSize}
 import com.nvidia.spark.rapids.shims.{GpuDataSourceRDD, SparkShimImpl}
 import org.apache.hadoop.fs.Path
 import org.apache.spark.TaskContext
@@ -432,8 +432,7 @@ case class GpuFileSourceScanExec(
     val numOutputRows = gpuLongMetric(NUM_OUTPUT_ROWS)
     val scanTime = gpuLongMetric("scanTime")
     inputRDD.asInstanceOf[RDD[ColumnarBatch]].mapPartitionsInternal { batches =>
-      new MemoryAwareIterator[ColumnarBatch]("fileSourceScanExec", batches) {
-
+      new AbstractMemoryAwareIterator[ColumnarBatch]("fileSourceScanExec", batches) {
         override def hasNext: Boolean = {
           // The `FileScanRDD` returns an iterator which scans the file during the `hasNext` call.
           val startNs = System.nanoTime()
@@ -445,13 +444,15 @@ case class GpuFileSourceScanExec(
         override def next(): ColumnarBatch = {
           val batch = batches.next()
           withResource(GpuColumnVector.from(batch)) { tbl =>
-            GpuSemaphore.updateMemory(TaskContext.get(),
+            updateMemory(TaskContext.get(),
               tbl,
               NoopMetric)
           }
           numOutputRows += batch.numRows()
           batch
         }
+
+        override def getTargetSize: Option[TargetSize] = None
       }
     }
   }

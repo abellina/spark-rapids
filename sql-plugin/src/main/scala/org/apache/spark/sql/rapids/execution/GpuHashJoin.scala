@@ -706,7 +706,7 @@ trait GpuHashJoin extends GpuExec {
       joinOutputRows: GpuMetric,
       numOutputBatches: GpuMetric,
       opTime: GpuMetric,
-      joinTime: GpuMetric): Iterator[ColumnarBatch] = {
+      joinTime: GpuMetric): AbstractMemoryAwareIterator[ColumnarBatch] = {
     // The 10k is mostly for tests, hopefully no one is setting anything that low in production.
     val realTarget = Math.max(targetSize, 10 * 1024)
 
@@ -759,11 +759,16 @@ trait GpuHashJoin extends GpuExec {
         }
     }
 
-    joinIterator.map { cb =>
+    val joinIter = joinIterator.map { cb =>
       joinOutputRows += cb.numRows()
       numOutputRows += cb.numRows()
       numOutputBatches += 1
       cb
+    }
+    new AbstractMemoryAwareIterator[ColumnarBatch]("doJoin", stream) {
+      override def hasNext: Boolean = joinIter.hasNext
+      override def next() = joinIter.next()
+      override def getTargetSize: Option[TargetSize] = Some(TargetSize(targetSize))
     }
   }
 }

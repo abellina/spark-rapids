@@ -168,7 +168,7 @@ case class GpuBroadcastHashJoinExec(
     rdd.mapPartitions { it =>
       val stIt = new CollectTimeIterator("broadcast join stream", it, streamTime)
       withResource(
-          GpuBroadcastHelper.getBroadcastBatch(broadcastRelation, buildSchema)) { builtBatch =>
+        GpuBroadcastHelper.getBroadcastBatch(broadcastRelation, buildSchema)) { builtBatch =>
         doJoin(builtBatch, stIt, targetSize, spillCallback,
           numOutputRows, joinOutputRows, numOutputBatches, opTime, joinTime)
       }

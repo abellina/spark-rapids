@@ -815,10 +815,7 @@ class GpuHashAggregateIterator(
       opTime)) { _ =>
       if (toAggregateBatch.numCols() > 0) {
         withResource(GpuColumnVector.from(toAggregateBatch)) { tbl =>
-          GpuSemaphore.updateMemory(
-            TaskContext.get(),
-            math.ceil(tbl.getDeviceMemorySize.toDouble / 1024 / 1024).toInt,
-            metrics.semWaitTime)
+          updateMemory(TaskContext.get(), tbl, metrics.semWaitTime)
         }
       }
       // a pre-processing step required before we go into the cuDF aggregate, in some cases

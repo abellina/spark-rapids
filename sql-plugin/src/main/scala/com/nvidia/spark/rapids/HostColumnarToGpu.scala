@@ -258,7 +258,10 @@ class HostToGpuCoalesceIterator(iter: Iterator[ColumnarBatch],
     GpuSemaphore.acquireIfNecessary(TaskContext.get(), semTime)
     val ret = batchBuilder.build(totalRows)
     maxDeviceMemory = GpuColumnVector.getTotalDeviceMemoryUsed(ret)
-    GpuSemaphore.updateMemory(TaskContext.get(), (maxDeviceMemory / 1024 / 1024).toInt, semTime)
+    withResource(GpuColumnVector.from(ret)) { tbl =>
+      GpuSemaphore.updateMemory(TaskContext.get(), tbl, semTime)
+    }
+
 
     // refine the estimate for number of rows based on this batch
     batchRowLimit = GpuBatchUtils.estimateRowCount(goal.targetSizeBytes, maxDeviceMemory,

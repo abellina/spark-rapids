@@ -831,6 +831,7 @@ abstract class MultiFileCoalescingPartitionReaderBase(
         metrics(PEAK_DEVICE_MEMORY) += maxDeviceMemory
       } else {
         batch = readBatch()
+
       }
     }
 

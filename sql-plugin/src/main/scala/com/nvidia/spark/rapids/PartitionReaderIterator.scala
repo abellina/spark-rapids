@@ -28,7 +28,8 @@ import org.apache.spark.sql.vectorized.ColumnarBatch
  */
 class PartitionReaderIterator(reader: PartitionReader[ColumnarBatch])
     extends MemoryAwareIterator[ColumnarBatch]("partReader", null)
-      with AutoCloseable {
+      with AutoCloseable
+      with Arm {
   Option(TaskContext.get()).foreach(_.addTaskCompletionListener[Unit](_ => close()))
 
   var hasNextResult: Option[Boolean] = None
@@ -45,7 +46,11 @@ class PartitionReaderIterator(reader: PartitionReader[ColumnarBatch])
       hasNextResult = Some(reader.next())
     }
     hasNextResult = None
-    reader.get()
+    val cb = reader.get()
+    withResource(GpuColumnVector.from(cb)) { tbl =>
+      updateMemory(TaskContext.get(), tbl, NoopMetric)
+    }
+    cb
   }
 
   override def close(): Unit = {

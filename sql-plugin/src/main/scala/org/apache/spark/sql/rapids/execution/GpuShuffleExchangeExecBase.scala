@@ -298,8 +298,9 @@ object GpuShuffleExchangeExecBase {
     val rddWithPartitionIds: RDD[Product2[Int, ColumnarBatch]] = {
       newRdd.mapPartitions { iter =>
         val getParts = getPartitioned
-        val cbProductIter = new AbstractMemoryAwareIterator[ColumnarBatch, Product2[Int, ColumnarBatch]](
-            "internalShuffle", iter) {
+        new AbstractMemoryAwareIterator[Product2[Int, ColumnarBatch]](
+            "shuffleEx", iter) {
+          override def getTargetSize: Option[TargetSize] = None
           private var partitioned : Array[(ColumnarBatch, Int)] = _
           private var at = 0
           private val mutablePair = new MutablePair[Int, ColumnarBatch]()
@@ -351,8 +352,6 @@ object GpuShuffleExchangeExecBase {
             mutablePair
           }
         }
-
-        new MemoryAwareIterator("shuffleEx", cbProductIter)
       }
     }
 
