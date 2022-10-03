@@ -21,6 +21,8 @@ abstract class AbstractMemoryAwareIterator[T](
     GpuSemaphore.updateMemory(context, table, waitMetric)
   }
 
+  var myRequiredMemory: Option[TargetSize] = None
+
   def getMemoryRequired: Long = {
     var isMemAware = true
     var current: Any = wrapped
@@ -37,6 +39,9 @@ abstract class AbstractMemoryAwareIterator[T](
         case mai: MemoryAwareLike =>
           println(s"${TaskContext.get.taskAttemptId()}: $current is MemoryAwareIter. " +
             s"${mai.getClass}: ${mai.getName}, target: ${getTargetSize}")
+          if (mai.getTargetSize.isDefined) {
+            myRequiredMemory = mai.getTargetSize
+          }
           current = mai.getWrapped
         case _ =>
           println(s"${TaskContext.get.taskAttemptId()}: $current is NOT MemoryAwareIter, " +
@@ -44,7 +49,8 @@ abstract class AbstractMemoryAwareIterator[T](
           isMemAware = false
       }
     }
-    0L
+    println(s"my required size $this is ${myRequiredMemory}")
+    myRequiredMemory.map(_.targetSizeBytes).getOrElse(-1L)
   }
 
   override def hasNext: Boolean// = wrapped.hasNext

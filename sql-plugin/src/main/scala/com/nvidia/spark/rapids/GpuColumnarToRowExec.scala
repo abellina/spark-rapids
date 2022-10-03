@@ -41,7 +41,9 @@ class AcceleratedColumnarToRowIterator(
     numInputBatches: GpuMetric,
     numOutputRows: GpuMetric,
     opTime: GpuMetric,
-    streamTime: GpuMetric) extends Iterator[InternalRow] with Arm with Serializable {
+    streamTime: GpuMetric)
+  extends AbstractMemoryAwareIterator[InternalRow]("accelC2R", batches)
+    with Arm with Serializable {
   @transient private var pendingCvs: Queue[HostColumnVector] = Queue.empty
   // GPU batches read in must be closed by the receiver (us)
   @transient private var currentCv: Option[HostColumnVector] = None
@@ -175,6 +177,7 @@ class AcceleratedColumnarToRowIterator(
     if (!hasNext) {
       throw new NoSuchElementException()
     }
+    val requirement = getMemoryRequired
     // Here we should do some code generation, but for now
     val startReadOffset = currentCv.get.getStartListOffset(at)
     val endReadOffset = currentCv.get.getEndListOffset(at)
@@ -182,6 +185,8 @@ class AcceleratedColumnarToRowIterator(
     at += 1
     outputRow
   }
+
+  override def getTargetSize: Option[TargetSize] = None
 }
 
 class ColumnarToRowIterator(batches: Iterator[ColumnarBatch],
@@ -189,7 +194,8 @@ class ColumnarToRowIterator(batches: Iterator[ColumnarBatch],
     numOutputRows: GpuMetric,
     opTime: GpuMetric,
     streamTime: GpuMetric,
-    nullSafe: Boolean = false) extends Iterator[InternalRow] with Arm {
+    nullSafe: Boolean = false)
+    extends AbstractMemoryAwareIterator[InternalRow]("c2r", batches) with Arm {
   // GPU batches read in must be closed by the receiver (us)
   @transient private var cb: ColumnarBatch = null
   private var it: java.util.Iterator[InternalRow] = null
@@ -238,6 +244,7 @@ class ColumnarToRowIterator(batches: Iterator[ColumnarBatch],
     withResource(new NvtxWithMetrics("ColumnarToRow: fetch", NvtxColor.BLUE, streamTime)) { _ =>
       while (batches.hasNext) {
         numInputBatches += 1
+        val requirement = getMemoryRequired
         val devCb = batches.next()
         if (devCb.numRows() > 0) {
           return Some(devCb)
@@ -268,6 +275,8 @@ class ColumnarToRowIterator(batches: Iterator[ColumnarBatch],
     }
     it.next()
   }
+
+  override def getTargetSize: Option[TargetSize] = None
 }
 
 object CudfRowTransitions {

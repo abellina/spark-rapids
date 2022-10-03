@@ -149,10 +149,17 @@ case class GpuProjectExec(
     val opTime = gpuLongMetric(OP_TIME)
     val boundProjectList = GpuBindReferences.bindGpuReferences(projectList, child.output)
     val rdd = child.executeColumnar()
-    rdd.map { cb =>
-      numOutputBatches += 1
-      numOutputRows += cb.numRows()
-      GpuProjectExec.projectAndClose(cb, boundProjectList, opTime)
+    rdd.mapPartitions { cbIters =>
+      val partIter = cbIters.map { cb =>
+        numOutputBatches += 1
+        numOutputRows += cb.numRows()
+        GpuProjectExec.projectAndClose(cb, boundProjectList, opTime)
+      }
+      new AbstractMemoryAwareIterator[ColumnarBatch]("project", cbIters) {
+        override def hasNext: Boolean = partIter.hasNext
+        override def next(): ColumnarBatch = partIter.next()
+        override def getTargetSize: Option[TargetSize] = None
+      }
     }
   }
 
