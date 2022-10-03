@@ -700,7 +700,7 @@ trait GpuHashJoin extends GpuExec {
   def doJoin(
       builtBatch: ColumnarBatch,
       stream: Iterator[ColumnarBatch],
-      targetSize: Long,
+      targetSizeBytes: Long,
       spillCallback: SpillCallback,
       numOutputRows: GpuMetric,
       joinOutputRows: GpuMetric,
@@ -708,7 +708,7 @@ trait GpuHashJoin extends GpuExec {
       opTime: GpuMetric,
       joinTime: GpuMetric): AbstractMemoryAwareIterator[ColumnarBatch] = {
     // The 10k is mostly for tests, hopefully no one is setting anything that low in production.
-    val realTarget = Math.max(targetSize, 10 * 1024)
+    val realTarget = Math.max(targetSizeBytes, 10 * 1024)
 
     // Filtering nulls on the build side is a workaround for Struct joins with nullable children
     // see https://github.com/NVIDIA/spark-rapids/issues/2126 for more info
@@ -768,7 +768,7 @@ trait GpuHashJoin extends GpuExec {
     new AbstractMemoryAwareIterator[ColumnarBatch]("doJoin", stream) {
       override def hasNext: Boolean = joinIter.hasNext
       override def next() = joinIter.next()
-      override def getTargetSize: Option[TargetSize] = Some(TargetSize(targetSize))
+      override def getTargetSize: Option[TargetSize] = Some(TargetSize(targetSizeBytes))
     }
   }
 }
