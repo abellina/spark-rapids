@@ -29,7 +29,11 @@ abstract class AbstractMemoryAwareIterator[T](
 
   def updateMemory(context: TaskContext, table: Table, waitMetric: GpuMetric): Unit = {
     logInfo(s"updating memory ${name}. My memory requirement is ${targetSize}")
-    GpuSemaphore.updateMemory(context, table, waitMetric)
+    if (targetSize.isDefined) {
+      GpuSemaphore.updateMemory(context,
+        math.ceil(targetSize.get.targetSizeBytes.toDouble/1024/1024).toInt,
+        waitMetric)
+    }
   }
 
   def getMemoryRequired: Long = {
