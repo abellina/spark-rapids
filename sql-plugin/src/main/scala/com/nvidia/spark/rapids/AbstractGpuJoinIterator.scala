@@ -170,7 +170,10 @@ abstract class SplittableJoinIterator(
       gatherNvtxName,
       targetSize,
       opTime = opTime,
-      joinTime = joinTime) with Logging {
+      joinTime = joinTime)
+      with MemoryAwareLike with Logging {
+  def getWrapped: Any = stream
+  def getName: String = "splittableJoinIter"
   // For some join types even if there is no stream data we might output something
   private var isInitialJoin = true
   // If the join explodes this holds batches from the stream side split into smaller pieces.

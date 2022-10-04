@@ -187,7 +187,8 @@ case class WrappedGpuMetric(sqlMetric: SQLMetric) extends GpuMetric {
 class CollectTimeIterator(
     nvtxName: String,
     it: Iterator[ColumnarBatch],
-    collectTime: GpuMetric) extends Iterator[ColumnarBatch] {
+    collectTime: GpuMetric)
+  extends AbstractMemoryAwareIterator[ColumnarBatch]("collectTime", it){
   override def hasNext: Boolean = {
     withResource(new NvtxWithMetrics(nvtxName, NvtxColor.BLUE, collectTime)) { _ =>
       it.hasNext
@@ -199,6 +200,8 @@ class CollectTimeIterator(
       it.next
     }
   }
+
+  override def getTargetSize: Option[TargetSize] = None
 }
 
 object GpuExec {
