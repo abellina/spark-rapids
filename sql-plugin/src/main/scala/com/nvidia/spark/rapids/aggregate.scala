@@ -190,7 +190,7 @@ class GpuHashAggregateIterator(
     metrics: GpuHashAggregateMetrics,
     configuredTargetBatchSize: Long,
     useTieredProject: Boolean)
-    extends MemoryAwareIterator[ColumnarBatch]("aggIter", cbIter)
+    extends AbstractMemoryAwareIterator[ColumnarBatch]("aggIter", cbIter)
       with Arm with AutoCloseable with Logging {
 
   // Partial mode:

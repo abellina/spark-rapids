@@ -245,7 +245,7 @@ abstract class AbstractGpuCoalesceIterator(
     concatTime: GpuMetric,
     opTime: GpuMetric,
     opName: String)
-  extends MemoryAwareIterator[ColumnarBatch]("abstractGpuCoalesce", batches)
+  extends AbstractMemoryAwareIterator[ColumnarBatch]("abstractGpuCoalesce", batches)
     with Arm with Logging {
 
   private val iter = new CollectTimeIterator(s"$opName: collect", batches, streamTime)

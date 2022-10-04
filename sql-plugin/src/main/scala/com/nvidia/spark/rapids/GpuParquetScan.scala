@@ -23,13 +23,11 @@ import java.nio.charset.StandardCharsets
 import java.util
 import java.util.{Collections, Locale}
 import java.util.concurrent._
-
 import scala.annotation.tailrec
 import scala.collection.JavaConverters._
 import scala.collection.mutable.ArrayBuffer
 import scala.language.implicitConversions
 import scala.math.max
-
 import ai.rapids.cudf._
 import com.nvidia.spark.RebaseHelper
 import com.nvidia.spark.rapids.GpuMetric._
@@ -52,7 +50,6 @@ import org.apache.parquet.hadoop.metadata._
 import org.apache.parquet.io.{InputFile, SeekableInputStream}
 import org.apache.parquet.schema.{DecimalMetadata, GroupType, MessageType, OriginalType, PrimitiveType, Type}
 import org.apache.parquet.schema.PrimitiveType.PrimitiveTypeName
-
 import org.apache.spark.TaskContext
 import org.apache.spark.broadcast.Broadcast
 import org.apache.spark.internal.Logging
@@ -1154,8 +1151,12 @@ case class GpuParquetPartitionReaderFactory(
   }
 }
 
-trait ParquetPartitionReaderBase extends Logging with Arm with ScanWithMetrics
-    with MultiFileReaderFunctions {
+trait ParquetPartitionReaderBase
+  extends Logging
+    with Arm
+    with ScanWithMetrics
+    with MultiFileReaderFunctions
+    with MemoryAwareLike {
 
   // Configuration
   def conf: Configuration
@@ -1665,8 +1666,15 @@ class MultiFileParquetPartitionReader(
 
     val parseOpts = getParquetOptions(readDataSchema, clippedSchema, useFieldId)
 
+    setTargetSize(Some(TargetSize(maxReadBatchSizeBytes)))
+
     // About to start using the GPU
     GpuSemaphore.acquireIfNecessary(TaskContext.get(), metrics(SEMAPHORE_WAIT_TIME))
+    GpuSemaphore.updateMemory(TaskContext.get(),
+      math.floor(
+        math.max(getMemoryRequired, maxReadBatchSizeBytes)
+          .toDouble/1024/1024).toInt,
+      metrics(SEMAPHORE_WAIT_TIME))
 
     val table = withResource(new NvtxWithMetrics(s"$getFileFormatShortName decode",
       NvtxColor.DARK_GREEN, metrics(GPU_DECODE_TIME))) { _ =>
@@ -1674,6 +1682,12 @@ class MultiFileParquetPartitionReader(
     }
 
     closeOnExcept(table) { _ =>
+      setTargetSize(Some(TargetSize(table.getDeviceMemorySize)))
+      GpuSemaphore.updateMemory(TaskContext.get(),
+        math.floor(
+          math.max(getMemoryRequired, maxReadBatchSizeBytes)
+            .toDouble/1024/1024).toInt,
+        metrics(SEMAPHORE_WAIT_TIME))
       GpuParquetScan.throwIfNeeded(
         table,
         extraInfo.isCorrectedInt96RebaseMode,

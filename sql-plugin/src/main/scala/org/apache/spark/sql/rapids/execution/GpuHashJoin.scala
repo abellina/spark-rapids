@@ -758,21 +758,17 @@ trait GpuHashJoin extends GpuExec {
             opTime, joinTime)
         }
     }
-
-
-    val joinIteratorFinal =
-      new AbstractMemoryAwareIterator[ColumnarBatch]("doJoin", joinIterator) {
+    new AbstractMemoryAwareIterator[ColumnarBatch]("doJoin", joinIterator) {
       override def hasNext: Boolean = joinIterator.hasNext
-      override def next() = joinIterator.next()
-      override def getTargetSize: Option[TargetSize] = None
-    }
-
-    new MemoryAwareIterator[ColumnarBatch]("doJoin2",
-      joinIteratorFinal.map { cb =>
+      override def next() = {
+        val cb = joinIterator.next()
         joinOutputRows += cb.numRows()
         numOutputRows += cb.numRows()
         numOutputBatches += 1
         cb
-      })
+
+      }
+      override def getTargetSize: Option[TargetSize] = None
+    }
   }
 }

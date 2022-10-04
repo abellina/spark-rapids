@@ -1,8 +1,10 @@
 package com.nvidia.spark.rapids
 
 import ai.rapids.cudf.Table
-import org.apache.spark.TaskContext
+import org.apache.spark.{InterruptibleIterator, TaskContext}
 import org.apache.spark.internal.Logging
+
+import scala.collection.mutable.ArrayBuffer
 
 trait MemoryAwareLike extends Logging {
   def getWrapped: Any
@@ -14,25 +16,25 @@ trait MemoryAwareLike extends Logging {
     _targetSize = newTarget
   }
 
-  def getMemoryRequired: Long = {
+  var child: MemoryAwareLike = null
+
+  install
+
+  def install: Unit = {
     var isMemAware = true
     var current: Any = getWrapped
     val name = getName
     val targetSize = getTargetSize
-    if (current == null) {
-      logInfo(s"${TaskContext.get.taskAttemptId()}: starting at ${name}. ${this.getClass}. " +
-        s"NOTHING WRAPPED")
-      return 0L
-    }
-
     logInfo(s"${TaskContext.get.taskAttemptId()}: starting at ${name}. ${this.getClass}. " +
       s"target: ${getTargetSize}")
     var theTarget: Option[TargetSize] = None
+    val stack = new ArrayBuffer[MemoryAwareLike]()
+    stack.append(this)
     while (isMemAware) {
       current match {
+        case i: InterruptibleIterator[_] =>
+          current = i.delegate
         case mai: MemoryAwareLike =>
-          logInfo(s"${TaskContext.get.taskAttemptId()}: $current is MemoryAwareIter. " +
-            s"${mai.getClass}: ${mai.getName}, target: ${getTargetSize}")
           if (mai.getTargetSize.isDefined) {
             if (theTarget.isEmpty ||
               theTarget.get.targetSizeBytes < mai.getTargetSize.get.targetSizeBytes) {
@@ -40,27 +42,46 @@ trait MemoryAwareLike extends Logging {
             }
           }
           current = mai.getWrapped
-        case _ =>
-          logInfo(s"${TaskContext.get.taskAttemptId()}: $current is NOT MemoryAwareIter, " +
-            s"it is $current, ${current.getClass}, target: ${getTargetSize}")
-          isMemAware = false
-      }
-    }
-    logInfo(s"my required size $this is ${targetSize}")
-    current = getWrapped
-    logInfo(s"${TaskContext.get.taskAttemptId()}: starting AGAIN at ${name}. ${this.getClass}. " +
-      s"target: ${getTargetSize}")
-    isMemAware = true
-    while (isMemAware) {
-      current match {
-        case mai: MemoryAwareLike =>
-          mai.setTargetSize(theTarget)
-          current = mai.getWrapped
+          stack.append(mai)
+        case null => isMemAware = false// at end
         case _ =>
           isMemAware = false
       }
     }
-    targetSize.map(_.targetSizeBytes).getOrElse(-1L)
+    (0 until stack.length - 1).foreach { ix =>
+      stack(ix + 1).child = stack(ix)
+    }
+  }
+
+  def getMemoryRequired: Long = {
+    var targetSize: Option[TargetSize] = getTargetSize
+    val ctx = TaskContext.get()
+    var currentChild = child
+    while (currentChild != null) {
+      logInfo(s"Finding requirement =>  " +
+        s"starting node: ${getName} " +
+        s"task: ${ctx.taskAttemptId()} " +
+        s"at child: ${currentChild.getName} " +
+        s"child target: ${currentChild.getTargetSize}")
+      if (currentChild.getTargetSize.isDefined) {
+        if (targetSize.isEmpty) {
+          targetSize = currentChild.getTargetSize
+        } else {
+          if (currentChild.getTargetSize.get.targetSizeBytes >
+                targetSize.get.targetSizeBytes){
+            targetSize = currentChild.getTargetSize
+          }
+        }
+      }
+      currentChild = currentChild.child
+    }
+    val memReq = targetSize.map(_.targetSizeBytes).getOrElse(-1L)
+
+    logInfo(s"Memory requirement =>  " +
+      s"node: ${getName} " +
+      s"task: ${ctx.taskAttemptId()} " +
+      s"is: ${memReq}")
+    memReq
   }
 }
 

@@ -16,8 +16,7 @@
 
 package com.nvidia.spark.rapids.shims
 
-import com.nvidia.spark.rapids.{MetricsBatchIterator, PartitionIterator}
-
+import com.nvidia.spark.rapids.{AbstractMemoryAwareIterator, MemoryAwareLike, MetricsBatchIterator, PartitionIterator}
 import org.apache.spark.{InterruptibleIterator, Partition, SparkContext, SparkException, TaskContext}
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.connector.read.{InputPartition, PartitionReaderFactory}

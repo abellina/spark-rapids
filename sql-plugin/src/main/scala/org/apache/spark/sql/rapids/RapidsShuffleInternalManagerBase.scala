@@ -265,9 +265,10 @@ abstract class RapidsShuffleThreadedWriterBase[K, V](
 
   override def write(it: Iterator[Product2[K, V]]): Unit = {
     val records = new MemoryAwareIterator("writer", it)
-    val requirement = records.getMemoryRequired
+
     withResource(new NvtxRange("ThreadedWriter.write", NvtxColor.RED)) { _ =>
       withResource(new NvtxRange("compute", NvtxColor.GREEN)) { _ =>
+        val requirement = records.getMemoryRequired
         val mapOutputWriter = shuffleExecutorComponents.createMapOutputWriter(
           shuffleId,
           mapId,
@@ -302,6 +303,7 @@ abstract class RapidsShuffleThreadedWriterBase[K, V](
             while (records.hasNext) {
               // get the record
               val computeStartTime = System.nanoTime()
+
               val record = records.next()
               computeTime += System.nanoTime() - computeStartTime
               val key = record._1

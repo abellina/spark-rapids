@@ -78,7 +78,9 @@ trait HostMemoryBuffersWithMetaDataBase {
 }
 
 // This is a common trait for all kind of file formats
-trait MultiFileReaderFunctions extends Arm {
+trait MultiFileReaderFunctions extends Arm with MemoryAwareLike {
+  override def getName: String = "MultiFileReader"
+  override def getWrapped: MemoryAwareLike = null
 
   // Add partitioned columns into the batch
   protected def addPartitionValues(
@@ -895,6 +897,7 @@ abstract class MultiFileCoalescingPartitionReaderBase(
     val (dataBuffer, dataSize) = readPartFiles(currentChunkedBlocks, clippedSchema)
     withResource(dataBuffer) { _ =>
       if (dataSize == 0) {
+        setTargetSize(None)
         None
       } else {
         val table = readBufferToTable(dataBuffer, dataSize, clippedSchema, readDataSchema,

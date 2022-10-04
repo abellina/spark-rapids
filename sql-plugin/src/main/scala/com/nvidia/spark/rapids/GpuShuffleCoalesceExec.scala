@@ -64,10 +64,9 @@ case class GpuShuffleCoalesceExec(child: SparkPlan, targetBatchByteSize: Long)
     val dataTypes = GpuColumnVector.extractTypes(schema)
 
     child.executeColumnar().mapPartitions { iter =>
-      new MemoryAwareIterator("shuffleCoalesce",
-        new GpuShuffleCoalesceIterator(
-          new HostShuffleCoalesceIterator(iter, targetSize, dataTypes, metricsMap),
-        dataTypes, metricsMap))
+      new GpuShuffleCoalesceIterator(
+        new HostShuffleCoalesceIterator(iter, targetSize, dataTypes, metricsMap),
+        dataTypes, metricsMap)
     }
   }
 }
@@ -83,7 +82,8 @@ class HostShuffleCoalesceIterator(
     targetBatchByteSize: Long,
     dataTypes: Array[DataType],
     metricsMap: Map[String, GpuMetric])
-      extends Iterator[HostConcatResult] with Arm with AutoCloseable {
+  extends AbstractMemoryAwareIterator[HostConcatResult]("hostShuffleCoalesce", iter)
+    with Arm with AutoCloseable {
   private[this] val concatTimeMetric = metricsMap(GpuMetric.CONCAT_TIME)
   private[this] val inputBatchesMetric = metricsMap(GpuMetric.NUM_INPUT_BATCHES)
   private[this] val inputRowsMetric = metricsMap(GpuMetric.NUM_INPUT_ROWS)
@@ -151,6 +151,7 @@ class HostShuffleCoalesceIterator(
               numTablesInBatch += 1
               numRowsInBatch += tableColumn.header.getNumRows
               batchByteSize += tableColumn.header.getDataLen
+              setTargetSize(Some(TargetSize(batchByteSize)))
             }
           } else {
             batch.close()
@@ -169,7 +170,10 @@ class HostShuffleCoalesceIterator(
     if (!hasNext()) {
       throw new NoSuchElementException("No more host batches to concatenate")
     }
-    concatenateTablesInHost()
+    val x = concatenateTablesInHost()
+    logInfo(s"At source HostShuffleCoalesceIter. Task ${TaskContext.get().taskAttemptId()} " +
+      s"needs: ${getMemoryRequired}")
+    x
   }
 
   private def canAddToBatch(nextTable: SerializedTableHeader): Boolean = {
@@ -192,7 +196,8 @@ class HostShuffleCoalesceIterator(
 class GpuShuffleCoalesceIterator(iter: Iterator[HostConcatResult],
                                  dataTypes: Array[DataType],
                                  metricsMap: Map[String, GpuMetric])
-      extends Iterator[ColumnarBatch] with Arm {
+  extends AbstractMemoryAwareIterator[ColumnarBatch]("shuffleCoalesce", iter)
+    with Arm {
   private[this] val semWaitTime = metricsMap(GpuMetric.SEMAPHORE_WAIT_TIME)
   private[this] val opTimeMetric = metricsMap(GpuMetric.OP_TIME)
   private[this] val outputBatchesMetric = metricsMap(GpuMetric.NUM_OUTPUT_BATCHES)

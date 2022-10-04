@@ -21,7 +21,8 @@ import org.apache.spark.sql.connector.read.PartitionReader
 import org.apache.spark.sql.rapids.execution.TrampolineUtil
 import org.apache.spark.sql.vectorized.ColumnarBatch
 
-class PartitionIterator[T](reader: PartitionReader[T]) extends Iterator[T] {
+class PartitionIterator[T](reader: PartitionReader[T])
+  extends AbstractMemoryAwareIterator[T]("partIter", reader) {
   private[this] var valuePrepared = false
 
   override def hasNext: Boolean = {
@@ -40,7 +41,8 @@ class PartitionIterator[T](reader: PartitionReader[T]) extends Iterator[T] {
   }
 }
 
-class MetricsBatchIterator(iter: Iterator[ColumnarBatch]) extends Iterator[ColumnarBatch] {
+class MetricsBatchIterator(iter: Iterator[ColumnarBatch])
+  extends AbstractMemoryAwareIterator[ColumnarBatch]("metricsBatchIter", iter) {
   private[this] val inputMetrics = TaskContext.get().taskMetrics().inputMetrics
 
   override def hasNext: Boolean = iter.hasNext
