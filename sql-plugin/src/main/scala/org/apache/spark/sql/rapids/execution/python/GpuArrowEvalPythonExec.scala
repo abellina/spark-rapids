@@ -528,7 +528,7 @@ case class GpuArrowEvalPythonExec(
     NUM_INPUT_BATCHES -> createMetric(DEBUG_LEVEL, DESCRIPTION_NUM_INPUT_BATCHES)
   ) ++ spillMetrics
 
-  override protected def doExecuteColumnar(): RDD[ColumnarBatch] = {
+  override protected def gpuDoExecuteColumnar(): RDD[ColumnarBatch] = {
     val numOutputRows = gpuLongMetric(NUM_OUTPUT_ROWS)
     val numOutputBatches = gpuLongMetric(NUM_OUTPUT_BATCHES)
     val numInputRows = gpuLongMetric(NUM_INPUT_ROWS)

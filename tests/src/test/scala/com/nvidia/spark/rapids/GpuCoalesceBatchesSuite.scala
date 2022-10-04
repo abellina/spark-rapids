@@ -45,7 +45,7 @@ class GpuCoalesceBatchesSuite extends SparkQueryCompareTestSuite {
       val gpuRowToColumnarExec = GpuRowToColumnarExec(testData.queryExecution.sparkPlan,
         TargetSize(1))
       val gpuCoalesceBatches = GpuCoalesceBatches(gpuRowToColumnarExec, TargetSize(100000))
-      val rdd = gpuCoalesceBatches.doExecuteColumnar()
+      val rdd = gpuCoalesceBatches.gpuDoExecuteColumnar()
       val part = rdd.partitions.head
       val context = new MockTaskContext(taskAttemptId = 1, partitionId = 0)
       val batches = rdd.compute(part, context)
@@ -71,7 +71,7 @@ class GpuCoalesceBatchesSuite extends SparkQueryCompareTestSuite {
       val gpuRowToColumnarExec = GpuRowToColumnarExec(testData.queryExecution.sparkPlan,
         TargetSize(1))
       val gpuCoalesceBatches = GpuCoalesceBatches(gpuRowToColumnarExec, TargetSize(50))
-      val rdd = gpuCoalesceBatches.doExecuteColumnar()
+      val rdd = gpuCoalesceBatches.gpuDoExecuteColumnar()
       val part = rdd.partitions.head
       val context = new MockTaskContext(taskAttemptId = 1, partitionId = 0)
       val batches = rdd.compute(part, context)

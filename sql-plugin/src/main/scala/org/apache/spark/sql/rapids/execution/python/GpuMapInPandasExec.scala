@@ -81,7 +81,7 @@ case class GpuMapInPandasExec(
 
   override def outputPartitioning: Partitioning = child.outputPartitioning
 
-  override def doExecuteColumnar(): RDD[ColumnarBatch] = {
+  override def gpuDoExecuteColumnar(): RDD[ColumnarBatch] = {
     val (mNumInputRows, mNumInputBatches, mNumOutputRows, mNumOutputBatches,
          spillCallback) = commonGpuMetrics()
 

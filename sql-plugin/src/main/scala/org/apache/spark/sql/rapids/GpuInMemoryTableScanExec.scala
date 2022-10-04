@@ -152,7 +152,7 @@ case class GpuInMemoryTableScanExec(
     throw new UnsupportedOperationException("This Exec only deals with Columnar Data")
   }
 
-  protected override def doExecuteColumnar(): RDD[ColumnarBatch] = {
+  protected override def gpuDoExecuteColumnar(): RDD[ColumnarBatch] = {
     columnarInputRDD
   }
 }

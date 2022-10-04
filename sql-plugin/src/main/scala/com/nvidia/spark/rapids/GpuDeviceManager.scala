@@ -173,6 +173,8 @@ object GpuDeviceManager extends Logging {
 
   private def toMB(x: Long): Double = x / 1024 / 1024.0
 
+  var poolAllocation: Long = 0L
+
   private def computeRmmPoolSize(conf: RapidsConf, info: CudaMemInfo): Long = {
     def truncateToAlignment(x: Long): Long = x & ~511L
 
@@ -191,7 +193,7 @@ object GpuDeviceManager extends Logging {
         } else {
           conf.rmmAllocReserve
         }
-      var poolAllocation = truncateToAlignment(
+      poolAllocation = truncateToAlignment(
         (conf.rmmAllocFraction * (info.free - reserveAmount)).toLong)
       if (poolAllocation < minAllocation) {
         throw new IllegalArgumentException(s"The pool allocation of " +

@@ -405,7 +405,7 @@ trait GpuWindowInPandasExecBase extends ShimUnaryExecNode with GpuExec {
   override protected def doExecute(): RDD[InternalRow] =
     throw new IllegalStateException(s"Row-based execution should not occur for $this")
 
-  override protected def doExecuteColumnar(): RDD[ColumnarBatch] = {
+  override protected def gpuDoExecuteColumnar(): RDD[ColumnarBatch] = {
     val numInputRows = gpuLongMetric(NUM_INPUT_ROWS)
     val numInputBatches = gpuLongMetric(NUM_INPUT_BATCHES)
     val numOutputRows = gpuLongMetric(NUM_OUTPUT_ROWS)

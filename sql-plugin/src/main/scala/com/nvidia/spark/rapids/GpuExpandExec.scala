@@ -87,7 +87,7 @@ case class GpuExpandExec(
   override lazy val references: AttributeSet =
     AttributeSet(projections.flatten.flatMap(_.references))
 
-  override protected def doExecuteColumnar(): RDD[ColumnarBatch] = {
+  override protected def gpuDoExecuteColumnar(): RDD[ColumnarBatch] = {
     val boundProjections: Seq[Seq[GpuExpression]] =
       projections.map(GpuBindReferences.bindGpuReferences(_, child.output))
 

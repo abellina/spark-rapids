@@ -78,7 +78,7 @@ case class GpuFlatMapCoGroupsInPandasExec(
   extends SparkPlan with ShimBinaryExecNode with GpuExec {
 
   override def supportsColumnar = false
-  override def doExecuteColumnar(): RDD[ColumnarBatch] = {
+  override def gpuDoExecuteColumnar(): RDD[ColumnarBatch] = {
     throw new IllegalStateException(s"Columnar execution is not supported by $this yet")
   }
 

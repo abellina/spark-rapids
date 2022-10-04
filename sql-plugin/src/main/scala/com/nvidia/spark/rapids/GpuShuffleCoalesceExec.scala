@@ -58,7 +58,7 @@ case class GpuShuffleCoalesceExec(child: SparkPlan, targetBatchByteSize: Long)
     throw new IllegalStateException("ROW BASED PROCESSING IS NOT SUPPORTED")
   }
 
-  override def doExecuteColumnar(): RDD[ColumnarBatch] = {
+  override def gpuDoExecuteColumnar(): RDD[ColumnarBatch] = {
     val metricsMap = allMetrics
     val targetSize = targetBatchByteSize
     val dataTypes = GpuColumnVector.extractTypes(schema)

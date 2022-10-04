@@ -57,7 +57,7 @@ trait GpuBaseLimitExec extends LimitExec with GpuExec with ShimUnaryExecNode {
   protected override def doExecute(): RDD[InternalRow] =
     throw new IllegalStateException(s"Row-based execution should not occur for $this")
 
-  override def doExecuteColumnar(): RDD[ColumnarBatch] = {
+  override def gpuDoExecuteColumnar(): RDD[ColumnarBatch] = {
     sliceRDD(child.executeColumnar(), limit, 0)
   }
 
@@ -158,7 +158,7 @@ case class GpuGlobalLimitExec(limit: Int = -1, child: SparkPlan,
 
   override def requiredChildDistribution: List[Distribution] = AllTuples :: Nil
 
-  override def doExecuteColumnar(): RDD[ColumnarBatch]  = {
+  override def gpuDoExecuteColumnar(): RDD[ColumnarBatch]  = {
     super.sliceRDD(child.executeColumnar(), limit, offset)
   }
 }
@@ -316,7 +316,7 @@ case class GpuTopN(
     CONCAT_TIME -> createNanoTimingMetric(DEBUG_LEVEL, DESCRIPTION_CONCAT_TIME)
   ) ++ spillMetrics
 
-  override def doExecuteColumnar(): RDD[ColumnarBatch] = {
+  override def gpuDoExecuteColumnar(): RDD[ColumnarBatch] = {
     val sorter = new GpuSorter(gpuSortOrder, child.output)
     val boundProjectExprs = GpuBindReferences.bindGpuReferences(projectList, child.output)
     val opTime = gpuLongMetric(OP_TIME)

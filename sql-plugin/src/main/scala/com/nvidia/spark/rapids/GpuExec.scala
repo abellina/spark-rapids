@@ -20,10 +20,11 @@ import ai.rapids.cudf.NvtxColor
 import com.nvidia.spark.RebaseHelper.withResource
 import com.nvidia.spark.rapids.StorageTier.{DEVICE, DISK, GDS, HOST, StorageTier}
 import com.nvidia.spark.rapids.shims.SparkShimImpl
-
+import org.apache.spark.TaskContext
 import org.apache.spark.internal.Logging
+import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.SparkSession
-import org.apache.spark.sql.catalyst.expressions.{Alias, AttributeReference, Expression, ExprId}
+import org.apache.spark.sql.catalyst.expressions.{Alias, AttributeReference, ExprId, Expression}
 import org.apache.spark.sql.catalyst.plans.QueryPlan
 import org.apache.spark.sql.execution.SparkPlan
 import org.apache.spark.sql.execution.metric.{SQLMetric, SQLMetrics}
@@ -332,5 +333,24 @@ trait GpuExec extends SparkPlan with Arm {
         ar.withExprId(ExprId(id)).canonicalized
       case other => QueryPlan.normalizeExpressions(other, allAttributes)
     }.withNewChildren(canonicalizedChildren)
+  }
+
+  protected def gpuDoExecuteColumnar(): RDD[ColumnarBatch] = {
+    throw new IllegalStateException(s"Internal Error ${this.getClass} has column support" +
+      s" mismatch:\n${this}")
+  }
+
+  override def doExecuteColumnar(): RDD[ColumnarBatch] = {
+    gpuDoExecuteColumnar.mapPartitions { iter =>
+      new Iterator[ColumnarBatch]() {
+        override def hasNext: Boolean = iter.hasNext
+        override def next(): ColumnarBatch = {
+          GpuSemaphore.acquireIfNecessary(TaskContext.get(), NoopMetric)
+          val cb = iter.next()
+          GpuSemaphore.updateUsage(TaskContext.get(), cb, NoopMetric)
+          cb
+        }
+      }
+    }
   }
 }

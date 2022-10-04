@@ -690,7 +690,7 @@ case class GpuCoalesceBatches(child: SparkPlan, goal: CoalesceGoal)
       child.outputOrdering
   }
 
-  override def doExecuteColumnar(): RDD[ColumnarBatch] = {
+  override def gpuDoExecuteColumnar(): RDD[ColumnarBatch] = {
     val numInputRows = gpuLongMetric(NUM_INPUT_ROWS)
     val numInputBatches = gpuLongMetric(NUM_INPUT_BATCHES)
     val numOutputRows = gpuLongMetric(NUM_OUTPUT_ROWS)

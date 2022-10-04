@@ -462,7 +462,7 @@ case class GpuBroadcastNestedLoopJoinExec(
     }
   }
 
-  override def doExecuteColumnar(): RDD[ColumnarBatch] = {
+  override def gpuDoExecuteColumnar(): RDD[ColumnarBatch] = {
     // Determine which table will be first in the join and bind the references accordingly
     // so the AST column references match the appropriate table.
     val (firstTable, secondTable) = joinType match {

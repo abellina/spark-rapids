@@ -131,7 +131,7 @@ case class GpuAggregateInPandasExec(
   // so better to coalesce the output batches.
   override def coalesceAfter: Boolean = gpuGroupingExpressions.nonEmpty
 
-  override def doExecuteColumnar(): RDD[ColumnarBatch] = {
+  override def gpuDoExecuteColumnar(): RDD[ColumnarBatch] = {
     val (mNumInputRows, mNumInputBatches, mNumOutputRows, mNumOutputBatches,
       spillCallback) = commonGpuMetrics()
 

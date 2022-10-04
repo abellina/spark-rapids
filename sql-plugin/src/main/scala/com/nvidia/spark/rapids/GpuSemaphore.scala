@@ -17,14 +17,14 @@
 package com.nvidia.spark.rapids
 
 import java.util.concurrent.{ConcurrentHashMap, Semaphore}
-
 import ai.rapids.cudf.{NvtxColor, NvtxRange}
 import org.apache.commons.lang3.mutable.MutableInt
-
 import org.apache.spark.TaskContext
 import org.apache.spark.internal.Logging
+import org.apache.spark.sql.vectorized.ColumnarBatch
 
-object GpuSemaphore {
+object GpuSemaphore extends Arm with Logging {
+
   private val enabled = {
     val propstr = System.getProperty("com.nvidia.spark.rapids.semaphore.enabled")
     if (propstr != null) {
@@ -77,6 +77,18 @@ object GpuSemaphore {
     }
   }
 
+  def updateUsage(context: TaskContext, cb: ColumnarBatch, metric: GpuMetric) = {
+    try {
+      withResource(GpuColumnVector.from(cb)) { tbl =>
+        val used = tbl.getDeviceMemorySize.toInt
+        println(s"${context.taskAttemptId()} updating usage to $used")
+        getInstance.updateUsage(context, used)
+      }
+    }catch {
+      case e: Throwable => logWarning("Error updating usage. Ignore", e)
+    }
+  }
+
   /**
    * Tasks must call this when they are finished using the GPU.
    */
@@ -99,22 +111,46 @@ object GpuSemaphore {
 }
 
 private final class GpuSemaphore(tasksPerGpu: Int) extends Logging with Arm {
-  private val semaphore = new Semaphore(tasksPerGpu)
+
+  val memPerTaskMB =
+    math.floor((GpuDeviceManager.poolAllocation.toDouble /tasksPerGpu)/1024/1024).toInt
+  logInfo(s"Initilized with MB per task ${memPerTaskMB}")
+  private val semaphore = new Semaphore(memPerTaskMB)
   // Map to track which tasks have acquired the semaphore.
-  private val activeTasks = new ConcurrentHashMap[Long, MutableInt]
+  case class TaskInfo(var memNeededMB: Int, var refCount: MutableInt)
+  private val activeTasks = new ConcurrentHashMap[Long, TaskInfo]
+
+  def updateUsage(context: TaskContext, used: Int): Unit = {
+    withResource(new NvtxWithMetrics("Acquire GPU", NvtxColor.ORANGE, NoopMetric)) { _ =>
+      val taskAttemptId = context.taskAttemptId()
+      val refs = activeTasks.get(taskAttemptId)
+      logInfo(s"Task $taskAttemptId updating usage to $used")
+      if (refs == null) {
+        activeTasks.put(taskAttemptId, TaskInfo(used, new MutableInt(1)))
+        semaphore.acquire(used)
+      } else {
+        if (refs.memNeededMB > used) {
+          semaphore.release(refs.memNeededMB - used)
+          refs.memNeededMB = used
+        } else {
+          semaphore.acquire(used - refs.memNeededMB)
+        }
+      }
+    }
+  }
 
   def acquireIfNecessary(context: TaskContext, waitMetric: GpuMetric): Unit = {
     withResource(new NvtxWithMetrics("Acquire GPU", NvtxColor.RED, waitMetric)) { _ =>
       val taskAttemptId = context.taskAttemptId()
       val refs = activeTasks.get(taskAttemptId)
-      if (refs == null || refs.getValue == 0) {
+      if (refs == null || refs.refCount == 0) {
         logDebug(s"Task $taskAttemptId acquiring GPU")
-        semaphore.acquire()
+        semaphore.acquire(memPerTaskMB)
         if (refs != null) {
-          refs.increment()
+          refs.refCount.increment()
         } else {
           // first time this task has been seen
-          activeTasks.put(taskAttemptId, new MutableInt(1))
+          activeTasks.put(taskAttemptId, TaskInfo(memPerTaskMB, new MutableInt(1)))
           context.addTaskCompletionListener[Unit](completeTask)
         }
         GpuDeviceManager.initializeFromTask()
@@ -127,10 +163,10 @@ private final class GpuSemaphore(tasksPerGpu: Int) extends Logging with Arm {
     try {
       val taskAttemptId = context.taskAttemptId()
       val refs = activeTasks.get(taskAttemptId)
-      if (refs != null && refs.getValue > 0) {
-        if (refs.decrementAndGet() == 0) {
+      if (refs != null && refs.refCount.getValue > 0) {
+        if (refs.refCount.decrementAndGet() == 0) {
           logDebug(s"Task $taskAttemptId releasing GPU")
-          semaphore.release()
+          semaphore.release(refs.memNeededMB)
         }
       }
     } finally {
@@ -144,9 +180,9 @@ private final class GpuSemaphore(tasksPerGpu: Int) extends Logging with Arm {
     if (refs == null) {
       throw new IllegalStateException(s"Completion of unknown task $taskAttemptId")
     }
-    if (refs.getValue > 0) {
+    if (refs.refCount.getValue > 0) {
       logDebug(s"Task $taskAttemptId releasing GPU")
-      semaphore.release()
+      semaphore.release(refs.memNeededMB)
     }
   }
 

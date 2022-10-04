@@ -895,7 +895,7 @@ case class GpuRowToColumnarExec(child: SparkPlan,
     NUM_INPUT_ROWS -> createMetric(DEBUG_LEVEL, DESCRIPTION_NUM_INPUT_ROWS)
   )
 
-  override def doExecuteColumnar(): RDD[ColumnarBatch] = {
+  override def gpuDoExecuteColumnar(): RDD[ColumnarBatch] = {
     // use local variables instead of class global variables to prevent the entire
     // object from having to be serialized
     val numInputRows = gpuLongMetric(NUM_INPUT_ROWS)

@@ -149,7 +149,7 @@ case class GpuBroadcastHashJoinExec(
     throw new IllegalStateException(
       "GpuBroadcastHashJoin does not support row-based processing")
 
-  override def doExecuteColumnar(): RDD[ColumnarBatch] = {
+  override def gpuDoExecuteColumnar(): RDD[ColumnarBatch] = {
     val numOutputRows = gpuLongMetric(NUM_OUTPUT_ROWS)
     val numOutputBatches = gpuLongMetric(NUM_OUTPUT_BATCHES)
     val opTime = gpuLongMetric(OP_TIME)
