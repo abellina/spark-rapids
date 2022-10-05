@@ -16,10 +16,9 @@
 
 package com.nvidia.spark.rapids.cudf_utils
 
-import ai.rapids.cudf.{HostMemoryBuffer, JCudfSerialization, NvtxColor, NvtxRange}
+import ai.rapids.cudf.{HostMemoryBuffer, JCudfSerialization}
 import ai.rapids.cudf.JCudfSerialization.HostConcatResult
-import com.nvidia.spark.rapids.{Arm, GpuColumnVectorFromBuffer, GpuSemaphore, NoopMetric}
-import org.apache.spark.TaskContext
+import com.nvidia.spark.rapids.{Arm, GpuColumnVectorFromBuffer}
 import org.apache.spark.sql.types.DataType
 import org.apache.spark.sql.vectorized.ColumnarBatch
 
@@ -50,12 +49,6 @@ object HostConcatResultUtil extends Arm {
       new ColumnarBatch(Array.empty, hostConcatResult.getTableHeader.getNumRows)
     } else {
       withResource(hostConcatResult.toContiguousTable) { ct =>
-        withResource(new NvtxRange("updating mem", NvtxColor.GREEN)) { _ =>
-          GpuSemaphore.updateMemory(
-            TaskContext.get(),
-            math.ceil(ct.getBuffer.getLength.toDouble / 1024 / 1024).toInt,
-            NoopMetric)
-        }
         GpuColumnVectorFromBuffer.from(ct, sparkSchema)
       }
     }

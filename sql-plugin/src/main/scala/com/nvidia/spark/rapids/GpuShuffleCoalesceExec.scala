@@ -171,8 +171,7 @@ class HostShuffleCoalesceIterator(
       throw new NoSuchElementException("No more host batches to concatenate")
     }
     val x = concatenateTablesInHost()
-    logInfo(s"At source HostShuffleCoalesceIter. Task ${TaskContext.get().taskAttemptId()} " +
-      s"needs: ${getMemoryRequired}")
+
     x
   }
 
@@ -223,6 +222,9 @@ class GpuShuffleCoalesceIterator(iter: Iterator[HostConcatResult],
         // the `GpuShuffleCoalesceIterator` to acquire the semaphore and may
         // generate GPU data from batches that are empty.
         GpuSemaphore.acquireIfNecessary(TaskContext.get(), semWaitTime)
+        GpuSemaphore.updateMemory(TaskContext.get(), 
+          math.floor(getMemoryRequired.toDouble/1024/1024).toInt,
+          NoopMetric)
 
         withResource(new MetricRange(opTimeMetric)) { _ =>
           val batch = cudf_utils.HostConcatResultUtil.getColumnarBatch(hostConcatResult, dataTypes)

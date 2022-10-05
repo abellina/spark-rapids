@@ -164,7 +164,7 @@ private final class GpuSemaphore(tasksPerGpu: Int) extends Logging with Arm {
 
   def acquireIfNecessaryMemory(
       context: TaskContext, reqMemoryMB: Int, waitMetric: GpuMetric): Unit = {
-    val memoryMB = math.min(reqMemoryMB, mbPerTask)
+    val memoryMB = math.max(math.min(reqMemoryMB, mbPerTask), 0)
     if (memoryMB < reqMemoryMB) {
       logWarning(s"Acquiring less memory ($memoryMB instead of ${reqMemoryMB} MB)" +
         s" due to to small a pool")
@@ -174,16 +174,15 @@ private final class GpuSemaphore(tasksPerGpu: Int) extends Logging with Arm {
       val taskInfo = activeTasks.get(taskAttemptId)
       if (taskInfo.acquiredMB.getValue > memoryMB) {
         // ok, we are going to release some
-        logInfo(s"Task $taskAttemptId releasing from ${taskInfo.acquiredMB.getValue} to $memoryMB")
+        logInfo(s"Task $taskAttemptId RELEASING from ${taskInfo.acquiredMB.getValue} to $memoryMB")
         semaphore.release(taskInfo.acquiredMB.getValue - memoryMB)
-        taskInfo.acquiredMB.setValue(memoryMB)
       } else {
         // now we need to acquire, we could lock
         logInfo(s"Task $taskAttemptId ACQUIRING from ${taskInfo.acquiredMB.getValue} to $memoryMB")
         semaphore.acquire(memoryMB - taskInfo.acquiredMB.getValue)
         logInfo(s"Task $taskAttemptId ACQUIRED! $memoryMB")
-        taskInfo.acquiredMB.setValue(memoryMB)
       }
+      taskInfo.acquiredMB.setValue(memoryMB)
       GpuDeviceManager.initializeFromTask()
     }
   }

@@ -1684,9 +1684,7 @@ class MultiFileParquetPartitionReader(
     closeOnExcept(table) { _ =>
       setTargetSize(Some(TargetSize(table.getDeviceMemorySize)))
       GpuSemaphore.updateMemory(TaskContext.get(),
-        math.floor(
-          math.max(getMemoryRequired, maxReadBatchSizeBytes)
-            .toDouble/1024/1024).toInt,
+        math.floor(getMemoryRequired.toDouble/1024/1024).toInt,
         metrics(SEMAPHORE_WAIT_TIME))
       GpuParquetScan.throwIfNeeded(
         table,

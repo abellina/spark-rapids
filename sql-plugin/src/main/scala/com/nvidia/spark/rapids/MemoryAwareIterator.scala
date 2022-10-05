@@ -25,8 +25,7 @@ trait MemoryAwareLike extends Logging {
     var current: Any = getWrapped
     val name = getName
     val targetSize = getTargetSize
-    logInfo(s"${TaskContext.get.taskAttemptId()}: starting at ${name}. ${this.getClass}. " +
-      s"target: ${getTargetSize}")
+    logInfo(s"${TaskContext.get.taskAttemptId()}: installing. Starting at ${name}. ${this.getClass}. ")
     var theTarget: Option[TargetSize] = None
     val stack = new ArrayBuffer[MemoryAwareLike]()
     stack.append(this)
@@ -45,6 +44,7 @@ trait MemoryAwareLike extends Logging {
           stack.append(mai)
         case null => isMemAware = false// at end
         case _ =>
+          logInfo(s"NOT MemAware => ${current.getClass}")
           isMemAware = false
       }
     }
@@ -57,9 +57,9 @@ trait MemoryAwareLike extends Logging {
     var targetSize: Option[TargetSize] = getTargetSize
     val ctx = TaskContext.get()
     var currentChild = child
+    logInfo(s"Starting target at ${getName} is $targetSize")
     while (currentChild != null) {
-      logInfo(s"Finding requirement =>  " +
-        s"starting node: ${getName} " +
+      logInfo(s"Finding requirement => " +
         s"task: ${ctx.taskAttemptId()} " +
         s"at child: ${currentChild.getName} " +
         s"child target: ${currentChild.getTargetSize}")
@@ -78,8 +78,8 @@ trait MemoryAwareLike extends Logging {
     val memReq = targetSize.map(_.targetSizeBytes).getOrElse(-1L)
 
     logInfo(s"Memory requirement =>  " +
-      s"node: ${getName} " +
       s"task: ${ctx.taskAttemptId()} " +
+      s"node: ${getName} " +
       s"is: ${memReq}")
     memReq
   }

@@ -724,10 +724,14 @@ trait GpuHashJoin extends GpuExec {
       LazySpillableColumnarBatch(_, spillCallback, "built")
     }
 
-    val lazyStream = stream.map { cb =>
-      withResource(cb) { cb =>
-        LazySpillableColumnarBatch(cb, spillCallback, "stream_batch")
+    val lazyStream = new AbstractMemoryAwareIterator[LazySpillableColumnarBatch]("lazySpillable", stream) {
+      override def hasNext: Boolean = stream.hasNext
+      override def next() = {
+        withResource(stream.next()) { cb =>
+          LazySpillableColumnarBatch(cb, spillCallback, "stream_batch")
+        }
       }
+      override def getTargetSize: Option[TargetSize] = None
     }
 
     // The HashJoinIterator takes ownership of the built keys and built data. It will close
@@ -768,7 +772,7 @@ trait GpuHashJoin extends GpuExec {
         cb
 
       }
-      override def getTargetSize: Option[TargetSize] = None
+      override def getTargetSize: Option[TargetSize] = Some(TargetSize(targetSizeBytes))
     }
   }
 }
