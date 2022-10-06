@@ -17,7 +17,7 @@
 package com.nvidia.spark.rapids
 
 import java.util.concurrent.{ConcurrentHashMap, Semaphore}
-import ai.rapids.cudf.{NvtxColor, NvtxRange, Table}
+import ai.rapids.cudf.{NvtxColor, NvtxUniqueRange, NvtxRange, Table}
 import org.apache.commons.lang3.mutable.MutableInt
 import org.apache.spark.TaskContext
 import org.apache.spark.internal.Logging
@@ -90,14 +90,14 @@ object GpuSemaphore extends Logging {
    */
   def updateMemory(context: TaskContext, memoryMB: Int, waitMetric: GpuMetric): Unit = {
     if (enabled && context != null) {
-      getInstance.acquireIfNecessaryMemory(context, memoryMB, waitMetric)
+      getInstance.acquireIfNecessaryMemory(context, 4*memoryMB, waitMetric)
     }
   }
 
   def updateMemory(context: TaskContext, table: Table, waitMetric: GpuMetric): Unit = {
     if (enabled && context != null) {
       val memoryMB = math.ceil(table.getDeviceMemorySize.toDouble/1024/1024).toInt
-      getInstance.acquireIfNecessaryMemory(context, memoryMB, waitMetric)
+      getInstance.acquireIfNecessaryMemory(context, 4*memoryMB, waitMetric)
       // if we couldn't acquire (say if we need more memory than what we had before)...
       // we have the table... make it spillable, release the semaphore, block
     }
@@ -132,7 +132,7 @@ private final class GpuSemaphore(tasksPerGpu: Int) extends Logging with Arm {
   private val mbPerTask = (maxMemoryMB / tasksPerGpu)
   private val semaphore = new Semaphore(maxMemoryMB)
   // Map to track which tasks have acquired the semaphore.
-  case class TaskInfo(refs: MutableInt, acquiredMB: MutableInt)
+  case class TaskInfo(refs: MutableInt, acquiredMB: MutableInt, var range: NvtxUniqueRange)
   private val activeTasks = new ConcurrentHashMap[Long, TaskInfo]
 
   logInfo(s"Semaphore initialized with max=${maxMemoryMB}MB, mbPerTask=${mbPerTask}MB")
@@ -149,10 +149,16 @@ private final class GpuSemaphore(tasksPerGpu: Int) extends Logging with Arm {
         if (taskInfo != null) {
           taskInfo.refs.increment()
           taskInfo.acquiredMB.add(mbPerTask)
+          if (taskInfo.range == null) {
+            taskInfo.range = new NvtxUniqueRange(s"Task $taskAttemptId", NvtxColor.RED)
+          }
         } else {
           // first time this task has been seen
           activeTasks.put(taskAttemptId,
-            TaskInfo(new MutableInt(1), new MutableInt(mbPerTask)))
+            TaskInfo(
+              new MutableInt(1), 
+              new MutableInt(mbPerTask), 
+              new NvtxUniqueRange(s"Task $taskAttemptId", NvtxColor.BLUE)))
           context.addTaskCompletionListener[Unit](completeTask)
         }
         acquired = true
@@ -179,7 +185,9 @@ private final class GpuSemaphore(tasksPerGpu: Int) extends Logging with Arm {
       } else {
         // now we need to acquire, we could lock
         logInfo(s"Task $taskAttemptId ACQUIRING from ${taskInfo.acquiredMB.getValue} to $memoryMB")
+        taskInfo.range.close()
         semaphore.acquire(memoryMB - taskInfo.acquiredMB.getValue)
+        taskInfo.range = new NvtxUniqueRange(s"Task $taskAttemptId", NvtxColor.ORANGE)
         logInfo(s"Task $taskAttemptId ACQUIRED! $memoryMB")
       }
       taskInfo.acquiredMB.setValue(memoryMB)
@@ -198,6 +206,8 @@ private final class GpuSemaphore(tasksPerGpu: Int) extends Logging with Arm {
           semaphore.release(refs.acquiredMB.getValue)
           logInfo(s"Taks $taskAttemptId released ${refs.acquiredMB.getValue}. Semaphore at ${semaphore.availablePermits()} MB")
           refs.acquiredMB.setValue(0)
+          refs.range.close()
+          refs.range = null
           released = true
         }
       }
@@ -216,6 +226,8 @@ private final class GpuSemaphore(tasksPerGpu: Int) extends Logging with Arm {
     if (refs.refs.getValue > 0) {
       logDebug(s"Task $taskAttemptId releasing GPU")
       semaphore.release(refs.acquiredMB.getValue)
+      refs.range.close()
+      refs.range = null
     }
   }
 

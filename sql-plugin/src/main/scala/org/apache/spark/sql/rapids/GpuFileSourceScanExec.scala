@@ -443,10 +443,12 @@ case class GpuFileSourceScanExec(
 
         override def next(): ColumnarBatch = {
           val batch = batches.next()
-          withResource(GpuColumnVector.from(batch)) { tbl =>
-            updateMemory(TaskContext.get(),
-              tbl,
-              NoopMetric)
+          if (batch.numCols() > 0) {
+            withResource(GpuColumnVector.from(batch)) { tbl =>
+              updateMemory(TaskContext.get(),
+                tbl,
+                NoopMetric)
+            }
           }
           numOutputRows += batch.numRows()
           batch
