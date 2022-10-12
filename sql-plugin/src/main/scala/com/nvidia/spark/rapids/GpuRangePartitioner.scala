@@ -179,23 +179,21 @@ case class GpuRangePartitioner(
   override val numPartitions: Int = rangeBounds.length + 1
 
   private[this] def computeBoundsAndClose(cb: ColumnarBatch): (Array[Int], ColumnarBatch) = {
-    withResource(cb) { cb =>
-      withResource(
-        sorter.appendProjectedAndSort(cb, NoopMetric)) { sortedTbl =>
-        val parts = withResource(
-          GpuColumnVector.from(sortedTbl, sorter.projectedBatchTypes)) { sorted =>
-          val retCv = withResource(converters.convertBatch(rangeBounds,
-            TrampolineUtil.fromAttributes(sorter.projectedBatchSchema))) { ranges =>
-            sorter.upperBound(sorted, ranges)
-          }
-          withResource(retCv) { retCv =>
-            // The first entry must always be 0, which upper bound is not doing
-            Array(0) ++ GpuColumnVector.toIntArray(retCv)
-          }
-        }
-        (parts, sorter.removeProjectedColumns(sortedTbl))
+    val sortedTbl = withResource(cb) { _ =>
+      sorter.appendProjectedAndSort(cb, NoopMetric)
+    }
+    val parts = withResource(
+      GpuColumnVector.from(sortedTbl, sorter.projectedBatchTypes)) { sorted =>
+      val retCv = withResource(converters.convertBatch(rangeBounds,
+        TrampolineUtil.fromAttributes(sorter.projectedBatchSchema))) { ranges =>
+        sorter.upperBound(sorted, ranges)
+      }
+      withResource(retCv) { retCv =>
+        // The first entry must always be 0, which upper bound is not doing
+        Array(0) ++ GpuColumnVector.toIntArray(retCv)
       }
     }
+    (parts, sorter.removeProjectedColumns(sortedTbl))
   }
 
   override def columnarEval(batch: ColumnarBatch): Any = {
