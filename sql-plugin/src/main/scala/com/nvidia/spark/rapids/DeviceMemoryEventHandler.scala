@@ -18,9 +18,10 @@ package com.nvidia.spark.rapids
 
 import java.io.File
 import java.lang.management.ManagementFactory
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
 
-import ai.rapids.cudf.{NvtxColor, NvtxRange, Rmm, RmmEventHandler}
+import ai.rapids.cudf.{Cuda, NvtxColor, NvtxRange, Rmm, RmmEventHandler}
 import com.sun.management.HotSpotDiagnosticMXBean
 
 import org.apache.spark.internal.Logging
@@ -35,6 +36,9 @@ class DeviceMemoryEventHandler(
     store: RapidsDeviceMemoryStore,
     oomDumpDir: Option[String],
     isGdsSpillEnabled: Boolean) extends RmmEventHandler with Logging {
+
+  private val threshold = TimeUnit.MILLISECONDS.toNanos(10)
+  private val lastRetried = ThreadLocal.withInitial[Long](() => 0L)
 
   // Flag that ensures we dump stack traces once and not for every allocation
   // failure. The assumption is that unhandled allocations will be fatal
@@ -51,19 +55,29 @@ class DeviceMemoryEventHandler(
       val nvtx = new NvtxRange("onAllocFailure", NvtxColor.RED)
       try {
         val storeSize = store.currentSize
+        val now = System.nanoTime()
         logInfo(s"Device allocation of $allocSize bytes failed, device store has " +
             s"$storeSize bytes. Total RMM allocated is ${Rmm.getTotalBytesAllocated} bytes.")
         if (storeSize == 0) {
-          logWarning(s"Device store exhausted, unable to allocate $allocSize bytes. " +
+          val threadLastRetried = lastRetried.get()
+          if (threadLastRetried == 0 || (now - threadLastRetried >= threshold)) {
+            Cuda.deviceSynchronize()
+            lastRetried.set(now)
+            logWarning(s"RETRYING: Device store exhausted, unable to allocate $allocSize bytes. " +
               s"Total RMM allocated is ${Rmm.getTotalBytesAllocated} bytes.")
-          synchronized {
-            if (dumpStackTracesOnFailureToHandleOOM) {
-              dumpStackTracesOnFailureToHandleOOM = false
-              GpuSemaphore.dumpActiveStackTracesToLog()
+            return true
+          } else {
+            logWarning(s"Device store exhausted, unable to allocate $allocSize bytes. " +
+              s"Total RMM allocated is ${Rmm.getTotalBytesAllocated} bytes.")
+            synchronized {
+              if (dumpStackTracesOnFailureToHandleOOM) {
+                dumpStackTracesOnFailureToHandleOOM = false
+                GpuSemaphore.dumpActiveStackTracesToLog()
+              }
             }
+            oomDumpDir.foreach(heapDump)
+            return false
           }
-          oomDumpDir.foreach(heapDump)
-          return false
         }
         val targetSize = Math.max(storeSize - allocSize, 0)
         logDebug(s"Targeting device store size of $targetSize bytes")
