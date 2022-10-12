@@ -428,7 +428,7 @@ case class GpuOutOfCoreSortIterator(
           pendingSort += buffer
           bytesLeftToFetch -= buffer.sizeInBytes
         }
-        withResource(ArrayBuffer[ColumnarBatch]()) { batches =>
+        closeOnExcept(ArrayBuffer[ColumnarBatch]()) { batches =>
           pendingSort.foreach { tmp =>
             val batch = tmp.getColumnarBatch()
             memUsed += GpuColumnVector.getTotalDeviceMemoryUsed(batch)
@@ -436,7 +436,9 @@ case class GpuOutOfCoreSortIterator(
           }
           if (batches.size == 1) {
             // Single batch no need for a merge sort
-            GpuColumnVector.incRefCounts(batches.head)
+            withResource(batches) { _ =>
+              GpuColumnVector.incRefCounts(batches.head)
+            }
           } else {
             val ret = sorter.mergeSort(batches.toArray, sortTime)
             memUsed += GpuColumnVector.getTotalDeviceMemoryUsed(ret)
@@ -492,13 +494,62 @@ case class GpuOutOfCoreSortIterator(
     // combine all the sorted data into a single batch
     withResource(ArrayBuffer[Table]()) { tables =>
       var totalBytes = 0L
-      while(!sorted.isEmpty && (tables.isEmpty ||
+      var totalToPop = 0L
+
+      var continue = !sorted.isEmpty
+      var sortedIx = 0
+      while(continue && sortedIx < sorted.size()) {
+        val nextSize = sorted.get(sortedIx).sizeInBytes
+        if (sortedIx == 0 || (totalToPop + nextSize < targetSize)) {
+          totalToPop += nextSize
+          sortedIx += 1
+        } else {
+          continue = false
+        }
+      }
+
+      // now that we know how much we will need, ask the spill framework to know if we do have that
+      // if we don't have that, back off `targetSize`, try again
+      val poolSize = GpuDeviceManager.poolSize
+      val inStore = RapidsBufferCatalog.getDeviceStorage.currentSize
+      val totalEstimate = poolSize - inStore
+      if (totalEstimate < targetSize) {
+        logInfo(s"Detected that we would spill if we go to " +
+          s"targetSize totalEstimate=${totalEstimate} vs target=${targetSize}" )
+      }
+      if (totalEstimate < totalToPop) {
+        logInfo(s"Detected that we would spill if we pop all we said we would pop " +
+          s"targetSize totalEstimate=${totalEstimate} vs totalToPop=${totalToPop}" )
+      }
+
+      logInfo(s"poolSize=$poolSize, " +
+        s"inStore=$inStore, " +
+        s"totalEstimate=${totalEstimate}, " +
+        s"totalToPop=${totalToPop}")
+
+      continue = true
+      while(continue && !sorted.isEmpty && (tables.isEmpty ||
           (totalBytes + sorted.peek().sizeInBytes) < targetSize)) {
         withResource(sorted.pop()) { tmp =>
-          sortedSize -= tmp.sizeInBytes
-          totalBytes += tmp.sizeInBytes
-          withResource(tmp.getColumnarBatch()) { batch =>
-            tables += GpuColumnVector.from(batch)
+          try {
+            withResource(tmp.getColumnarBatch()) { batch =>
+              tables += GpuColumnVector.from(batch)
+              sortedSize -= tmp.sizeInBytes
+              totalBytes += tmp.sizeInBytes
+            }
+          } catch {
+            case oom: java.lang.OutOfMemoryError =>
+              // if we OOM here, we couldn't materialize a spilled batch
+              // go on with what we have or wait
+              sorted.addFirst(tmp) // add the batch back
+              if (tables.nonEmpty) {
+                logInfo(s"Had popped ${tables.size}, with size ${totalBytes} continuing!")
+                continue = false
+              } else {
+                logInfo("Will retry!")
+                Thread.sleep(100) // wait a bit and retry
+              }
+              logInfo("Handled OOM", oom)
           }
         }
       }
