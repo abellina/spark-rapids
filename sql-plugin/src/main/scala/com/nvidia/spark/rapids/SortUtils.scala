@@ -226,20 +226,24 @@ class GpuSorter(
   }
 
   /**
-   * Merge multiple batches together. All of these batches should be the output of
+   * Merge multiple batches together, and closes them. All of these batches should be the output of
    * `appendProjectedColumns` and the output of this will also be in that same format.
    * @param batches the batches to sort
    * @param sortTime metric for the time spent doing the merge sort
    * @return the sorted data.
    */
-  final def mergeSort(batches: Array[ColumnarBatch], sortTime: GpuMetric): ColumnarBatch = {
+  final def mergeSortAndClose(batches: Array[ColumnarBatch], sortTime: GpuMetric): ColumnarBatch = {
     withResource(new NvtxWithMetrics("merge sort", NvtxColor.DARK_GREEN, sortTime)) { _ =>
       if (batches.length == 1) {
-        GpuColumnVector.incRefCounts(batches.head)
+        withResource(batches) { _ =>
+          GpuColumnVector.incRefCounts(batches.head)
+        }
       } else {
-        val merged = withResource(ArrayBuffer[Table]()) { tabs =>
-          batches.foreach { cb =>
-            tabs += GpuColumnVector.from(cb)
+        val merged = closeOnExcept(ArrayBuffer[Table]()) { tabs =>
+          withResource(batches) { _ =>
+            batches.foreach { cb =>
+              tabs += GpuColumnVector.from(cb)
+            }
           }
           // In the current version of cudf merge does not work for lists and maps.
           // This should be fixed by https://github.com/rapidsai/cudf/issues/8050
@@ -247,11 +251,16 @@ class GpuSorter(
           if (hasNestedInKeyColumns || hasUnsupportedNestedInRideColumns) {
             // so as a work around we concatenate all of the data together and then sort it.
             // It is slower, but it works
-            withResource(Table.concatenate(tabs: _*)) { concatenated =>
+            val concatenated = withResource(tabs) { _ =>
+              Table.concatenate(tabs: _*)
+            }
+            closeOnExcept(concatenated) { _ =>
               concatenated.orderBy(cudfOrdering: _*)
             }
           } else {
-            Table.merge(tabs.toArray, cudfOrdering: _*)
+            withResource(tabs) { _ =>
+              Table.merge(tabs.toArray, cudfOrdering: _*)
+            }
           }
         }
         withResource(merged) { merged =>

@@ -428,20 +428,15 @@ case class GpuOutOfCoreSortIterator(
           pendingSort += buffer
           bytesLeftToFetch -= buffer.sizeInBytes
         }
-        withResource(ArrayBuffer[ColumnarBatch]()) { batches =>
+        closeOnExcept(ArrayBuffer[ColumnarBatch]()) { batches =>
           pendingSort.foreach { tmp =>
             val batch = tmp.getColumnarBatch()
             memUsed += GpuColumnVector.getTotalDeviceMemoryUsed(batch)
             batches += batch
           }
-          if (batches.size == 1) {
-            // Single batch no need for a merge sort
-            GpuColumnVector.incRefCounts(batches.head)
-          } else {
-            val ret = sorter.mergeSort(batches.toArray, sortTime)
-            memUsed += GpuColumnVector.getTotalDeviceMemoryUsed(ret)
-            ret
-          }
+          val ret = sorter.mergeSortAndClose(batches.toArray, sortTime)
+          memUsed += GpuColumnVector.getTotalDeviceMemoryUsed(ret)
+          ret
         }
       }
       // We now have closed the input tables to merge sort so reset the memory used
