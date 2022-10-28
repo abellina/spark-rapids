@@ -20,7 +20,7 @@ import java.util.concurrent.{ConcurrentHashMap, Semaphore}
 
 import scala.collection.mutable
 
-import ai.rapids.cudf.{NvtxColor, NvtxRange}
+import ai.rapids.cudf.{NvtxColor, NvtxRange, Rmm}
 import org.apache.commons.lang3.mutable.MutableInt
 
 import org.apache.spark.TaskContext
@@ -129,6 +129,8 @@ private final class GpuSemaphore(tasksPerGpu: Int) extends Logging with Arm {
         if (refs != null) {
           refs.count.increment()
         } else {
+          Rmm.resetScopedMaximumBytesAllocated(0, true)
+
           // first time this task has been seen
           activeTasks.put(
             taskAttemptId,
@@ -147,6 +149,8 @@ private final class GpuSemaphore(tasksPerGpu: Int) extends Logging with Arm {
       val refs = activeTasks.get(taskAttemptId)
       if (refs != null && refs.count.getValue > 0) {
         if (refs.count.decrementAndGet() == 0) {
+          logInfo(s"Task $taskAttemptId used ${Rmm.getScopedMaximumBytesAllocated()} Bytes. " +
+            s"Max stack: ${DeviceMemoryEventHandler.maxStackTrace}")
           logDebug(s"Task $taskAttemptId releasing GPU")
           semaphore.release()
         }
@@ -163,6 +167,8 @@ private final class GpuSemaphore(tasksPerGpu: Int) extends Logging with Arm {
       throw new IllegalStateException(s"Completion of unknown task $taskAttemptId")
     }
     if (refs.count.getValue > 0) {
+      logInfo(s"Task $taskAttemptId used ${Rmm.getScopedMaximumBytesAllocated()} Bytes." +
+        s"Max stack: ${DeviceMemoryEventHandler.maxStackTrace}")
       logDebug(s"Task $taskAttemptId releasing GPU")
       semaphore.release()
     }

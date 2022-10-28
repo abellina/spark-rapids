@@ -17,10 +17,29 @@ package com.nvidia.spark.rapids
 
 import scala.collection.mutable.ArrayBuffer
 
+import ai.rapids.cudf.Rmm
 import com.nvidia.spark.rapids.RapidsPluginImplicits._
 
 /** Implementation of the automatic-resource-management pattern */
 trait Arm {
+
+  def logMemoryUsed[V, T](logFn: ( => String) => _, name: String, in: Seq[ai.rapids.cudf.Table])(body: => V): V = {
+    val input = in.map(_.getDeviceMemorySize).sum
+    Rmm.resetScopedMaximumBytesAllocated(0, true)
+    val res = body
+    val used = Rmm.getScopedMaximumBytesAllocated
+    logFn(s"$name input was: $input, used max $used Bytes")
+    res
+  }
+
+  def logMemoryUsed[V, T](logFn: ( => String) => _, name: String)(body: => V): V = {
+    Rmm.resetScopedMaximumBytesAllocated(0, true)
+    val res = body
+    val used = Rmm.getScopedMaximumBytesAllocated
+    logFn(s"$name used max $used Bytes")
+    res
+  }
+
 
   /** Executes the provided code block and then closes the resource */
   def withResource[T <: AutoCloseable, V](r: T)(block: T => V): V = {

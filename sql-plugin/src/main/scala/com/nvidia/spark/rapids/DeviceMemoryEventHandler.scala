@@ -19,12 +19,12 @@ package com.nvidia.spark.rapids
 import java.io.File
 import java.lang.management.ManagementFactory
 import java.util.concurrent.atomic.AtomicLong
-
 import ai.rapids.cudf.{Cuda, NvtxColor, NvtxRange, Rmm, RmmEventHandler}
 import com.sun.management.HotSpotDiagnosticMXBean
-
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.rapids.execution.TrampolineUtil
+
+import scala.collection.mutable
 
 /**
  * RMM event handler to trigger spilling from the device memory store.
@@ -171,6 +171,15 @@ class DeviceMemoryEventHandler(
   override def onDeallocThreshold(totalAllocated: Long): Unit = {
   }
 
+  override def onMaxAllocated(maxAllocated: Long): Unit = {
+    //logInfo(s"onMaxAllocated $maxAllocated Bytes.")
+    val sb = new mutable.StringBuilder()
+    Thread.currentThread().getStackTrace.foreach { stackTraceElement =>
+      sb.append("    " + stackTraceElement + "\n")
+    }
+    DeviceMemoryEventHandler.maxStackTrace = Some(sb.toString())
+  }
+
   private def heapDump(dumpDir: String): Unit = {
     val dumpPath = getDumpPath(dumpDir)
     logWarning(s"Dumping heap to $dumpPath")
@@ -186,4 +195,8 @@ class DeviceMemoryEventHandler(
     val pid = ManagementFactory.getRuntimeMXBean.getName.split('@').head
     new File(dumpDir, s"gpu-oom-$pid-${dumps.incrementAndGet}.hprof").toString
   }
+}
+
+object DeviceMemoryEventHandler {
+  var maxStackTrace: Option[String] = None
 }
