@@ -38,7 +38,10 @@ class DeviceMemoryEventHandler(
     store: RapidsDeviceMemoryStore,
     oomDumpDir: Option[String],
     isGdsSpillEnabled: Boolean,
-    maxFailedOOMRetries: Int) extends RmmEventHandler with Logging with Arm {
+    maxFailedOOMRetries: Int)
+  extends RmmEventHandler
+    with MemoryStoreHandler
+    with Logging with Arm {
 
   // Flag that ensures we dump stack traces once and not for every allocation
   // failure. The assumption is that unhandled allocations will be fatal
@@ -178,13 +181,37 @@ class DeviceMemoryEventHandler(
   override def onDeallocThreshold(totalAllocated: Long): Unit = {
   }
 
-  override def onMaxAllocated(maxAllocated: Long): Unit = {
-    //logInfo(s"onMaxAllocated $maxAllocated Bytes.")
+  var lastMax: Long = 0
+  var spillableTrack: Long = 0
+
+  private def setMaxStackTrace(): Unit = {
     val sb = new mutable.StringBuilder()
     Thread.currentThread().getStackTrace.foreach { stackTraceElement =>
       sb.append("    " + stackTraceElement + "\n")
     }
     DeviceMemoryEventHandler.maxStackTrace = Some(sb.toString())
+  }
+
+  override def onMaxAllocated(maxAllocated: Long): Unit = {
+    //logInfo(s"onMaxAllocated $maxAllocated Bytes.")
+    if (maxAllocated != lastMax) {
+      setMaxStackTrace()
+    }
+    lastMax = maxAllocated
+  }
+
+  override def onSpillStoreSizeChange(delta: Long): Unit = {
+    spillableTrack += delta
+    logInfo(s"Spill changed has ${spillableTrack}")
+    val actualMax = lastMax - spillableTrack
+    // adjust cuDF's max
+    Rmm.resetScopedMaximumBytesAllocated(actualMax)
+    spillableTrack = 0
+    if (actualMax > lastMax) {
+      setMaxStackTrace()
+    }
+    // keep track of the last max as we have just reset it
+    lastMax = actualMax
   }
 
   private def heapDump(dumpDir: String): Unit = {

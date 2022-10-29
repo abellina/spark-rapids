@@ -23,12 +23,20 @@ import com.nvidia.spark.rapids.format.TableMeta
 import org.apache.spark.sql.types.DataType
 import org.apache.spark.sql.vectorized.ColumnarBatch
 
+trait MemoryStoreHandler {
+  def onSpillStoreSizeChange(delta: Long): Unit
+}
 /**
  * Buffer storage using device memory.
  * @param catalog catalog to register this store
  */
 class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog.singleton)
     extends RapidsBufferStore(StorageTier.DEVICE, catalog) with Arm {
+
+  var memoryStoreHandler: MemoryStoreHandler = _
+  def setEventHandler(handler: MemoryStoreHandler) = {
+    memoryStoreHandler = handler
+  }
 
   override protected def createBuffer(other: RapidsBuffer, memoryBuffer: MemoryBuffer,
       stream: Cuda.Stream): RapidsBufferBase = {
@@ -47,7 +55,8 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
       }
     }
     new RapidsDeviceMemoryBuffer(other.id, other.size, other.meta, None,
-      deviceBuffer, other.getSpillPriority, other.spillCallback)
+      deviceBuffer, other.getSpillPriority, other.spillCallback,
+      memoryStoreHandler)
   }
 
   /**
@@ -75,7 +84,8 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
         Some(table),
         contigBuffer,
         initialSpillPriority,
-        spillCallback)) { buffer =>
+        spillCallback,
+        memoryStoreHandler)) { buffer =>
       logDebug(s"Adding table for: [id=$id, size=${buffer.size}, " +
           s"meta_id=${buffer.meta.bufferMeta.id}, meta_size=${buffer.meta.bufferMeta.size}]")
       addDeviceBuffer(buffer, needsSync = true)
@@ -113,7 +123,8 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
         None,
         contigBuffer,
         initialSpillPriority,
-        spillCallback)) { buffer =>
+        spillCallback,
+        memoryStoreHandler)) { buffer =>
       logDebug(s"Adding table for: [id=$id, size=${buffer.size}, " +
           s"uncompressed=${buffer.meta.bufferMeta.uncompressedSize}, " +
           s"meta_id=${buffer.meta.bufferMeta.id}, meta_size=${buffer.meta.bufferMeta.size}]")
@@ -147,7 +158,8 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
         None,
         buffer,
         initialSpillPriority,
-        spillCallback)) { buff =>
+        spillCallback,
+        memoryStoreHandler)) { buff =>
       logDebug(s"Adding receive side table for: [id=$id, size=${buffer.getLength}, " +
           s"uncompressed=${buff.meta.bufferMeta.uncompressedSize}, " +
           s"meta_id=${tableMeta.bufferMeta.id}, " +
@@ -167,6 +179,7 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
       Cuda.DEFAULT_STREAM.sync()
     }
     addBuffer(buffer);
+    memoryStoreHandler.onSpillStoreSizeChange(buffer.size)
   }
 
   class RapidsDeviceMemoryBuffer(
@@ -176,13 +189,15 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
       table: Option[Table],
       contigBuffer: DeviceMemoryBuffer,
       spillPriority: Long,
-      override val spillCallback: SpillCallback)
+      override val spillCallback: SpillCallback,
+      memoryStoreHandler: MemoryStoreHandler)
       extends RapidsBufferBase(id, size, meta, spillPriority, spillCallback) {
     override val storageTier: StorageTier = StorageTier.DEVICE
 
     override protected def releaseResources(): Unit = {
       contigBuffer.close()
       table.foreach(_.close())
+      memoryStoreHandler.onSpillStoreSizeChange(-1L*size)
     }
 
     override def getDeviceMemoryBuffer: DeviceMemoryBuffer = {
