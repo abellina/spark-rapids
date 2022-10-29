@@ -19,6 +19,7 @@ import ai.rapids.cudf.{DType, GatherMap, GroupByAggregation, NullEquality, NullP
 import ai.rapids.cudf.ast.CompiledExpression
 import com.nvidia.spark.rapids._
 
+import org.apache.spark.internal.Logging
 import org.apache.spark.sql.catalyst.expressions.{Attribute, AttributeReference, Expression, NamedExpression}
 import org.apache.spark.sql.catalyst.plans.{Cross, ExistenceJoin, FullOuter, Inner, InnerLike, JoinType, LeftAnti, LeftExistence, LeftOuter, LeftSemi, RightOuter}
 import org.apache.spark.sql.execution.SparkPlan
@@ -247,7 +248,7 @@ abstract class BaseHashJoinIterator(
       targetSize,
       spillCallback,
       opTime = opTime,
-      joinTime = joinTime) {
+      joinTime = joinTime) with Logging  {
   // We can cache this because the build side is not changing
   private lazy val streamMagnificationFactor = joinType match {
     case _: InnerLike | LeftOuter | RightOuter =>
@@ -346,8 +347,17 @@ abstract class BaseHashJoinIterator(
 
   private def countGroups(keys: ColumnarBatch): Table = {
     withResource(GpuColumnVector.from(keys)) { keysTable =>
-      keysTable.groupBy(0 until keysTable.getNumberOfColumns: _*)
+      try {
+        keysTable.groupBy(0 until keysTable.getNumberOfColumns: _*)
           .aggregate(GroupByAggregation.count(NullPolicy.INCLUDE).onColumn(0))
+      } catch {
+        case t: Throwable =>
+          logError(s"Error while in countGroups. Table rowcount: " +
+            s"${keysTable.getRowCount}, device size: ${keysTable.getDeviceMemorySize}, " +
+            s"num cols: ${keysTable.getNumberOfColumns}. Dumping table to /tmp/debug_table", t)
+          DumpUtils.dumpToParquetFile(keysTable, s"/tmp/debug_table")
+          throw t
+      }
     }
   }
 
