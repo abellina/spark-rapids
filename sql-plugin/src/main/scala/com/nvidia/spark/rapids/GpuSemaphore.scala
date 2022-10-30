@@ -100,6 +100,12 @@ object GpuSemaphore {
     }
   }
 
+  def beforePartition(): Unit = {
+    if (enabled) {
+      getInstance.beforePartition()
+    }
+  }
+
   /**
    * Uninitialize the GPU semaphore.
    * NOTE: This does not wait for active tasks to release!
@@ -130,6 +136,7 @@ private final class GpuSemaphore(tasksPerGpu: Int) extends Logging with Arm {
           refs.count.increment()
         } else {
           Rmm.resetScopedMaximumBytesAllocated(0, true)
+          printedStack = taskAttemptId
 
           // first time this task has been seen
           activeTasks.put(
@@ -142,6 +149,20 @@ private final class GpuSemaphore(tasksPerGpu: Int) extends Logging with Arm {
     }
   }
 
+  def beforePartition(): Unit = {
+    printStackIfNeeded()
+  }
+
+  private var printedStack = 0L
+
+  def printStackIfNeeded(): Unit = {
+    if (printedStack > 0) {
+      logInfo(s"Task $printedStack used ${Rmm.getScopedMaximumBytesAllocated()} Bytes. " +
+        s"Max stack: ${DeviceMemoryEventHandler.maxStackTrace}")
+      printedStack = 0
+    }
+  }
+
   def releaseIfNecessary(context: TaskContext): Unit = {
     val nvtxRange = new NvtxRange("Release GPU", NvtxColor.RED)
     try {
@@ -149,8 +170,7 @@ private final class GpuSemaphore(tasksPerGpu: Int) extends Logging with Arm {
       val refs = activeTasks.get(taskAttemptId)
       if (refs != null && refs.count.getValue > 0) {
         if (refs.count.decrementAndGet() == 0) {
-          logInfo(s"Task $taskAttemptId used ${Rmm.getScopedMaximumBytesAllocated()} Bytes. " +
-            s"Max stack: ${DeviceMemoryEventHandler.maxStackTrace}")
+          printStackIfNeeded()
           logDebug(s"Task $taskAttemptId releasing GPU")
           semaphore.release()
         }
@@ -167,8 +187,7 @@ private final class GpuSemaphore(tasksPerGpu: Int) extends Logging with Arm {
       throw new IllegalStateException(s"Completion of unknown task $taskAttemptId")
     }
     if (refs.count.getValue > 0) {
-      logInfo(s"Task $taskAttemptId used ${Rmm.getScopedMaximumBytesAllocated()} Bytes." +
-        s"Max stack: ${DeviceMemoryEventHandler.maxStackTrace}")
+      printStackIfNeeded()
       logDebug(s"Task $taskAttemptId releasing GPU")
       semaphore.release()
     }

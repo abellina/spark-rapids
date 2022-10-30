@@ -62,6 +62,7 @@ abstract class GpuHashPartitioningBase(expressions: Seq[Expression], numPartitio
     //  We are doing this here because the cudf partition command is at this level
     withResource(new NvtxRange("Hash partition", NvtxColor.PURPLE)) { _ =>
       val numRows = batch.numRows
+      GpuSemaphore.beforePartition()
       val (partitionIndexes, partitionColumns) = {
         withResource(new NvtxRange("partition", NvtxColor.BLUE)) { _ =>
           partitionInternalAndClose(batch)

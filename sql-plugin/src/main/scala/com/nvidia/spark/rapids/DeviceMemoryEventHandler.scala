@@ -202,10 +202,10 @@ class DeviceMemoryEventHandler(
 
   override def onSpillStoreSizeChange(delta: Long): Unit = {
     spillableTrack += delta
-    logInfo(s"Spill changed has ${spillableTrack}")
     val actualMax = lastMax - spillableTrack
+    logInfo(s"Spill changed delta $delta has ${spillableTrack}. Last max was ${lastMax} is now ${actualMax}")
     // adjust cuDF's max
-    Rmm.resetScopedMaximumBytesAllocated(actualMax)
+    Rmm.resetScopedMaximumBytesAllocated(actualMax, true)
     spillableTrack = 0
     if (actualMax > lastMax) {
       setMaxStackTrace()
