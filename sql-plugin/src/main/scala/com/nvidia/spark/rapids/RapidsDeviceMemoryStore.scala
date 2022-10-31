@@ -197,7 +197,8 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
     override protected def releaseResources(): Unit = {
       contigBuffer.close()
       table.foreach(_.close())
-      memoryStoreHandler.onSpillStoreSizeChange(-1L*size)
+      // spill store has removed this, we need to discount
+      memoryStoreHandler.onSpillStoreSizeChange(-1L * size)
     }
 
     override def getDeviceMemoryBuffer: DeviceMemoryBuffer = {
@@ -213,6 +214,24 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
         GpuColumnVectorFromBuffer.from(table.get, contigBuffer, meta, sparkTypes)
       } else {
         columnarBatchFromDeviceBuffer(contigBuffer, sparkTypes)
+      }
+    }
+
+    override def addReference(): Boolean = synchronized {
+      val wasAcquired = isAcquired
+      val res = super.addReference()
+      if (!wasAcquired) {
+        // it now is, we want to track this as a new max
+        memoryStoreHandler.onSpillStoreSizeChange(-1L * size)
+      }
+      res
+    }
+
+    override def close(): Unit = synchronized {
+      super.close()
+      if (!isAcquired) {
+        // it now is not acquired, we want to mark this as spillable
+        memoryStoreHandler.onSpillStoreSizeChange(1L * size)
       }
     }
   }
