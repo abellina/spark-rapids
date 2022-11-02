@@ -136,7 +136,7 @@ private final class GpuSemaphore(tasksPerGpu: Int) extends Logging with Arm {
           refs.count.increment()
         } else {
           DeviceMemoryEventHandler.resetTotalAllocated()
-          Rmm.resetScopedMaximumBytesAllocated(0, true)
+          Rmm.resetScopedMaximumBytesAllocated(0)
           printedStack = taskAttemptId
 
           // first time this task has been seen

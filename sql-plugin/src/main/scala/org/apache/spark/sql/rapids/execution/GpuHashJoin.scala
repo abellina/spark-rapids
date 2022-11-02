@@ -348,6 +348,8 @@ abstract class BaseHashJoinIterator(
   private def countGroups(keys: ColumnarBatch): Table = {
     withResource(GpuColumnVector.from(keys)) { keysTable =>
       try {
+        logInfo(s"about to call groupBy in countGroups with keysTable of size: " +
+          s"${keysTable.getDeviceMemorySize} B, and rowCount ${keysTable.getRowCount}")
         keysTable.groupBy(0 until keysTable.getNumberOfColumns: _*)
           .aggregate(GroupByAggregation.count(NullPolicy.INCLUDE).onColumn(0))
       } catch {

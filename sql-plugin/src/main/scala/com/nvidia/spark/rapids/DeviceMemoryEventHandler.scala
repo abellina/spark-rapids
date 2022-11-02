@@ -206,16 +206,20 @@ class DeviceMemoryEventHandler(
    //lastMax = actualMax
   }
 
-  override def onAllocated(size: Long): Boolean = synchronized {
+  override def onAllocated(size: Long): Unit = synchronized {
     DeviceMemoryEventHandler.onAllocated(size, store)
   }
 
   override def onFreed(size: Long): Unit = synchronized {
-    DeviceMemoryEventHandler.onFreed(size, store)
-
+    try {
+      DeviceMemoryEventHandler.onFreed(size, store)
+    } catch {
+      case t: Throwable =>
+        logError("Exception while handling free", t)
+    }
   }
 
-  private def heapDump(dumpDir: String): Unit = {
+private def heapDump(dumpDir: String): Unit = {
     val dumpPath = getDumpPath(dumpDir)
     logWarning(s"Dumping heap to $dumpPath")
     val server = ManagementFactory.getPlatformMBeanServer
@@ -251,7 +255,7 @@ object DeviceMemoryEventHandler extends Logging {
       logWarning(s"STORE HAS NON-ZERO SIZE AT RESET ${storeHack.currentSize} B")
     }
   }
-  def onAllocated(size: Long, store: RapidsDeviceMemoryStore): Boolean = synchronized {
+  def onAllocated(size: Long, store: RapidsDeviceMemoryStore) = synchronized {
     if (storeHack == null) {
       storeHack = store
     }
@@ -263,9 +267,6 @@ object DeviceMemoryEventHandler extends Logging {
     if (totalAllocatedWithSpillable > lastMax) {
       lastMax = totalAllocatedWithSpillable
       setMaxStackTrace()
-      lastMax > 2L * 1024 * 1024 * 1024
-    } else {
-      false
     }
   }
 

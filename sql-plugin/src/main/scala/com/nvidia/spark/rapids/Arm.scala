@@ -47,7 +47,7 @@ trait Arm extends Logging {
   }
 
   def logMemoryUsed[V, T](logFn: ( => String) => _, name: String)(body: => V): V = {
-    Rmm.resetScopedMaximumBytesAllocated(0, true)
+    Rmm.resetScopedMaximumBytesAllocated(0)
     val res = body
     val used = Rmm.getScopedMaximumBytesAllocated
     logFn(s"$name used max $used Bytes")
