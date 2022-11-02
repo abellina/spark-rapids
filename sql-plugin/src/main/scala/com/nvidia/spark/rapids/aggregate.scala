@@ -741,10 +741,12 @@ class GpuHashAggregateIterator(
             case (cudfAgg, ord) => cudfAgg.groupByAggregate.onColumn(ord)
           }
 
-          // perform the aggregate
-          val aggTbl = preProcessedTbl
-            .groupBy(groupOptions, groupingExpressions.indices: _*)
-            .aggregate(cudfAggsOnColumn: _*)
+          val aggTbl = logMemoryUsed("aggregate", preProcessedTbl) {
+            // perform the aggregate
+            preProcessedTbl
+              .groupBy(groupOptions, groupingExpressions.indices: _*)
+              .aggregate(cudfAggsOnColumn: _*)
+          }
 
           withResource(aggTbl) { _ =>
             GpuColumnVector.from(aggTbl, postStepDataTypes.toArray)

@@ -183,31 +183,36 @@ class DeviceMemoryEventHandler(
 
   var lastMax: Long = 0
 
-  private def setMaxStackTrace(): Unit = {
-    val sb = new mutable.StringBuilder()
-    Thread.currentThread().getStackTrace.foreach { stackTraceElement =>
-      sb.append("    " + stackTraceElement + "\n")
-    }
-    DeviceMemoryEventHandler.maxStackTrace = Some(sb.toString())
-  }
-
   override def onMaxAllocated(maxAllocated: Long): Unit = {
-    if (maxAllocated >= lastMax) {
-      setMaxStackTrace()
-    }
-    lastMax = maxAllocated
+   //if (maxAllocated >= lastMax) {
+   //  setMaxStackTrace()
+   //}
+   //lastMax = maxAllocated
+  }
+  var totalAllocated: Long = 0L
+  var totalAllocatedIncludingSpillable: Long = 0L
+
+  override def onSpillStoreSizeChange(delta: Long): Unit = synchronized {
+    DeviceMemoryEventHandler.onSpillStoreSizeChange(store)
+
+   //val actualMax = lastMax - delta
+   //logInfo(s"Spill changed delta $delta. Last max was ${lastMax} is now ${actualMax}")
+   //// adjust cuDF's max
+   //Rmm.resetScopedMaximumBytesAllocated(actualMax, true)
+   //if (actualMax >= lastMax) {
+   //  setMaxStackTrace()
+   //}
+   //// keep track of the last max as we have just reset it
+   //lastMax = actualMax
   }
 
-  override def onSpillStoreSizeChange(delta: Long): Unit = {
-    val actualMax = lastMax - delta
-    logInfo(s"Spill changed delta $delta. Last max was ${lastMax} is now ${actualMax}")
-    // adjust cuDF's max
-    Rmm.resetScopedMaximumBytesAllocated(actualMax, true)
-    if (actualMax >= lastMax) {
-      setMaxStackTrace()
-    }
-    // keep track of the last max as we have just reset it
-    lastMax = actualMax
+  override def onAllocated(size: Long): Boolean = synchronized {
+    DeviceMemoryEventHandler.onAllocated(size, store)
+  }
+
+  override def onFreed(size: Long): Unit = synchronized {
+    DeviceMemoryEventHandler.onFreed(size, store)
+
   }
 
   private def heapDump(dumpDir: String): Unit = {
@@ -227,6 +232,74 @@ class DeviceMemoryEventHandler(
   }
 }
 
-object DeviceMemoryEventHandler {
+object DeviceMemoryEventHandler extends Logging {
   var maxStackTrace: Option[String] = None
+  var totalAllocated: Long = 0L
+  var totalAllocatedWithSpillable: Long = 0L
+  var lastMax: Long = 0L
+  var lastMaxTotal: Long = 0L
+  var storeHack: RapidsDeviceMemoryStore = null
+  def setStore(store: RapidsDeviceMemoryStore): Unit = {
+    storeHack = store
+  }
+  def resetTotalAllocated(): Unit = synchronized {
+    totalAllocated = 0
+    totalAllocatedWithSpillable = 0
+    lastMax = 0
+    lastMaxTotal = 0
+    if (storeHack != null && storeHack.currentSize > 0) {
+      logWarning(s"STORE HAS NON-ZERO SIZE AT RESET ${storeHack.currentSize} B")
+    }
+  }
+  def onAllocated(size: Long, store: RapidsDeviceMemoryStore): Boolean = synchronized {
+    if (storeHack == null) {
+      storeHack = store
+    }
+    totalAllocated += size
+    totalAllocatedWithSpillable = totalAllocated - store.currentSize
+    if (totalAllocated > lastMaxTotal) {
+      lastMaxTotal = totalAllocated
+    }
+    if (totalAllocatedWithSpillable > lastMax) {
+      lastMax = totalAllocatedWithSpillable
+      setMaxStackTrace()
+      lastMax > 2L * 1024 * 1024 * 1024
+    } else {
+      false
+    }
+  }
+
+  def onFreed(size: Long, store: RapidsDeviceMemoryStore): Unit = synchronized {
+    if (storeHack == null) {
+      storeHack = store
+    }
+    totalAllocated -= size
+    totalAllocatedWithSpillable = totalAllocated - store.currentSize
+    if (totalAllocated > lastMaxTotal) {
+      lastMaxTotal = totalAllocated
+    }
+    if (totalAllocatedWithSpillable > lastMax) {
+      lastMax = totalAllocatedWithSpillable
+      setMaxStackTrace()
+    }
+  }
+
+  def onSpillStoreSizeChange(store: RapidsDeviceMemoryStore): Unit = synchronized {
+    if (storeHack == null) {
+      storeHack = store
+    }
+    totalAllocatedWithSpillable = totalAllocated - store.currentSize
+    if (totalAllocatedWithSpillable > lastMax) {
+      lastMax = totalAllocatedWithSpillable
+      setMaxStackTrace()
+    }
+  }
+
+  private def setMaxStackTrace(): Unit = {
+    val sb = new mutable.StringBuilder()
+    Thread.currentThread().getStackTrace.foreach { stackTraceElement =>
+      sb.append("    " + stackTraceElement + "\n")
+    }
+    maxStackTrace = Some(sb.toString())
+  }
 }

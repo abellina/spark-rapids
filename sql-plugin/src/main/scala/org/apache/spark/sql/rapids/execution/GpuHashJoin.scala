@@ -431,7 +431,10 @@ class HashJoinIterator(
           // always be on the right
           rightKeys.leftJoinGatherMaps(leftKeys, compareNullsEqual).reverse
         case _: InnerLike => leftKeys.innerJoinGatherMaps(rightKeys, compareNullsEqual)
-        case LeftSemi => Array(leftKeys.leftSemiJoinGatherMap(rightKeys, compareNullsEqual))
+        case LeftSemi =>
+          logMemoryUsed("leftSemiJoinGatherMap", Seq(leftKeys, rightKeys)) {
+            Array(leftKeys.leftSemiJoinGatherMap(rightKeys, compareNullsEqual))
+          }
         case LeftAnti => Array(leftKeys.leftAntiJoinGatherMap(rightKeys, compareNullsEqual))
         case FullOuter => leftKeys.fullJoinGatherMaps(rightKeys, compareNullsEqual)
         case _ =>

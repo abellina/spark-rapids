@@ -16,19 +16,33 @@
 package com.nvidia.spark.rapids
 
 import scala.collection.mutable.ArrayBuffer
-
 import ai.rapids.cudf.Rmm
 import com.nvidia.spark.rapids.RapidsPluginImplicits._
+import org.apache.spark.internal.Logging
 
 /** Implementation of the automatic-resource-management pattern */
-trait Arm {
-
-  def logMemoryUsed[V, T](logFn: ( => String) => _, name: String, in: Seq[ai.rapids.cudf.Table])(body: => V): V = {
-    val input = in.map(_.getDeviceMemorySize).sum
-    Rmm.resetScopedMaximumBytesAllocated(0, true)
+trait Arm extends Logging {
+  def logMemoryUsed[V, T](name: String, in: ai.rapids.cudf.Table)(body: => V): V = {
+    val beforeWithSpillable = DeviceMemoryEventHandler.totalAllocatedWithSpillable
+    val beforeMax = DeviceMemoryEventHandler.lastMax
+    val input = in.getDeviceMemorySize
     val res = body
-    val used = Rmm.getScopedMaximumBytesAllocated
-    logFn(s"$name input was: $input, used max $used Bytes")
+    val afterMax = DeviceMemoryEventHandler.lastMax
+    val afterWithSpillable = DeviceMemoryEventHandler.totalAllocatedWithSpillable
+    logInfo(s"$name input was: $input, started with ${beforeWithSpillable} B, " +
+      s"and finished at ${afterWithSpillable}. Max before ${beforeMax} B, max after ${afterMax} b")
+    res
+  }
+
+  def logMemoryUsed[V, T](name: String, in: Seq[ai.rapids.cudf.Table])(body: => V): V = {
+    val input = in.map(_.getDeviceMemorySize).sum
+    val beforeWithSpillable = DeviceMemoryEventHandler.totalAllocatedWithSpillable
+    val beforeMax = DeviceMemoryEventHandler.lastMax
+    val res = body
+    val afterMax = DeviceMemoryEventHandler.lastMax
+    val afterWithSpillable = DeviceMemoryEventHandler.totalAllocatedWithSpillable
+    logInfo(s"$name input was: $input, started with ${beforeWithSpillable} B, " +
+      s"and finished at ${afterWithSpillable}. Max before ${beforeMax} B, max after ${afterMax} b")
     res
   }
 

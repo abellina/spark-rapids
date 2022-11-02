@@ -534,7 +534,9 @@ class JoinGathererImpl(
     val ret = withResource(gatherMap.toColumnView(start, n)) { gatherView =>
       val batch = data.getBatch
       val gatheredTable = withResource(GpuColumnVector.from(batch)) { table =>
-        table.gather(gatherView, boundsCheckPolicy)
+        logMemoryUsed("JoinGathererImpl.gatherNext", table) {
+          table.gather(gatherView, boundsCheckPolicy)
+        }
       }
       withResource(gatheredTable) { gt =>
         GpuColumnVector.from(gt, GpuColumnVector.extractTypes(batch))

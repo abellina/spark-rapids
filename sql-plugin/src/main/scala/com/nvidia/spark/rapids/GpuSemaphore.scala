@@ -135,6 +135,7 @@ private final class GpuSemaphore(tasksPerGpu: Int) extends Logging with Arm {
         if (refs != null) {
           refs.count.increment()
         } else {
+          DeviceMemoryEventHandler.resetTotalAllocated()
           Rmm.resetScopedMaximumBytesAllocated(0, true)
           printedStack = taskAttemptId
 
@@ -157,7 +158,11 @@ private final class GpuSemaphore(tasksPerGpu: Int) extends Logging with Arm {
 
   def printStackIfNeeded(): Unit = {
     if (printedStack > 0) {
-      logInfo(s"Task $printedStack used ${Rmm.getScopedMaximumBytesAllocated()} Bytes. " +
+      logInfo(s"Task $printedStack used ${Rmm.getScopedMaximumBytesAllocated()} B. " +
+        s"Max allocated with spill: ${DeviceMemoryEventHandler.lastMax} B. " +
+        s"Max allocated: ${DeviceMemoryEventHandler.lastMaxTotal} B. " +
+        s"Last allocated: ${DeviceMemoryEventHandler.totalAllocated} B. " +
+        s"Last allocated with spill: ${DeviceMemoryEventHandler.totalAllocatedWithSpillable} B. " +
         s"Max stack: ${DeviceMemoryEventHandler.maxStackTrace}")
       printedStack = 0
     }
