@@ -353,6 +353,13 @@ object RapidsConf {
     .stringConf
     .createOptional
 
+  val GPU_DEBUG_MAX_MEMORY_USAGE = conf("spark.rapids.memory.gpu.debugMaxMemoryUsage")
+    .doc("Calculate max memory and max unspillable usage. USE ONLY IN DEBUG")
+    .internal()
+    .startupOnly()
+    .booleanConf
+    .createWithDefault(false)
+
   val GPU_OOM_MAX_RETRIES =
     conf("spark.rapids.memory.gpu.oomMaxRetries")
       .doc("The number of times that an OOM will be re-attempted after the device store " +
@@ -1841,6 +1848,8 @@ class RapidsConf(conf: Map[String, String]) extends Logging {
   lazy val rmmDebugLocation: String = get(RMM_DEBUG)
 
   lazy val gpuOomDumpDir: Option[String] = get(GPU_OOM_DUMP_DIR)
+
+  lazy val gpuDebugMaxMemoryUsage: Boolean = get(GPU_DEBUG_MAX_MEMORY_USAGE)
 
   lazy val gpuOomMaxRetries: Int = get(GPU_OOM_MAX_RETRIES)
 

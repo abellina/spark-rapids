@@ -182,13 +182,6 @@ class DeviceMemoryEventHandler(
   }
 
   var lastMax: Long = 0
-
-  override def onMaxAllocated(maxAllocated: Long): Unit = {
-   //if (maxAllocated >= lastMax) {
-   //  setMaxStackTrace()
-   //}
-   //lastMax = maxAllocated
-  }
   var totalAllocated: Long = 0L
   var totalAllocatedIncludingSpillable: Long = 0L
 
@@ -210,9 +203,9 @@ class DeviceMemoryEventHandler(
     DeviceMemoryEventHandler.onAllocated(size, store)
   }
 
-  override def onFreed(size: Long): Unit = synchronized {
+  override def onDeallocated(size: Long): Unit = synchronized {
     try {
-      DeviceMemoryEventHandler.onFreed(size, store)
+      DeviceMemoryEventHandler.onDeallocated(size, store)
     } catch {
       case t: Throwable =>
         logError("Exception while handling free", t)
@@ -270,7 +263,7 @@ object DeviceMemoryEventHandler extends Logging {
     }
   }
 
-  def onFreed(size: Long, store: RapidsDeviceMemoryStore): Unit = synchronized {
+  def onDeallocated(size: Long, store: RapidsDeviceMemoryStore): Unit = synchronized {
     if (storeHack == null) {
       storeHack = store
     }
@@ -297,10 +290,12 @@ object DeviceMemoryEventHandler extends Logging {
   }
 
   private def setMaxStackTrace(): Unit = {
-    val sb = new mutable.StringBuilder()
-    Thread.currentThread().getStackTrace.foreach { stackTraceElement =>
-      sb.append("    " + stackTraceElement + "\n")
+    if (lastMax > 4L * 1024 * 1024 * 1024) {
+      val sb = new mutable.StringBuilder()
+      Thread.currentThread().getStackTrace.foreach { stackTraceElement =>
+        sb.append("    " + stackTraceElement + "\n")
+      }
+      maxStackTrace = Some(sb.toString())
     }
-    maxStackTrace = Some(sb.toString())
   }
 }

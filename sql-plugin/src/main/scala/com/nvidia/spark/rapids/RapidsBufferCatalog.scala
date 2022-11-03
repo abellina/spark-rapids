@@ -206,7 +206,7 @@ object RapidsBufferCatalog extends Logging with Arm {
       rapidsConf.gpuOomDumpDir,
       rapidsConf.isGdsSpillEnabled,
       rapidsConf.gpuOomMaxRetries)
-    Rmm.setEventHandler(memoryEventHandler)
+    Rmm.setEventHandler(memoryEventHandler, rapidsConf.gpuDebugMaxMemoryUsage)
     deviceStorage.setEventHandler(memoryEventHandler)
 
     _shouldUnspill = rapidsConf.isUnspillEnabled
