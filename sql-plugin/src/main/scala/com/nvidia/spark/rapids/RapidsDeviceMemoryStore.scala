@@ -23,6 +23,7 @@ import com.nvidia.spark.rapids.format.TableMeta
 import org.apache.spark.sql.types.DataType
 import org.apache.spark.sql.vectorized.ColumnarBatch
 
+
 trait MemoryStoreHandler {
   def onSpillStoreSizeChange(delta: Long): Unit
 }
@@ -76,12 +77,13 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
       tableMeta: TableMeta,
       initialSpillPriority: Long,
       spillCallback: SpillCallback = RapidsBuffer.defaultSpillCallback): Unit = {
+    table.close()
     freeOnExcept(
       new RapidsDeviceMemoryBuffer(
         id,
         contigBuffer.getLength,
         tableMeta,
-        Some(table),
+        None,
         contigBuffer,
         initialSpillPriority,
         spillCallback,
@@ -191,47 +193,82 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
       spillPriority: Long,
       override val spillCallback: SpillCallback,
       memoryStoreHandler: MemoryStoreHandler)
-      extends RapidsBufferBase(id, size, meta, spillPriority, spillCallback) {
+      extends RapidsBufferBase(id, size, meta, spillPriority, spillCallback)
+        with DeviceMemoryBuffer.EventHandler {
     override val storageTier: StorageTier = StorageTier.DEVICE
 
-    override protected def releaseResources(): Unit = {
+    // a new buffer that is guaranteed to have refcount=1
+    val lease: DeviceMemoryBuffer = {
+      val l = contigBuffer.slice(0, contigBuffer.getLength)
+      l.setEventHandler(this)
       contigBuffer.close()
+      l
+    }
+
+    override def onClosed(deviceMemoryBuffer: DeviceMemoryBuffer): Unit = synchronized {
+      logInfo(s"onClosed!! ${id}")
+      isLeased = false
+      close()
+    }
+
+    override protected def releaseResources(): Unit = {
+      logInfo(s"at releaseResources ${id}")
+      // should be last lease
+      lease.close()
       table.foreach(_.close())
       // spill store has removed this, we need to discount
       memoryStoreHandler.onSpillStoreSizeChange(-1L * size)
+      removeSpillable(this)
     }
 
-    override def getDeviceMemoryBuffer: DeviceMemoryBuffer = {
-      contigBuffer.incRefCount()
-      contigBuffer
+    override def getDeviceMemoryBuffer: DeviceMemoryBuffer = synchronized {
+      isLeased = true
+      lease.incRefCount()
+      lease
     }
 
     override def getMemoryBuffer: MemoryBuffer = getDeviceMemoryBuffer
 
     override def getColumnarBatch(sparkTypes: Array[DataType]): ColumnarBatch = {
-      if (table.isDefined) {
-        //REFCOUNT ++ of all columns
-        GpuColumnVectorFromBuffer.from(table.get, contigBuffer, meta, sparkTypes)
-      } else {
-        columnarBatchFromDeviceBuffer(contigBuffer, sparkTypes)
+      withResource(getDeviceMemoryBuffer) { clone =>
+        if (table.isDefined) {
+          //REFCOUNT ++ of all columns
+          GpuColumnVectorFromBuffer.from(table.get, clone, meta, sparkTypes)
+        } else {
+          columnarBatchFromDeviceBuffer(clone, sparkTypes)
+        }
       }
     }
 
     override def addReference(): Boolean = synchronized {
+      logInfo(s"Acquiring RapidsBuffer ${id}: ${refcount}")
       val wasAcquired = isAcquired
       val res = super.addReference()
       if (!wasAcquired) {
         // it now is, we want to track this as a new max
         memoryStoreHandler.onSpillStoreSizeChange(-1L * size)
+
+        logInfo(s"Removing bc addReference ${id}")
+        // this buffer is no longer a candidate for spilling
+        removeSpillable(this)
       }
       res
     }
 
     override def close(): Unit = synchronized {
-      super.close()
-      if (!isAcquired) {
-        // it now is not acquired, we want to mark this as spillable
-        memoryStoreHandler.onSpillStoreSizeChange(1L * size)
+      logInfo(s"At close() RapidsBuffer ${id}: ${refcount}. ${printStackTrace}")
+      if (refcount == 1) {
+        if (!isLeased) {
+          logInfo(s"Making ${id} spillable")
+          makeSpillable(this)
+          // it now is not acquired, we want to mark this as spillable
+          memoryStoreHandler.onSpillStoreSizeChange(1L * size)
+          super.close()
+        } else {
+          logInfo(s"CANNOT MAKE ${id} spillable. It is leased")
+        }
+      } else {
+        super.close() // refcount -- up until 1
       }
     }
   }

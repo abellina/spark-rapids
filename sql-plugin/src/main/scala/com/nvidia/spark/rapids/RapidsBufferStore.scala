@@ -19,15 +19,15 @@ package com.nvidia.spark.rapids
 import java.util.Comparator
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
-
 import ai.rapids.cudf.{BaseDeviceMemoryBuffer, Cuda, DeviceMemoryBuffer, HostMemoryBuffer, MemoryBuffer, NvtxColor, NvtxRange}
 import com.nvidia.spark.rapids.RapidsPluginImplicits._
 import com.nvidia.spark.rapids.StorageTier.{DEVICE, StorageTier}
 import com.nvidia.spark.rapids.format.TableMeta
-
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.types.DataType
 import org.apache.spark.sql.vectorized.ColumnarBatch
+
+import scala.collection.mutable
 
 object RapidsBufferStore {
   private val FREE_WAIT_TIMEOUT = 10 * 1000
@@ -59,15 +59,44 @@ abstract class RapidsBufferStore(
       if (old != null) {
         throw new DuplicateBufferException(s"duplicate buffer registered: ${buffer.id}")
       }
-      spillable.offer(buffer)
-      totalBytesStored += buffer.size
+      makeSpillable(buffer)
     }
 
-    def remove(id: RapidsBufferId): Unit = synchronized {
-      val obj = buffers.remove(id)
-      if (obj != null) {
-        spillable.remove(obj)
-        totalBytesStored -= obj.size
+    def makeSpillable(buffer: RapidsBufferBase): Unit = synchronized {
+      val didAdd = spillable.offer(buffer)
+      if (didAdd) {
+        totalBytesStored += buffer.size
+        val leftovers = new scala.collection.mutable.ArrayBuffer[RapidsBufferId]()
+        spillable.forEach { k =>
+          leftovers.append(k.id)
+        }
+        logInfo(s"Added ${buffer.id}, size: ${buffer.size}: " +
+          s"Num spillable: ${spillable.size} " +
+          s"totalBytesStored: ${totalBytesStored} " +
+          s"leftovers: ${leftovers.mkString(",")}")
+      }
+    }
+
+    def removeSpillable(buffer: RapidsBufferBase): Unit = synchronized {
+      val didRemove = spillable.remove(buffer)
+      if (didRemove) {
+        val leftovers = new scala.collection.mutable.ArrayBuffer[RapidsBufferId]()
+        spillable.forEach { k =>
+          leftovers.append(k.id)
+        }
+        totalBytesStored -= buffer.size
+        logInfo(s"Removed ${buffer.id}, size: ${buffer.size}: " +
+          s"Num spillable: ${spillable.size} " +
+          s"totalBytesStored: ${totalBytesStored} " +
+          s"leftovers: ${leftovers.mkString(",")}")
+      }
+    }
+
+    def remove(buffer: RapidsBufferBase): Unit = synchronized {
+      logInfo(s"Calling remove with ${buffer.id}")
+      val obj = buffers.remove(buffer.id)
+      if (obj != null && !buffer.isLeased){
+        removeSpillable(obj)
       }
     }
 
@@ -219,10 +248,28 @@ abstract class RapidsBufferStore(
   protected def createBuffer(buffer: RapidsBuffer, memoryBuffer: MemoryBuffer, stream: Cuda.Stream)
   : RapidsBufferBase
 
+  def printStackTrace(): String= {
+    val sb = new mutable.StringBuilder()
+    Thread.currentThread().getStackTrace().foreach { stackTraceElement =>
+      sb.append("    " + stackTraceElement + "\n")
+    }
+    sb.toString()
+  }
+
   /** Update bookkeeping for a new buffer */
   protected def addBuffer(buffer: RapidsBufferBase): Unit = synchronized {
     buffers.add(buffer)
     catalog.registerNewBuffer(buffer)
+  }
+
+  protected def makeSpillable(buffer: RapidsBufferBase): Unit = synchronized {
+    logInfo(s"Making spillable ${buffer.id} ${printStackTrace()}")
+    buffers.makeSpillable(buffer)
+  }
+
+  protected def removeSpillable(buffer: RapidsBufferBase): Unit = synchronized {
+    logInfo(s"Removing from spillable ${buffer.id} ${printStackTrace()}")
+    buffers.removeSpillable(buffer)
   }
 
   override def close(): Unit = {
@@ -279,6 +326,8 @@ abstract class RapidsBufferStore(
     private[this] var isValid = true
     protected[this] var refcount = 0
     private[this] var spillPriority: Long = initialSpillPriority
+
+    var isLeased: Boolean = false
 
     /** Release the underlying resources for this buffer. */
     protected def releaseResources(): Unit
@@ -396,6 +445,7 @@ abstract class RapidsBufferStore(
       }
       refcount -= 1
       if (refcount == 0 && !isValid) {
+        logInfo(s"freeing buffer $id")
         pendingFreeBuffers.remove(id)
         pendingFreeBytes.addAndGet(-size)
         freeBuffer()
@@ -408,12 +458,15 @@ abstract class RapidsBufferStore(
      * In that case the resources will be released when the reference count reaches zero.
      */
     override def free(): Unit = synchronized {
+      logInfo(s"at free for ${id}. isvalid? ${isValid}")
       if (isValid) {
         isValid = false
-        buffers.remove(id)
+        buffers.remove(this)
         if (refcount == 0) {
+          logInfo(s"freeing buffer from free for ${id}")
           freeBuffer()
         } else {
+          logInfo(s"added to pending ${id}")
           pendingFreeBuffers.put(id, this)
           pendingFreeBytes.addAndGet(size)
         }
