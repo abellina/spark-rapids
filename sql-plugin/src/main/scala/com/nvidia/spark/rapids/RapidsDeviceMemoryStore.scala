@@ -196,7 +196,7 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
       override val spillCallback: SpillCallback,
       memoryStoreHandler: MemoryStoreHandler)
       extends RapidsBufferBase(id, size, meta, spillPriority, spillCallback)
-        with DeviceMemoryBuffer.EventHandler {
+        with MemoryBuffer.EventHandler {
     override val storageTier: StorageTier = StorageTier.DEVICE
 
     // we now own the buffer, the caller will close
@@ -205,7 +205,7 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
     // withResource shananigans
     //contigBuffer.incRefCount()
     val lease = contigBuffer.slice(0, contigBuffer.getLength)
-    lease.setEventHandler(this) // starts at refcount 1
+    require(null == lease.setEventHandler(this)) // starts at refcount 1
 
     def isLeased() = lease.getRefCount > 1
 
