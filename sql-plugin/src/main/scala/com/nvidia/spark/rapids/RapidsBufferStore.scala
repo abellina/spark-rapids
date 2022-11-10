@@ -94,10 +94,8 @@ abstract class RapidsBufferStore(
 
     def remove(buffer: RapidsBufferBase): Unit = synchronized {
       logInfo(s"Calling remove with ${buffer.id}")
-      val obj = buffers.remove(buffer.id)
-      if (obj != null && !buffer.isLeased){
-        removeSpillable(obj)
-      }
+      buffers.remove(buffer.id)
+      removeSpillable(buffer)
     }
 
     def freeAll(): Unit = {
@@ -114,7 +112,9 @@ abstract class RapidsBufferStore(
     }
 
     def nextSpillableBuffer(): RapidsBufferBase = synchronized {
-      spillable.poll()
+      val buff = spillable.poll()
+      totalBytesStored -= buff.size
+      buff
     }
 
     def updateSpillPriority(buffer: RapidsBufferBase, priority:Long): Unit = synchronized {
@@ -326,8 +326,6 @@ abstract class RapidsBufferStore(
     private[this] var isValid = true
     protected[this] var refcount = 0
     private[this] var spillPriority: Long = initialSpillPriority
-
-    var isLeased: Boolean = false
 
     /** Release the underlying resources for this buffer. */
     protected def releaseResources(): Unit

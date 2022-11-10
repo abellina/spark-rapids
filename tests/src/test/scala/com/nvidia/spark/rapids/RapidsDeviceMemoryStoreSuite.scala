@@ -196,6 +196,126 @@ class RapidsDeviceMemoryStoreSuite extends FunSuite with Arm with MockitoSugar {
     }
   }
 
+  test("spill leased") {
+    val catalog = new RapidsBufferCatalog
+    val spillStore = new MockSpillStore(catalog)
+    val spillPriorities = Array(0, -1, 2)
+    val bufferSizes = new Array[Long](spillPriorities.length)
+    withResource(new RapidsDeviceMemoryStore(catalog)) { store =>
+      val bufferIds = new ArrayBuffer[RapidsBufferId]()
+      store.setSpillStore(spillStore)
+      spillPriorities.indices.foreach { i =>
+        withResource(buildContiguousTable()) { ct =>
+          bufferSizes(i) = ct.getBuffer.getLength
+          // store takes ownership of the table
+          val bufferId = MockRapidsBufferId(i)
+          store.addContiguousTable(bufferId, ct, spillPriorities(i))
+          bufferIds += bufferId
+        }
+      }
+      assert(spillStore.spilledBuffers.isEmpty)
+
+      // we as going to lease each of the buffers we added, and ensure we cannot spill them
+      val rapidsBuffers = bufferIds.map { bid =>
+        catalog.acquireBuffer(bid)
+      }
+
+      // asking to spill 0 bytes should not spill
+      var sizeBeforeSpill = store.currentSize
+      store.synchronousSpill(sizeBeforeSpill)
+      assert(spillStore.spilledBuffers.isEmpty)
+      assertResult(sizeBeforeSpill)(store.currentSize)
+      store.synchronousSpill(sizeBeforeSpill + 1)
+      assert(spillStore.spilledBuffers.isEmpty)
+      assertResult(sizeBeforeSpill)(store.currentSize)
+
+      // spilling 1 byte should force one buffer to spill in priority order
+      assertResult(0)(store.currentSize) // everything is leased
+
+      // now 1 buffer is available for spilling
+      val buff = rapidsBuffers.remove(1)
+      buff.close()
+
+      assertResult(buff.size)(store.currentSize)
+      sizeBeforeSpill = store.currentSize
+      store.synchronousSpill(sizeBeforeSpill - 1)
+      assertResult(1)(spillStore.spilledBuffers.length)
+      assertResult(0)(store.currentSize)
+      assertResult(1)(spillStore.spilledBuffers(0).tableId)
+
+      rapidsBuffers.foreach(_.close())
+      rapidsBuffers.clear()
+
+      // spilling to zero should force all buffers to spill in priority order
+      store.synchronousSpill(0)
+      assertResult(3)(spillStore.spilledBuffers.length)
+      assertResult(0)(store.currentSize)
+      assertResult(0)(spillStore.spilledBuffers(1).tableId)
+      assertResult(2)(spillStore.spilledBuffers(2).tableId)
+    }
+  }
+
+  test("spill leased by getting underlying buffer") {
+    val catalog = new RapidsBufferCatalog
+    val spillStore = new MockSpillStore(catalog)
+    val spillPriorities = Array(0, -1, 2)
+    val bufferSizes = new Array[Long](spillPriorities.length)
+    withResource(new RapidsDeviceMemoryStore(catalog)) { store =>
+      val bufferIds = new ArrayBuffer[RapidsBufferId]()
+      store.setSpillStore(spillStore)
+      spillPriorities.indices.foreach { i =>
+        withResource(buildContiguousTable()) { ct =>
+          bufferSizes(i) = ct.getBuffer.getLength
+          // store takes ownership of the table
+          val bufferId = MockRapidsBufferId(i)
+          store.addContiguousTable(bufferId, ct, spillPriorities(i))
+          bufferIds += bufferId
+        }
+      }
+      assert(spillStore.spilledBuffers.isEmpty)
+
+      // we as going to lease each of the buffers we added, and ensure we cannot spill them
+      val rapidsDeviceBuffers = bufferIds.map { bid =>
+        withResource(catalog.acquireBuffer(bid)) { rapidsBuffer =>
+          rapidsBuffer.getDeviceMemoryBuffer
+        }
+      }
+
+      // asking to spill 0 bytes should not spill
+      var sizeBeforeSpill = store.currentSize
+      store.synchronousSpill(sizeBeforeSpill)
+      assert(spillStore.spilledBuffers.isEmpty)
+      assertResult(sizeBeforeSpill)(store.currentSize)
+      store.synchronousSpill(sizeBeforeSpill + 1)
+      assert(spillStore.spilledBuffers.isEmpty)
+      assertResult(sizeBeforeSpill)(store.currentSize)
+
+      // spilling 1 byte should force one buffer to spill in priority order
+      assertResult(0)(store.currentSize) // everything is leased
+
+      // now 1 buffer is available for spilling
+      val buff = rapidsDeviceBuffers.remove(1)
+      buff.close()
+
+      assertResult(buff.getLength)(store.currentSize)
+      sizeBeforeSpill = store.currentSize
+      store.synchronousSpill(sizeBeforeSpill - 1)
+      assertResult(1)(spillStore.spilledBuffers.length)
+      assertResult(0)(store.currentSize)
+      assertResult(1)(spillStore.spilledBuffers(0).tableId)
+
+      rapidsDeviceBuffers.foreach(_.close())
+      rapidsDeviceBuffers.clear()
+
+      // spilling to zero should force all buffers to spill in priority order
+      store.synchronousSpill(0)
+      assertResult(3)(spillStore.spilledBuffers.length)
+      assertResult(0)(store.currentSize)
+      assertResult(0)(spillStore.spilledBuffers(1).tableId)
+      assertResult(2)(spillStore.spilledBuffers(2).tableId)
+    }
+  }
+
   case class MockRapidsBufferId(tableId: Int) extends RapidsBufferId {
     override def getDiskPath(diskBlockManager: RapidsDiskBlockManager): File =
       throw new UnsupportedOperationException
