@@ -210,6 +210,18 @@ public class TestHashedPriorityQueue {
   }
 
   @Test
+  public void testRemovingAndOffering() {
+    TestObj obj = buildTestObjs(1).remove(0);
+    HashedPriorityQueue<TestObj> q =
+            new HashedPriorityQueue<>(new TestObjPriorityComparator());
+    q.offer(obj);
+    q.remove(obj);
+    q.offer(obj);
+    q.remove(obj);
+    q.offer(obj);
+    q.poll();
+  }
+  @Test
   public void testUpdatePriority() {
     ArrayList<TestObj> objs = buildTestObjs(100);
     HashedPriorityQueue<TestObj> q =

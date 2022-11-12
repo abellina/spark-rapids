@@ -229,8 +229,11 @@ class RapidsDeviceMemoryStoreSuite extends FunSuite with Arm with MockitoSugar {
       assert(spillStore.spilledBuffers.isEmpty)
       assertResult(sizeBeforeSpill)(store.currentSize)
 
-      // spilling 1 byte should force one buffer to spill in priority order
-      assertResult(0)(store.currentSize) // everything is leased
+      // spilling 1 byte will not be able to free anthing, because we have
+      // leased all buffers
+      assertResult(0)(store.currentSize)
+      store.synchronousSpill(0)
+      assertResult(0)(spillStore.spilledBuffers.length)
 
       // now 1 buffer is available for spilling
       val buff = rapidsBuffers.remove(1)
