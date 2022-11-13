@@ -226,7 +226,7 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
       //removeSpillable(this)
       lease.close()
       require(!isLeased(),
-        s"lease refcount > 0 (refcount=$refcount) for ${id} at releaseResources")
+        s"lease refcount > 0 (refcount=${lease.getRefCount}) for ${id} at releaseResources")
     }
 
     override def getDeviceMemoryBuffer: DeviceMemoryBuffer = synchronized {
