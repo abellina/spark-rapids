@@ -208,7 +208,7 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
       removeSpillable(this)
       lease.incRefCount
       logInfo(s"getLease refCount ${lease.getRefCount}, refcount=$refcount " +
-        s"${id} ${lease} isLeased: ${isLeased}")
+        s"${id} ${lease} isLeased: ${isLeased} ${printStackTrace()}")
       lease
     }
 
