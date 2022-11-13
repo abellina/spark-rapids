@@ -193,6 +193,7 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
       memoryStoreHandler: MemoryStoreHandler)
       extends RapidsBufferBase(id, size, meta, spillPriority, spillCallback)
         with MemoryBuffer.EventHandler {
+    logInfo(s"Adding buffer ${contigBuffer} with orig refCount = ${contigBuffer.getRefCount}")
     override val storageTier: StorageTier = StorageTier.DEVICE
 
     // we now own the buffer, the caller will close
