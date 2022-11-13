@@ -207,6 +207,8 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
     def getLease(): DeviceMemoryBuffer = {
       removeSpillable(this)
       lease.incRefCount
+      logInfo(s"getLease refCount ${lease.getRefCount}, refcount=$refcount " +
+        s"${id} ${lease} isLeased: ${isLeased}")
       lease
     }
 
