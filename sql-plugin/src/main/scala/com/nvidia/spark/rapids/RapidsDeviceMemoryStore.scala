@@ -232,9 +232,7 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
     }
 
     override def getDeviceMemoryBuffer: DeviceMemoryBuffer = synchronized {
-      removeSpillable(this) // make ourselves uneligible for spill
-      lease.incRefCount()
-      lease
+      getLease()
     }
 
     override def getMemoryBuffer: MemoryBuffer = getDeviceMemoryBuffer
