@@ -77,14 +77,12 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
       tableMeta: TableMeta,
       initialSpillPriority: Long,
       spillCallback: SpillCallback = RapidsBuffer.defaultSpillCallback): Unit = {
-    table.close()
-    //contigBuffer.incRefCount()
     freeOnExcept(
       new RapidsDeviceMemoryBuffer(
         id,
         contigBuffer.getLength,
         tableMeta,
-        None,
+        Some(table),
         contigBuffer,
         initialSpillPriority,
         spillCallback,
@@ -117,7 +115,6 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
     val contigBuffer = contigTable.getBuffer
     val size = contigBuffer.getLength
     val meta = MetaUtils.buildTableMeta(id.tableId, contigTable)
-    //contigBuffer.incRefCount()
     freeOnExcept(
       new RapidsDeviceMemoryBuffer(
         id,
@@ -153,7 +150,6 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
       initialSpillPriority: Long,
       spillCallback: SpillCallback = RapidsBuffer.defaultSpillCallback,
       needsSync: Boolean = true): Unit = {
-    //buffer.incRefCount()
     freeOnExcept(
       new RapidsDeviceMemoryBuffer(
         id,
@@ -203,7 +199,6 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
     // refcount will be 2 momentarily, and will return to 1 shortly
     // maybe we should just ensure this is refcount 1 so we stop with
     // withResource shananigans
-    //contigBuffer.incRefCount()
     val lease = contigBuffer.slice(0, contigBuffer.getLength)
     require(null == lease.setEventHandler(this)) // starts at refcount 1
 
@@ -216,8 +211,7 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
     }
 
     override def onClosed(refCount: Int): Unit = synchronized {
-      logInfo(s"onClosed!! ${id}")
-      println(s"onClosed!! refCount ${refCount} ${id} ${lease} isLeased: ${isLeased}")
+      logInfo(s"onClosed!! refCount ${refCount} ${id} ${lease} isLeased: ${isLeased}")
       if (refCount == 1) {
         makeSpillable(this)
       }
@@ -231,6 +225,7 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
       // TODO: memoryStoreHandler.onSpillStoreSizeChange(-1L * size)
       //removeSpillable(this)
       lease.close()
+      require(!isLeased(), s"lease refcount > 0 (refcount=$refcount) for ${id} at releaseResources")
     }
 
     override def getDeviceMemoryBuffer: DeviceMemoryBuffer = synchronized {
@@ -254,24 +249,21 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
 
     override def addReference(): Boolean = synchronized {
       logInfo(s"Acquiring RapidsBuffer ${id}: ${refcount}")
-      val wasAcquired = isAcquired
+      // refcount for contigBuffer cou
       val res = super.addReference()
-      if (!wasAcquired) {
-        // it now is, we want to track this as a new max
-        // TODO: fix memoryStoreHandler.onSpillStoreSizeChange(-1L * size)
-        logInfo(s"Removing bc addReference ${id}")
-        // this buffer is no longer a candidate for spilling
-        removeSpillable(this)
-      }
+      // TODO: fix memoryStoreHandler.onSpillStoreSizeChange(-1L * size)
+      logInfo(s"Removing bc addReference ${id}")
+      // this buffer is no longer a candidate for spilling
+      removeSpillable(this)
       res
     }
 
     override def close(): Unit = synchronized {
       super.close()
-      logInfo(s"At close() RapidsBuffer ${id}: ${refcount}. ${printStackTrace}")
+      logInfo(s"At close() RapidsBuffer ${id}: refcount=${refcount}. ${printStackTrace}")
       if (refcount == 0) {
-        logInfo(s"Making ${id} spillable")
         if (!isLeased) {
+          logInfo(s"Making ${id} spillable")
           makeSpillable(this)
         }
         // it now is not acquired, we want to mark this as spillable

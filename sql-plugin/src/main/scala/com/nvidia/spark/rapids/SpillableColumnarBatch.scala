@@ -195,6 +195,7 @@ object SpillableColumnarBatch extends Arm {
         val cv = batch.column(0).asInstanceOf[GpuColumnVectorFromBuffer]
         val table = GpuColumnVector.from(batch)
         val buff = cv.getBuffer
+        logInfo(s"TABLE addTable, causes leak? refcount = ${buff.getRefCount}")
         RapidsBufferCatalog.addTable(id, table, buff, cv.getTableMeta, initialSpillPriority,
           spillCallback)
       } else {
