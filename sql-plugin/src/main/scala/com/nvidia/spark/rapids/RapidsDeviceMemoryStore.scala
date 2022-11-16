@@ -228,8 +228,8 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
       // TODO: memoryStoreHandler.onSpillStoreSizeChange(-1L * size)
       //removeSpillable(this)
       lease.close()
-      require(!isLeased(),
-        s"lease refcount > 0 (refcount=${lease.getRefCount}) for ${id} at releaseResources")
+      //require(!isLeased(),
+      //  s"lease refcount > 0 (refcount=${lease.getRefCount}) for ${id} at releaseResources")
     }
 
     override def getDeviceMemoryBuffer: DeviceMemoryBuffer = synchronized {
