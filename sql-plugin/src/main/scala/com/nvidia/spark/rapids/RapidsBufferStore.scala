@@ -53,19 +53,21 @@ abstract class RapidsBufferStore(
     private[this] val buffers = new java.util.HashMap[RapidsBufferId, RapidsBufferBase]
     private[this] val spillable = new HashedPriorityQueue[RapidsBufferBase](comparator)
     private[this] var totalBytesStored: Long = 0L
+    private[this] var totalBytesSpillable: Long = 0L
 
     def add(buffer: RapidsBufferBase): Unit = synchronized {
       val old = buffers.put(buffer.id, buffer)
       if (old != null) {
         throw new DuplicateBufferException(s"duplicate buffer registered: ${buffer.id}")
       }
+      totalBytesStored += buffer.size
       makeSpillable(buffer)
     }
 
     def makeSpillable(buffer: RapidsBufferBase): Unit = synchronized {
       val didAdd = spillable.offer(buffer)
       if (didAdd) {
-        totalBytesStored += buffer.size
+        totalBytesSpillable += buffer.size
         val leftovers = new scala.collection.mutable.ArrayBuffer[RapidsBufferId]()
         spillable.forEach { k =>
           leftovers.append(k.id)
@@ -73,6 +75,7 @@ abstract class RapidsBufferStore(
         logInfo(s"Added ${buffer.id}, size: ${buffer.size}: " +
           s"Num spillable: ${spillable.size} " +
           s"totalBytesStored: ${totalBytesStored} " +
+          s"totalBytesSpillable: ${totalBytesSpillable} " +
           s"leftovers: ${leftovers.mkString(",")}")
       }
     }
@@ -84,10 +87,11 @@ abstract class RapidsBufferStore(
         spillable.forEach { k =>
           leftovers.append(k.id)
         }
-        totalBytesStored -= buffer.size
+        totalBytesSpillable -= buffer.size
         logInfo(s"Removed ${buffer.id}, size: ${buffer.size}: " +
           s"Num spillable: ${spillable.size} " +
           s"totalBytesStored: ${totalBytesStored} " +
+          s"totalBytesSpillable: ${totalBytesSpillable} " +
           s"leftovers: ${leftovers.mkString(",")}")
       }
     }
@@ -95,6 +99,7 @@ abstract class RapidsBufferStore(
     def remove(buffer: RapidsBufferBase): Unit = synchronized {
       logInfo(s"Calling remove with ${buffer.id}")
       buffers.remove(buffer.id)
+      totalBytesStored -= buffer.size
       removeSpillable(buffer)
     }
 
@@ -113,7 +118,9 @@ abstract class RapidsBufferStore(
 
     def nextSpillableBuffer(): RapidsBufferBase = synchronized {
       val buff = spillable.poll()
-      totalBytesStored -= buff.size
+      if (buff != null) {
+        totalBytesStored -= buff.size
+      }
       buff
     }
 
@@ -123,6 +130,7 @@ abstract class RapidsBufferStore(
     }
 
     def getTotalBytes: Long = synchronized { totalBytesStored }
+    def getTotalBytesSpillable: Long = synchronized { totalBytesSpillable }
   }
 
   private[this] val pendingFreeBytes = new AtomicLong(0L)
@@ -142,6 +150,8 @@ abstract class RapidsBufferStore(
 
   /** Return the current byte total of buffers in this store. */
   def currentSize: Long = buffers.getTotalBytes
+
+  def currentSpillableSize: Long = buffers.getTotalBytesSpillable
 
   /**
    * Specify another store that can be used when this store needs to spill.
@@ -191,14 +201,14 @@ abstract class RapidsBufferStore(
     require(targetTotalSize >= 0, s"Negative spill target size: $targetTotalSize")
 
     var totalSpilled: Long = 0
-    if (buffers.getTotalBytes > targetTotalSize) {
+    if (buffers.getTotalBytesSpillable > targetTotalSize) {
       val nvtx = new NvtxRange(nvtxSyncSpillName, NvtxColor.ORANGE)
       try {
         logDebug(s"$name store spilling to reduce usage from " +
-            s"${buffers.getTotalBytes} to $targetTotalSize bytes")
+            s"${buffers.getTotalBytesSpillable} to $targetTotalSize bytes")
         var waited = false
         var exhausted = false
-        while (!exhausted && buffers.getTotalBytes > targetTotalSize) {
+        while (!exhausted && buffers.getTotalBytesSpillable > targetTotalSize) {
           val amountSpilled = trySpillAndFreeBuffer(stream)
           if (amountSpilled != 0) {
             totalSpilled += amountSpilled
@@ -209,7 +219,7 @@ abstract class RapidsBufferStore(
               logWarning(s"Cannot spill further, waiting for ${pendingFreeBytes.get} " +
                   " bytes of pending buffers to be released")
               memoryFreedMonitor.synchronized {
-                val memNeeded = buffers.getTotalBytes - targetTotalSize
+                val memNeeded = buffers.getTotalBytesSpillable - targetTotalSize
                 if (memNeeded > 0 && memNeeded <= pendingFreeBytes.get) {
                   // This could be a futile wait if the thread(s) holding the pending buffers open
                   // are here waiting for more memory.
@@ -218,7 +228,10 @@ abstract class RapidsBufferStore(
               }
             } else {
               logWarning("Unable to spill enough to meet request. " +
-                  s"Total=${buffers.getTotalBytes} Target=$targetTotalSize")
+                s"PendingFree=${pendingFreeBytes.get()} " +
+                s"Total=${buffers.getTotalBytes} " +
+                s"Spillable=${buffers.getTotalBytesSpillable} " +
+                s"Target=$targetTotalSize")
               exhausted = true
             }
           }
@@ -262,12 +275,12 @@ abstract class RapidsBufferStore(
     catalog.registerNewBuffer(buffer)
   }
 
-  protected def makeSpillable(buffer: RapidsBufferBase): Unit = synchronized {
+  protected def makeSpillable(buffer: RapidsBufferBase): Unit = {
     logInfo(s"Making spillable ${buffer.id} ${printStackTrace()}")
     buffers.makeSpillable(buffer)
   }
 
-  protected def removeSpillable(buffer: RapidsBufferBase): Unit = synchronized {
+  protected def removeSpillable(buffer: RapidsBufferBase): Unit = {
     logInfo(s"Removing from spillable ${buffer.id} ${printStackTrace()}")
     buffers.removeSpillable(buffer)
   }

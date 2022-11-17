@@ -120,6 +120,7 @@ class DeviceMemoryEventHandler(
     try {
       withResource(new NvtxRange("onAllocFailure", NvtxColor.RED)) { _ =>
         val storeSize = store.currentSize
+        val storeSizeSpillable = store.currentSpillableSize
         val attemptMsg = if (retryCount > 0) {
           s"Attempt ${retryCount}. "
         } else {
@@ -127,12 +128,12 @@ class DeviceMemoryEventHandler(
         }
 
         val retryState = oomRetryState.get()
-        retryState.resetIfNeeded(retryCount, storeSize)
+        retryState.resetIfNeeded(retryCount, storeSizeSpillable)
 
         logInfo(s"Device allocation of $allocSize bytes failed, device store has " +
-          s"$storeSize bytes. $attemptMsg" +
+          s"$storeSize bytes out of which $storeSizeSpillable bytes are spillable. $attemptMsg" +
           s"Total RMM allocated is ${Rmm.getTotalBytesAllocated} bytes. ")
-        if (storeSize == 0) {
+        if (storeSizeSpillable == 0) {
           if (retryState.shouldTrySynchronizing(retryCount)) {
             Cuda.deviceSynchronize()
             logWarning(s"[RETRY ${retryState.getRetriesSoFar}] " +
@@ -152,7 +153,7 @@ class DeviceMemoryEventHandler(
             false
           }
         } else {
-          val targetSize = Math.max(storeSize - allocSize, 0)
+          val targetSize = Math.max(storeSizeSpillable - allocSize, 0)
           logDebug(s"Targeting device store size of $targetSize bytes")
           val amountSpilled = store.synchronousSpill(targetSize)
           logInfo(s"Spilled $amountSpilled bytes from the device store")

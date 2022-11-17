@@ -213,7 +213,7 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
       lease
     }
 
-    override def onClosed(refCount: Int): Unit = synchronized {
+    override def onClosed(refCount: Int): Unit = {
       logInfo(s"onClosed!! refCount ${refCount} ${id} ${lease} isLeased: ${isLeased}")
       if (refCount == 1) {
         makeSpillable(this)
