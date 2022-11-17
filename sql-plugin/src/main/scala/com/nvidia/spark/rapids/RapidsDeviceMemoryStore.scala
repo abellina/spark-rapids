@@ -203,21 +203,19 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
     val lease = contigBuffer.slice(0, contigBuffer.getLength)
     require(null == lease.setEventHandler(this)) // starts at refcount 1
 
-    def isLeased() = lease.getRefCount > 1
-
     def getLease(): DeviceMemoryBuffer = {
       removeSpillable(this)
-      lease.incRefCount
-      logInfo(s"getLease refCount ${lease.getRefCount}, refcount=$refcount " +
-        s"${id} ${lease} isLeased: ${isLeased} ${printStackTrace()}")
+      synchronized {
+        lease.incRefCount
+      }
       lease
     }
 
     override def onClosed(refCount: Int): Unit = {
-      logInfo(s"onClosed!! refCount ${refCount} ${id} ${lease} isLeased: ${isLeased}")
       if (refCount == 1) {
         makeSpillable(this)
       } else {
+        // TODO: only for refcount > 1?
         // make sure we removed ourselves
         removeSpillable(this)
       }
@@ -267,7 +265,7 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
       super.close()
       logInfo(s"At close() RapidsBuffer ${id}: refcount=${refcount}. ${printStackTrace}")
       if (refcount == 0) {
-        if (!isLeased) {
+        if (lease.getRefCount > 1) {
           logInfo(s"Making ${id} spillable")
           makeSpillable(this)
         }

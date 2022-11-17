@@ -65,18 +65,20 @@ abstract class RapidsBufferStore(
     }
 
     def makeSpillable(buffer: RapidsBufferBase): Unit = synchronized {
-      val didAdd = spillable.offer(buffer)
-      if (didAdd) {
-        totalBytesSpillable += buffer.size
-        val leftovers = new scala.collection.mutable.ArrayBuffer[RapidsBufferId]()
-        spillable.forEach { k =>
-          leftovers.append(k.id)
+      if (buffer.isValid) {
+        val didAdd = spillable.offer(buffer)
+        if (didAdd) {
+          totalBytesSpillable += buffer.size
+          val leftovers = new scala.collection.mutable.ArrayBuffer[RapidsBufferId]()
+          spillable.forEach { k =>
+            leftovers.append(k.id)
+          }
+          logInfo(s"Added ${buffer.id}, size: ${buffer.size}: " +
+            s"Num spillable: ${spillable.size} " +
+            s"totalBytesStored: ${totalBytesStored} " +
+            s"totalBytesSpillable: ${totalBytesSpillable} " +
+            s"leftovers: ${leftovers.mkString(",")}")
         }
-        logInfo(s"Added ${buffer.id}, size: ${buffer.size}: " +
-          s"Num spillable: ${spillable.size} " +
-          s"totalBytesStored: ${totalBytesStored} " +
-          s"totalBytesSpillable: ${totalBytesSpillable} " +
-          s"leftovers: ${leftovers.mkString(",")}")
       }
     }
 
@@ -98,8 +100,10 @@ abstract class RapidsBufferStore(
 
     def remove(buffer: RapidsBufferBase): Unit = synchronized {
       logInfo(s"Calling remove with ${buffer.id}")
-      buffers.remove(buffer.id)
-      totalBytesStored -= buffer.size
+      val obj = buffers.remove(buffer.id)
+      if (obj != null) {
+        totalBytesStored -= buffer.size
+      }
       removeSpillable(buffer)
     }
 
@@ -117,11 +121,7 @@ abstract class RapidsBufferStore(
     }
 
     def nextSpillableBuffer(): RapidsBufferBase = synchronized {
-      val buff = spillable.poll()
-      if (buff != null) {
-        totalBytesStored -= buff.size
-      }
-      buff
+      spillable.poll()
     }
 
     def updateSpillPriority(buffer: RapidsBufferBase, priority:Long): Unit = synchronized {
@@ -336,7 +336,7 @@ abstract class RapidsBufferStore(
       deviceStorage: RapidsDeviceMemoryStore = RapidsBufferCatalog.getDeviceStorage)
       extends RapidsBuffer with Arm {
     private val MAX_UNSPILL_ATTEMPTS = 100
-    private[this] var isValid = true
+    var isValid = true
     protected[this] var refcount = 0
     private[this] var spillPriority: Long = initialSpillPriority
 
