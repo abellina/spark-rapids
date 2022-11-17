@@ -217,6 +217,9 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
       logInfo(s"onClosed!! refCount ${refCount} ${id} ${lease} isLeased: ${isLeased}")
       if (refCount == 1) {
         makeSpillable(this)
+      } else {
+        // make sure we removed ourselves
+        removeSpillable(this)
       }
     }
 
