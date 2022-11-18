@@ -19,15 +19,15 @@ package com.nvidia.spark.rapids
 import java.util.Comparator
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
-
 import ai.rapids.cudf.{BaseDeviceMemoryBuffer, Cuda, DeviceMemoryBuffer, HostMemoryBuffer, MemoryBuffer, NvtxColor, NvtxRange}
 import com.nvidia.spark.rapids.RapidsPluginImplicits._
 import com.nvidia.spark.rapids.StorageTier.{DEVICE, StorageTier}
 import com.nvidia.spark.rapids.format.TableMeta
-
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.types.DataType
 import org.apache.spark.sql.vectorized.ColumnarBatch
+
+import scala.collection.mutable
 
 object RapidsBufferStore {
   private val FREE_WAIT_TIMEOUT = 10 * 1000
@@ -52,6 +52,7 @@ abstract class RapidsBufferStore(
         java.lang.Long.compare(o1.getSpillPriority, o2.getSpillPriority)
     private[this] val buffers = new java.util.HashMap[RapidsBufferId, RapidsBufferBase]
     private[this] val spillable = new HashedPriorityQueue[RapidsBufferBase](comparator)
+    private[this] val spillableMemoryBuffer = new mutable.HashSet[MemoryBuffer]()
     private[this] var totalBytesStored: Long = 0L
 
     def add(buffer: RapidsBufferBase): Unit = synchronized {
@@ -60,6 +61,12 @@ abstract class RapidsBufferStore(
         throw new DuplicateBufferException(s"duplicate buffer registered: ${buffer.id}")
       }
       spillable.offer(buffer)
+      val underlying = buffer.getMemoryBufferInternal
+      if (spillableMemoryBuffer.contains(underlying)) {
+        throw new IllegalStateException(
+          s"Buffer ${buffer} tracks an already tracked spillable ${underlying}")
+      }
+      spillableMemoryBuffer.add(underlying)
       totalBytesStored += buffer.size
     }
 
@@ -67,6 +74,7 @@ abstract class RapidsBufferStore(
       val obj = buffers.remove(id)
       if (obj != null) {
         spillable.remove(obj)
+        spillableMemoryBuffer.remove(obj.getMemoryBufferInternal)
         totalBytesStored -= obj.size
       }
     }
@@ -76,6 +84,7 @@ abstract class RapidsBufferStore(
         val buffs = buffers.values().toArray(new Array[RapidsBufferBase](0))
         buffers.clear()
         spillable.clear()
+        spillableMemoryBuffer.clear()
         buffs
       }
       // We need to release the `RapidsBufferStore` lock to prevent a lock order inversion
@@ -275,6 +284,11 @@ abstract class RapidsBufferStore(
       catalog: RapidsBufferCatalog = RapidsBufferCatalog.singleton,
       deviceStorage: RapidsDeviceMemoryStore = RapidsBufferCatalog.getDeviceStorage)
       extends RapidsBuffer with Arm {
+
+    def getMemoryBufferInternal: MemoryBuffer = {
+      throw new IllegalStateException("foo")
+    }
+
     private val MAX_UNSPILL_ATTEMPTS = 100
     private[this] var isValid = true
     protected[this] var refcount = 0

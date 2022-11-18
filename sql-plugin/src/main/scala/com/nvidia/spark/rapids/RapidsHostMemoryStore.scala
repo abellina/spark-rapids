@@ -131,6 +131,8 @@ class RapidsHostMemoryStore(
       buffer
     }
 
+    override def getMemoryBufferInternal: MemoryBuffer = { buffer }
+
     override protected def releaseResources(): Unit = {
       allocationMode match {
         case Pooled =>

@@ -180,6 +180,8 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
       extends RapidsBufferBase(id, size, meta, spillPriority, spillCallback) {
     override val storageTier: StorageTier = StorageTier.DEVICE
 
+    override def getMemoryBufferInternal: MemoryBuffer = { contigBuffer }
+
     override protected def releaseResources(): Unit = {
       contigBuffer.close()
       table.foreach(_.close())
