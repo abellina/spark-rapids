@@ -117,6 +117,7 @@ class DeviceMemoryEventHandler(
     try {
       withResource(new NvtxRange("onAllocFailure", NvtxColor.RED)) { _ =>
         val storeSize = store.currentSize
+        val storeSpillable = store.currentSpillableSize
         val attemptMsg = if (retryCount > 0) {
           s"Attempt ${retryCount}. "
         } else {
@@ -127,9 +128,9 @@ class DeviceMemoryEventHandler(
         retryState.resetIfNeeded(retryCount, storeSize)
 
         logInfo(s"Device allocation of $allocSize bytes failed, device store has " +
-          s"$storeSize bytes. $attemptMsg" +
+          s"$storeSize total, and $storeSpillable spillable bytes. $attemptMsg" +
           s"Total RMM allocated is ${Rmm.getTotalBytesAllocated} bytes. ")
-        if (storeSize == 0) {
+        if (storeSpillable == 0) {
           if (retryState.shouldTrySynchronizing(retryCount)) {
             Cuda.deviceSynchronize()
             logWarning(s"[RETRY ${retryState.getRetriesSoFar}] " +
@@ -149,10 +150,12 @@ class DeviceMemoryEventHandler(
             false
           }
         } else {
-          val targetSize = Math.max(storeSize - allocSize, 0)
+          val targetSize = Math.max(storeSpillable - allocSize, 0)
           logDebug(s"Targeting device store size of $targetSize bytes")
+          val before = Rmm.getTotalBytesAllocated
           val amountSpilled = store.synchronousSpill(targetSize)
-          logInfo(s"Spilled $amountSpilled bytes from the device store")
+          val after = Rmm.getTotalBytesAllocated
+          logInfo(s"Spilled $amountSpilled bytes from the device store (${before} -> ${after})")
           if (isGdsSpillEnabled) {
             TrampolineUtil.incTaskMetricsDiskBytesSpilled(amountSpilled)
           } else {
