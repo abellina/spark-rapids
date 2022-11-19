@@ -127,7 +127,7 @@ class DeviceMemoryEventHandler(
         retryState.resetIfNeeded(retryCount, storeSize)
 
         logInfo(s"Device allocation of $allocSize bytes failed, device store has " +
-          s"$storeSize bytes. $attemptMsg" +
+          s"$storeSize spillable bytes. $attemptMsg" +
           s"Total RMM allocated is ${Rmm.getTotalBytesAllocated} bytes. ")
         if (storeSize == 0) {
           if (retryState.shouldTrySynchronizing(retryCount)) {

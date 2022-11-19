@@ -126,12 +126,27 @@ class RapidsHostMemoryStore(
         id, size, meta, spillPriority, spillCallback, deviceStorage = deviceStorage) {
     override val storageTier: StorageTier = StorageTier.HOST
 
+    override def addReference(): Boolean = {
+      val added = super.addReference()
+      if (added) {
+        removeSpillable(this)
+      }
+      added
+    }
+
+    override def close(): Unit = {
+      super.close()
+      if (refcount == 0 && isValid) {
+        makeSpillable(this)
+      }
+    }
+
     override def getMemoryBuffer: MemoryBuffer = {
       buffer.incRefCount()
       buffer
     }
 
-    override def getMemoryBufferInternal: MemoryBuffer = { buffer }
+    override def getMemoryBufferInternal: Option[MemoryBuffer] = Some(buffer)
 
     override protected def releaseResources(): Unit = {
       allocationMode match {

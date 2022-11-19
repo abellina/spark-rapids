@@ -180,7 +180,22 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
       extends RapidsBufferBase(id, size, meta, spillPriority, spillCallback) {
     override val storageTier: StorageTier = StorageTier.DEVICE
 
-    override def getMemoryBufferInternal: MemoryBuffer = { contigBuffer }
+    override def getMemoryBufferInternal: Option[MemoryBuffer] = Some(contigBuffer)
+
+    override def addReference(): Boolean = synchronized {
+      val added = super.addReference()
+      if (added) {
+        removeSpillable(this)
+      }
+      added
+    }
+
+    override def close(): Unit = synchronized {
+      super.close()
+      if (refcount == 0 && isValid) {
+        makeSpillable(this)
+      }
+    }
 
     override protected def releaseResources(): Unit = {
       contigBuffer.close()
