@@ -361,6 +361,7 @@ abstract class RapidsBufferStore(
     override def addReference(): Boolean = synchronized {
       if (isValid) {
         refcount += 1
+        removeSpillable(this)
       }
       isValid
     }
@@ -450,6 +451,8 @@ abstract class RapidsBufferStore(
         pendingFreeBuffers.remove(id)
         pendingFreeBytes.addAndGet(-size)
         freeBuffer()
+      } else if (refcount == 0 && isValid) {
+        makeSpillable(this)
       }
     }
 
