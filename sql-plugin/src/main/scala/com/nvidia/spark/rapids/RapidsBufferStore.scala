@@ -68,6 +68,14 @@ abstract class RapidsBufferStore(
           throw new IllegalStateException(
             s"Buffer ${buffer} tracks an already tracked spillable ${underlying}")
         }
+        // register the event handler
+        b.setEventHandler((refCount: Int) => {
+          if (refCount == 1) {
+            makeSpillable(buffer)
+          } else {
+            removeSpillable(buffer)
+          }
+        })
         spillableMemoryBuffer.add(b)
       }
       totalBytesStored += buffer.size
@@ -75,7 +83,7 @@ abstract class RapidsBufferStore(
     }
 
     def makeSpillable(buffer: RapidsBufferBase): Unit = synchronized {
-      if (spillable.offer(buffer)) {
+      if (buffer.isValid && spillable.offer(buffer)) {
         totalSpillableBytes += buffer.size
         logInfo(s"makeSpillable: ${buffer}, " +
           s"size: ${buffer.size} => spillable ${totalSpillableBytes}")
@@ -361,6 +369,8 @@ abstract class RapidsBufferStore(
     override def addReference(): Boolean = synchronized {
       if (isValid) {
         refcount += 1
+        // add refcount to the buffer we are managing
+        getMemoryBufferInternal.foreach(_.incRefCount())
         removeSpillable(this)
       }
       isValid
@@ -445,15 +455,19 @@ abstract class RapidsBufferStore(
     override def close(): Unit = synchronized {
       if (refcount == 0) {
         throw new IllegalStateException("Buffer already closed")
+      } else if (refcount > 0) {
+        // decrement refcount for the buffer we are managing
+        getMemoryBufferInternal.foreach(_.close())
       }
       refcount -= 1
       if (refcount == 0 && !isValid) {
         pendingFreeBuffers.remove(id)
         pendingFreeBytes.addAndGet(-size)
         freeBuffer()
-      } else if (refcount == 0 && isValid) {
-        makeSpillable(this)
       }
+      //} else if (refcount == 0 && isValid) {
+      //  makeSpillable(this)
+      //}
     }
 
     /**
