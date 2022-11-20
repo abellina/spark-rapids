@@ -86,7 +86,10 @@ abstract class RapidsBufferStore(
       if (buffer.isValid && spillable.offer(buffer)) {
         totalSpillableBytes += buffer.size
         logInfo(s"makeSpillable: ${buffer}, " +
-          s"size: ${buffer.size} => spillable ${totalSpillableBytes}")
+          s"size: ${buffer.size}. " +
+          s"Total: ${totalBytesStored} " +
+          s"Spillable: ${totalSpillableBytes} " +
+          s"(${totalSpillableBytes.toDouble/totalBytesStored})")
       }
     }
 
@@ -94,7 +97,10 @@ abstract class RapidsBufferStore(
       if (spillable.remove(buffer)) {
         totalSpillableBytes -= buffer.size
         logInfo(s"removeSpillable: ${buffer}, " +
-          s"size: ${buffer.size} => spillable ${totalSpillableBytes}")
+          s"size: ${buffer.size}. " +
+          s"Total: ${totalBytesStored} " +
+          s"Spillable: ${totalSpillableBytes} " +
+          s"(${totalSpillableBytes.toDouble/totalBytesStored})")
       }
     }
 
