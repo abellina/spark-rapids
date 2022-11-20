@@ -70,6 +70,7 @@ abstract class RapidsBufferStore(
         }
         // register the event handler
         b.setEventHandler((refCount: Int) => {
+          logInfo(s"onClose ${refCount} for ${buffer} and ${underlying}")
           if (refCount == 1) {
             makeSpillable(buffer)
           } else {
