@@ -70,7 +70,6 @@ abstract class RapidsBufferStore(
         }
         // register the event handler
         b.setEventHandler((refCount: Int) => {
-          logInfo(s"onClose ${refCount} for ${buffer} and ${underlying}")
           if (refCount == 1) {
             makeSpillable(buffer)
           } else {
@@ -86,22 +85,22 @@ abstract class RapidsBufferStore(
     def makeSpillable(buffer: RapidsBufferBase): Unit = synchronized {
       if (buffer.isValid && spillable.offer(buffer)) {
         totalSpillableBytes += buffer.size
-        logInfo(s"makeSpillable: ${buffer}, " +
-          s"size: ${buffer.size}. " +
-          s"Total: ${totalBytesStored} " +
-          s"Spillable: ${totalSpillableBytes} " +
-          s"(${totalSpillableBytes.toDouble/totalBytesStored})")
+        //logInfo(s"makeSpillable: ${buffer}, " +
+        //  s"size: ${buffer.size}. " +
+        //  s"Total: ${totalBytesStored} " +
+        //  s"Spillable: ${totalSpillableBytes} " +
+        //  s"(${totalSpillableBytes.toDouble/totalBytesStored})")
       }
     }
 
     def removeSpillable(buffer: RapidsBufferBase): Unit = synchronized {
       if (spillable.remove(buffer)) {
         totalSpillableBytes -= buffer.size
-        logInfo(s"removeSpillable: ${buffer}, " +
-          s"size: ${buffer.size}. " +
-          s"Total: ${totalBytesStored} " +
-          s"Spillable: ${totalSpillableBytes} " +
-          s"(${totalSpillableBytes.toDouble/totalBytesStored})")
+        //logInfo(s"removeSpillable: ${buffer}, " +
+        //  s"size: ${buffer.size}. " +
+        //  s"Total: ${totalBytesStored} " +
+        //  s"Spillable: ${totalSpillableBytes} " +
+        //  s"(${totalSpillableBytes.toDouble/totalBytesStored})")
       }
     }
 
