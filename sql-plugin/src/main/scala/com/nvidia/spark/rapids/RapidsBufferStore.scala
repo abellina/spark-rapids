@@ -216,7 +216,7 @@ abstract class RapidsBufferStore(
     require(targetTotalSize >= 0, s"Negative spill target size: $targetTotalSize")
 
     var totalSpilled: Long = 0
-    if (buffers.getTotalBytes > targetTotalSize) {
+    if (buffers.getSpillableBytes > targetTotalSize) {
       val nvtx = new NvtxRange(nvtxSyncSpillName, NvtxColor.ORANGE)
       try {
         logInfo(s"$name store spilling to reduce usage from " +
@@ -224,7 +224,7 @@ abstract class RapidsBufferStore(
           s"to $targetTotalSize bytes")
         var waited = false
         var exhausted = false
-        while (!exhausted && buffers.getTotalBytes > targetTotalSize) {
+        while (!exhausted && buffers.getSpillableBytes > targetTotalSize) {
           val amountSpilled = trySpillAndFreeBuffer(stream)
           if (amountSpilled != 0) {
             totalSpilled += amountSpilled
@@ -235,7 +235,7 @@ abstract class RapidsBufferStore(
               logWarning(s"Cannot spill further, waiting for ${pendingFreeBytes.get} " +
                   " bytes of pending buffers to be released")
               memoryFreedMonitor.synchronized {
-                val memNeeded = buffers.getTotalBytes - targetTotalSize
+                val memNeeded = buffers.getSpillableBytes - targetTotalSize
                 if (memNeeded > 0 && memNeeded <= pendingFreeBytes.get) {
                   // This could be a futile wait if the thread(s) holding the pending buffers open
                   // are here waiting for more memory.
@@ -244,7 +244,9 @@ abstract class RapidsBufferStore(
               }
             } else {
               logWarning("Unable to spill enough to meet request. " +
-                  s"Total=${buffers.getTotalBytes} Target=$targetTotalSize")
+                s"Total=${buffers.getTotalBytes} " +
+                s"Spillable=${buffers.getSpillableBytes} " +
+                s"Target=$targetTotalSize")
               exhausted = true
             }
           }
