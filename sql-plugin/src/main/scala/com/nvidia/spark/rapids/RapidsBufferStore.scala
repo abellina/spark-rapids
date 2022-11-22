@@ -33,6 +33,9 @@ object RapidsBufferStore {
   private val FREE_WAIT_TIMEOUT = 10 * 1000
 }
 
+trait Spillable
+trait AliasRapidsBuffer
+
 /**
  * Base class for all buffer store types.
  *
@@ -51,9 +54,12 @@ abstract class RapidsBufferStore(
     private[this] val comparator: Comparator[RapidsBufferBase] =
       (o1: RapidsBufferBase, o2: RapidsBufferBase) =>
         java.lang.Long.compare(o1.getSpillPriority, o2.getSpillPriority)
+
+    // all of these buffers are de-duped
+    // RapidsBufferBase -all buffers, spillable or not
     private[this] val buffers = new java.util.HashMap[RapidsBufferId, RapidsBufferBase]
     private[this] val spillable = new HashedPriorityQueue[RapidsBufferBase](comparator)
-    private[this] val spillableMemoryBuffer = new mutable.HashSet[MemoryBuffer]()
+    private[this] val spillableMemoryBuffer = new mutable.HashSet[Spillable]()
     private[this] var totalBytesStored: Long = 0L
     private[this] var totalSpillableBytes: Long = 0L
 
@@ -62,24 +68,32 @@ abstract class RapidsBufferStore(
       if (old != null) {
         throw new DuplicateBufferException(s"duplicate buffer registered: ${buffer.id}")
       }
-      val underlying = buffer.getMemoryBufferInternal
+      val underlying = buffer match {
+        case spillable: Spillable => Some(spillable)
+        case _ => None
+      }
       underlying.foreach { b =>
+        logInfo(s"Adding a spillable buffer! ${b}")
         if (spillableMemoryBuffer.contains(b)) {
           throw new IllegalStateException(
             s"Buffer ${buffer} tracks an already tracked spillable ${underlying}")
         }
-        // register the event handler
-        b.setEventHandler((refCount: Int) => {
-          if (refCount == 1) {
-            makeSpillable(buffer)
-          } else {
-            removeSpillable(buffer)
-          }
-        })
         spillableMemoryBuffer.add(b)
+        makeSpillable(b)
       }
-      totalBytesStored += buffer.size
-      makeSpillable(buffer)
+      if (underlying.isEmpty) {
+        logInfo(s"Adding a regular buffer! ${buffer}")
+      }
+      buffer match {
+        case alias: AliasRapidsBuffer =>
+          // TODO: could just make the size of the alias 0, and have a "get underlying size" ??
+          logInfo(s"add: Since ${alias} is alias, it doesn't count towards totals")
+        case _ =>
+          logInfo(s"add: Since ${buffer} is NOT alias, it counts towards totals")
+          totalBytesStored += buffer.size
+      }
+
+      logInfo(s"Total ${totalBytesStored} Spillable ${totalSpillableBytes}")
     }
 
     def makeSpillable(buffer: RapidsBufferBase): Unit = synchronized {
@@ -97,12 +111,24 @@ abstract class RapidsBufferStore(
     def remove(id: RapidsBufferId): Unit = synchronized {
       val obj = buffers.remove(id)
       if (obj != null) {
-        obj.getMemoryBufferInternal.foreach { b =>
-          spillableMemoryBuffer.remove(b)
+        obj match {
+          case spillable: Spillable =>
+            spillableMemoryBuffer.remove(spillable)
+            logInfo(s"Spillable buffer ${obj}, removing from spillable")
+            removeSpillable(spillable)
+          case _ =>
+            logInfo(s"Not a spillable buffer ${obj}, not removing from spillable")
         }
-        totalBytesStored -= obj.size
-        removeSpillable(obj)
+        obj match {
+          case alias: AliasRapidsBuffer =>
+            // TODO: could just make the size of the alias 0, and have a "get underlying size" ??
+            logInfo(s"remove: Since ${alias} is alias, it doesn't count towards totals")
+          case _ =>
+            logInfo(s"remove: Since ${obj} is NOT alias, it counts towards totals")
+            totalBytesStored -= obj.size
+        }
       }
+      logInfo(s"Total ${totalBytesStored} Spillable ${totalSpillableBytes}")
     }
 
     def freeAll(): Unit = {
@@ -368,9 +394,6 @@ abstract class RapidsBufferStore(
     override def addReference(): Boolean = synchronized {
       if (isValid) {
         refcount += 1
-        // add refcount to the buffer we are managing
-        getMemoryBufferInternal.foreach(_.incRefCount())
-        removeSpillable(this)
       }
       isValid
     }
@@ -454,9 +477,6 @@ abstract class RapidsBufferStore(
     override def close(): Unit = synchronized {
       if (refcount == 0) {
         throw new IllegalStateException("Buffer already closed")
-      } else if (refcount > 0) {
-        // decrement refcount for the buffer we are managing
-        getMemoryBufferInternal.foreach(_.close())
       }
       refcount -= 1
       if (refcount == 0 && !isValid) {
@@ -464,9 +484,6 @@ abstract class RapidsBufferStore(
         pendingFreeBytes.addAndGet(-size)
         freeBuffer()
       }
-      //} else if (refcount == 0 && isValid) {
-      //  makeSpillable(this)
-      //}
     }
 
     /**
@@ -506,6 +523,6 @@ abstract class RapidsBufferStore(
       }
     }
 
-    override def toString: String = s"$name buffer size=$size"
+    override def toString: String = s"ID: $id $name buffer size=$size"
   }
 }
