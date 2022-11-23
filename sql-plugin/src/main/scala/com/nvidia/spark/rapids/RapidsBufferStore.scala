@@ -53,6 +53,7 @@ abstract class RapidsBufferStore(
     private[this] val buffers = new java.util.HashMap[RapidsBufferId, RapidsBufferBase]
     private[this] val spillable = new HashedPriorityQueue[RapidsBufferBase](comparator)
     private[this] var totalBytesStored: Long = 0L
+    private[this] var totalSpillableBytes: Long = 0L
 
     def add(buffer: RapidsBufferBase): Unit = synchronized {
       val old = buffers.put(buffer.id, buffer)
@@ -61,8 +62,10 @@ abstract class RapidsBufferStore(
       }
       if (buffer.isSpillable) {
         spillable.offer(buffer)
+        totalSpillableBytes += buffer.size
       }
       totalBytesStored += buffer.size
+      logInfo(s"addBuffer $buffer total=$totalBytesStored spillable=$totalSpillableBytes")
     }
 
     def remove(id: RapidsBufferId): Unit = synchronized {
@@ -70,9 +73,11 @@ abstract class RapidsBufferStore(
       if (obj != null) {
         if (obj.isSpillable) {
           spillable.remove(obj)
+          totalSpillableBytes -= obj.size
         }
         totalBytesStored -= obj.size
       }
+      logInfo(s"addBuffer $obj total=$totalBytesStored spillable=$totalSpillableBytes")
     }
 
     def freeAll(): Unit = {

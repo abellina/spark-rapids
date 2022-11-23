@@ -266,6 +266,8 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
     override val storageTier: StorageTier = StorageTier.DEVICE
 
     override def getMemoryBuffer: MemoryBuffer = getDeviceMemoryBuffer
+
+    override def toString: String = s"$name spillable buffer size=$size"
   }
 
   class RapidsDeviceMemoryBuffer(
@@ -299,5 +301,7 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
       spillable.free()
       super.free()
     }
+
+    override def toString: String = s"$name facade buffer size=$size"
   }
 }
