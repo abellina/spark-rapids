@@ -311,7 +311,7 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
       extends RapidsBufferBase(id, size, meta, spillPriority, spillCallback)
       with AliasRapidsBuffer {
 
-    override def toString: String = s"ID: $id alias $name buffer size=$size"
+    override def toString: String = s"ID: $id alias of (${spillable.toString}) size=$size"
 
     spillable.registerAlias(this)
 
