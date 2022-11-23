@@ -62,7 +62,7 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
       spillBuffer,
       other.getSpillPriority,
       other.spillCallback)
-      addFacadeBuffer(facadeBuffer)
+    addFacadeBuffer(facadeBuffer)
     facadeBuffer
   }
 
@@ -279,8 +279,10 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
       extends RapidsBufferBase(id, size, meta, spillPriority, spillCallback) {
     override val storageTier: StorageTier = StorageTier.DEVICE
 
+    override def isSpillable(): Boolean = false
+
     override protected def releaseResources(): Unit = {
-      spillable.releaseResources()
+      logInfo(s"releaseResources called on facade... $id")
     }
 
     override def getDeviceMemoryBuffer: DeviceMemoryBuffer = {
@@ -291,6 +293,11 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
 
     override def getColumnarBatch(sparkTypes: Array[DataType]): ColumnarBatch = {
       spillable.getColumnarBatch(sparkTypes)
+    }
+
+    override def free(): Unit = synchronized {
+      spillable.free()
+      super.free()
     }
   }
 }

@@ -59,14 +59,18 @@ abstract class RapidsBufferStore(
       if (old != null) {
         throw new DuplicateBufferException(s"duplicate buffer registered: ${buffer.id}")
       }
-      spillable.offer(buffer)
+      if (buffer.isSpillable) {
+        spillable.offer(buffer)
+      }
       totalBytesStored += buffer.size
     }
 
     def remove(id: RapidsBufferId): Unit = synchronized {
       val obj = buffers.remove(id)
       if (obj != null) {
-        spillable.remove(obj)
+        if (obj.isSpillable) {
+          spillable.remove(obj)
+        }
         totalBytesStored -= obj.size
       }
     }
@@ -275,6 +279,9 @@ abstract class RapidsBufferStore(
       catalog: RapidsBufferCatalog = RapidsBufferCatalog.singleton,
       deviceStorage: RapidsDeviceMemoryStore = RapidsBufferCatalog.getDeviceStorage)
       extends RapidsBuffer with Arm {
+
+    def isSpillable(): Boolean = true
+
     private val MAX_UNSPILL_ATTEMPTS = 100
     private[this] var isValid = true
     protected[this] var refcount = 0
