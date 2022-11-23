@@ -63,8 +63,8 @@ abstract class RapidsBufferStore(
       if (buffer.isSpillable) {
         spillable.offer(buffer)
         totalSpillableBytes += buffer.size
+        totalBytesStored += buffer.size
       }
-      totalBytesStored += buffer.size
       logInfo(s"addBuffer $buffer total=$totalBytesStored spillable=$totalSpillableBytes")
     }
 
@@ -74,10 +74,10 @@ abstract class RapidsBufferStore(
         if (obj.isSpillable) {
           spillable.remove(obj)
           totalSpillableBytes -= obj.size
+          totalBytesStored -= obj.size
         }
-        totalBytesStored -= obj.size
       }
-      logInfo(s"addBuffer $obj total=$totalBytesStored spillable=$totalSpillableBytes")
+      logInfo(s"remove $obj total=$totalBytesStored spillable=$totalSpillableBytes")
     }
 
     def freeAll(): Unit = {
@@ -277,7 +277,7 @@ abstract class RapidsBufferStore(
   /** Base class for all buffers in this store. */
   abstract class RapidsBufferBase(
       override val id: RapidsBufferId,
-      override val size: Long,
+      val size: Long,
       override val meta: TableMeta,
       initialSpillPriority: Long,
       override val spillCallback: SpillCallback,
