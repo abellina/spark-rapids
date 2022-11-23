@@ -272,6 +272,7 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
     override def releaseResources(): Unit = {
       memoryBuffer.close()
       table.foreach(_.close())
+      memoryBuffer.setEventHandler(null)
     }
 
     override def getMemoryBufferInternal: Option[MemoryBuffer] = {
