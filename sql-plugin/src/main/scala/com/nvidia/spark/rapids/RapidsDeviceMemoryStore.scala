@@ -281,6 +281,16 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
       extends RapidsBufferBase(id, size, meta, spillPriority, spillCallback) {
     override val storageTier: StorageTier = StorageTier.DEVICE
 
+    override def addReference(): Boolean = {
+      spillable.addReference()
+      super.addReference()
+    }
+
+    override def close(): Unit = {
+      spillable.close()
+      super.close()
+    }
+
     override def isSpillable(): Boolean = false
 
     override protected def releaseResources(): Unit = {
