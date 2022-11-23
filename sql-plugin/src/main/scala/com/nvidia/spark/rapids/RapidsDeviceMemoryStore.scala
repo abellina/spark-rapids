@@ -230,7 +230,12 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
       size: Long,
       meta: TableMeta,
       table: Option[Table])
-    extends RapidsBufferBase(id, size, meta, -1, null)
+    extends RapidsBufferBase(id, size, meta, -1, new SpillCallback() {
+      override def apply(from: StorageTier, to: StorageTier, amount: Long): Unit = {
+        logInfo(s"At spill callback for ${id}")
+      }
+      override def semaphoreWaitTime: GpuMetric = NoopMetric
+    })
       with MemoryBuffer.EventHandler
       with Spillable {
 
