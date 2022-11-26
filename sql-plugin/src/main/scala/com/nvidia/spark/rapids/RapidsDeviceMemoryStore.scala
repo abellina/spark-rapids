@@ -103,7 +103,6 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
       tableMeta: TableMeta,
       initialSpillPriority: Long,
       spillCallback: SpillCallback = RapidsBuffer.defaultSpillCallback): Unit = {
-
     val spillBuffer = getOrElseCreateBuffer(
       contigBuffer,
       tableMeta,
@@ -267,7 +266,7 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
 
     override def getMemoryBuffer: MemoryBuffer = getDeviceMemoryBuffer
 
-    override def toString: String = s"$name spillable buffer size=$size"
+    override def toString: String = s"$id: $name spillable buffer size=$size"
   }
 
   class RapidsDeviceMemoryBuffer(
@@ -283,18 +282,16 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
 
     override def addReference(): Boolean = {
       spillable.addReference()
-      super.addReference()
     }
 
     override def close(): Unit = {
       spillable.close()
-      super.close()
     }
 
     override def isSpillable(): Boolean = false
 
     override protected def releaseResources(): Unit = {
-      spillable.releaseResources()
+      //spillable.releaseResources()
     }
 
     override def getDeviceMemoryBuffer: DeviceMemoryBuffer = {
@@ -312,6 +309,6 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
       super.free()
     }
 
-    override def toString: String = s"$name facade buffer size=$size"
+    override def toString: String = s"$id: $name facade buffer size=$size"
   }
 }
