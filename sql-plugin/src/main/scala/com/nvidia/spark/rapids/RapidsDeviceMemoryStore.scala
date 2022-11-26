@@ -294,7 +294,7 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
     override def isSpillable(): Boolean = false
 
     override protected def releaseResources(): Unit = {
-      logInfo(s"releaseResources called on facade... $id")
+      spillable.releaseResources()
     }
 
     override def getDeviceMemoryBuffer: DeviceMemoryBuffer = {
