@@ -215,6 +215,7 @@ class ConditionalNestedLoopJoinIterator(
       joinTime = joinTime) {
   override def close(): Unit = {
     if (!closed) {
+      logInfo(s"At CNLJ close for task: ${TaskContext.get().taskAttemptId()}")
       super.close()
       condition.close()
     }
@@ -446,6 +447,8 @@ case class GpuBroadcastNestedLoopJoinExec(
       buildTime: GpuMetric,
       buildDataSize: GpuMetric): ColumnarBatch = {
     withResource(new NvtxWithMetrics("build join table", NvtxColor.GREEN, buildTime)) { _ =>
+      logInfo(s"at makeBuiltBatch for broadcast ${broadcastRelation.id} from task " +
+        s"${TaskContext.get().taskAttemptId()}")
       val builtBatch = GpuBroadcastHelper.getBroadcastBatch(broadcastRelation, broadcast.schema)
       buildDataSize += GpuColumnVector.getTotalDeviceMemoryUsed(builtBatch)
       builtBatch

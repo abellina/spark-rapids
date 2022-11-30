@@ -18,7 +18,6 @@ package com.nvidia.spark.rapids
 
 import ai.rapids.cudf.{GatherMap, NvtxColor, OutOfBoundsPolicy}
 import com.nvidia.spark.rapids.RapidsPluginImplicits._
-
 import org.apache.spark.TaskContext
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.catalyst.expressions.Attribute
@@ -131,6 +130,8 @@ abstract class AbstractGpuJoinIterator(
         val nextRows = JoinGatherer.getRowsInNextBatch(gather, targetSize)
         gather.gatherNext(nextRows)
       }
+
+      // TODO: this is calling `allowSpilling`
       if (gathererStore.exists(_.isDone)) {
         gathererStore.foreach(_.close())
         gathererStore = None
@@ -244,6 +245,7 @@ abstract class SplittableJoinIterator(
 
   override def close(): Unit = {
     if (!closed) {
+      logInfo(s"AbstractGpuIterator::close ${TaskContext.get().taskAttemptId()}")
       super.close()
       builtBatch.close()
       pendingSplits.foreach(_.close())

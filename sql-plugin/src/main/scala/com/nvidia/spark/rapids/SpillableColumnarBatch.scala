@@ -27,6 +27,7 @@ import org.apache.spark.sql.vectorized.ColumnarBatch
  * Holds a ColumnarBatch that the backing buffers on it can be spilled.
  */
 trait SpillableColumnarBatch extends AutoCloseable {
+  def getId(): RapidsBufferId
   /**
    * The number of rows stored in this batch.
    */
@@ -45,6 +46,7 @@ trait SpillableColumnarBatch extends AutoCloseable {
    *       with decompressing the data if necessary.
    */
   def getColumnarBatch(): ColumnarBatch
+  def getRefCount(): Int = -1
 
   def sizeInBytes: Long
 }
@@ -55,6 +57,7 @@ trait SpillableColumnarBatch extends AutoCloseable {
  * row count in memory, and not dealing with the catalog at all.
  */
 class JustRowsColumnarBatch(numRows: Int, semWait: GpuMetric) extends SpillableColumnarBatch {
+  override def getId(): RapidsBufferId = null
   override def numRows(): Int = numRows
   override def setSpillPriority(priority: Long): Unit = () // NOOP nothing to spill
   override def getColumnarBatch(): ColumnarBatch = {
@@ -77,6 +80,8 @@ class SpillableColumnarBatchImpl(
     sparkTypes: Array[DataType],
     semWait: GpuMetric)
     extends SpillableColumnarBatch with Arm {
+
+  override def getId(): RapidsBufferId = id
   private var closed = false
 
   /**
@@ -84,10 +89,11 @@ class SpillableColumnarBatchImpl(
    */
   override def numRows(): Int = rowCount
 
-  override lazy val sizeInBytes: Long =
+  override lazy val sizeInBytes: Long = {
     withResource(RapidsBufferCatalog.acquireBuffer(id)) { buff =>
       buff.size
     }
+  }
 
   /**
    * Set a new spill priority.
@@ -109,6 +115,12 @@ class SpillableColumnarBatchImpl(
     withResource(RapidsBufferCatalog.acquireBuffer(id)) { rapidsBuffer =>
       GpuSemaphore.acquireIfNecessary(TaskContext.get(), semWait)
       rapidsBuffer.getColumnarBatch(sparkTypes)
+    }
+  }
+
+  override def getRefCount(): Int = {
+    withResource(RapidsBufferCatalog.acquireBuffer(id)) { buff =>
+      withResource(buff.getMemoryBuffer) { mb => mb.getRefCount }
     }
   }
 

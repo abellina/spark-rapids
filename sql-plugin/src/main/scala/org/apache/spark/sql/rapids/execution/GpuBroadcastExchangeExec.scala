@@ -19,18 +19,15 @@ package org.apache.spark.sql.rapids.execution
 import java.io._
 import java.util.UUID
 import java.util.concurrent._
-
 import scala.collection.mutable
 import scala.concurrent.ExecutionContext
 import scala.util.control.NonFatal
-
-import ai.rapids.cudf.{HostMemoryBuffer, JCudfSerialization, NvtxColor, NvtxRange}
+import ai.rapids.cudf.{DeviceMemoryBuffer, HostMemoryBuffer, JCudfSerialization, NvtxColor, NvtxRange}
 import ai.rapids.cudf.JCudfSerialization.SerializedTableHeader
 import com.nvidia.spark.rapids._
 import com.nvidia.spark.rapids.GpuMetric._
 import com.nvidia.spark.rapids.RapidsPluginImplicits._
 import com.nvidia.spark.rapids.shims.{ShimBroadcastExchangeLike, ShimUnaryExecNode, SparkShimImpl}
-
 import org.apache.spark.SparkException
 import org.apache.spark.broadcast.Broadcast
 import org.apache.spark.internal.Logging
@@ -40,14 +37,14 @@ import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.expressions.Attribute
 import org.apache.spark.sql.catalyst.plans.logical.Statistics
 import org.apache.spark.sql.catalyst.plans.physical.{BroadcastMode, BroadcastPartitioning, Partitioning}
-import org.apache.spark.sql.execution.{SparkPlan, SQLExecution}
+import org.apache.spark.sql.execution.{SQLExecution, SparkPlan}
 import org.apache.spark.sql.execution.exchange.BroadcastExchangeExec
 import org.apache.spark.sql.execution.exchange.BroadcastExchangeExec.MAX_BROADCAST_TABLE_BYTES
 import org.apache.spark.sql.execution.joins.{BroadcastHashJoinExec, BroadcastNestedLoopJoinExec}
 import org.apache.spark.sql.execution.metric.SQLMetrics
 import org.apache.spark.sql.internal.{SQLConf, StaticSQLConf}
 import org.apache.spark.sql.types.DataType
-import org.apache.spark.sql.vectorized.{ColumnarBatch, ColumnVector}
+import org.apache.spark.sql.vectorized.{ColumnVector, ColumnarBatch}
 
 object SerializedHostTableUtils extends Arm {
   /**
@@ -116,11 +113,12 @@ class SerializeConcatHostBuffersDeserializeBatch(
       assert(headers.length <= 1 && buffers.length <= 1)
       withResource(new NvtxRange("broadcast manifest batch", NvtxColor.PURPLE)) { _ =>
         try {
+          var b: DeviceMemoryBuffer = null
           val res = if (headers.isEmpty) {
             SpillableColumnarBatch(GpuColumnVector.emptyBatchFromTypes(dataTypes),
             SpillPriorities.ACTIVE_BATCHING_PRIORITY, RapidsBuffer.defaultSpillCallback)
           } else {
-            withResource(JCudfSerialization.readTableFrom(headers.head, buffers.head)) {
+            val r = withResource(JCudfSerialization.readTableFrom(headers.head, buffers.head)) {
               tableInfo =>
                 val table = tableInfo.getContiguousTable
                 if (table == null) {
@@ -128,11 +126,16 @@ class SerializeConcatHostBuffersDeserializeBatch(
                   SpillableColumnarBatch(new ColumnarBatch(Array.empty[ColumnVector], numRows),
                     SpillPriorities.ACTIVE_BATCHING_PRIORITY, RapidsBuffer.defaultSpillCallback)
                 } else {
-                  SpillableColumnarBatch(table, dataTypes,
+                  val sb = SpillableColumnarBatch(table, dataTypes,
                     SpillPriorities.ACTIVE_BATCHING_PRIORITY, RapidsBuffer.defaultSpillCallback)
+                  b = table.getBuffer
+                  table.close() // TODO: fix
+                  sb
                 }
             }
+            r
           }
+          logInfo(s"Buffer ${b} has refcount ${b.getRefCount}")
           batchInternal = res
           res
         } finally {
