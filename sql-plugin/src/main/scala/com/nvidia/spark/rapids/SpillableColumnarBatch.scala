@@ -71,23 +71,18 @@ class JustRowsColumnarBatch(numRows: Int, semWait: GpuMetric) extends SpillableC
  *       ownership of the life cycle of the batch.  So don't call this constructor directly please
  *       use `SpillableColumnarBatch.apply` instead.
  */
-class SpillableColumnarBatchImpl (id: TempSpillBufferId,
+class SpillableColumnarBatchImpl(
+    id: RapidsBufferId,
     rowCount: Int,
     sparkTypes: Array[DataType],
     semWait: GpuMetric)
-    extends  SpillableColumnarBatch with Arm {
+    extends SpillableColumnarBatch with Arm {
   private var closed = false
 
   /**
    * The number of rows stored in this batch.
    */
   override def numRows(): Int = rowCount
-
-  /**
-   * The ID that this is stored under.
-   * @note Use with caution because if this has been closed the id is no longer valid.
-   */
-  def spillId: TempSpillBufferId = id
 
   override lazy val sizeInBytes: Long =
     withResource(RapidsBufferCatalog.acquireBuffer(id)) { buff =>
@@ -137,7 +132,8 @@ object SpillableColumnarBatch extends Arm {
    * @param spillCallback a callback when the buffer is spilled. This should be very light weight.
    *                      It should never allocate GPU memory and really just be used for metrics.
    */
-  def apply(batch: ColumnarBatch,
+  def apply(
+      batch: ColumnarBatch,
       priority: Long,
       spillCallback: SpillCallback): SpillableColumnarBatch = {
     val numRows = batch.numRows()
@@ -146,9 +142,8 @@ object SpillableColumnarBatch extends Arm {
       batch.close()
       new JustRowsColumnarBatch(numRows, spillCallback.semaphoreWaitTime)
     } else {
-      val types =  GpuColumnVector.extractTypes(batch)
-      val id = TempSpillBufferId()
-      addBatch(id, batch, priority, spillCallback)
+      val types = GpuColumnVector.extractTypes(batch)
+      val id = addBatch(batch, priority, spillCallback)
       new SpillableColumnarBatchImpl(id, numRows, types, spillCallback.semaphoreWaitTime)
     }
   }
@@ -174,25 +169,28 @@ object SpillableColumnarBatch extends Arm {
   }
 
   private[this] def addBatch(
-      id: RapidsBufferId,
       batch: ColumnarBatch,
       initialSpillPriority: Long,
-      spillCallback: SpillCallback): Unit = {
+      spillCallback: SpillCallback): RapidsBufferId = {
+    val id = TempSpillBufferId()
     withResource(batch) { batch =>
       val numColumns = batch.numCols()
       if (GpuCompressedColumnVector.isBatchCompressed(batch)) {
+        // UCX shuffle
         val cv = batch.column(0).asInstanceOf[GpuCompressedColumnVector]
         val buff = cv.getTableBuffer
         buff.incRefCount()
         RapidsBufferCatalog.addBuffer(id, buff, cv.getTableMeta, initialSpillPriority,
           spillCallback)
       } else if (GpuPackedTableColumn.isBatchPacked(batch)) {
+        // result of contig split - UCX shuffle?
         val cv = batch.column(0).asInstanceOf[GpuPackedTableColumn]
         RapidsBufferCatalog.addContiguousTable(id, cv.getContiguousTable, initialSpillPriority,
           spillCallback)
       } else if (numColumns > 0 &&
           (0 until numColumns)
               .forall(i => batch.column(i).isInstanceOf[GpuColumnVectorFromBuffer])) {
+        // I believe these are contig split buffers from the store
         val cv = batch.column(0).asInstanceOf[GpuColumnVectorFromBuffer]
         val table = GpuColumnVector.from(batch)
         val buff = cv.getBuffer
@@ -200,6 +198,7 @@ object SpillableColumnarBatch extends Arm {
         RapidsBufferCatalog.addTable(id, table, buff, cv.getTableMeta, initialSpillPriority,
           spillCallback)
       } else {
+        // guaranteed unique buffer... no aliasing
         withResource(GpuColumnVector.from(batch)) { tmpTable =>
           withResource(tmpTable.contiguousSplit()) { contigTables =>
             require(contigTables.length == 1, "Unexpected number of contiguous spit tables")
@@ -209,6 +208,7 @@ object SpillableColumnarBatch extends Arm {
         }
       }
     }
+    id
   }
 }
 
@@ -216,14 +216,8 @@ object SpillableColumnarBatch extends Arm {
 /**
  * Just like a SpillableColumnarBatch but for buffers.
  */
-class SpillableBuffer (id: TempSpillBufferId, semWait: GpuMetric) extends AutoCloseable with Arm {
+class SpillableBuffer (id: RapidsBufferId, semWait: GpuMetric) extends AutoCloseable with Arm {
   private var closed = false
-
-  /**
-   * The ID that this is stored under.
-   * @note Use with caution because if this has been closed the id is no longer valid.
-   */
-  def spillId: TempSpillBufferId = id
 
   lazy val sizeInBytes: Long =
     withResource(RapidsBufferCatalog.acquireBuffer(id)) { buff =>
