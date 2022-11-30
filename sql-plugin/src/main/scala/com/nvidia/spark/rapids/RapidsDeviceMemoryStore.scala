@@ -19,9 +19,11 @@ package com.nvidia.spark.rapids
 import ai.rapids.cudf.{ContiguousTable, Cuda, DeviceMemoryBuffer, HostMemoryBuffer, MemoryBuffer, Table}
 import com.nvidia.spark.rapids.StorageTier.StorageTier
 import com.nvidia.spark.rapids.format.TableMeta
-
+import org.apache.spark.sql.rapids.TempSpillBufferId
 import org.apache.spark.sql.types.DataType
 import org.apache.spark.sql.vectorized.ColumnarBatch
+
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * Buffer storage using device memory.
@@ -47,7 +49,7 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
       }
     }
     new RapidsDeviceMemoryBuffer(other.id, other.size, other.meta, None,
-      deviceBuffer, other.getSpillPriority, other.spillCallback)
+      registeredBuffer(deviceBuffer), other.getSpillPriority, other.spillCallback)
   }
 
   /**
@@ -73,7 +75,7 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
         contigBuffer.getLength,
         tableMeta,
         Some(table),
-        contigBuffer,
+        registeredBuffer(contigBuffer),
         initialSpillPriority,
         spillCallback)) { buffer =>
       logDebug(s"Adding table for: [id=$id, size=${buffer.size}, " +
@@ -111,7 +113,7 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
         size,
         meta,
         None,
-        contigBuffer,
+        registeredBuffer(contigBuffer),
         initialSpillPriority,
         spillCallback)) { buffer =>
       logDebug(s"Adding table for: [id=$id, size=${buffer.size}, " +
@@ -145,7 +147,7 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
         buffer.getLength,
         tableMeta,
         None,
-        buffer,
+        registeredBuffer(buffer),
         initialSpillPriority,
         spillCallback)) { buff =>
       logDebug(s"Adding receive side table for: [id=$id, size=${buffer.getLength}, " +
@@ -154,6 +156,51 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
           s"meta_size=${tableMeta.bufferMeta.size}]")
       addDeviceBuffer(buff, needsSync)
     }
+  }
+
+  val dmbs = new ConcurrentHashMap[RapidsBufferId, RegisteredDeviceMemoryBuffer]()
+
+  class RegisteredDeviceMemoryBuffer(id: RapidsBufferId, buffer: DeviceMemoryBuffer)
+    extends MemoryBuffer.EventHandler
+    with AutoCloseable {
+
+    buffer.setEventHandler(this)
+
+    override def onClosed(refCount: Int): Unit = {
+      logInfo(s"RegisteredDeviceMemoryBuffer ${buffer} closed with ${refCount}")
+      if (refCount == 0) {
+        dmbs.remove(id)
+        logInfo(s"Removed RegisteredDeviceMemoryBuffer ${buffer} from cached: ${dmbs.size()}")
+        buffer.setEventHandler(null)
+      }
+    }
+
+    def getDeviceMemoryBuffer: DeviceMemoryBuffer = {
+      buffer.incRefCount()
+      buffer
+    }
+
+    override def close(): Unit = {
+      buffer.close()
+    }
+
+    def alias(): RegisteredDeviceMemoryBuffer = {
+      buffer.incRefCount()
+      this
+    }
+  }
+
+  def registeredBuffer(buffer: DeviceMemoryBuffer): RegisteredDeviceMemoryBuffer = {
+    val handler = buffer.getEventHandler
+    handler match {
+      case null =>
+        val id = TempSpillBufferId()
+        val buff = new RegisteredDeviceMemoryBuffer(id, buffer)
+        dmbs.put(id, buff)
+        buff
+      case hndr:RegisteredDeviceMemoryBuffer => hndr.alias()
+    }
+
   }
 
   /**
@@ -174,7 +221,7 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
       size: Long,
       meta: TableMeta,
       table: Option[Table],
-      contigBuffer: DeviceMemoryBuffer,
+      contigBuffer: RegisteredDeviceMemoryBuffer,
       spillPriority: Long,
       override val spillCallback: SpillCallback)
       extends RapidsBufferBase(id, size, meta, spillPriority, spillCallback) {
@@ -186,18 +233,19 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
     }
 
     override def getDeviceMemoryBuffer: DeviceMemoryBuffer = {
-      contigBuffer.incRefCount()
-      contigBuffer
+      contigBuffer.getDeviceMemoryBuffer
     }
 
     override def getMemoryBuffer: MemoryBuffer = getDeviceMemoryBuffer
 
     override def getColumnarBatch(sparkTypes: Array[DataType]): ColumnarBatch = {
-      if (table.isDefined) {
-        //REFCOUNT ++ of all columns
-        GpuColumnVectorFromBuffer.from(table.get, contigBuffer, meta, sparkTypes)
-      } else {
-        columnarBatchFromDeviceBuffer(contigBuffer, sparkTypes)
+      withResource(contigBuffer.getDeviceMemoryBuffer) { buff =>
+        if (table.isDefined) {
+          //REFCOUNT ++ of all columns
+          GpuColumnVectorFromBuffer.from(table.get, buff, meta, sparkTypes)
+        } else {
+          columnarBatchFromDeviceBuffer(buff, sparkTypes)
+        }
       }
     }
   }
