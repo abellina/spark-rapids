@@ -49,7 +49,7 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
       }
     }
     new RapidsDeviceMemoryBuffer(other.id, other.size, other.meta, None,
-      registeredBuffer(deviceBuffer), other.getSpillPriority, other.spillCallback)
+      registeredBuffer(other.id, deviceBuffer), other.getSpillPriority, other.spillCallback)
   }
 
   /**
@@ -75,7 +75,7 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
         contigBuffer.getLength,
         tableMeta,
         Some(table),
-        registeredBuffer(contigBuffer),
+        registeredBuffer(id, contigBuffer),
         initialSpillPriority,
         spillCallback)) { buffer =>
       logDebug(s"Adding table for: [id=$id, size=${buffer.size}, " +
@@ -113,7 +113,7 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
         size,
         meta,
         None,
-        registeredBuffer(contigBuffer),
+        registeredBuffer(id, contigBuffer),
         initialSpillPriority,
         spillCallback)) { buffer =>
       logDebug(s"Adding table for: [id=$id, size=${buffer.size}, " +
@@ -147,7 +147,7 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
         buffer.getLength,
         tableMeta,
         None,
-        registeredBuffer(buffer),
+        registeredBuffer(id, buffer),
         initialSpillPriority,
         spillCallback)) { buff =>
       logDebug(s"Adding receive side table for: [id=$id, size=${buffer.getLength}, " +
@@ -184,23 +184,32 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
       buffer.close()
     }
 
-    def alias(): RegisteredDeviceMemoryBuffer = {
+    val aliases = new ConcurrentHashMap[RapidsBufferId, Boolean]()
+
+    def alias(aliasingId: RapidsBufferId): RegisteredDeviceMemoryBuffer = synchronized {
+      if (!aliases.contains(aliasingId)) {
+        throw new IllegalStateException(s"Alias already exists for $id to $aliasingId")
+      }
       buffer.incRefCount()
+      aliases.put(aliasingId, true)
+      logInfo(s"$id aliases $aliasingId now. Buffer ref count: ${buffer.getRefCount}")
       this
     }
   }
 
-  def registeredBuffer(buffer: DeviceMemoryBuffer): RegisteredDeviceMemoryBuffer = {
+  def registeredBuffer(
+      aliasingId: RapidsBufferId,
+      buffer: DeviceMemoryBuffer): RegisteredDeviceMemoryBuffer = {
     val handler = buffer.getEventHandler
-    handler match {
+    val registered = handler match {
       case null =>
         val id = TempSpillBufferId()
         val buff = new RegisteredDeviceMemoryBuffer(id, buffer)
         dmbs.put(id, buff)
         buff
-      case hndr:RegisteredDeviceMemoryBuffer => hndr.alias()
+      case hndr:RegisteredDeviceMemoryBuffer => hndr
     }
-
+    registered.alias(aliasingId)
   }
 
   /**
