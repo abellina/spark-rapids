@@ -22,7 +22,7 @@ import java.util.concurrent._
 import scala.collection.mutable
 import scala.concurrent.ExecutionContext
 import scala.util.control.NonFatal
-import ai.rapids.cudf.{DeviceMemoryBuffer, HostMemoryBuffer, JCudfSerialization, NvtxColor, NvtxRange}
+import ai.rapids.cudf.{HostMemoryBuffer, JCudfSerialization, NvtxColor, NvtxRange}
 import ai.rapids.cudf.JCudfSerialization.SerializedTableHeader
 import com.nvidia.spark.rapids._
 import com.nvidia.spark.rapids.GpuMetric._
@@ -113,12 +113,11 @@ class SerializeConcatHostBuffersDeserializeBatch(
       assert(headers.length <= 1 && buffers.length <= 1)
       withResource(new NvtxRange("broadcast manifest batch", NvtxColor.PURPLE)) { _ =>
         try {
-          var b: DeviceMemoryBuffer = null
           val res = if (headers.isEmpty) {
             SpillableColumnarBatch(GpuColumnVector.emptyBatchFromTypes(dataTypes),
             SpillPriorities.ACTIVE_BATCHING_PRIORITY, RapidsBuffer.defaultSpillCallback)
           } else {
-            val r = withResource(JCudfSerialization.readTableFrom(headers.head, buffers.head)) {
+            withResource(JCudfSerialization.readTableFrom(headers.head, buffers.head)) {
               tableInfo =>
                 val table = tableInfo.getContiguousTable
                 if (table == null) {
@@ -126,16 +125,11 @@ class SerializeConcatHostBuffersDeserializeBatch(
                   SpillableColumnarBatch(new ColumnarBatch(Array.empty[ColumnVector], numRows),
                     SpillPriorities.ACTIVE_BATCHING_PRIORITY, RapidsBuffer.defaultSpillCallback)
                 } else {
-                  val sb = SpillableColumnarBatch(table, dataTypes,
+                  SpillableColumnarBatch(table, dataTypes,
                     SpillPriorities.ACTIVE_BATCHING_PRIORITY, RapidsBuffer.defaultSpillCallback)
-                  b = table.getBuffer
-                  table.close() // TODO: fix
-                  sb
                 }
             }
-            r
           }
-          logInfo(s"Buffer ${b} has refcount ${b.getRefCount}")
           batchInternal = res
           res
         } finally {

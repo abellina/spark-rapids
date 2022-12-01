@@ -220,10 +220,15 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
       buffer: DeviceMemoryBuffer): RegisteredDeviceMemoryBuffer = {
     val handler = buffer.getEventHandler
     val registered = handler match {
-      case null => new RegisteredDeviceMemoryBuffer(TempSpillBufferId(), buffer)
-      case hndr: RegisteredDeviceMemoryBuffer => hndr
+      case null =>
+        buffer.incRefCount()
+        new RegisteredDeviceMemoryBuffer(TempSpillBufferId(), buffer)
+      case hndr: RegisteredDeviceMemoryBuffer =>
+        hndr
     }
-    registered.alias(aliasingId)
+    withResource(buffer) { _ =>
+      registered.alias(aliasingId)
+    }
   }
 
   /**
@@ -265,12 +270,31 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
 
     override def getColumnarBatch(sparkTypes: Array[DataType]): ColumnarBatch = {
       withResource(contigBuffer.getDeviceMemoryBuffer) { buff =>
-        if (table.isDefined) {
+        val startedWith = buff.getRefCount
+        var endedWith: Int = -1
+        logInfo(s"At getColumnarBatch with ref count ${buff.getRefCount}")
+        val res = if (table.isDefined) {
           //REFCOUNT ++ of all columns
-          GpuColumnVectorFromBuffer.from(table.get, buff, meta, sparkTypes)
+          if (buff.getRefCount == 8) {
+            logError("this is it")
+          }
+          logInfo("went .from route")
+          buff.incRefCount()
+          val r = GpuColumnVectorFromBuffer.from(table.get, buff, meta, sparkTypes)
+          endedWith = buff.getRefCount
+          if (endedWith == startedWith) {
+            logError("WHAT!!")
+          }
+          r
         } else {
+          logInfo("went columnarBatchFromDeviceBuffer route")
           columnarBatchFromDeviceBuffer(buff, sparkTypes)
         }
+
+        endedWith = buff.getRefCount
+        require(endedWith > startedWith,
+          s"endedWith=$endedWith, startedWith=$startedWith")
+        res
       }
     }
   }
