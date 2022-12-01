@@ -164,6 +164,8 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
     extends MemoryBuffer.EventHandler
     with AutoCloseable {
 
+    buffer.incRefCount()
+
     dmbs.put(id, this)
 
     buffer.setEventHandler(this)
@@ -199,7 +201,6 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
       if (aliases.contains(aliasingId)) {
         throw new IllegalStateException(s"Alias already exists for $id to $aliasingId")
       }
-      buffer.incRefCount()
       aliases.put(aliasingId, true)
       logInfo(s"$id is aliased by $aliasingId now. Buffer ref count: ${buffer.getRefCount}")
       this
@@ -208,9 +209,10 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
     def removeAlias(aliasingId: RapidsBufferId) = synchronized {
       aliases.remove(aliasingId)
       logInfo(s"$id no longer aliased by ${aliasingId}. Number of aliases ${aliases.size()}")
+      close()
       if (aliases.size() == 0) {
         logInfo(s"$id has no aliases left, closing it!")
-        close()
+        close() // final close
       }
     }
   }
@@ -218,15 +220,12 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
   def registeredBuffer(
       aliasingId: RapidsBufferId,
       buffer: DeviceMemoryBuffer): RegisteredDeviceMemoryBuffer = {
-    val handler = buffer.getEventHandler
-    val registered = handler match {
-      case null =>
-        buffer.incRefCount()
-        new RegisteredDeviceMemoryBuffer(TempSpillBufferId(), buffer)
-      case hndr: RegisteredDeviceMemoryBuffer =>
-        hndr
-    }
     withResource(buffer) { _ =>
+      val handler = buffer.getEventHandler
+      val registered = handler match {
+        case null => new RegisteredDeviceMemoryBuffer(TempSpillBufferId(), buffer)
+        case hndr: RegisteredDeviceMemoryBuffer => hndr
+      }
       registered.alias(aliasingId)
     }
   }
@@ -255,9 +254,13 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
       extends RapidsBufferBase(id, size, meta, spillPriority, spillCallback) {
     override val storageTier: StorageTier = StorageTier.DEVICE
 
+    var released = false
     override protected def releaseResources(): Unit = {
+      if (released) {
+        throw new IllegalStateException(s"Already released ${id} which aliases ${contigBuffer.id}")
+      }
+      released = true
       logInfo(s"releaseResources ${id} -- with registered buff ${contigBuffer.id}")
-      contigBuffer.close()
       table.foreach(_.close())
       contigBuffer.removeAlias(id)
     }
