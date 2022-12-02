@@ -199,14 +199,20 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
     val aliases = new ConcurrentHashMap[RapidsBufferId, Boolean]()
 
     def alias(aliasingId: RapidsBufferId): RegisteredDeviceMemoryBuffer = synchronized {
-      if (id.tableId == 1) {
-        logInfo(s"first one. ${buffer.getRefCount}")
-      }
       if (aliases.contains(aliasingId)) {
         throw new IllegalStateException(s"Alias already exists for $id to $aliasingId")
       }
       aliases.put(aliasingId, true)
       buffer.incRefCount()
+      if (aliases.size == 1) {
+        println(s"first alias ${id} being aliased by ${aliasingId}. " +
+          s"Num aliases ${aliases.size()}. Buff ref count: ${getRefCount}")
+      }
+
+      if (aliases.size > 1) {
+        println(s"already existing ${id} being aliased by ${aliasingId}. " +
+          s"Num aliases ${aliases.size()}. Buff ref count: ${getRefCount}")
+      }
       logInfo(s"$id is aliased by $aliasingId now. Buffer ref count: ${buffer.getRefCount}")
       this
     }
@@ -235,7 +241,8 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
           val reg = new RegisteredDeviceMemoryBuffer(TempSpillBufferId(), buffer)
           println(s"it is new, created registered, refCount is ${buffer.getRefCount}")
           reg
-        case hndr: RegisteredDeviceMemoryBuffer => hndr
+        case hndr: RegisteredDeviceMemoryBuffer =>
+          hndr
       }
       registered.alias(aliasingId)
     }
@@ -267,7 +274,7 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
 
     var released = false
     override protected def releaseResources(): Unit = {
-      println(s"releaseResources $this")
+      println(s"releaseResources ${this.id}")
       if (released) {
         throw new IllegalStateException(s"Already released ${id} which aliases ${contigBuffer.id}")
       }

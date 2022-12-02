@@ -18,9 +18,7 @@ package com.nvidia.spark.rapids
 
 import java.io.File
 import java.math.RoundingMode
-
 import scala.collection.mutable.ArrayBuffer
-
 import ai.rapids.cudf.{ContiguousTable, Cuda, DeviceMemoryBuffer, HostMemoryBuffer, MemoryBuffer, Table}
 import com.nvidia.spark.rapids.StorageTier.StorageTier
 import com.nvidia.spark.rapids.format.TableMeta
@@ -28,8 +26,7 @@ import org.mockito.ArgumentCaptor
 import org.mockito.Mockito.verify
 import org.scalatest.FunSuite
 import org.scalatest.mockito.MockitoSugar
-
-import org.apache.spark.sql.rapids.RapidsDiskBlockManager
+import org.apache.spark.sql.rapids.{RapidsDiskBlockManager, TempSpillBufferId}
 import org.apache.spark.sql.types.{DataType, DecimalType, DoubleType, IntegerType, StringType}
 
 class RapidsDeviceMemoryStoreSuite extends FunSuite with Arm with MockitoSugar {
@@ -43,7 +40,7 @@ class RapidsDeviceMemoryStoreSuite extends FunSuite with Arm with MockitoSugar {
       table.contiguousSplit()(0)
     }
   }
-
+/*
   test("add table registers with catalog") {
     val catalog = mock[RapidsBufferCatalog]
     var ctToCheck: DeviceMemoryBuffer = null
@@ -203,6 +200,61 @@ class RapidsDeviceMemoryStoreSuite extends FunSuite with Arm with MockitoSugar {
       assertResult(0)(store.currentSize)
       assertResult(0)(spillStore.spilledBuffers(1).tableId)
       assertResult(2)(spillStore.spilledBuffers(2).tableId)
+    }
+  }
+
+ */
+
+  test("test aliased spill") {
+    val catalog = new RapidsBufferCatalog
+    val spillStore = new MockSpillStore(catalog)
+    val spillPriorities = Array(0)//, -1, 2)
+    val bufferSizes = new Array[Long](spillPriorities.length)
+    withResource(new RapidsDeviceMemoryStore(catalog)) { store =>
+      store.setSpillStore(spillStore)
+      val aliases = new ArrayBuffer[RapidsBufferId]()
+      spillPriorities.indices.foreach { i =>
+        val bufferId = MockRapidsBufferId(i)
+        withResource(buildContiguousTable()) { ct =>
+          bufferSizes(i) = ct.getBuffer.getLength
+          // store takes ownership of the table
+          store.addContiguousTable(bufferId, ct, spillPriorities(i))
+        }
+        // alias each buffer, so now we have 6 device buffers pointing to 3 registered buffers
+        withResource(catalog.acquireBuffer(bufferId)) { acquired =>
+          println(s"Acquired ${acquired}")
+          withResource(acquired.getDeviceMemoryBuffer) { buff =>
+            println(s"Buffer is ${buff}, adding an alias")
+            val id = TempSpillBufferId()
+            val meta = MetaUtils.getTableMetaNoTable(buff)
+            aliases += id
+            store.addBuffer(
+              id, buff, meta, spillPriorities(i), RapidsBuffer.defaultSpillCallback)
+          }
+        }
+      }
+
+      println("ADDED ALL BUFFERS AND ALIASES")
+
+      assert(spillStore.spilledBuffers.isEmpty)
+
+      val sizeBeforeSpill = store.currentSize
+      // spilling 1 byte should force one buffer to spill in priority order
+      store.synchronousSpill(sizeBeforeSpill - 1)
+      println("SPILLED!")
+      //assertResult(1)(spillStore.spilledBuffers.length)
+      //assertResult(bufferSizes.drop(1).sum)(store.currentSize)
+      //assertResult(1)(spillStore.spilledBuffers(0).tableId)
+
+      //println("SPILLING ALL NOW")
+
+      //// spilling to zero should force all buffers to spill in priority order
+      //store.synchronousSpill(0)
+      //assertResult(3)(spillStore.spilledBuffers.length)
+      //assertResult(0)(store.currentSize)
+      //assertResult(0)(spillStore.spilledBuffers(1).tableId)
+      //assertResult(2)(spillStore.spilledBuffers(2).tableId)
+      //println("Done with the test")
     }
   }
 
