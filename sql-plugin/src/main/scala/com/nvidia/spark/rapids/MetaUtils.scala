@@ -29,7 +29,7 @@ import org.apache.spark.sql.types.DataType
 import org.apache.spark.sql.vectorized.ColumnarBatch
 import org.apache.spark.storage.ShuffleBlockBatchId
 
-object MetaUtils extends Arm {
+object MetaUtils extends Arm with Logging {
   // Used in cases where the `tableId` is not known at meta creation. 
   // We pick a non-zero integer since FlatBuffers prevent mutating the 
   // field if originally set to the default value as specified in the 
@@ -183,7 +183,10 @@ object MetaUtils extends Arm {
   def getTableFromMeta(deviceBuffer: DeviceMemoryBuffer, meta: TableMeta): Table = {
     val packedMeta = meta.packedMetaAsByteBuffer
     require(packedMeta != null, "Missing packed table metadata")
-    Table.fromPackedTable(packedMeta, deviceBuffer)
+    logInfo(s"At getTableFromMeta ${deviceBuffer.getRefCount}")
+    val t = Table.fromPackedTable(packedMeta, deviceBuffer)
+    logInfo(s"Exiting getTableFromMeta ${deviceBuffer.getRefCount}")
+    t
   }
 
   /**

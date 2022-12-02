@@ -40,7 +40,7 @@ class RapidsDeviceMemoryStoreSuite extends FunSuite with Arm with MockitoSugar {
       table.contiguousSplit()(0)
     }
   }
-/*
+
   test("add table registers with catalog") {
     val catalog = mock[RapidsBufferCatalog]
     var ctToCheck: DeviceMemoryBuffer = null
@@ -162,12 +162,11 @@ class RapidsDeviceMemoryStoreSuite extends FunSuite with Arm with MockitoSugar {
       assertResult(0)(store.currentSize)
     }
   }
- */
 
   test("spill") {
     val catalog = new RapidsBufferCatalog
     val spillStore = new MockSpillStore(catalog)
-    val spillPriorities = Array(0)//, -1, 2)
+    val spillPriorities = Array(0, -1, 2)
     val bufferSizes = new Array[Long](spillPriorities.length)
     withResource(new RapidsDeviceMemoryStore(catalog)) { store =>
       store.setSpillStore(spillStore)
@@ -182,12 +181,12 @@ class RapidsDeviceMemoryStoreSuite extends FunSuite with Arm with MockitoSugar {
 
       // asking to spill 0 bytes should not spill
       val sizeBeforeSpill = store.currentSize
-      //store.synchronousSpill(sizeBeforeSpill)
-      //assert(spillStore.spilledBuffers.isEmpty)
-      //assertResult(sizeBeforeSpill)(store.currentSize)
-      //store.synchronousSpill(sizeBeforeSpill + 1)
-      //assert(spillStore.spilledBuffers.isEmpty)
-      //assertResult(sizeBeforeSpill)(store.currentSize)
+      store.synchronousSpill(sizeBeforeSpill)
+      assert(spillStore.spilledBuffers.isEmpty)
+      assertResult(sizeBeforeSpill)(store.currentSize)
+      store.synchronousSpill(sizeBeforeSpill + 1)
+      assert(spillStore.spilledBuffers.isEmpty)
+      assertResult(sizeBeforeSpill)(store.currentSize)
 
       // spilling 1 byte should force one buffer to spill in priority order
       println("SPILL!")
@@ -196,21 +195,21 @@ class RapidsDeviceMemoryStoreSuite extends FunSuite with Arm with MockitoSugar {
 
       assertResult(1)(spillStore.spilledBuffers.length)
       assertResult(bufferSizes.drop(1).sum)(store.currentSize)
-      //assertResult(1)(spillStore.spilledBuffers(0).tableId)
+      assertResult(1)(spillStore.spilledBuffers(0).tableId)
 
       // spilling to zero should force all buffers to spill in priority order
-      //store.synchronousSpill(0)
-      //assertResult(3)(spillStore.spilledBuffers.length)
-      //assertResult(0)(store.currentSize)
-      //assertResult(0)(spillStore.spilledBuffers(1).tableId)
-      //assertResult(2)(spillStore.spilledBuffers(2).tableId)
+      store.synchronousSpill(0)
+      assertResult(3)(spillStore.spilledBuffers.length)
+      assertResult(0)(store.currentSize)
+      assertResult(0)(spillStore.spilledBuffers(1).tableId)
+      assertResult(2)(spillStore.spilledBuffers(2).tableId)
     }
   }
 
   test("test aliased spill") {
     val catalog = new RapidsBufferCatalog
     val spillStore = new MockSpillStore(catalog)
-    val spillPriorities = Array(0)//, -1, 2)
+    val spillPriorities = Array(0, -1, 2)
     val bufferSizes = new Array[Long](spillPriorities.length)
     withResource(new RapidsDeviceMemoryStore(catalog)) { store =>
       store.setSpillStore(spillStore)
@@ -244,19 +243,19 @@ class RapidsDeviceMemoryStoreSuite extends FunSuite with Arm with MockitoSugar {
       // spilling 1 byte should force one buffer to spill in priority order
       store.synchronousSpill(sizeBeforeSpill - 1)
       println("SPILLED!")
-      //assertResult(1)(spillStore.spilledBuffers.length)
-      //assertResult(bufferSizes.drop(1).sum)(store.currentSize)
-      //assertResult(1)(spillStore.spilledBuffers(0).tableId)
+      assertResult(1)(spillStore.spilledBuffers.length)
+      assertResult(bufferSizes.drop(1).sum)(store.currentSize)
+      assertResult(1)(spillStore.spilledBuffers(0).tableId)
 
-      //println("SPILLING ALL NOW")
+      println("SPILLING ALL NOW")
 
       //// spilling to zero should force all buffers to spill in priority order
-      //store.synchronousSpill(0)
-      //assertResult(3)(spillStore.spilledBuffers.length)
-      //assertResult(0)(store.currentSize)
-      //assertResult(0)(spillStore.spilledBuffers(1).tableId)
-      //assertResult(2)(spillStore.spilledBuffers(2).tableId)
-      //println("Done with the test")
+      store.synchronousSpill(0)
+      assertResult(3)(spillStore.spilledBuffers.length)
+      assertResult(0)(store.currentSize)
+      assertResult(0)(spillStore.spilledBuffers(1).tableId)
+      assertResult(2)(spillStore.spilledBuffers(2).tableId)
+      println("Done with the test")
     }
   }
 
