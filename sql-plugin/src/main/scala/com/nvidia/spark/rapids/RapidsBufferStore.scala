@@ -72,12 +72,14 @@ abstract class RapidsBufferStore(
     }
 
     def freeAll(): Unit = {
+
       val values = synchronized {
         val buffs = buffers.values().toArray(new Array[RapidsBufferBase](0))
         buffers.clear()
         spillable.clear()
         buffs
       }
+      println(s"at freeAll with ${values.length}, calling safeFree")
       // We need to release the `RapidsBufferStore` lock to prevent a lock order inversion
       // deadlock: (1) `RapidsBufferBase.free`     calls  (2) `RapidsBufferStore.remove` and
       //           (1) `RapidsBufferStore.freeAll` calls  (2) `RapidsBufferBase.free`.
@@ -226,6 +228,7 @@ abstract class RapidsBufferStore(
   }
 
   override def close(): Unit = {
+    println(s"Closing store ${this}")
     buffers.freeAll()
   }
 
@@ -408,10 +411,13 @@ abstract class RapidsBufferStore(
      * In that case the resources will be released when the reference count reaches zero.
      */
     override def free(): Unit = synchronized {
+      println(s"At free ${this}")
       if (isValid) {
+        println(s"isValid ${this}")
         isValid = false
         buffers.remove(id)
         if (refcount == 0) {
+          println(s"refcount==0 ${this}")
           freeBuffer()
         } else {
           pendingFreeBuffers.put(id, this)

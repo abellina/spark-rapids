@@ -104,9 +104,11 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
       spillCallback: SpillCallback = RapidsBuffer.defaultSpillCallback,
       needsSync: Boolean = true): Unit = {
     val contigBuffer = contigTable.getBuffer
+    println(s"addContiguousTable refCount is ${contigBuffer.getRefCount}")
     val size = contigBuffer.getLength
     val meta = MetaUtils.buildTableMeta(id.tableId, contigTable)
     contigBuffer.incRefCount()
+    println(s"addContiguousTable after incRefCount refCount is ${contigBuffer.getRefCount}")
     freeOnExcept(
       new RapidsDeviceMemoryBuffer(
         id,
@@ -121,6 +123,7 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
           s"meta_id=${buffer.meta.bufferMeta.id}, meta_size=${buffer.meta.bufferMeta.size}]")
       addDeviceBuffer(buffer, needsSync)
     }
+    println(s"addContiguousTable after adding refCount is ${contigBuffer.getRefCount}")
   }
 
   /**
@@ -163,6 +166,7 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
   class RegisteredDeviceMemoryBuffer(val id: RapidsBufferId, buffer: DeviceMemoryBuffer)
     extends MemoryBuffer.EventHandler
     with AutoCloseable {
+    def getRefCount = buffer.getRefCount
 
     buffer.incRefCount()
 
@@ -202,6 +206,7 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
         throw new IllegalStateException(s"Alias already exists for $id to $aliasingId")
       }
       aliases.put(aliasingId, true)
+      buffer.incRefCount()
       logInfo(s"$id is aliased by $aliasingId now. Buffer ref count: ${buffer.getRefCount}")
       this
     }
@@ -210,8 +215,11 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
       aliases.remove(aliasingId)
       logInfo(s"$id no longer aliased by ${aliasingId}. Number of aliases ${aliases.size()}")
       close()
+      println(s"Closed, as standard for all removeAlias. ${getRefCount} ")
       if (aliases.size() == 0) {
-        logInfo(s"$id has no aliases left, closing it!")
+        logInfo(s"$id has no aliases left") //, closing it!")
+
+        println(s"Closing more time, aliases.size() == 0. ${getRefCount} ")
         close() // final close
       }
     }
@@ -223,7 +231,10 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
     withResource(buffer) { _ =>
       val handler = buffer.getEventHandler
       val registered = handler match {
-        case null => new RegisteredDeviceMemoryBuffer(TempSpillBufferId(), buffer)
+        case null =>
+          val reg = new RegisteredDeviceMemoryBuffer(TempSpillBufferId(), buffer)
+          println(s"it is new, created registered, refCount is ${buffer.getRefCount}")
+          reg
         case hndr: RegisteredDeviceMemoryBuffer => hndr
       }
       registered.alias(aliasingId)
@@ -256,12 +267,15 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
 
     var released = false
     override protected def releaseResources(): Unit = {
+      println(s"releaseResources $this")
       if (released) {
         throw new IllegalStateException(s"Already released ${id} which aliases ${contigBuffer.id}")
       }
       released = true
       logInfo(s"releaseResources ${id} -- with registered buff ${contigBuffer.id}")
+      println(s"closing table ${contigBuffer.getRefCount}")
       table.foreach(_.close())
+      println(s"removing alias ${contigBuffer.getRefCount}")
       contigBuffer.removeAlias(id)
     }
 

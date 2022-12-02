@@ -46,18 +46,25 @@ class RapidsDeviceMemoryStoreSuite extends FunSuite with Arm with MockitoSugar {
 
   test("add table registers with catalog") {
     val catalog = mock[RapidsBufferCatalog]
+    var ctToCheck: DeviceMemoryBuffer = null
     withResource(new RapidsDeviceMemoryStore(catalog)) { store =>
       val spillPriority = 3
       val bufferId = MockRapidsBufferId(7)
+
       withResource(buildContiguousTable()) { ct =>
+        ctToCheck = ct.getBuffer
         store.addContiguousTable(bufferId, ct, spillPriority)
+        println(s"After adding table ${ct.getBuffer.getRefCount}")
       }
+
       val captor: ArgumentCaptor[RapidsBuffer] = ArgumentCaptor.forClass(classOf[RapidsBuffer])
       verify(catalog).registerNewBuffer(captor.capture())
       val resultBuffer = captor.getValue
       assertResult(bufferId)(resultBuffer.id)
       assertResult(spillPriority)(resultBuffer.getSpillPriority)
+      println (s"at end of test before close ${ctToCheck.getRefCount}")
     }
+    println (s"at end of test AFTER close ${ctToCheck.getRefCount}")
   }
 
   test("add buffer registers with catalog") {
@@ -80,6 +87,7 @@ class RapidsDeviceMemoryStoreSuite extends FunSuite with Arm with MockitoSugar {
       assertResult(meta)(resultBuffer.meta)
     }
   }
+
 
   test("get memory buffer") {
     val catalog = new RapidsBufferCatalog
@@ -105,6 +113,7 @@ class RapidsDeviceMemoryStoreSuite extends FunSuite with Arm with MockitoSugar {
     }
   }
 
+
   test("get column batch") {
     val catalog = new RapidsBufferCatalog
     val sparkTypes = Array[DataType](IntegerType, StringType, DoubleType,
@@ -127,6 +136,7 @@ class RapidsDeviceMemoryStoreSuite extends FunSuite with Arm with MockitoSugar {
       }
     }
   }
+
 
   test("cannot receive spilled buffers") {
     val catalog = new RapidsBufferCatalog
