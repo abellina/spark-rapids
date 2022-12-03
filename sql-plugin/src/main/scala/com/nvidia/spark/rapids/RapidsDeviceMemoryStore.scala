@@ -194,8 +194,15 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
     }
     require(null == buffer.setEventHandler(this), "Overwrote an event handler!!")
 
-    override def onClosed(refCount: Int): Unit = {
+    override def onClosed(refCount: Int): Unit = synchronized {
       logInfo(s"RegisteredDeviceMemoryBuffer ${buffer} closed with ${refCount}")
+      if (refCount > 0 && aliases.size == 0) {
+        val sb = new mutable.StringBuilder()
+        Thread.currentThread().getStackTrace.foreach { stackTraceElement =>
+          sb.append("    " + stackTraceElement + "\n")
+        }
+        logInfo(s"refCount is $refCount but no aliases for ${id} ${sb.toString()}")
+      }
       if (refCount == 0) {
         val sb = new mutable.StringBuilder()
         Thread.currentThread().getStackTrace.foreach { stackTraceElement =>
