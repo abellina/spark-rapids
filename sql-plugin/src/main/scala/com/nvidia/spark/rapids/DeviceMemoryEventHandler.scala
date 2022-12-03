@@ -100,6 +100,8 @@ class DeviceMemoryEventHandler(
     }
   }
 
+
+  val counter= new AtomicLong(0L)
   /**
    * Handles RMM allocation failures by spilling buffers from device memory.
    * @param allocSize the byte amount that RMM failed to allocate
@@ -149,10 +151,17 @@ class DeviceMemoryEventHandler(
             false
           }
         } else {
+          val cnt = counter.getAndIncrement
           val targetSize = Math.max(storeSize - allocSize, 0)
-          logDebug(s"Targeting device store size of $targetSize bytes")
+          logInfo(s">>> $cnt: Targeting device store size of $targetSize bytes. " +
+            s"Before spill, RMM has ${Rmm.getTotalBytesAllocated} bytes.")
+          val before = Rmm.getTotalBytesAllocated
           val amountSpilled = store.synchronousSpill(targetSize)
-          logInfo(s"Spilled $amountSpilled bytes from the device store")
+          val after = Rmm.getTotalBytesAllocated
+          val delta = after - before
+          logInfo(s"<<< $cnt: Spilled $amountSpilled bytes from the device store. " + 
+            s"RMM now has ${Rmm.getTotalBytesAllocated} bytes. " +
+            s"Delta of: $delta bytes.")
           if (isGdsSpillEnabled) {
             TrampolineUtil.incTaskMetricsDiskBytesSpilled(amountSpilled)
           } else {

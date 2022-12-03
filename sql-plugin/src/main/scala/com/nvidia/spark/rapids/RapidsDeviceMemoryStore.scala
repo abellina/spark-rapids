@@ -192,7 +192,7 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
     if (dmbs.size > 10) {
       logInfo(s"$id: ${myStackTrace}")
     }
-    buffer.setEventHandler(this)
+    require(null == buffer.setEventHandler(this), "Overwrote an event handler!!")
 
     override def onClosed(refCount: Int): Unit = {
       logInfo(s"RegisteredDeviceMemoryBuffer ${buffer} closed with ${refCount}")
@@ -209,7 +209,7 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
         })
         logInfo(s"Removed RegisteredDeviceMemoryBuffer ${buffer} from cached: ${dmbs.size()} " +
           s"$idsLeft")
-        buffer.setEventHandler(null)
+        require(this == buffer.setEventHandler(null), "Stumped on an event handler that wasn't mine!!")
       }
     }
 
