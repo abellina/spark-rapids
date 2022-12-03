@@ -245,7 +245,7 @@ abstract class SplittableJoinIterator(
 
   override def close(): Unit = {
     if (!closed) {
-      logInfo(s"AbstractGpuIterator::close ${TaskContext.get().taskAttemptId()}")
+      logInfo(s"AbstractGpuIterator::close about to close ${builtBatch}")
       super.close()
       builtBatch.close()
       pendingSplits.foreach(_.close())

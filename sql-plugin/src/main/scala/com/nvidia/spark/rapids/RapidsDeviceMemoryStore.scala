@@ -49,8 +49,16 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
         case b => throw new IllegalStateException(s"Unrecognized buffer: $b")
       }
     }
-    new RapidsDeviceMemoryBuffer(other.id, other.size, other.meta, None,
-      registeredBuffer(other.id, deviceBuffer), other.getSpillPriority, other.spillCallback)
+    logInfo(s"CREATE BUFFER!! ${other.id}")
+    val (added, registered) = registeredBuffer(other.id, deviceBuffer, "createBuffer")
+    new RapidsDeviceMemoryBuffer(
+      other.id,
+      other.size,
+      other.meta,
+      None,
+      registered,
+      other.getSpillPriority,
+      other.spillCallback)
   }
 
   /**
@@ -70,13 +78,14 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
       tableMeta: TableMeta,
       initialSpillPriority: Long,
       spillCallback: SpillCallback = RapidsBuffer.defaultSpillCallback): Unit = {
+    val (added, registered) = registeredBuffer(id, contigBuffer, "addTable")
     freeOnExcept(
       new RapidsDeviceMemoryBuffer(
         id,
         contigBuffer.getLength,
         tableMeta,
         Some(table),
-        registeredBuffer(id, contigBuffer),
+        registered,
         initialSpillPriority,
         spillCallback)) { buffer =>
       logDebug(s"Adding table for: [id=$id, size=${buffer.size}, " +
@@ -108,6 +117,9 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
     println(s"addContiguousTable refCount is ${contigBuffer.getRefCount}")
     val size = contigBuffer.getLength
     val meta = MetaUtils.buildTableMeta(id.tableId, contigTable)
+    val (added, registered) = registeredBuffer(id, contigBuffer, "addContiguousTable")
+
+    // add always? if we don't we segfault
     contigBuffer.incRefCount()
     println(s"addContiguousTable after incRefCount refCount is ${contigBuffer.getRefCount}")
     freeOnExcept(
@@ -116,7 +128,7 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
         size,
         meta,
         None,
-        registeredBuffer(id, contigBuffer),
+        registered,
         initialSpillPriority,
         spillCallback)) { buffer =>
       logDebug(s"Adding table for: [id=$id, size=${buffer.size}, " +
@@ -145,13 +157,14 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
       initialSpillPriority: Long,
       spillCallback: SpillCallback = RapidsBuffer.defaultSpillCallback,
       needsSync: Boolean = true): Unit = {
+    val (added, registered) = registeredBuffer(id, buffer, "addBuffer")
     freeOnExcept(
       new RapidsDeviceMemoryBuffer(
         id,
         buffer.getLength,
         tableMeta,
         None,
-        registeredBuffer(id, buffer),
+        registered,
         initialSpillPriority,
         spillCallback)) { buff =>
       logDebug(s"Adding receive side table for: [id=$id, size=${buffer.getLength}, " +
@@ -169,8 +182,16 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
     with AutoCloseable {
     def getRefCount = buffer.getRefCount
 
+    val sb = new mutable.StringBuilder()
+    Thread.currentThread().getStackTrace.foreach { stackTraceElement =>
+      sb.append("    " + stackTraceElement + "\n")
+    }
+    val myStackTrace = sb.toString
+    logInfo(s"Adding RegisteredDeviceMemoryBuffer ${buffer} to cached as ${id} ")
     dmbs.put(id, this)
-
+    if (dmbs.size > 10) {
+      logInfo(s"$id: ${myStackTrace}")
+    }
     buffer.setEventHandler(this)
 
     override def onClosed(refCount: Int): Unit = {
@@ -200,13 +221,14 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
       logInfo(s"At close for ${id} with buffer ref count ${buffer.getRefCount}")
     }
 
-    val aliases = new ConcurrentHashMap[RapidsBufferId, Boolean]()
+    val aliases = new ConcurrentHashMap[RapidsBufferId, String]()
 
-    def alias(aliasingId: RapidsBufferId): RegisteredDeviceMemoryBuffer = synchronized {
+    def alias(aliasingId: RapidsBufferId,
+              how: String): RegisteredDeviceMemoryBuffer = synchronized {
       if (aliases.contains(aliasingId)) {
         throw new IllegalStateException(s"Alias already exists for $id to $aliasingId")
       }
-      aliases.put(aliasingId, true)
+      aliases.put(aliasingId, how)
       //buffer.incRefCount()
       if (aliases.size == 1) {
         println(s"first alias ${id} being aliased by ${aliasingId}. " +
@@ -216,13 +238,13 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
         println(s"already existing ${id} being aliased by ${aliasingId}. " +
           s"Num aliases ${aliases.size()}. Buff ref count: ${getRefCount}")
       }
-      logInfo(s"$id is aliased by $aliasingId now. Buffer ref count: ${buffer.getRefCount}")
+      logInfo(s"$id is aliased by $aliasingId, via $how. Buffer ref count: ${buffer.getRefCount}")
       this
     }
 
     def removeAlias(aliasingId: RapidsBufferId) = synchronized {
-      aliases.remove(aliasingId)
-      logInfo(s"$id no longer aliased by ${aliasingId}. Number of aliases ${aliases.size()}." +
+      val how: String = aliases.remove(aliasingId)
+      logInfo(s"$id no longer aliased by ${aliasingId} ($how). Number of aliases ${aliases.size()}." +
         s"buffer refCount=${getRefCount}")
       //close()
       //println(s"Closed, as standard for all removeAlias. ${getRefCount} ")
@@ -237,17 +259,24 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
 
   def registeredBuffer(
       aliasingId: RapidsBufferId,
-      buffer: DeviceMemoryBuffer): RegisteredDeviceMemoryBuffer = {
-    val handler = buffer.getEventHandler
-    val registered = handler match {
-      case null =>
-        val reg = new RegisteredDeviceMemoryBuffer(TempSpillBufferId(), buffer)
-        println(s"it is new, created registered, refCount is ${buffer.getRefCount}")
-        reg
-      case hndr: RegisteredDeviceMemoryBuffer =>
-        hndr
+      buffer: DeviceMemoryBuffer,
+      how: String): (Boolean, RegisteredDeviceMemoryBuffer) = {
+    buffer.incRefCount()
+    withResource(buffer) { _ =>
+      val handler = buffer.getEventHandler
+      var added = false
+      val registered = handler match {
+        case null =>
+          // TODO: do I need this? buffer.incRefCount()
+          added = true
+          val reg = new RegisteredDeviceMemoryBuffer(TempSpillBufferId(), buffer)
+          println(s"it is new, created registered, refCount is ${buffer.getRefCount}")
+          reg
+        case hndr: RegisteredDeviceMemoryBuffer =>
+          hndr
+      }
+      (added, registered.alias(aliasingId, how))
     }
-    registered.alias(aliasingId)
   }
 
   /**
@@ -301,12 +330,9 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
         var endedWith: Int = -1
         logInfo(s"At getColumnarBatch with ref count ${buff.getRefCount}")
         val res = if (table.isDefined) {
-          //REFCOUNT ++ of all columns
-          if (buff.getRefCount == 8) {
-            logError("this is it")
-          }
+          //REFCOUNT ++ of all columns, not necessarily the underlying buffer
           logInfo("went .from route")
-          buff.incRefCount()
+          //buff.incRefCount()
           val r = GpuColumnVectorFromBuffer.from(table.get, buff, meta, sparkTypes)
           endedWith = buff.getRefCount
           if (endedWith == startedWith) {
@@ -319,8 +345,8 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
         }
 
         endedWith = buff.getRefCount
-        require(endedWith > startedWith,
-          s"endedWith=$endedWith, startedWith=$startedWith")
+        //require(endedWith > startedWith,
+        //  s"endedWith=$endedWith, startedWith=$startedWith")
         res
       }
     }

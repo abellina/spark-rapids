@@ -191,6 +191,7 @@ object SpillableColumnarBatch extends Arm {
         // UCX shuffle
         val cv = batch.column(0).asInstanceOf[GpuCompressedColumnVector]
         val buff = cv.getTableBuffer
+        // TODO: re-added double-free?
         buff.incRefCount()
         RapidsBufferCatalog.addBuffer(id, buff, cv.getTableMeta, initialSpillPriority,
           spillCallback)
@@ -204,8 +205,10 @@ object SpillableColumnarBatch extends Arm {
               .forall(i => batch.column(i).isInstanceOf[GpuColumnVectorFromBuffer])) {
         // I believe these are contig split buffers from the store
         val cv = batch.column(0).asInstanceOf[GpuColumnVectorFromBuffer]
+        //TODO: table leak?
         val table = GpuColumnVector.from(batch)
         val buff = cv.getBuffer
+        // TODO: added back, I think really we need this
         buff.incRefCount()
         RapidsBufferCatalog.addTable(id, table, buff, cv.getTableMeta, initialSpillPriority,
           spillCallback)
