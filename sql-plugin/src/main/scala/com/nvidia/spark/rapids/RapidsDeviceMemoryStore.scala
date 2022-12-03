@@ -203,7 +203,12 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
         }
         println(s"I just got closed ${id} ${sb.toString()}")
         dmbs.remove(id)
-        logInfo(s"Removed RegisteredDeviceMemoryBuffer ${buffer} from cached: ${dmbs.size()}")
+        val idsLeft = new mutable.ArrayBuffer[(RapidsBufferId, RegisteredDeviceMemoryBuffer)]()
+        dmbs.forEach((k, v) => {
+          idsLeft.append((k, v))
+        })
+        logInfo(s"Removed RegisteredDeviceMemoryBuffer ${buffer} from cached: ${dmbs.size()} " +
+          s"$idsLeft")
         buffer.setEventHandler(null)
       }
     }
