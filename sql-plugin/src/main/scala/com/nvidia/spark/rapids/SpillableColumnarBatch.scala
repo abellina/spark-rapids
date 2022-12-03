@@ -46,7 +46,6 @@ trait SpillableColumnarBatch extends AutoCloseable {
    *       with decompressing the data if necessary.
    */
   def getColumnarBatch(): ColumnarBatch
-  def getRefCount(): Int = -1
 
   def sizeInBytes: Long
 }
@@ -115,12 +114,6 @@ class SpillableColumnarBatchImpl(
     withResource(RapidsBufferCatalog.acquireBuffer(id)) { rapidsBuffer =>
       GpuSemaphore.acquireIfNecessary(TaskContext.get(), semWait)
       rapidsBuffer.getColumnarBatch(sparkTypes)
-    }
-  }
-
-  override def getRefCount(): Int = {
-    withResource(RapidsBufferCatalog.acquireBuffer(id)) { buff =>
-      withResource(buff.getMemoryBuffer) { mb => mb.getRefCount }
     }
   }
 
