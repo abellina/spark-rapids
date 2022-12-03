@@ -130,8 +130,6 @@ abstract class AbstractGpuJoinIterator(
         val nextRows = JoinGatherer.getRowsInNextBatch(gather, targetSize)
         gather.gatherNext(nextRows)
       }
-
-      // TODO: this is calling `allowSpilling`
       if (gathererStore.exists(_.isDone)) {
         gathererStore.foreach(_.close())
         gathererStore = None
@@ -245,7 +243,6 @@ abstract class SplittableJoinIterator(
 
   override def close(): Unit = {
     if (!closed) {
-      logInfo(s"AbstractGpuIterator::close about to close ${builtBatch}")
       super.close()
       builtBatch.close()
       pendingSplits.foreach(_.close())

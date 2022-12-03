@@ -79,7 +79,7 @@ abstract class RapidsBufferStore(
         spillable.clear()
         buffs
       }
-      println(s"at freeAll with ${values.length}, calling safeFree")
+      logInfo(s"at freeAll with ${values.length}, calling safeFree")
       // We need to release the `RapidsBufferStore` lock to prevent a lock order inversion
       // deadlock: (1) `RapidsBufferBase.free`     calls  (2) `RapidsBufferStore.remove` and
       //           (1) `RapidsBufferStore.freeAll` calls  (2) `RapidsBufferBase.free`.
@@ -228,7 +228,7 @@ abstract class RapidsBufferStore(
   }
 
   override def close(): Unit = {
-    println(s"Closing store ${this}")
+    logInfo(s"Closing store ${this}")
     buffers.freeAll()
   }
 
@@ -258,15 +258,15 @@ abstract class RapidsBufferStore(
           logDebug(s"Spilling $buffer ${buffer.id} to ${spillStore.name} " +
               s"total mem=${buffers.getTotalBytes}")
           buffer.spillCallback(buffer.storageTier, spillStore.tier, buffer.size)
-          println(s"Copying buffer ${buffer}")
+          logInfo(s"Copying buffer ${buffer}")
           spillStore.copyBuffer(buffer, buffer.getMemoryBuffer, stream)
         }
       } finally {
-        println(s"Closing acquisition ${buffer.id}")
+        logInfo(s"Closing acquisition ${buffer.id}")
         buffer.close()
       }
       catalog.removeBufferTier(buffer.id, buffer.storageTier)
-      println(s"Freeing buffer ${buffer.id}")
+      logInfo(s"Freeing buffer ${buffer.id}")
       buffer.free()
     }
   }
@@ -402,7 +402,7 @@ abstract class RapidsBufferStore(
       }
       refcount -= 1
       if (refcount == 0 && !isValid) {
-        println(s"At close with refcount==0 for ${id}")
+        logInfo(s"At close with refcount==0 for ${id}")
         pendingFreeBuffers.remove(id)
         pendingFreeBytes.addAndGet(-size)
         freeBuffer()
@@ -415,13 +415,13 @@ abstract class RapidsBufferStore(
      * In that case the resources will be released when the reference count reaches zero.
      */
     override def free(): Unit = synchronized {
-      println(s"At free ${this.id}")
+      logInfo(s"At free ${this.id}")
       if (isValid) {
-        println(s"isValid ${this.id}")
+        logInfo(s"isValid ${this.id}")
         isValid = false
         buffers.remove(id)
         if (refcount == 0) {
-          println(s"refcount==0 ${this.id}")
+          logInfo(s"refcount==0 ${this.id}")
           freeBuffer()
         } else {
           pendingFreeBuffers.put(id, this)

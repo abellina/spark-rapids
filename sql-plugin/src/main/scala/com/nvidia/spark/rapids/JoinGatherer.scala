@@ -18,7 +18,6 @@ package com.nvidia.spark.rapids
 
 import ai.rapids.cudf.{ColumnVector, ColumnView, DeviceMemoryBuffer, DType, GatherMap, NvtxColor, NvtxRange, OrderByArg, OutOfBoundsPolicy, Scalar, Table}
 
-import org.apache.spark.internal.Logging
 import org.apache.spark.sql.types._
 import org.apache.spark.sql.vectorized.ColumnarBatch
 
@@ -230,7 +229,7 @@ object LazySpillableColumnarBatch {
  * where the data itself needs to out live the JoinGatherer it is handed off to.
  */
 case class AllowSpillOnlyLazySpillableColumnarBatchImpl(wrapped: LazySpillableColumnarBatch)
-    extends LazySpillableColumnarBatch with Arm with Logging {
+    extends LazySpillableColumnarBatch with Arm {
   override def getBatch: ColumnarBatch =
     wrapped.getBatch
 
@@ -251,8 +250,6 @@ case class AllowSpillOnlyLazySpillableColumnarBatchImpl(wrapped: LazySpillableCo
 
   override def close(): Unit = {
     // Don't actually close it, we don't own it, just allow it to be spilled.
-    logInfo(s"AllowSpillOnlyLazySpillableColumnarBatchImpl " +
-      s"calling allowSpilling ${wrapped}")
     wrapped.allowSpilling()
   }
 
@@ -265,7 +262,7 @@ case class AllowSpillOnlyLazySpillableColumnarBatchImpl(wrapped: LazySpillableCo
 class LazySpillableColumnarBatchImpl(
     cb: ColumnarBatch,
     spillCallback: SpillCallback,
-    name: String) extends LazySpillableColumnarBatch with Arm with Logging {
+    name: String) extends LazySpillableColumnarBatch with Arm {
 
   private var cached: Option[ColumnarBatch] = Some(GpuColumnVector.incRefCounts(cb))
   private var spill: Option[SpillableColumnarBatch] = None
@@ -298,8 +295,6 @@ class LazySpillableColumnarBatchImpl(
         spill = Some(SpillableColumnarBatch(cached.get,
           SpillPriorities.ACTIVE_ON_DECK_PRIORITY,
           spillCallback))
-        logInfo(s"allowSpilling created batch ${spill.get.getId()} and " +
-          s"refcount ${spill.get.getRefCount()}")
         // Putting data in a SpillableColumnarBatch takes ownership of it.
         cached = None
       }
