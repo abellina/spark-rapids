@@ -54,20 +54,45 @@ abstract class RapidsBufferStore(
     private[this] val spillable = new HashedPriorityQueue[RapidsBufferBase](comparator)
     private[this] var totalBytesStored: Long = 0L
 
+    def makeSpillable(buffer: RapidsBufferBase): Unit = synchronized {
+      if (spillable.offer(buffer)) {
+        totalBytesStored += buffer.size
+        logInfo(s"Added spillable ${buffer.id} totalBytesStored=${totalBytesStored}")
+      } else {
+        logError(s"ALREADY SPILLABLE ${buffer.id} totalBytesStored=${totalBytesStored}")
+      }
+    }
+
+    def removeSpillable(buffer: RapidsBufferBase): Unit = synchronized {
+      if (spillable.remove(buffer)) {
+        totalBytesStored -= buffer.size
+        logInfo(s"Removed spillable ${buffer} totalBytesStored=${totalBytesStored}")
+      } else {
+        logError(s"ALREADY REMOVED SPILLABLE ${buffer.id} " +
+          s"totalBytesStored=${totalBytesStored}")
+      }
+    }
+
     def add(buffer: RapidsBufferBase): Unit = synchronized {
       val old = buffers.put(buffer.id, buffer)
       if (old != null) {
         throw new DuplicateBufferException(s"duplicate buffer registered: ${buffer.id}")
       }
-      spillable.offer(buffer)
-      totalBytesStored += buffer.size
+      if (buffer.isSpillable) {
+        makeSpillable(buffer)
+      } else {
+        logInfo(s"Added non-spillable ${buffer.id} totalBytesStored=${totalBytesStored}")
+      }
     }
 
     def remove(id: RapidsBufferId): Unit = synchronized {
       val obj = buffers.remove(id)
       if (obj != null) {
-        spillable.remove(obj)
-        totalBytesStored -= obj.size
+        if (obj.isSpillable) {
+          removeSpillable(obj)
+        } else {
+          logInfo(s"Removed non-spillable ${id} totalBytesStored=${totalBytesStored}")
+        }
       }
     }
 
@@ -227,6 +252,21 @@ abstract class RapidsBufferStore(
     catalog.registerNewBuffer(buffer)
   }
 
+  protected def removeBuffer(bufferId: RapidsBufferId): Unit = synchronized {
+    buffers.remove(bufferId)
+    catalog.removeBuffer(bufferId)
+  }
+
+  protected def removeSpillable(buffer: RapidsBufferBase): Unit = synchronized {
+    logInfo(s"Removing spillable ${buffer}")
+    buffers.removeSpillable(buffer)
+  }
+
+  protected def makeSpillable(buffer: RapidsBufferBase): Unit = synchronized {
+    logInfo(s"Making spillable ${buffer.id}")
+    buffers.makeSpillable(buffer)
+  }
+
   override def close(): Unit = {
     logInfo(s"Closing store ${this}")
     buffers.freeAll()
@@ -285,6 +325,8 @@ abstract class RapidsBufferStore(
     private[this] var isValid = true
     protected[this] var refcount = 0
     private[this] var spillPriority: Long = initialSpillPriority
+
+    def isSpillable: Boolean = true
 
     /** Release the underlying resources for this buffer. */
     protected def releaseResources(): Unit
