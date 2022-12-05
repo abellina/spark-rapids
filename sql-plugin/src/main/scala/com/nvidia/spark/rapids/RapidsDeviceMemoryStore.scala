@@ -50,7 +50,14 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
       }
     }
     logInfo(s"CREATE BUFFER!! ${other.id}")
-    val (added, registered) = registeredBuffer(other.id, deviceBuffer, "createBuffer")
+    val (added, registered) = registeredBuffer(
+      other.id,
+      deviceBuffer,
+      other.meta,
+      other.getSpillPriority,
+      other.spillCallback,
+      "createBuffer")
+
     new RapidsDeviceMemoryBuffer(
       other.id,
       other.size,
@@ -78,7 +85,13 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
       tableMeta: TableMeta,
       initialSpillPriority: Long,
       spillCallback: SpillCallback = RapidsBuffer.defaultSpillCallback): Unit = {
-    val (added, registered) = registeredBuffer(id, contigBuffer, "addTable")
+    val (added, registered) = registeredBuffer(
+      id,
+      contigBuffer,
+      tableMeta,
+      initialSpillPriority,
+      spillCallback,
+      "addTable")
     freeOnExcept(
       new RapidsDeviceMemoryBuffer(
         id,
@@ -117,7 +130,13 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
     println(s"addContiguousTable refCount is ${contigBuffer.getRefCount}")
     val size = contigBuffer.getLength
     val meta = MetaUtils.buildTableMeta(id.tableId, contigTable)
-    val (added, registered) = registeredBuffer(id, contigBuffer, "addContiguousTable")
+    val (added, registered) = registeredBuffer(
+      id,
+      contigBuffer,
+      meta,
+      initialSpillPriority,
+      spillCallback,
+      "addContiguousTable")
 
     // add always? if we don't we segfault
     contigBuffer.incRefCount()
@@ -157,7 +176,13 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
       initialSpillPriority: Long,
       spillCallback: SpillCallback = RapidsBuffer.defaultSpillCallback,
       needsSync: Boolean = true): Unit = {
-    val (added, registered) = registeredBuffer(id, buffer, "addBuffer")
+    val (added, registered) = registeredBuffer(
+      id,
+      buffer,
+      tableMeta,
+      initialSpillPriority,
+      spillCallback,
+      "addBuffer")
     freeOnExcept(
       new RapidsDeviceMemoryBuffer(
         id,
@@ -177,9 +202,16 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
 
   val dmbs = new ConcurrentHashMap[RapidsBufferId, RegisteredDeviceMemoryBuffer]()
 
-  class RegisteredDeviceMemoryBuffer(val id: RapidsBufferId, buffer: DeviceMemoryBuffer)
-    extends MemoryBuffer.EventHandler
-    with AutoCloseable {
+  class RegisteredDeviceMemoryBuffer(
+      override val id: RapidsBufferId,
+      buffer: DeviceMemoryBuffer,
+      meta: TableMeta,
+      initialSpillPriority: Long,
+      spillCallback: SpillCallback)
+    extends RapidsBufferBase(id, buffer.getLength, meta, initialSpillPriority, spillCallback)
+      with MemoryBuffer.EventHandler
+      with AutoCloseable {
+
     def getRefCount = buffer.getRefCount
 
     val sb = new mutable.StringBuilder()
@@ -194,7 +226,8 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
     }
     require(null == buffer.setEventHandler(this), "Overwrote an event handler!!")
 
-    override def onClosed(refCount: Int): Unit = synchronized {
+    // TODO: fix removed registered.synchronized from here
+    override def onClosed(refCount: Int): Unit = {
       logInfo(s"RegisteredDeviceMemoryBuffer ${buffer} closed with ${refCount}")
       if (refCount > 0 && aliases.size == 0) {
         val sb = new mutable.StringBuilder()
@@ -202,8 +235,11 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
           sb.append("    " + stackTraceElement + "\n")
         }
         logInfo(s"refCount is $refCount but no aliases for ${id} ${sb.toString()}")
+        //buffer.cleaner.logRefCountDebug("foo")
       }
-      if (refCount == 0) {
+      if (refCount == 1) {
+        makeSpillable(this)
+      } else if (refCount == 0) {
         val sb = new mutable.StringBuilder()
         Thread.currentThread().getStackTrace.foreach { stackTraceElement =>
           sb.append("    " + stackTraceElement + "\n")
@@ -216,19 +252,18 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
         })
         logInfo(s"Removed RegisteredDeviceMemoryBuffer ${buffer} from cached: ${dmbs.size()} " +
           s"$idsLeft")
+        removeBuffer(id)
         require(this == buffer.setEventHandler(null), "Stumped on an event handler that wasn't mine!!")
       }
     }
 
-    def getDeviceMemoryBuffer: DeviceMemoryBuffer = synchronized {
-      if (id.tableId == 1) {
-        logInfo(s"first one ${buffer.getRefCount}")
-      }
+    override def getDeviceMemoryBuffer: DeviceMemoryBuffer = buffer.synchronized {
+      removeSpillable(this)
       buffer.incRefCount()
       buffer
     }
 
-    override def close(): Unit = synchronized {
+    override def close(): Unit = buffer.synchronized {
       buffer.close()
       logInfo(s"At close for ${id} with buffer ref count ${buffer.getRefCount}")
     }
@@ -236,7 +271,7 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
     val aliases = new ConcurrentHashMap[RapidsBufferId, String]()
 
     def alias(aliasingId: RapidsBufferId,
-              how: String): RegisteredDeviceMemoryBuffer = synchronized {
+              how: String): RegisteredDeviceMemoryBuffer = buffer.synchronized {
       if (aliases.contains(aliasingId)) {
         throw new IllegalStateException(s"Alias already exists for $id to $aliasingId")
       }
@@ -254,7 +289,7 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
       this
     }
 
-    def removeAlias(aliasingId: RapidsBufferId) = synchronized {
+    def removeAlias(aliasingId: RapidsBufferId) = buffer.synchronized {
       val how: String = aliases.remove(aliasingId)
       logInfo(s"$id no longer aliased by ${aliasingId} ($how). Number of aliases ${aliases.size()}." +
         s"buffer refCount=${getRefCount}")
@@ -267,28 +302,56 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
         close() // final close
       }
     }
-  }
+
+    /** Release the underlying resources for this buffer. */
+    override protected def releaseResources(): Unit = {
+      logInfo(s"releaseResources in ${id}.. " +
+        s"refCount= ${buffer.getRefCount}, aliases=${aliases.size()}")
+    }
+
+    /** The storage tier for this buffer */
+    override val storageTier: StorageTier = StorageTier.DEVICE
+
+    /**
+     * Get the underlying memory buffer. This may be either a HostMemoryBuffer or a DeviceMemoryBuffer
+     * depending on where the buffer currently resides.
+     * The caller must have successfully acquired the buffer beforehand.
+     *
+     * @see [[addReference]]
+     * @note It is the responsibility of the caller to close the buffer.
+     */
+    override def getMemoryBuffer: MemoryBuffer = getDeviceMemoryBuffer
+}
 
   def registeredBuffer(
       aliasingId: RapidsBufferId,
       buffer: DeviceMemoryBuffer,
-      how: String): (Boolean, RegisteredDeviceMemoryBuffer) = {
-    buffer.incRefCount()
-    withResource(buffer) { _ =>
+      meta: TableMeta,
+      initialSpillPriority: Long,
+      spillCallback: SpillCallback,
+      how: String): (Boolean, RegisteredDeviceMemoryBuffer) = buffer.synchronized {
+    //buffer.incRefCount()
+    //withResource(buffer) { _ =>
       val handler = buffer.getEventHandler
       var added = false
       val registered = handler match {
         case null =>
           // TODO: do I need this? buffer.incRefCount()
           added = true
-          val reg = new RegisteredDeviceMemoryBuffer(TempSpillBufferId(), buffer)
+          val reg = new RegisteredDeviceMemoryBuffer(
+            TempSpillBufferId(),
+            buffer,
+            meta,
+            initialSpillPriority,
+            spillCallback)
           println(s"it is new, created registered, refCount is ${buffer.getRefCount}")
+          addBuffer(reg)
           reg
         case hndr: RegisteredDeviceMemoryBuffer =>
           hndr
       }
       (added, registered.alias(aliasingId, how))
-    }
+    //}
   }
 
   /**
@@ -314,6 +377,8 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
       override val spillCallback: SpillCallback)
       extends RapidsBufferBase(id, size, meta, spillPriority, spillCallback) {
     override val storageTier: StorageTier = StorageTier.DEVICE
+
+    override def isSpillable: Boolean = false
 
     var released = false
     override protected def releaseResources(): Unit = contigBuffer.synchronized {
