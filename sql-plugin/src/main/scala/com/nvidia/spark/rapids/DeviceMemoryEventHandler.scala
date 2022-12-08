@@ -108,7 +108,7 @@ class DeviceMemoryEventHandler(
    * @param retryCount the number of times this allocation has been retried after failure
    * @return true if allocation should be reattempted or false if it should fail
    */
-  override def onAllocFailure(allocSize: Long, retryCount: Int): Boolean = {
+  override def onAllocFailure(allocSize: Long, retryCount: Int): Boolean = store.synchronized {
     // check arguments for good measure
     require(allocSize >= 0, 
       s"onAllocFailure invoked with invalid allocSize $allocSize")
@@ -118,7 +118,7 @@ class DeviceMemoryEventHandler(
 
     try {
       withResource(new NvtxRange("onAllocFailure", NvtxColor.RED)) { _ =>
-        val storeSize = store.currentSize
+        val storeSpillableSize = store.currentSpillable
         val attemptMsg = if (retryCount > 0) {
           s"Attempt ${retryCount}. "
         } else {
@@ -126,12 +126,12 @@ class DeviceMemoryEventHandler(
         }
 
         val retryState = oomRetryState.get()
-        retryState.resetIfNeeded(retryCount, storeSize)
+        retryState.resetIfNeeded(retryCount, storeSpillableSize)
 
-        logInfo(s"Device allocation of $allocSize bytes failed, device store has " +
-          s"$storeSize bytes. $attemptMsg" +
+        logInfo(s"Device allocation of $allocSize bytes failed, $store." +
+          s"$attemptMsg" +
           s"Total RMM allocated is ${Rmm.getTotalBytesAllocated} bytes. ")
-        if (storeSize == 0) {
+        if (storeSpillableSize == 0) {
           if (retryState.shouldTrySynchronizing(retryCount)) {
             Cuda.deviceSynchronize()
             logWarning(s"[RETRY ${retryState.getRetriesSoFar}] " +
@@ -152,7 +152,7 @@ class DeviceMemoryEventHandler(
           }
         } else {
           val cnt = counter.getAndIncrement
-          val targetSize = Math.max(storeSize - allocSize, 0)
+          val targetSize = Math.max(storeSpillableSize - allocSize, 0)
           logInfo(s">>> $cnt: Targeting device store size of $targetSize bytes. " +
             s"Before spill, RMM has ${Rmm.getTotalBytesAllocated} bytes.")
           val before = Rmm.getTotalBytesAllocated

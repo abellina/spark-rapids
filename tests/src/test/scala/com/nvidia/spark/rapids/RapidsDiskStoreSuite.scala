@@ -50,13 +50,13 @@ class RapidsDiskStoreSuite extends FunSuiteWithTempDir with Arm with MockitoSuga
         hostStore =>
           devStore.setSpillStore(hostStore)
           withResource(new RapidsDiskStore(mock[RapidsDiskBlockManager], catalog)) { diskStore =>
-            assertResult(0)(diskStore.currentSize)
+            assertResult(0)(diskStore.currentSpillable)
             hostStore.setSpillStore(diskStore)
             val bufferSize = addTableToStore(devStore, bufferId, spillPriority)
             devStore.synchronousSpill(0)
             hostStore.synchronousSpill(0)
-            assertResult(0)(hostStore.currentSize)
-            assertResult(bufferSize)(diskStore.currentSize)
+            assertResult(0)(hostStore.currentSpillable)
+            assertResult(bufferSize)(diskStore.currentSpillable)
             val path = bufferId.getDiskPath(null)
             assert(path.exists)
             assertResult(bufferSize)(path.length)

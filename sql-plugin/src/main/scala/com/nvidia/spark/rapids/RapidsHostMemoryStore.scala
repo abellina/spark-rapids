@@ -73,7 +73,7 @@ class RapidsHostMemoryStore(
       if (allocation.isDefined) {
         buffer = pool.slice(allocation.get, size)
       } else {
-        val targetSize = math.max(currentSize - size, 0)
+        val targetSize = math.max(currentSpillable - size, 0)
         synchronousSpill(targetSize)
       }
     }
@@ -106,7 +106,7 @@ class RapidsHostMemoryStore(
     }
   }
 
-  def numBytesFree: Long = maxSize - currentSize
+  def numBytesFree: Long = maxSize - currentSpillable
 
   override def close(): Unit = {
     super.close()

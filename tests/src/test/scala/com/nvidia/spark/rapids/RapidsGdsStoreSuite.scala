@@ -59,7 +59,7 @@ class RapidsGdsStoreSuite extends FunSuiteWithTempDir with Arm with MockitoSugar
         diskBlockManager, batchWriteBufferSize, catalog)) { gdsStore =>
 
         devStore.setSpillStore(gdsStore)
-        assertResult(0)(gdsStore.currentSize)
+        assertResult(0)(gdsStore.currentSpillable)
 
         val bufferSizes = bufferIds.map(id => {
           val size = addTableToStore(devStore, id, spillPriority)
@@ -67,7 +67,7 @@ class RapidsGdsStoreSuite extends FunSuiteWithTempDir with Arm with MockitoSugar
           size
         })
         val totalSize = bufferSizes.sum
-        assertResult(totalSize)(gdsStore.currentSize)
+        assertResult(totalSize)(gdsStore.currentSpillable)
 
         assert(paths(0).exists)
         assert(!paths(1).exists)
@@ -104,10 +104,10 @@ class RapidsGdsStoreSuite extends FunSuiteWithTempDir with Arm with MockitoSugar
       withResource(new RapidsGdsStore(mock[RapidsDiskBlockManager], 4096, catalog)) {
         gdsStore =>
         devStore.setSpillStore(gdsStore)
-        assertResult(0)(gdsStore.currentSize)
+        assertResult(0)(gdsStore.currentSpillable)
         val bufferSize = addTableToStore(devStore, bufferId, spillPriority)
         devStore.synchronousSpill(0)
-        assertResult(bufferSize)(gdsStore.currentSize)
+        assertResult(bufferSize)(gdsStore.currentSpillable)
         assert(path.exists)
         assertResult(bufferSize)(path.length)
         verify(catalog, times(2)).registerNewBuffer(ArgumentMatchers.any[RapidsBuffer])

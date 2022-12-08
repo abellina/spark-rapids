@@ -128,6 +128,7 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
       needsSync: Boolean = true): Unit = {
     val contigBuffer = contigTable.getBuffer
     println(s"addContiguousTable refCount is ${contigBuffer.getRefCount}")
+    logInfo(s"addContiguousTable ${id} refCount is ${contigBuffer.getRefCount}")
     val size = contigBuffer.getLength
     val meta = MetaUtils.buildTableMeta(id.tableId, contigTable)
     val (added, registered) = registeredBuffer(
@@ -140,7 +141,8 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
 
     // add always? if we don't we segfault
     //contigBuffer.incRefCount()
-    println(s"addContiguousTable after incRefCount refCount is ${contigBuffer.getRefCount}")
+    println(s"addContiguousTable ${id} after incRefCount refCount is ${contigBuffer.getRefCount}")
+    logInfo(s"addContiguousTable ${id} after incRefCount refCount is ${contigBuffer.getRefCount}")
     freeOnExcept(
       new RapidsDeviceMemoryBuffer(
         id,

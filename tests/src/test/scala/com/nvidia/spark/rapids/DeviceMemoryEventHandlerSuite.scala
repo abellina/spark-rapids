@@ -25,7 +25,7 @@ class DeviceMemoryEventHandlerSuite extends FunSuite with MockitoSugar {
 
   test("a failed allocation should be retried if we spilled enough") {
     val mockStore = mock[RapidsDeviceMemoryStore]
-    when(mockStore.currentSize).thenReturn(1024)
+    when(mockStore.currentSpillable).thenReturn(1024)
     when(mockStore.synchronousSpill(any())).thenReturn(1024)
     val handler = new DeviceMemoryEventHandler(mockStore, None, false, 2)
     assertResult(true)(handler.onAllocFailure(1024, 0))
@@ -33,7 +33,7 @@ class DeviceMemoryEventHandlerSuite extends FunSuite with MockitoSugar {
 
   test("when we deplete the store, retry up to max failed OOM retries") {
     val mockStore = mock[RapidsDeviceMemoryStore]
-    when(mockStore.currentSize).thenReturn(0)
+    when(mockStore.currentSpillable).thenReturn(0)
     when(mockStore.synchronousSpill(any())).thenReturn(0)
     val handler = new DeviceMemoryEventHandler(mockStore, None, false, 2)
     assertResult(true)(handler.onAllocFailure(1024, 0)) // sync
@@ -43,7 +43,7 @@ class DeviceMemoryEventHandlerSuite extends FunSuite with MockitoSugar {
 
   test("we reset our OOM state after a successful retry") {
     val mockStore = mock[RapidsDeviceMemoryStore]
-    when(mockStore.currentSize).thenReturn(0)
+    when(mockStore.currentSpillable).thenReturn(0)
     when(mockStore.synchronousSpill(any())).thenReturn(0)
     val handler = new DeviceMemoryEventHandler(mockStore, None, false, 2)
     // with this call we sync, and we mark our attempts at 1, we store 0 as the last count
@@ -56,7 +56,7 @@ class DeviceMemoryEventHandlerSuite extends FunSuite with MockitoSugar {
 
   test("a negative allocation cannot be retried and handler throws") {
     val mockStore = mock[RapidsDeviceMemoryStore]
-    when(mockStore.currentSize).thenReturn(1024)
+    when(mockStore.currentSpillable).thenReturn(1024)
     when(mockStore.synchronousSpill(any())).thenReturn(1024)
     val handler = new DeviceMemoryEventHandler(mockStore, None, false, 2)
     assertThrows[IllegalArgumentException](handler.onAllocFailure(-1, 0))
@@ -64,7 +64,7 @@ class DeviceMemoryEventHandlerSuite extends FunSuite with MockitoSugar {
 
   test("a negative retry count is invalid") {
     val mockStore = mock[RapidsDeviceMemoryStore]
-    when(mockStore.currentSize).thenReturn(1024)
+    when(mockStore.currentSpillable).thenReturn(1024)
     when(mockStore.synchronousSpill(any())).thenReturn(1024)
     val handler = new DeviceMemoryEventHandler(mockStore, None, false, 2)
     assertThrows[IllegalArgumentException](handler.onAllocFailure(1024, -1))

@@ -59,7 +59,7 @@ class RapidsHostMemoryStoreSuite extends FunSuite with Arm with MockitoSugar {
     withResource(new RapidsDeviceMemoryStore(catalog)) { devStore =>
       withResource(new RapidsHostMemoryStore(hostStoreMaxSize, hostStoreMaxSize, catalog)) {
         hostStore =>
-          assertResult(0)(hostStore.currentSize)
+          assertResult(0)(hostStore.currentSpillable)
           assertResult(hostStoreMaxSize)(hostStore.numBytesFree)
           devStore.setSpillStore(hostStore)
 
@@ -71,7 +71,7 @@ class RapidsHostMemoryStoreSuite extends FunSuite with Arm with MockitoSugar {
           }
 
           devStore.synchronousSpill(0)
-          assertResult(bufferSize)(hostStore.currentSize)
+          assertResult(bufferSize)(hostStore.currentSpillable)
           assertResult(hostStoreMaxSize - bufferSize)(hostStore.numBytesFree)
           verify(catalog, times(2)).registerNewBuffer(ArgumentMatchers.any[RapidsBuffer])
           verify(catalog).removeBufferTier(
