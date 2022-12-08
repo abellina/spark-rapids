@@ -16,10 +16,12 @@
 
 package com.nvidia.spark.rapids
 
-import ai.rapids.cudf.{ColumnVector, ColumnView, DeviceMemoryBuffer, DType, GatherMap, NvtxColor, NvtxRange, OrderByArg, OutOfBoundsPolicy, Scalar, Table}
-
+import ai.rapids.cudf.{BufferType, ColumnVector, ColumnView, DType, DeviceMemoryBuffer, GatherMap, NvtxColor, NvtxRange, OrderByArg, OutOfBoundsPolicy, Scalar, Table}
+import org.apache.spark.internal.Logging
 import org.apache.spark.sql.types._
 import org.apache.spark.sql.vectorized.ColumnarBatch
+
+import scala.collection.mutable
 
 /**
  * Holds something that can be spilled if it is marked as such, but it does not modify the
@@ -262,7 +264,7 @@ case class AllowSpillOnlyLazySpillableColumnarBatchImpl(wrapped: LazySpillableCo
 class LazySpillableColumnarBatchImpl(
     cb: ColumnarBatch,
     spillCallback: SpillCallback,
-    name: String) extends LazySpillableColumnarBatch with Arm {
+    name: String) extends LazySpillableColumnarBatch with Arm with Logging {
 
   private var cached: Option[ColumnarBatch] = Some(GpuColumnVector.incRefCounts(cb))
   private var spill: Option[SpillableColumnarBatch] = None
@@ -270,18 +272,27 @@ class LazySpillableColumnarBatchImpl(
   override val deviceMemorySize: Long = GpuColumnVector.getTotalDeviceMemoryUsed(cb)
   override val dataTypes: Array[DataType] = GpuColumnVector.extractTypes(cb)
   override val numCols: Int = dataTypes.length
+  var theId: Option[RapidsBufferId] = None
 
   override def getBatch: ColumnarBatch = {
     if (cached.isEmpty) {
       withResource(new NvtxRange("get batch " + name, NvtxColor.RED)) { _ =>
+        theId = spill.map(_.getId())
         cached = spill.map(_.getColumnarBatch())
       }
     }
+    val sb = new mutable.StringBuilder()
+    Thread.currentThread().getStackTrace.foreach { stackTraceElement =>
+      sb.append("    " + stackTraceElement + "\n")
+    }
+    val myStackTrace = sb.toString
+    logInfo(s"At getBatch with ${theId} and cached ${cached} stackTrace ${myStackTrace}")
     cached.getOrElse(throw new IllegalStateException("batch is closed"))
   }
 
   override def releaseBatch(): ColumnarBatch = {
     closeOnExcept(getBatch) { batch =>
+      logInfo(s"At releaseBatch with ${theId}")
       cached = None
       close()
       batch
@@ -292,18 +303,45 @@ class LazySpillableColumnarBatchImpl(
     if (spill.isEmpty && cached.isDefined) {
       withResource(new NvtxRange("spill batch " + name, NvtxColor.RED)) { _ =>
         // First time we need to allow for spilling
+        if (cached.isDefined) {
+          var bases: Array[ColumnVector] = null
+          bases = GpuColumnVector.extractBases(cached.get)
+          bases.foreach(cv => {
+            logInfo(s"allowSpilling ${theId} with " +
+              s"refCount ${cv.getDeviceBufferFor(BufferType.DATA).getRefCount}")
+          })
+        }
         spill = Some(SpillableColumnarBatch(cached.get,
           SpillPriorities.ACTIVE_ON_DECK_PRIORITY,
           spillCallback))
+
+        logInfo(s"At allowSpilling with ${theId} cached=${cached} spill=${spill}")
         // Putting data in a SpillableColumnarBatch takes ownership of it.
         cached = None
       }
     }
+
     cached.foreach(_.close())
     cached = None
   }
 
   override def close(): Unit = {
+    val sb = new mutable.StringBuilder()
+    Thread.currentThread().getStackTrace.foreach { stackTraceElement =>
+      sb.append("    " + stackTraceElement + "\n")
+    }
+    val myStackTrace = sb.toString
+    logInfo(s"At close with ${theId} cached=${cached} spill=${spill} stackTrace=${myStackTrace}")
+    var bases: Array[ColumnVector] = null
+    if (cached.isDefined) {
+      bases = GpuColumnVector.extractBases(cached.get)
+      bases.foreach(cv => {
+        logInfo(s"close ${theId} with " +
+          s"refCount ${cv.getDeviceBufferFor(BufferType.DATA).getRefCount}")
+      })
+    } else {
+      logInfo(s"close ${theId} without cached")
+    }
     cached.foreach(_.close())
     cached = None
     spill.foreach(_.close())

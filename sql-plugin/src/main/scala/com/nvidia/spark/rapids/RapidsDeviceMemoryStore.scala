@@ -139,7 +139,7 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
       "addContiguousTable")
 
     // add always? if we don't we segfault
-    contigBuffer.incRefCount()
+    //contigBuffer.incRefCount()
     println(s"addContiguousTable after incRefCount refCount is ${contigBuffer.getRefCount}")
     freeOnExcept(
       new RapidsDeviceMemoryBuffer(
@@ -212,6 +212,10 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
       with MemoryBuffer.EventHandler
       with AutoCloseable {
 
+    def getDeviceMemoryBufferInternal: DeviceMemoryBuffer  = buffer
+
+    override def isSpillable: Boolean = buffer.getRefCount == 1
+
     def getRefCount = buffer.getRefCount
 
     val sb = new mutable.StringBuilder()
@@ -219,7 +223,8 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
       sb.append("    " + stackTraceElement + "\n")
     }
     val myStackTrace = sb.toString
-    logInfo(s"Adding RegisteredDeviceMemoryBuffer ${buffer} to cached as ${id} ")
+    logInfo(s"Adding RegisteredDeviceMemoryBuffer ${buffer} to cached as ${id} with " +
+      s"initial refCount ${buffer.getRefCount}")
     dmbs.put(id, this)
     if (dmbs.size > 10) {
       logInfo(s"$id: ${myStackTrace}")
@@ -228,7 +233,7 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
 
     // TODO: fix removed registered.synchronized from here
     override def onClosed(refCount: Int): Unit = {
-      logInfo(s"RegisteredDeviceMemoryBuffer ${buffer} closed with ${refCount}")
+      logInfo(s"RegisteredDeviceMemoryBuffer ${id} ${buffer} closed with refCount ${refCount}")
       if (refCount > 0 && aliases.size == 0) {
         val sb = new mutable.StringBuilder()
         Thread.currentThread().getStackTrace.foreach { stackTraceElement =>
@@ -237,7 +242,7 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
         logInfo(s"refCount is $refCount but no aliases for ${id} ${sb.toString()}")
         //buffer.cleaner.logRefCountDebug("foo")
       }
-      if (refCount == 1) {
+      if (aliases.size() > 0 && refCount == 1) {
         makeSpillable(this)
       } else if (refCount == 0) {
         val sb = new mutable.StringBuilder()
@@ -250,7 +255,8 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
         dmbs.forEach((k, v) => {
           idsLeft.append((k, v))
         })
-        logInfo(s"Removed RegisteredDeviceMemoryBuffer ${buffer} from cached: ${dmbs.size()} " +
+        logInfo(s"Removed RegisteredDeviceMemoryBuffer ${id} " +
+          s"${buffer} from cached: ${dmbs.size()} " +
           s"$idsLeft")
         removeBuffer(id)
         require(this == buffer.setEventHandler(null), "Stumped on an event handler that wasn't mine!!")
@@ -260,21 +266,32 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
     override def getDeviceMemoryBuffer: DeviceMemoryBuffer = buffer.synchronized {
       removeSpillable(this)
       buffer.incRefCount()
+      logInfo(s"At getDeviceMemoryBuffer ${this}, refCount=${buffer.getRefCount}")
       buffer
     }
 
     override def close(): Unit = buffer.synchronized {
-      buffer.close()
+      super.close()
       logInfo(s"At close for ${id} with buffer ref count ${buffer.getRefCount}")
     }
 
     val aliases = new ConcurrentHashMap[RapidsBufferId, String]()
 
+    var closed = false
+
     def alias(aliasingId: RapidsBufferId,
               how: String): RegisteredDeviceMemoryBuffer = buffer.synchronized {
+      if (closed) {
+        logWarning(s"New alias $aliasingId for previously dangled ${id}.")
+        // TODO: just added this.. it kind of makes sense
+        buffer.incRefCount()
+        closed = false
+        //throw new IllegalStateException(s"$aliasingId cannot alias $id since it is already closed!")
+      }
       if (aliases.contains(aliasingId)) {
         throw new IllegalStateException(s"Alias already exists for $id to $aliasingId")
       }
+      aliasingId.setAlias(id)
       aliases.put(aliasingId, how)
       //buffer.incRefCount()
       if (aliases.size == 1) {
@@ -290,6 +307,10 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
     }
 
     def removeAlias(aliasingId: RapidsBufferId) = buffer.synchronized {
+      if (closed) {
+        throw new IllegalStateException(s"$aliasingId cannot remove alias to $id " +
+          s"since it is already closed!")
+      }
       val how: String = aliases.remove(aliasingId)
       logInfo(s"$id no longer aliased by ${aliasingId} ($how). Number of aliases ${aliases.size()}." +
         s"buffer refCount=${getRefCount}")
@@ -297,9 +318,12 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
       //println(s"Closed, as standard for all removeAlias. ${getRefCount} ")
       if (aliases.size() == 0) {
         logInfo(s"$id has no aliases left") //, closing it!")
+        buffer.close() // TODO: need this?
+        closed = true
+        removeBuffer(this.id)
 
-        println(s"Closing more time, aliases.size() == 0. ${getRefCount} ")
-        close() // final close
+        println(s"NOT Closing more time, aliases.size() == 0. ${getRefCount} ")
+        // TODO: close() // final close
       }
     }
 
@@ -337,6 +361,7 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
       val registered = handler match {
         case null =>
           // TODO: do I need this? buffer.incRefCount()
+          buffer.incRefCount()
           added = true
           val reg = new RegisteredDeviceMemoryBuffer(
             TempSpillBufferId(),
@@ -387,10 +412,12 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
         throw new IllegalStateException(s"Already released ${id} which aliases ${contigBuffer.id}")
       }
       released = true
-      logInfo(s"releaseResources ${id} -- with registered buff ${contigBuffer.id}")
-      println(s"closing table ${contigBuffer.getRefCount}")
+      logInfo(s"releaseResources ${id} -- with registered buff ${contigBuffer.id} refCount ${contigBuffer.getRefCount}")
+      println(s"closing table ${id} reg ${contigBuffer.id} refCount ${contigBuffer.getRefCount}")
+      logInfo(s"closing table ${id} reg ${contigBuffer.id} refCount ${contigBuffer.getRefCount}")
       table.foreach(_.close())
-      println(s"removing alias ${contigBuffer.getRefCount}")
+      println(s"removing alias ${id} reg ${contigBuffer.id} refCount ${contigBuffer.getRefCount}")
+      logInfo(s"removing alias ${id} reg ${contigBuffer.id} refCount ${contigBuffer.getRefCount}")
       contigBuffer.removeAlias(id)
     }
 
@@ -402,30 +429,42 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
 
     override def getColumnarBatch(
       sparkTypes: Array[DataType]): ColumnarBatch = contigBuffer.synchronized {
-      withResource(contigBuffer.getDeviceMemoryBuffer) { buff =>
-        val startedWith = buff.getRefCount
-        var endedWith: Int = -1
-        logInfo(s"At getColumnarBatch with ref count ${buff.getRefCount}")
-        val res = if (table.isDefined) {
-          //REFCOUNT ++ of all columns, not necessarily the underlying buffer
-          logInfo("went .from route")
-          //buff.incRefCount()
-          val r = GpuColumnVectorFromBuffer.from(table.get, buff, meta, sparkTypes)
-          endedWith = buff.getRefCount
-          if (endedWith == startedWith) {
-            logError("WHAT!!")
-          }
-          r
-        } else {
-          logInfo("went columnarBatchFromDeviceBuffer route")
-          columnarBatchFromDeviceBuffer(buff, sparkTypes)
-        }
+      // TODO: remember to bring back acquisition here... really we may need
+      //   to always incRefCount here. Because, `columnarBatchFromDeviceBuffer`
+      //   is going to incRefCount. So it is by definition not spillable..
+      val buff = contigBuffer.getDeviceMemoryBufferInternal
+      val startedWith = buff.getRefCount
+      var endedWith: Int = -1
 
-        endedWith = buff.getRefCount
-        //require(endedWith > startedWith,
-        //  s"endedWith=$endedWith, startedWith=$startedWith")
-        res
+      val sb = new mutable.StringBuilder()
+      Thread.currentThread().getStackTrace.foreach { stackTraceElement =>
+        sb.append("    " + stackTraceElement + "\n")
       }
+      val myStackTrace = sb.toString
+
+      logInfo(s"At getColumnarBatch ${id} and registered ${contigBuffer.id} " +
+        s"with ref count ${buff.getRefCount}. stack trace: ${myStackTrace}")
+      val res = if (table.isDefined) {
+        //REFCOUNT ++ of all columns, not necessarily the underlying buffer
+        logInfo("went .from route")
+        //buff.incRefCount()
+        val r = GpuColumnVectorFromBuffer.from(table.get, buff, meta, sparkTypes)
+        endedWith = buff.getRefCount
+        if (endedWith == startedWith) {
+          logError("WHAT!!")
+        }
+        r
+      } else {
+        val r = columnarBatchFromDeviceBuffer(buff, sparkTypes)
+        logInfo(s"went columnarBatchFromDeviceBuffer route ${id} reg ${contigBuffer.id} " +
+          s"refCount is now ${buff.getRefCount}")
+        r
+      }
+
+      endedWith = buff.getRefCount
+      //require(endedWith > startedWith,
+      //  s"endedWith=$endedWith, startedWith=$startedWith")
+      res
     }
   }
 }

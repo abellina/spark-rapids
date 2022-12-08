@@ -23,7 +23,7 @@ import ai.rapids.cudf.{ContiguousTable, Cuda, DeviceMemoryBuffer, HostMemoryBuff
 import com.nvidia.spark.rapids.StorageTier.StorageTier
 import com.nvidia.spark.rapids.format.TableMeta
 import org.mockito.ArgumentCaptor
-import org.mockito.Mockito.verify
+import org.mockito.Mockito.{times, verify}
 import org.scalatest.FunSuite
 import org.scalatest.mockito.MockitoSugar
 import org.apache.spark.sql.rapids.{RapidsDiskBlockManager, TempSpillBufferId}
@@ -55,7 +55,7 @@ class RapidsDeviceMemoryStoreSuite extends FunSuite with Arm with MockitoSugar {
       }
 
       val captor: ArgumentCaptor[RapidsBuffer] = ArgumentCaptor.forClass(classOf[RapidsBuffer])
-      verify(catalog).registerNewBuffer(captor.capture())
+      verify(catalog, times(2)).registerNewBuffer(captor.capture())
       val resultBuffer = captor.getValue
       assertResult(bufferId)(resultBuffer.id)
       assertResult(spillPriority)(resultBuffer.getSpillPriority)
@@ -72,12 +72,12 @@ class RapidsDeviceMemoryStoreSuite extends FunSuite with Arm with MockitoSugar {
       val meta = withResource(buildContiguousTable()) { ct =>
         val meta = MetaUtils.buildTableMeta(bufferId.tableId, ct)
         // store takes ownership of the buffer
-        ct.getBuffer.incRefCount()
+        // TODO: HERE ct.getBuffer.incRefCount()
         store.addBuffer(bufferId, ct.getBuffer, meta, spillPriority)
         meta
       }
       val captor: ArgumentCaptor[RapidsBuffer] = ArgumentCaptor.forClass(classOf[RapidsBuffer])
-      verify(catalog).registerNewBuffer(captor.capture())
+      verify(catalog, times(2)).registerNewBuffer(captor.capture())
       val resultBuffer = captor.getValue
       assertResult(bufferId)(resultBuffer.id)
       assertResult(spillPriority)(resultBuffer.getSpillPriority)
@@ -95,7 +95,7 @@ class RapidsDeviceMemoryStoreSuite extends FunSuite with Arm with MockitoSugar {
           expectedHostBuffer.copyFromDeviceBuffer(ct.getBuffer)
           val meta = MetaUtils.buildTableMeta(bufferId.tableId, ct)
           // store takes ownership of the buffer
-          ct.getBuffer.incRefCount()
+          //TODO: HERE ct.getBuffer.incRefCount()
           store.addBuffer(bufferId, ct.getBuffer, meta, initialSpillPriority = 3)
           withResource(catalog.acquireBuffer(bufferId)) { buffer =>
             withResource(buffer.getMemoryBuffer.asInstanceOf[DeviceMemoryBuffer]) { devbuf =>
@@ -122,7 +122,7 @@ class RapidsDeviceMemoryStoreSuite extends FunSuite with Arm with MockitoSugar {
           expectedBatch =>
             val meta = MetaUtils.buildTableMeta(bufferId.tableId, ct)
             // store takes ownership of the buffer
-            ct.getBuffer.incRefCount()
+            //TODO: HERE ct.getBuffer.incRefCount()
             store.addBuffer(bufferId, ct.getBuffer, meta, initialSpillPriority = 3)
             withResource(catalog.acquireBuffer(bufferId)) { buffer =>
               withResource(buffer.getColumnarBatch(sparkTypes)) { actualBatch =>
@@ -170,11 +170,15 @@ class RapidsDeviceMemoryStoreSuite extends FunSuite with Arm with MockitoSugar {
     val bufferSizes = new Array[Long](spillPriorities.length)
     withResource(new RapidsDeviceMemoryStore(catalog)) { store =>
       store.setSpillStore(spillStore)
+      val bufferIds = new Array[RapidsBufferId](3)
       spillPriorities.indices.foreach { i =>
         withResource(buildContiguousTable()) { ct =>
           bufferSizes(i) = ct.getBuffer.getLength
           // store takes ownership of the table
-          store.addContiguousTable(MockRapidsBufferId(i), ct, spillPriorities(i))
+          println(s"Refcount for ${i} is ${ct.getBuffer.getRefCount}")
+          val bufferId = MockRapidsBufferId(i)
+          bufferIds(i) = bufferId
+          store.addContiguousTable(bufferId, ct, spillPriorities(i))
         }
       }
       assert(spillStore.spilledBuffers.isEmpty)
@@ -189,20 +193,20 @@ class RapidsDeviceMemoryStoreSuite extends FunSuite with Arm with MockitoSugar {
       assertResult(sizeBeforeSpill)(store.currentSize)
 
       // spilling 1 byte should force one buffer to spill in priority order
-      println("SPILL!")
+      println(s"SPILL! Current size is ${sizeBeforeSpill}")
       store.synchronousSpill(sizeBeforeSpill - 1)
-      println("DONE SPILL!")
+      println(s"DONE SPILL! size after is: ${store.currentSize}")
 
       assertResult(1)(spillStore.spilledBuffers.length)
       assertResult(bufferSizes.drop(1).sum)(store.currentSize)
-      assertResult(1)(spillStore.spilledBuffers(0).tableId)
+      assertResult(bufferIds(1).alias.get)(spillStore.spilledBuffers(0))
 
       // spilling to zero should force all buffers to spill in priority order
       store.synchronousSpill(0)
       assertResult(3)(spillStore.spilledBuffers.length)
       assertResult(0)(store.currentSize)
-      assertResult(0)(spillStore.spilledBuffers(1).tableId)
-      assertResult(2)(spillStore.spilledBuffers(2).tableId)
+      assertResult(bufferIds(0).alias.get)(spillStore.spilledBuffers(1))
+      assertResult(bufferIds(2).alias.get)(spillStore.spilledBuffers(2))
     }
   }
 
@@ -213,12 +217,15 @@ class RapidsDeviceMemoryStoreSuite extends FunSuite with Arm with MockitoSugar {
     val bufferSizes = new Array[Long](spillPriorities.length)
     withResource(new RapidsDeviceMemoryStore(catalog)) { store =>
       store.setSpillStore(spillStore)
+      val bufferIds = new Array[RapidsBufferId](3)
       val aliases = new ArrayBuffer[RapidsBufferId]()
       spillPriorities.indices.foreach { i =>
         val bufferId = MockRapidsBufferId(i)
+        bufferIds(i) = bufferId
         withResource(buildContiguousTable()) { ct =>
           bufferSizes(i) = ct.getBuffer.getLength
           // store takes ownership of the table
+          println(s"Refcount for ${i} is ${ct.getBuffer.getRefCount}")
           store.addContiguousTable(bufferId, ct, spillPriorities(i))
         }
         // alias each buffer, so now we have 6 device buffers pointing to 3 registered buffers
@@ -241,11 +248,12 @@ class RapidsDeviceMemoryStoreSuite extends FunSuite with Arm with MockitoSugar {
 
       val sizeBeforeSpill = store.currentSize
       // spilling 1 byte should force one buffer to spill in priority order
+      println(s"About to spill. Store has ${sizeBeforeSpill} asking to go to ${sizeBeforeSpill-1}")
       store.synchronousSpill(sizeBeforeSpill - 1)
       println("SPILLED!")
       assertResult(1)(spillStore.spilledBuffers.length)
       assertResult(bufferSizes.drop(1).sum)(store.currentSize)
-      assertResult(1)(spillStore.spilledBuffers(0).tableId)
+      assertResult(bufferIds(1).alias.get)(spillStore.spilledBuffers(0))
 
       println("SPILLING ALL NOW")
 
@@ -253,11 +261,12 @@ class RapidsDeviceMemoryStoreSuite extends FunSuite with Arm with MockitoSugar {
       store.synchronousSpill(0)
       assertResult(3)(spillStore.spilledBuffers.length)
       assertResult(0)(store.currentSize)
-      assertResult(0)(spillStore.spilledBuffers(1).tableId)
-      assertResult(2)(spillStore.spilledBuffers(2).tableId)
+      assertResult(bufferIds(0).alias.get)(spillStore.spilledBuffers(1))
+      assertResult(bufferIds(2).alias.get)(spillStore.spilledBuffers(2))
       println("Done with the test")
     }
   }
+
 
   case class MockRapidsBufferId(tableId: Int) extends RapidsBufferId {
     override def getDiskPath(diskBlockManager: RapidsDiskBlockManager): File =
@@ -272,6 +281,7 @@ class RapidsDeviceMemoryStoreSuite extends FunSuite with Arm with MockitoSugar {
         b: RapidsBuffer,
         m: MemoryBuffer,
         s: Cuda.Stream): RapidsBufferBase = {
+      println(s">>> spilled ${b.id}")
       withResource(m) { _ =>
         spilledBuffers += b.id
         new MockRapidsBuffer(b.id, b.size, b.meta, b.getSpillPriority)
@@ -280,6 +290,9 @@ class RapidsDeviceMemoryStoreSuite extends FunSuite with Arm with MockitoSugar {
 
     class MockRapidsBuffer(id: RapidsBufferId, size: Long, meta: TableMeta, spillPriority: Long)
         extends RapidsBufferBase(id, size, meta, spillPriority, RapidsBuffer.defaultSpillCallback) {
+
+      override def isSpillable: Boolean = false
+
       override protected def releaseResources(): Unit = {}
 
       override val storageTier: StorageTier = StorageTier.HOST

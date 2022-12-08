@@ -58,8 +58,10 @@ abstract class RapidsBufferStore(
       if (spillable.offer(buffer)) {
         totalBytesStored += buffer.size
         logInfo(s"Added spillable ${buffer.id} totalBytesStored=${totalBytesStored}")
+        println(s"Added spillable ${buffer.id} totalBytesStored=${totalBytesStored}")
       } else {
         logError(s"ALREADY SPILLABLE ${buffer.id} totalBytesStored=${totalBytesStored}")
+        println(s"ALREADY SPILLABLE ${buffer.id} totalBytesStored=${totalBytesStored}")
       }
     }
 
@@ -67,8 +69,11 @@ abstract class RapidsBufferStore(
       if (spillable.remove(buffer)) {
         totalBytesStored -= buffer.size
         logInfo(s"Removed spillable ${buffer} totalBytesStored=${totalBytesStored}")
+        println(s"Removed spillable ${buffer} totalBytesStored=${totalBytesStored}")
       } else {
         logError(s"ALREADY REMOVED SPILLABLE ${buffer.id} " +
+          s"totalBytesStored=${totalBytesStored}")
+        println(s"ALREADY REMOVED SPILLABLE ${buffer.id} " +
           s"totalBytesStored=${totalBytesStored}")
       }
     }
@@ -88,16 +93,12 @@ abstract class RapidsBufferStore(
     def remove(id: RapidsBufferId): Unit = synchronized {
       val obj = buffers.remove(id)
       if (obj != null) {
-        if (obj.isSpillable) {
-          removeSpillable(obj)
-        } else {
-          logInfo(s"Removed non-spillable ${id} totalBytesStored=${totalBytesStored}")
-        }
+        removeSpillable(obj)
       }
+      logInfo(s"After RapidsBufferStore::remove($id) num buffers left: ${buffers.size()}")
     }
 
     def freeAll(): Unit = {
-
       val values = synchronized {
         val buffs = buffers.values().toArray(new Array[RapidsBufferBase](0))
         buffers.clear()
@@ -105,6 +106,7 @@ abstract class RapidsBufferStore(
         buffs
       }
       logInfo(s"at freeAll with ${values.length}, calling safeFree")
+      println(s"at freeAll with ${values.length}, calling safeFree")
       // We need to release the `RapidsBufferStore` lock to prevent a lock order inversion
       // deadlock: (1) `RapidsBufferBase.free`     calls  (2) `RapidsBufferStore.remove` and
       //           (1) `RapidsBufferStore.freeAll` calls  (2) `RapidsBufferBase.free`.
@@ -112,7 +114,9 @@ abstract class RapidsBufferStore(
     }
 
     def nextSpillableBuffer(): RapidsBufferBase = synchronized {
-      spillable.poll()
+      val res = spillable.poll()
+      totalBytesStored -= res.size
+      res
     }
 
     def updateSpillPriority(buffer: RapidsBufferBase, priority:Long): Unit = synchronized {
@@ -198,6 +202,7 @@ abstract class RapidsBufferStore(
         var exhausted = false
         while (!exhausted && buffers.getTotalBytes > targetTotalSize) {
           val amountSpilled = trySpillAndFreeBuffer(stream)
+          println(s"Did spill ${amountSpilled}. Need to get to ${targetTotalSize}")
           if (amountSpilled != 0) {
             totalSpilled += amountSpilled
             waited = false
@@ -269,11 +274,13 @@ abstract class RapidsBufferStore(
 
   override def close(): Unit = {
     logInfo(s"Closing store ${this}")
+    println("CLOSING STORE")
     buffers.freeAll()
   }
 
   private def trySpillAndFreeBuffer(stream: Cuda.Stream): Long = synchronized {
     val bufferToSpill = buffers.nextSpillableBuffer()
+    println(s"Will spill ${bufferToSpill.id}")
     if (bufferToSpill != null) {
       spillAndFreeBuffer(bufferToSpill, stream)
       bufferToSpill.size

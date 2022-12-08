@@ -185,7 +185,7 @@ object SpillableColumnarBatch extends Arm {
         val cv = batch.column(0).asInstanceOf[GpuCompressedColumnVector]
         val buff = cv.getTableBuffer
         // TODO: re-added double-free?
-        buff.incRefCount()
+        // need? buff.incRefCount()
         RapidsBufferCatalog.addBuffer(id, buff, cv.getTableMeta, initialSpillPriority,
           spillCallback)
       } else if (GpuPackedTableColumn.isBatchPacked(batch)) {
@@ -202,16 +202,18 @@ object SpillableColumnarBatch extends Arm {
         val table = GpuColumnVector.from(batch)
         val buff = cv.getBuffer
         // TODO: added back, I think really we need this
-        buff.incRefCount()
+        // removed for now buff.incRefCount()
         RapidsBufferCatalog.addTable(id, table, buff, cv.getTableMeta, initialSpillPriority,
           spillCallback)
       } else {
         // guaranteed unique buffer... no aliasing
         withResource(GpuColumnVector.from(batch)) { tmpTable =>
           withResource(tmpTable.contiguousSplit()) { contigTables =>
-            require(contigTables.length == 1, "Unexpected number of contiguous spit tables")
-            RapidsBufferCatalog.addContiguousTable(id, contigTables.head, initialSpillPriority,
-              spillCallback)
+            withResource(contigTables) { _ =>
+              require(contigTables.length == 1, "Unexpected number of contiguous spit tables")
+              RapidsBufferCatalog.addContiguousTable(id, contigTables.head, initialSpillPriority,
+                spillCallback)
+            }
           }
         }
       }

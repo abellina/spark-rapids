@@ -34,6 +34,12 @@ import org.apache.spark.sql.vectorized.ColumnarBatch
 trait RapidsBufferId {
   val tableId: Int
 
+  var alias: Option[RapidsBufferId] = None
+
+  def setAlias(aliasingId: RapidsBufferId): Unit = {
+    alias = Some(aliasingId)
+  }
+
   /**
    * Indicates whether the buffer may share a spill file with other buffers.
    * If false then the spill file will be automatically removed when the buffer is freed.

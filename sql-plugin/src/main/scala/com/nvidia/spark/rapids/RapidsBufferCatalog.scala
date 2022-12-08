@@ -144,6 +144,8 @@ class RapidsBufferCatalog extends Logging {
 
   /** Remove a buffer ID from the catalog and release the resources of the registered buffers. */
   def removeBuffer(id: RapidsBufferId): Unit = {
+    println(s"Removing ${id}")
+    logInfo(s"Removing ${id}")
     val buffers = bufferMap.remove(id)
     buffers.safeFree()
   }
