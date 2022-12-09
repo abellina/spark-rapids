@@ -108,7 +108,7 @@ class DeviceMemoryEventHandler(
    * @param retryCount the number of times this allocation has been retried after failure
    * @return true if allocation should be reattempted or false if it should fail
    */
-  override def onAllocFailure(allocSize: Long, retryCount: Int): Boolean = store.synchronized {
+  override def onAllocFailure(allocSize: Long, retryCount: Int): Boolean = {
     // check arguments for good measure
     require(allocSize >= 0, 
       s"onAllocFailure invoked with invalid allocSize $allocSize")

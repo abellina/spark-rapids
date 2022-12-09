@@ -16,9 +16,9 @@
 
 package com.nvidia.spark.rapids
 
-import ai.rapids.cudf.{ContiguousTable, DeviceMemoryBuffer}
-
+import ai.rapids.cudf.{ContiguousTable, DeviceMemoryBuffer, Rmm}
 import org.apache.spark.TaskContext
+import org.apache.spark.internal.Logging
 import org.apache.spark.sql.rapids.TempSpillBufferId
 import org.apache.spark.sql.types.DataType
 import org.apache.spark.sql.vectorized.ColumnarBatch
@@ -128,7 +128,7 @@ class SpillableColumnarBatchImpl(
   }
 }
 
-object SpillableColumnarBatch extends Arm {
+object SpillableColumnarBatch extends Arm with Logging {
   /**
    * Create a new SpillableColumnarBatch.
    * @note This takes over ownership of batch, and batch should not be used after this.

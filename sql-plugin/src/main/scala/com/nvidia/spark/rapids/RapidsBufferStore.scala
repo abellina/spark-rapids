@@ -75,9 +75,6 @@ abstract class RapidsBufferStore(
           val after = this.toString()
           logInfo(s"Added spillable ${buffer.id} $before -> $after")
           println(s"Added spillable ${buffer.id} $this")
-        } else {
-          logError(s"ALREADY SPILLABLE ${buffer.id} $this")
-          println(s"ALREADY SPILLABLE ${buffer.id} $this")
         }
       } else {
         logInfo(s"Cannot make spillable ${buffer.id}. It is not in the store.")
@@ -91,9 +88,6 @@ abstract class RapidsBufferStore(
         val after = this.toString
         logInfo(s"Removed spillable ${buffer} $before -> $after")
         println(s"Removed spillable ${buffer} $this")
-      } else {
-        logError(s"ALREADY REMOVED SPILLABLE ${buffer.id} $this")
-        println(s"ALREADY REMOVED SPILLABLE ${buffer.id} $this")
       }
     }
 
@@ -288,12 +282,10 @@ abstract class RapidsBufferStore(
   }
 
   protected def removeSpillable(buffer: RapidsBufferBase): Unit = synchronized {
-    logInfo(s"Removing spillable ${buffer}")
     buffers.removeSpillable(buffer)
   }
 
   protected def makeSpillable(buffer: RapidsBufferBase): Unit = synchronized {
-    logInfo(s"Making spillable ${buffer.id}")
     buffers.makeSpillable(buffer)
   }
 

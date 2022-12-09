@@ -202,7 +202,7 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
     }
   }
 
-  val dmbs = new ConcurrentHashMap[RapidsBufferId, RegisteredDeviceMemoryBuffer]()
+  //val dmbs = new ConcurrentHashMap[RapidsBufferId, RegisteredDeviceMemoryBuffer]()
 
   class RegisteredDeviceMemoryBuffer(
       override val id: RapidsBufferId,
@@ -227,10 +227,7 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
     val myStackTrace = sb.toString
     logInfo(s"Adding RegisteredDeviceMemoryBuffer ${buffer} to cached as ${id} with " +
       s"initial refCount ${buffer.getRefCount}")
-    dmbs.put(id, this)
-    if (dmbs.size > 10) {
-      logInfo(s"$id: ${myStackTrace}")
-    }
+    //dmbs.put(id, this)
     require(null == buffer.setEventHandler(this), "Overwrote an event handler!!")
 
     // TODO: fix removed registered.synchronized from here
@@ -246,33 +243,35 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
       }
       if (aliases.size() > 0 && refCount == 1) {
         makeSpillable(this)
-      } else if (refCount == 0) {
+      }
+
+      if (refCount == 0) {
         val sb = new mutable.StringBuilder()
         Thread.currentThread().getStackTrace.foreach { stackTraceElement =>
           sb.append("    " + stackTraceElement + "\n")
         }
         println(s"I just got closed ${id} ${sb.toString()}")
-        dmbs.remove(id)
+        //dmbs.remove(id)
         val idsLeft = new mutable.ArrayBuffer[(RapidsBufferId, RegisteredDeviceMemoryBuffer)]()
-        dmbs.forEach((k, v) => {
-          idsLeft.append((k, v))
-        })
+        //dmbs.forEach((k, v) => {
+        //  idsLeft.append((k, v))
+        //})
         logInfo(s"Removed RegisteredDeviceMemoryBuffer ${id} " +
-          s"${buffer} from cached: ${dmbs.size()} " +
+          s"${buffer} " + //from cached: ${dmbs.size()} " +
           s"$idsLeft")
-        removeBuffer(id)
-        require(this == buffer.setEventHandler(null), "Stumped on an event handler that wasn't mine!!")
+        //removeBuffer(id)
+        //require(this == buffer.setEventHandler(null), "Stumped on an event handler that wasn't mine!!")
       }
     }
 
-    override def getDeviceMemoryBuffer: DeviceMemoryBuffer = buffer.synchronized {
+    override def getDeviceMemoryBuffer: DeviceMemoryBuffer = {
       removeSpillable(this)
       buffer.incRefCount()
       logInfo(s"At getDeviceMemoryBuffer ${this}, refCount=${buffer.getRefCount}")
       buffer
     }
 
-    override def close(): Unit = buffer.synchronized {
+    override def close(): Unit = {
       super.close()
       logInfo(s"At close for ${id} with buffer ref count ${buffer.getRefCount}")
     }
@@ -282,7 +281,7 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
     var closed = false
 
     def alias(aliasingId: RapidsBufferId,
-              how: String): RegisteredDeviceMemoryBuffer = buffer.synchronized {
+              how: String): RegisteredDeviceMemoryBuffer = {
       if (closed) {
         logWarning(s"New alias $aliasingId for previously dangled ${id}.")
         // TODO: just added this.. it kind of makes sense
@@ -308,7 +307,7 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
       this
     }
 
-    def removeAlias(aliasingId: RapidsBufferId) = buffer.synchronized {
+    def removeAlias(aliasingId: RapidsBufferId) = {
       if (closed) {
         throw new IllegalStateException(s"$aliasingId cannot remove alias to $id " +
           s"since it is already closed!")
@@ -319,13 +318,14 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
       //close()
       //println(s"Closed, as standard for all removeAlias. ${getRefCount} ")
       if (aliases.size() == 0) {
-        logInfo(s"$id has no aliases left") //, closing it!")
-        buffer.close() // TODO: need this?
-        closed = true
-        removeBuffer(this.id)
-
-        println(s"NOT Closing more time, aliases.size() == 0. ${getRefCount} ")
-        // TODO: close() // final close
+        buffer.synchronized {
+          logInfo(s"$id has no aliases left") //, closing it!")
+          closed = true
+          buffer.close() // TODO: need this?
+          buffer.setEventHandler(null)
+          removeBuffer(this.id)
+          // TODO: close() // final close
+        }
       }
     }
 
@@ -399,7 +399,7 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
       size: Long,
       meta: TableMeta,
       table: Option[Table],
-      contigBuffer: RegisteredDeviceMemoryBuffer,
+      var contigBuffer: RegisteredDeviceMemoryBuffer,
       spillPriority: Long,
       override val spillCallback: SpillCallback)
       extends RapidsBufferBase(id, size, meta, spillPriority, spillCallback) {
@@ -408,7 +408,7 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
     override def isSpillable: Boolean = false
 
     var released = false
-    override protected def releaseResources(): Unit = contigBuffer.synchronized {
+    override protected def releaseResources(): Unit = {
       println(s"releaseResources ${this.id}")
       if (released) {
         throw new IllegalStateException(s"Already released ${id} which aliases ${contigBuffer.id}")
@@ -421,6 +421,7 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
       println(s"removing alias ${id} reg ${contigBuffer.id} refCount ${contigBuffer.getRefCount}")
       logInfo(s"removing alias ${id} reg ${contigBuffer.id} refCount ${contigBuffer.getRefCount}")
       contigBuffer.removeAlias(id)
+      contigBuffer = null
     }
 
     override def getDeviceMemoryBuffer: DeviceMemoryBuffer = {
