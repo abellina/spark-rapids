@@ -486,7 +486,7 @@ case class GpuOutOfCoreSortIterator(
         withResource(sorted.pop()) { tmp =>
           sortedSize -= tmp.sizeInBytes
           totalBytes += tmp.sizeInBytes
-          withResource(tmp.getColumnarBatch()) { batch =>
+          withResource(tmp.releaseBatch()) { batch =>
             tables += GpuColumnVector.from(batch)
           }
         }

@@ -188,7 +188,7 @@ object GpuTopN extends Arm {
     withResource(new NvtxWithMetrics("readNConcat", NvtxColor.CYAN, concatTime)) { _ =>
       val dataTypes = GpuColumnVector.extractTypes(b)
       val aTable = withResource(a) { a =>
-        withResource(a.getColumnarBatch()) { aBatch =>
+        withResource(a.releaseBatch()) { aBatch =>
           GpuColumnVector.from(aBatch)
         }
       }
@@ -276,7 +276,7 @@ object GpuTopN extends Arm {
                   spillCallback))
           }
         }
-        val ret = pending.get.getColumnarBatch()
+        val ret = pending.get.releaseBatch()
         pending.get.close()
         pending = None
         outputBatches += 1

@@ -256,7 +256,7 @@ class GpuHashAggregateIterator(
         // this will be the last batch
         hasReductionOnlyBatch = false
         withResource(aggregatedBatches.pop()) { lazyBatch =>
-          GpuColumnVector.incRefCounts(lazyBatch.getBatch)
+          lazyBatch.releaseBatch()
         }
       }
     }
@@ -414,7 +414,7 @@ class GpuHashAggregateIterator(
 
       override def next(): ColumnarBatch = {
         withResource(aggregatedBatches.removeFirst()) { lazyBatch =>
-          GpuColumnVector.incRefCounts(lazyBatch.getBatch)
+          lazyBatch.releaseBatch()
         }
       }
     }
@@ -537,14 +537,16 @@ class GpuHashAggregateIterator(
     val opTime = metrics.opTime
     withResource(new NvtxWithMetrics("concatenateBatches", NvtxColor.BLUE, concatTime,
       opTime)) { _ =>
-      val batchesToConcat = spillableBatchesToConcat.map(_.getBatch)
-      val numCols = batchesToConcat.head.numCols()
-      val dataTypes = (0 until numCols).map {
-        c => batchesToConcat.head.column(c).dataType
-      }.toArray
-      withResource(batchesToConcat.map(GpuColumnVector.from)) { tbl =>
-        withResource(cudf.Table.concatenate(tbl: _*)) { concatenated =>
-          GpuColumnVector.from(concatenated, dataTypes)
+      val batchesToConcat = spillableBatchesToConcat.map(_.releaseBatch())
+      withResource(batchesToConcat) { _ =>
+        val numCols = batchesToConcat.head.numCols()
+        val dataTypes = (0 until numCols).map {
+          c => batchesToConcat.head.column(c).dataType
+        }.toArray
+        withResource(batchesToConcat.map(GpuColumnVector.from)) { tbl =>
+          withResource(cudf.Table.concatenate(tbl: _*)) { concatenated =>
+            GpuColumnVector.from(concatenated, dataTypes)
+          }
         }
       }
     }

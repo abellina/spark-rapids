@@ -65,7 +65,7 @@ class RebatchingRoundoffIterator(
   private[this] def popPending(): ColumnarBatch = {
     withResource(pending.get) { scb =>
       pending = None
-      scb.getColumnarBatch()
+      scb.releaseBatch()
     }
   }
 
@@ -79,7 +79,8 @@ class RebatchingRoundoffIterator(
     }
   }
 
-  private[this] def fillAndConcat(batches: ArrayBuffer[SpillableColumnarBatch]): ColumnarBatch = {
+  private[this] def fillConcatAndClose(
+      batches: ArrayBuffer[SpillableColumnarBatch]): ColumnarBatch = {
     var rowsSoFar = batches.map(_.numRows()).sum
     while (wrapped.hasNext && rowsSoFar < targetRoundoff) {
       val got = wrapped.next()
@@ -117,17 +118,13 @@ class RebatchingRoundoffIterator(
         } else {
           // If that does not work then we will need to fall back to slower special case code
           val batches: ArrayBuffer[SpillableColumnarBatch] = ArrayBuffer.empty
-          try {
-            val localPending = pending.get
-            localPending.setSpillPriority(SpillPriorities.ACTIVE_BATCHING_PRIORITY)
-            batches.append(localPending)
-            pending = None
-            batches.append(SpillableColumnarBatch(cb, SpillPriorities.ACTIVE_BATCHING_PRIORITY,
-              spillCallback))
-            fillAndConcat(batches)
-          } finally {
-            batches.safeClose()
-          }
+          val localPending = pending.get
+          localPending.setSpillPriority(SpillPriorities.ACTIVE_BATCHING_PRIORITY)
+          batches.append(localPending)
+          pending = None
+          batches.append(SpillableColumnarBatch(cb, SpillPriorities.ACTIVE_BATCHING_PRIORITY,
+            spillCallback))
+          fillConcatAndClose(batches)
         }
       }
     } else {
@@ -138,13 +135,9 @@ class RebatchingRoundoffIterator(
         cb
       } else {
         val batches: ArrayBuffer[SpillableColumnarBatch] = ArrayBuffer.empty
-        try {
-          batches.append(SpillableColumnarBatch(cb, SpillPriorities.ACTIVE_BATCHING_PRIORITY,
-            spillCallback))
-          fillAndConcat(batches)
-        } finally {
-          batches.safeClose()
-        }
+        batches.append(SpillableColumnarBatch(cb, SpillPriorities.ACTIVE_BATCHING_PRIORITY,
+          spillCallback))
+        fillConcatAndClose(batches)
       }
     }
 

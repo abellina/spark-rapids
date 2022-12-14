@@ -537,7 +537,7 @@ class GpuCoalesceIterator(iter: Iterator[ColumnarBatch],
       spillCallback))
 
   protected def popAll(): Array[ColumnarBatch] = {
-    closeOnExcept(batches.toArray.safeMap(_.getColumnarBatch())) { wip =>
+    closeOnExcept(batches.toArray.safeMap(_.releaseBatch())) { wip =>
       batches.safeClose()
       batches.clear()
       wip
@@ -572,7 +572,7 @@ class GpuCoalesceIterator(iter: Iterator[ColumnarBatch],
   }
 
   override protected def popOnDeck(): ColumnarBatch = {
-    val ret = onDeck.get.getColumnarBatch()
+    val ret = onDeck.get.releaseBatch()
     clearOnDeck()
     ret
   }
@@ -614,7 +614,7 @@ class GpuCompressionAwareCoalesceIterator(
   private[this] var codec: TableCompressionCodec = _
 
   override protected def popAll(): Array[ColumnarBatch] = {
-    closeOnExcept(batches.toArray.safeMap(_.getColumnarBatch())) { wip =>
+    closeOnExcept(batches.toArray.safeMap(_.releaseBatch())) { wip =>
       batches.safeClose()
       batches.clear()
 

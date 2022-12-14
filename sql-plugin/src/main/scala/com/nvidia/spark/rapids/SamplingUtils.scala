@@ -104,14 +104,13 @@ object SamplingUtils extends Arm {
               SpillPriorities.ACTIVE_ON_DECK_PRIORITY,
               RapidsBuffer.defaultSpillCallback)
           } else {
-            val concat = withResource(runningCb) { spb =>
-              runningCb = null
-              withResource(spb.getColumnarBatch()) { cb =>
+            val concat =
+              withResource(runningCb.releaseBatch()) { cb =>
+                runningCb = null
                 withResource(GpuColumnVector.from(cb)) { table =>
                   Table.concatenate(selected, table)
                 }
               }
-            }
             withResource(concat) { concat =>
               runningCb = SpillableColumnarBatch(
                 GpuColumnVector.from(concat, GpuColumnVector.extractTypes(cb)),
@@ -129,7 +128,7 @@ object SamplingUtils extends Arm {
     // Getting a spilled batch will acquire the semaphore if needed
     val cb = withResource(runningCb) { spb =>
       runningCb = null
-      spb.getColumnarBatch()
+      spb.releaseBatch()
     }
     val withSortColumns = withResource(cb) { cb =>
       sorter.appendProjectedColumns(cb)
@@ -196,7 +195,7 @@ object SamplingUtils extends Arm {
           } else {
             withResource(runningCb) { spb =>
               runningCb = null
-              withResource(spb.getColumnarBatch()) { cb =>
+              withResource(spb.releaseBatch()) { cb =>
                 val filtered = if (rowsToDrop > 0) {
                   selectWithoutReplacementFrom(cb.numRows() - rowsToDrop, rand, cb)
                 } else {
@@ -226,7 +225,7 @@ object SamplingUtils extends Arm {
     // Getting a spilled batch will acquire the semaphore if needed
     val cb = withResource(runningCb) { spb =>
       runningCb = null
-      spb.getColumnarBatch()
+      spb.releaseBatch()
     }
     val withSortColumns = withResource(cb) { cb =>
       sorter.appendProjectedColumns(cb)

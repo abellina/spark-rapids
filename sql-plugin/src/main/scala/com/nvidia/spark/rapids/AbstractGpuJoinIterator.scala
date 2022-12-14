@@ -198,7 +198,7 @@ abstract class SplittableJoinIterator(
       val cb = if (pendingSplits.nonEmpty) {
         opTime.ns {
           withResource(pendingSplits.dequeue()) {
-            _.getColumnarBatch()
+            _.releaseBatch()
           }
         }
       } else {

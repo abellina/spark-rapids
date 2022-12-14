@@ -46,6 +46,8 @@ trait SpillableColumnarBatch extends AutoCloseable {
    */
   def getColumnarBatch(): ColumnarBatch
 
+  def releaseBatch(): ColumnarBatch
+
   def sizeInBytes: Long
 }
 
@@ -63,6 +65,10 @@ class JustRowsColumnarBatch(numRows: Int, semWait: GpuMetric) extends SpillableC
   }
   override def close(): Unit = () // NOOP nothing to close
   override val sizeInBytes: Long = 0L
+
+  override def releaseBatch(): ColumnarBatch = {
+    getColumnarBatch()
+  }
 }
 
 /**
@@ -114,6 +120,13 @@ class SpillableColumnarBatchImpl (id: TempSpillBufferId,
     withResource(RapidsBufferCatalog.acquireBuffer(id)) { rapidsBuffer =>
       GpuSemaphore.acquireIfNecessary(TaskContext.get(), semWait)
       rapidsBuffer.getColumnarBatch(sparkTypes)
+    }
+  }
+
+  override def releaseBatch(): ColumnarBatch = {
+    withResource(RapidsBufferCatalog.acquireBuffer(id)) { rapidsBuffer =>
+      GpuSemaphore.acquireIfNecessary(TaskContext.get(), semWait)
+      rapidsBuffer.releaseBatch(sparkTypes)
     }
   }
 

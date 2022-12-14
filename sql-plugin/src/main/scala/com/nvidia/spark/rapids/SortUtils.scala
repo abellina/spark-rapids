@@ -241,7 +241,7 @@ class GpuSorter(
       if (spillableBatches.size == 1) {
         // Single batch no need for a merge sort
         withResource(spillableBatches.pop()) { sb =>
-          sb.getColumnarBatch()
+          sb.releaseBatch()
         }
       } else {
         val tablesToMerge = new mutable.ArrayStack[Table]()
@@ -256,7 +256,7 @@ class GpuSorter(
               val concatenated = closeOnExcept(tablesToMerge) { _ =>
                 while (spillableBatches.nonEmpty) {
                   withResource(spillableBatches.pop()) { sb =>
-                    withResource(sb.getColumnarBatch()) { cb =>
+                    withResource(sb.releaseBatch()) { cb =>
                       tablesToMerge.push(GpuColumnVector.from(cb))
                     }
                   }
@@ -284,7 +284,7 @@ class GpuSorter(
                   withResource(spillableCandidate) {
                     _.foreach { sb =>
                       // materialize a potentially spilled batch
-                      withResource(sb.getColumnarBatch()) { batch =>
+                      withResource(sb.releaseBatch()) { batch =>
                         tablesToMerge.push(GpuColumnVector.from(batch))
                       }
                     }

@@ -661,7 +661,7 @@ class GpuDynamicPartitionDataSingleWriter(
     withResource(spills) { _ =>
       val subTablesBuffer = new ArrayBuffer[Table]
       spills.foreach { spillableCb =>
-        withResource(spillableCb.getColumnarBatch()) { cb =>
+        withResource(spillableCb.releaseBatch()) { cb =>
           val currTable = GpuColumnVector.from(cb)
           subTablesBuffer += currTable
         }
