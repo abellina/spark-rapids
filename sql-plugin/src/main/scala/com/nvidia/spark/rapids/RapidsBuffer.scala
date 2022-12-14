@@ -89,6 +89,10 @@ object RapidsBuffer {
 
 /** Interface provided by all types of RAPIDS buffers */
 trait RapidsBuffer extends AutoCloseable {
+  def releaseBatch(sparkTypes: Array[DataType]): ColumnarBatch = {
+    getColumnarBatch(sparkTypes)
+  }
+
   /** The buffer identifier for this buffer. */
   val id: RapidsBufferId
 

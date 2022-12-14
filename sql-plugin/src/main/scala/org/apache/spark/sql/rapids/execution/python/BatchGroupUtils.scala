@@ -314,7 +314,7 @@ private[python] class BatchGroupedIterator private(
       }
 
       withResource(batchesQueue.dequeue()) { spillableBatch =>
-        spillableBatch.getColumnarBatch()
+        spillableBatch.releaseBatch()
       }
     }
   }

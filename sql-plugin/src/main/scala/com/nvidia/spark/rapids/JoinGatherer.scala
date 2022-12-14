@@ -280,6 +280,8 @@ class LazySpillableColumnarBatchImpl(
     cached.getOrElse(throw new IllegalStateException("batch is closed"))
   }
 
+  private var released: Boolean = false
+
   override def releaseBatch(): ColumnarBatch = {
     closeOnExcept(getBatch) { batch =>
       cached = None

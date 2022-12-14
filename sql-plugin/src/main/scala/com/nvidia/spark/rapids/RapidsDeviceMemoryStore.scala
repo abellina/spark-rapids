@@ -200,5 +200,9 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
         columnarBatchFromDeviceBuffer(contigBuffer, sparkTypes)
       }
     }
+
+    override def releaseBatch(sparkTypes: Array[DataType]): ColumnarBatch = {
+      getColumnarBatch(sparkTypes)
+    }
   }
 }

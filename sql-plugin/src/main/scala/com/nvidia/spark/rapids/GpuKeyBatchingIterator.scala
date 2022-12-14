@@ -123,7 +123,7 @@ class GpuKeyBatchingIterator(
         withResource(mutable.ArrayBuffer[Table]()) { toConcat =>
           while (pending.nonEmpty) {
             withResource(pending.dequeue()) { spillable =>
-              withResource(spillable.getColumnarBatch()) { cb =>
+              withResource(spillable.releaseBatch()) { cb =>
                 peak += GpuColumnVector.getTotalDeviceMemoryUsed(cb)
                 toConcat.append(GpuColumnVector.from(cb))
               }
