@@ -81,17 +81,19 @@ class RebatchingRoundoffIterator(
 
   private[this] def fillConcatAndClose(
       batches: ArrayBuffer[SpillableColumnarBatch]): ColumnarBatch = {
-    var rowsSoFar = batches.map(_.numRows()).sum
-    while (wrapped.hasNext && rowsSoFar < targetRoundoff) {
-      val got = wrapped.next()
-      inputBatches += 1
-      inputRows += got.numRows()
-      rowsSoFar += got.numRows()
-      batches.append(SpillableColumnarBatch(got, SpillPriorities.ACTIVE_BATCHING_PRIORITY,
-        spillCallback))
+    withResource(batches) { _ =>
+      var rowsSoFar = batches.map(_.numRows()).sum
+      while (wrapped.hasNext && rowsSoFar < targetRoundoff) {
+        val got = wrapped.next()
+        inputBatches += 1
+        inputRows += got.numRows()
+        rowsSoFar += got.numRows()
+        batches.append(SpillableColumnarBatch(got, SpillPriorities.ACTIVE_BATCHING_PRIORITY,
+          spillCallback))
+      }
+      val toConcat = batches.safeMap(_.releaseBatch()).toArray
+      ConcatAndConsumeAll.buildNonEmptyBatch(toConcat, schema)
     }
-    val toConcat = batches.safeMap(_.getColumnarBatch()).toArray
-    ConcatAndConsumeAll.buildNonEmptyBatch(toConcat, schema)
   }
 
   override def next(): ColumnarBatch = {
@@ -197,7 +199,7 @@ class BatchQueue extends AutoCloseable with Arm {
       null
     } else {
       withResource(queue.dequeue()) { scp =>
-        scp.getColumnarBatch()
+        scp.releaseBatch()
       }
     }
   }

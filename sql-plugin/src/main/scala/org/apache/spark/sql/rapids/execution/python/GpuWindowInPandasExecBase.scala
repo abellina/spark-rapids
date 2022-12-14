@@ -104,7 +104,7 @@ class GroupingIterator(
   override def next(): ColumnarBatch = {
     if (groupBatches.nonEmpty) {
       withResource(groupBatches.dequeue()) { gb =>
-        gb.getColumnarBatch()
+        gb.releaseBatch()
       }
     } else {
       val batch = wrapped.next()
