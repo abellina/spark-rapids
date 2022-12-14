@@ -74,7 +74,7 @@ abstract class ExistenceJoinIterator(
     withResource(lazyStream.next()) { lazyBatch =>
       withResource(new NvtxWithMetrics("existence join batch", NvtxColor.ORANGE, joinTime)) { _ =>
         opTime.ns {
-          val ret = existenceJoinNextBatch(lazyBatch.getBatch)
+          val ret = existenceJoinNextBatch(lazyBatch.releaseBatch())
           spillableBuiltBatch.allowSpilling()
           ret
         }

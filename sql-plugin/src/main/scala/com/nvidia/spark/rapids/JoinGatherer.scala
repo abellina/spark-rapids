@@ -280,14 +280,17 @@ class LazySpillableColumnarBatchImpl(
     cached.getOrElse(throw new IllegalStateException("batch is closed"))
   }
 
-  private var released: Boolean = false
-
   override def releaseBatch(): ColumnarBatch = {
-    closeOnExcept(getBatch) { batch =>
-      cached = None
-      close()
-      batch
+    val result = if (cached.isEmpty) {
+      closeOnExcept(spill.map(_.releaseBatch())) { batch =>
+        close()
+        batch.getOrElse(throw new IllegalStateException("batch is closed"))
+      }
+    } else {
+      cached.getOrElse(throw new IllegalStateException("cached is closed"))
     }
+    cached = None
+    result
   }
 
   override def allowSpilling(): Unit = {
