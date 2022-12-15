@@ -173,13 +173,14 @@ case class GpuShuffledHashJoinExec(
             spillCallback,
             coalesceMetricsMap)
 
-        withResource(builtBatch) { _ =>
-          // doJoin will increment the reference counts as needed for the builtBatch
-          buildDataSize += GpuColumnVector.getTotalDeviceMemoryUsed(builtBatch)
-          doJoin(builtBatch, maybeBufferedStreamIter,
-            batchSizeBytes, spillCallback, numOutputRows, joinOutputRows, numOutputBatches,
-            opTime, joinTime)
+        val lazySpill = withResource(builtBatch) { _ =>
+          LazySpillableColumnarBatch(builtBatch, RapidsBuffer.defaultSpillCallback, "built_batch")
         }
+        // doJoin will increment the reference counts as needed for the builtBatch
+        buildDataSize += GpuColumnVector.getTotalDeviceMemoryUsed(builtBatch)
+        doJoin(lazySpill, maybeBufferedStreamIter,
+          batchSizeBytes, spillCallback, numOutputRows, joinOutputRows, numOutputBatches,
+          opTime, joinTime)
       }
     }
   }
