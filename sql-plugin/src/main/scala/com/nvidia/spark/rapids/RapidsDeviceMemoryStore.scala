@@ -19,9 +19,10 @@ package com.nvidia.spark.rapids
 import ai.rapids.cudf.{ContiguousTable, Cuda, DeviceMemoryBuffer, HostMemoryBuffer, MemoryBuffer, Table}
 import com.nvidia.spark.rapids.StorageTier.StorageTier
 import com.nvidia.spark.rapids.format.TableMeta
-
 import org.apache.spark.sql.types.DataType
 import org.apache.spark.sql.vectorized.ColumnarBatch
+
+import scala.collection.mutable
 
 /**
  * Buffer storage using device memory.
@@ -177,8 +178,23 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
       contigBuffer: DeviceMemoryBuffer,
       spillPriority: Long,
       override val spillCallback: SpillCallback)
-      extends RapidsBufferBase(id, size, meta, spillPriority, spillCallback) {
+      extends RapidsBufferBase(id, size, meta, spillPriority, spillCallback)
+      with MemoryBuffer.EventHandler {
     override val storageTier: StorageTier = StorageTier.DEVICE
+
+    val sb = new mutable.StringBuilder()
+    Thread.currentThread().getStackTrace.foreach { stackTraceElement =>
+      sb.append("    " + stackTraceElement + "\n")
+    }
+    val myStack = sb.toString()
+
+    val prior = contigBuffer.setEventHandler(this)
+
+    if (prior != null) {
+      val pdmb = prior.asInstanceOf[RapidsDeviceMemoryBuffer]
+      throw new IllegalStateException(
+        s"Doubly associating event handler. Previously added in ${pdmb.myStack}")
+    }
 
     override protected def releaseResources(): Unit = {
       contigBuffer.close()
@@ -202,7 +218,16 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
     }
 
     override def releaseBatch(sparkTypes: Array[DataType]): ColumnarBatch = {
-      getColumnarBatch(sparkTypes)
+      val cb = super.releaseBatch(sparkTypes)
+      logInfo(s"Resetting event handler for ${id} because of releaseBatch. " +
+        s"refCount=${refcount} and refcount=${refcount}")
+      contigBuffer.setEventHandler(null)
+      cb
+    }
+
+    override def onClosed(refCount: Int): Unit = {
+      logWarning(
+        s"At onClosed for ${id} with buffer refCount=$refCount and refcount=$refcount")
     }
   }
 }
