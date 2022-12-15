@@ -248,6 +248,7 @@ case class GpuHiveTableScanExec(requestedAttributes: Seq[Attribute],
       }
     }
 
+    // TODO: here is the partition decision
     val filePartitions: Seq[FilePartition] = directories.flatMap { case (directory, partValues) =>
       val path               = new Path(directory)
       val fs                 = path.getFileSystem(hadoopConf)

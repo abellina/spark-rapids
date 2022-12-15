@@ -179,12 +179,12 @@ class GpuCartesianRDD(
             val lzyBatch = LazySpillableColumnarBatch(batch, spillCallback, "cross_rhs")
             spillBatchBuffer += lzyBatch
             // return a spill only version so we don't close it until the end
-            LazySpillableColumnarBatch.spillOnly(lzyBatch)
+            lzyBatch.incRefCount()
           }
         }
       } else {
         // fetch cached stream-side data, and make it spill only so we don't close it until the end
-        spillBatchBuffer.toIterator.map(LazySpillableColumnarBatch.spillOnly)
+        spillBatchBuffer.toIterator.map(_.incRefCount())
       }
 
       GpuBroadcastNestedLoopJoinExec.nestedLoopJoin(

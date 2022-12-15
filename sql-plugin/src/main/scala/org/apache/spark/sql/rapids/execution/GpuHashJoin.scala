@@ -339,7 +339,7 @@ abstract class BaseHashJoinIterator(
       streamCb: ColumnarBatch): Option[JoinGatherer] = {
     withResource(GpuProjectExec.project(streamCb, boundStreamKeys)) { streamKeys =>
       closeOnExcept(LazySpillableColumnarBatch(streamCb, spillCallback, "stream_data")) { sd =>
-        joinGatherer(buildKeys, LazySpillableColumnarBatch.spillOnly(buildData), streamKeys, sd)
+        joinGatherer(buildKeys, buildData.incRefCount(), streamKeys, sd)
       }
     }
   }
