@@ -220,50 +220,6 @@ object LazySpillableColumnarBatch {
       spillCallback: SpillCallback,
       name: String): LazySpillableColumnarBatch =
     new LazySpillableColumnarBatchImpl(cb, spillCallback, name)
-
-  def spillOnly(wrapped: LazySpillableColumnarBatch): LazySpillableColumnarBatch = wrapped match {
-    case alreadyGood: AllowSpillOnlyLazySpillableColumnarBatchImpl => alreadyGood
-    case anythingElse => AllowSpillOnlyLazySpillableColumnarBatchImpl(anythingElse)
-  }
-}
-
-/**
- * A version of `LazySpillableColumnarBatch` where instead of closing the underlying
- * batch it is only spilled. This is used for cases, like with a streaming hash join
- * where the data itself needs to out live the JoinGatherer it is handed off to.
- */
-case class AllowSpillOnlyLazySpillableColumnarBatchImpl(wrapped: LazySpillableColumnarBatch)
-    extends LazySpillableColumnarBatch with Arm {
-
-  override def incRefCount(): AllowSpillOnlyLazySpillableColumnarBatchImpl = {
-    throw new IllegalStateException(
-      "NOT IMPLEMENTED incRefCount for AllowSpillableOnlyLazySpillable")
-  }
-
-  override def getBatch: ColumnarBatch =
-    wrapped.getBatch
-
-  override def releaseBatch(): ColumnarBatch = {
-    closeOnExcept(GpuColumnVector.incRefCounts(wrapped.getBatch)) { batch =>
-      wrapped.allowSpilling()
-      batch
-    }
-  }
-
-  override def numRows: Int = wrapped.numRows
-  override def numCols: Int = wrapped.numCols
-  override def deviceMemorySize: Long = wrapped.deviceMemorySize
-  override def dataTypes: Array[DataType] = wrapped.dataTypes
-
-  override def allowSpilling(): Unit =
-    wrapped.allowSpilling()
-
-  override def close(): Unit = {
-    // Don't actually close it, we don't own it, just allow it to be spilled.
-    wrapped.allowSpilling()
-  }
-
-  override def toString: String = s"SPILL_ONLY $wrapped"
 }
 
 /**
