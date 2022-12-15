@@ -698,7 +698,7 @@ trait GpuHashJoin extends GpuExec {
   }
 
   def doJoin(
-      builtBatch: ColumnarBatch,
+      builtBatch: LazySpillableColumnarBatch,
       stream: Iterator[ColumnarBatch],
       targetSize: Long,
       spillCallback: SpillCallback,
@@ -714,14 +714,14 @@ trait GpuHashJoin extends GpuExec {
     // see https://github.com/NVIDIA/spark-rapids/issues/2126 for more info
     val builtAnyNullable = compareNullsEqual && buildKeys.exists(_.nullable)
 
-    val nullFiltered = if (builtAnyNullable) {
-      GpuHashJoin.filterNulls(builtBatch, boundBuildKeys)
+    val spillableBuiltBatch = if (builtAnyNullable) {
+      // use `getBatch` because multiple partitions are going to reuse `builtBatch`
+      LazySpillableColumnarBatch(
+        GpuHashJoin.filterNulls(builtBatch.getBatch, boundBuildKeys),
+        spillCallback,
+        "built")
     } else {
-      GpuColumnVector.incRefCounts(builtBatch)
-    }
-
-    val spillableBuiltBatch = withResource(nullFiltered) {
-      LazySpillableColumnarBatch(_, spillCallback, "built")
+      builtBatch
     }
 
     val lazyStream = stream.map { cb =>
