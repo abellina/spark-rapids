@@ -16,10 +16,12 @@
 
 package com.nvidia.spark.rapids
 
-import ai.rapids.cudf.{ColumnVector, ColumnView, DeviceMemoryBuffer, DType, GatherMap, NvtxColor, NvtxRange, OrderByArg, OutOfBoundsPolicy, Scalar, Table}
-
+import ai.rapids.cudf.{ColumnVector, ColumnView, DType, DeviceMemoryBuffer, GatherMap, NvtxColor, NvtxRange, OrderByArg, OutOfBoundsPolicy, Scalar, Table}
+import org.apache.spark.internal.Logging
 import org.apache.spark.sql.types._
 import org.apache.spark.sql.vectorized.ColumnarBatch
+
+import scala.collection.mutable
 
 /**
  * Holds something that can be spilled if it is marked as such, but it does not modify the
@@ -209,6 +211,8 @@ trait LazySpillableColumnarBatch extends LazySpillable {
    * batch will NOT be closed when this instance is closed.
    */
   def releaseBatch(): ColumnarBatch
+
+  def incRefCount(): LazySpillableColumnarBatch
 }
 
 object LazySpillableColumnarBatch {
@@ -230,6 +234,12 @@ object LazySpillableColumnarBatch {
  */
 case class AllowSpillOnlyLazySpillableColumnarBatchImpl(wrapped: LazySpillableColumnarBatch)
     extends LazySpillableColumnarBatch with Arm {
+
+  override def incRefCount(): AllowSpillOnlyLazySpillableColumnarBatchImpl = {
+    throw new IllegalStateException(
+      "NOT IMPLEMENTED incRefCount for AllowSpillableOnlyLazySpillable")
+  }
+
   override def getBatch: ColumnarBatch =
     wrapped.getBatch
 
@@ -262,7 +272,7 @@ case class AllowSpillOnlyLazySpillableColumnarBatchImpl(wrapped: LazySpillableCo
 class LazySpillableColumnarBatchImpl(
     cb: ColumnarBatch,
     spillCallback: SpillCallback,
-    name: String) extends LazySpillableColumnarBatch with Arm {
+    name: String) extends LazySpillableColumnarBatch with Arm with Logging {
 
   private var cached: Option[ColumnarBatch] = Some(GpuColumnVector.incRefCounts(cb))
   private var spill: Option[SpillableColumnarBatch] = None
@@ -277,6 +287,10 @@ class LazySpillableColumnarBatchImpl(
         cached = spill.map(_.getColumnarBatch())
       }
     }
+    if (cached.isEmpty) {
+      throw new IllegalStateException(
+        s"cached is empty! ${releaseStack} ${closedStack}")
+    }
     cached.getOrElse(throw new IllegalStateException("batch is closed"))
   }
 
@@ -290,6 +304,7 @@ class LazySpillableColumnarBatchImpl(
       cached.getOrElse(throw new IllegalStateException("cached is closed"))
     }
     cached = None
+    releaseStack = dumpStack
     result
   }
 
@@ -308,11 +323,39 @@ class LazySpillableColumnarBatchImpl(
     cached = None
   }
 
+  var closedStack: String = "not closed"
+  var releaseStack: String = "not released"
+
+  var refCount = 1
+
+  def incRefCount(): LazySpillableColumnarBatch = {
+    if (refCount == 0) {
+      throw new IllegalStateException("refCount was 0! for $this")
+    }
+    refCount += 1
+    this
+  }
+
   override def close(): Unit = {
-    cached.foreach(_.close())
-    cached = None
-    spill.foreach(_.close())
-    spill = None
+    if (refCount <= 0) {
+      throw new IllegalStateException(s"Closed too many times! $this")
+    }
+    refCount -= 1
+    if (refCount == 0) {
+      cached.foreach(_.close())
+      cached = None
+      spill.foreach(_.close())
+      spill = None
+      closedStack = dumpStack
+    }
+  }
+
+  def dumpStack: String = {
+    val sb = new mutable.StringBuilder()
+    Thread.currentThread().getStackTrace.foreach { stackTraceElement =>
+      sb.append("    " + stackTraceElement + "\n")
+    }
+    sb.toString()
   }
 
   override def toString: String = s"SpillableBatch $name $numCols X $numRows"
