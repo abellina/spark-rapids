@@ -160,8 +160,8 @@ class CrossJoinIterator(
       // Don't close the built side because it will be used for each stream and closed
       // when the iterator is done.
       val (leftBatch, rightBatch) = buildSide match {
-        case GpuBuildLeft => (LazySpillableColumnarBatch.spillOnly(builtBatch), streamBatch)
-        case GpuBuildRight => (streamBatch, LazySpillableColumnarBatch.spillOnly(builtBatch))
+        case GpuBuildLeft => (builtBatch, streamBatch)
+        case GpuBuildRight => (streamBatch, builtBatch)
       }
 
       val leftMap = LazySpillableGatherMap.leftCross(leftBatch.numRows, rightBatch.numRows)
@@ -249,10 +249,9 @@ class ConditionalNestedLoopJoinIterator(
     withResource(GpuColumnVector.from(builtBatch.getBatch)) { builtTable =>
       withResource(GpuColumnVector.from(cb)) { streamTable =>
         closeOnExcept(LazySpillableColumnarBatch(cb, spillCallback, "stream_data")) { streamBatch =>
-          val builtSpillOnly = LazySpillableColumnarBatch.spillOnly(builtBatch)
           val (leftTable, leftBatch, rightTable, rightBatch) = buildSide match {
-            case GpuBuildLeft => (builtTable, builtSpillOnly, streamTable, streamBatch)
-            case GpuBuildRight => (streamTable, streamBatch, builtTable, builtSpillOnly)
+            case GpuBuildLeft => (builtTable, builtBatch.incRefCount(), streamTable, streamBatch)
+            case GpuBuildRight => (streamTable, streamBatch, builtTable, builtBatch.incRefCount())
           }
           val maps = computeGatherMaps(leftTable, rightTable, numJoinRows)
           makeGatherer(maps, leftBatch, rightBatch, joinType)
@@ -444,10 +443,11 @@ case class GpuBroadcastNestedLoopJoinExec(
   private[this] def makeBuiltBatch(
       broadcastRelation: Broadcast[Any],
       buildTime: GpuMetric,
-      buildDataSize: GpuMetric): ColumnarBatch = {
+      buildDataSize: GpuMetric): LazySpillableColumnarBatch= {
     withResource(new NvtxWithMetrics("build join table", NvtxColor.GREEN, buildTime)) { _ =>
-      val builtBatch = GpuBroadcastHelper.getBroadcastBatch(broadcastRelation, broadcast.schema)
-      buildDataSize += GpuColumnVector.getTotalDeviceMemoryUsed(builtBatch)
+      val builtBatch: LazySpillableColumnarBatch =
+        GpuBroadcastHelper.getBroadcastBatch(broadcastRelation, broadcast.schema)
+      buildDataSize += builtBatch.deviceMemorySize
       builtBatch
     }
   }
@@ -551,11 +551,8 @@ case class GpuBroadcastNestedLoopJoinExec(
                 LazySpillableColumnarBatch(cb, spillCallback, "stream_batch")
               }
             }
-            val spillableBuiltBatch = withResource(builtBatch) {
-              LazySpillableColumnarBatch(_, spillCallback, "built_batch")
-            }
             new CrossJoinIterator(
-              spillableBuiltBatch,
+              builtBatch.incRefCount(),
               lazyStream,
               targetSizeBytes,
               buildSide,
@@ -631,13 +628,10 @@ case class GpuBroadcastNestedLoopJoinExec(
           LazySpillableColumnarBatch(cb, spillCallback, "stream_batch")
         }
       }
-      val spillableBuiltBatch = withResource(builtBatch) {
-        LazySpillableColumnarBatch(_, spillCallback, "built_batch")
-      }
 
       GpuBroadcastNestedLoopJoinExec.nestedLoopJoin(
         nestedLoopJoinType, buildSide, numFirstTableColumns,
-        spillableBuiltBatch,
+        builtBatch.incRefCount(),
         lazyStream, streamAttributes, targetSizeBytes, boundCondition, spillCallback,
         numOutputRows = numOutputRows,
         joinOutputRows = joinOutputRows,
