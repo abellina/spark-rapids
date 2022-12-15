@@ -126,7 +126,9 @@ class SpillableColumnarBatchImpl (id: TempSpillBufferId,
   override def releaseBatch(): ColumnarBatch = {
     withResource(RapidsBufferCatalog.acquireBuffer(id)) { rapidsBuffer =>
       GpuSemaphore.acquireIfNecessary(TaskContext.get(), semWait)
-      rapidsBuffer.releaseBatch(sparkTypes)
+      val released = rapidsBuffer.releaseBatch(sparkTypes)
+      close()
+      released
     }
   }
 
