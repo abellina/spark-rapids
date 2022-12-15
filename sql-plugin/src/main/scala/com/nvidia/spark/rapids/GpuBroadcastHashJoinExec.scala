@@ -171,7 +171,8 @@ case class GpuBroadcastHashJoinExec(
       broadcastRelation: Broadcast[Any],
       buildSchema: StructType,
       streamIter: Iterator[ColumnarBatch],
-      coalesceMetricsMap: Map[String, GpuMetric]): (ColumnarBatch, Iterator[ColumnarBatch]) = {
+      coalesceMetricsMap: Map[String, GpuMetric]):
+        (LazySpillableColumnarBatch, Iterator[ColumnarBatch]) = {
     val semWait = coalesceMetricsMap(GpuMetric.SEMAPHORE_WAIT_TIME)
 
     val bufferedStreamIter = new CloseableBufferedIterator(streamIter.buffered)
@@ -213,10 +214,8 @@ case class GpuBroadcastHashJoinExec(
           buildSchema,
           new CollectTimeIterator("broadcast join stream", it, streamTime),
           allMetrics)
-      withResource(builtBatch) { _ =>
-        doJoin(builtBatch, streamIter, targetSize, spillCallback,
-          numOutputRows, joinOutputRows, numOutputBatches, opTime, joinTime)
-      }
+      doJoin(builtBatch, streamIter, targetSize, spillCallback,
+        numOutputRows, joinOutputRows, numOutputBatches, opTime, joinTime)
     }
   }
 }
