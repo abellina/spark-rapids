@@ -255,7 +255,7 @@ class GpuHashAggregateIterator(
       } else {
         // this will be the last batch
         hasReductionOnlyBatch = false
-        withResource(aggregatedBatches.pop()) { lazyBatch =>
+        closeOnExcept(aggregatedBatches.pop()) { lazyBatch =>
           lazyBatch.releaseBatch()
         }
       }
@@ -319,7 +319,8 @@ class GpuHashAggregateIterator(
             logWarning(s"Unable to merge reduction-only aggregated batches within " +
                 s"target batch limit of $targetMergeBatchSize, attempting to merge remaining " +
                 s"${aggregatedBatches.size()} batches beyond limit")
-            withResource(mutable.ArrayBuffer[LazySpillableColumnarBatch]()) { batchesToConcat =>
+            // withResources?
+            closeOnExcept(mutable.ArrayBuffer[LazySpillableColumnarBatch]()) { batchesToConcat =>
               aggregatedBatches.forEach(b => batchesToConcat += b)
               aggregatedBatches.clear()
               val batch = concatenateAndMerge(batchesToConcat)
@@ -366,7 +367,9 @@ class GpuHashAggregateIterator(
 
       val mergedBatch = if (batchesToConcat.length > 1) {
         wasBatchMerged = true
-        val batch = concatenateAndMerge(batchesToConcat)
+        val batch = closeOnExcept(batchesToConcat) { _ =>
+          concatenateAndMerge(batchesToConcat)
+        }
         batch.allowSpilling()
         batch
       } else {
@@ -397,8 +400,11 @@ class GpuHashAggregateIterator(
    */
   private def concatenateAndMerge(
       batches: mutable.ArrayBuffer[LazySpillableColumnarBatch]): LazySpillableColumnarBatch = {
+    // closeOnExcept?
     val concatBatch = withResource(batches) { _ =>
-      concatenateBatches(batches)
+      val concat = concatenateBatches(batches)
+      batches.clear()
+      concat
     }
     withResource(computeAggregateAndClose(concatBatch, concatAndMergeHelper)) { mergedBatch =>
       LazySpillableColumnarBatch(mergedBatch, metrics.spillCallback, "agg merged batch")
@@ -413,7 +419,7 @@ class GpuHashAggregateIterator(
       override def hasNext: Boolean = !aggregatedBatches.isEmpty
 
       override def next(): ColumnarBatch = {
-        withResource(aggregatedBatches.removeFirst()) { lazyBatch =>
+        closeOnExcept(aggregatedBatches.removeFirst()) { lazyBatch =>
           lazyBatch.releaseBatch()
         }
       }
