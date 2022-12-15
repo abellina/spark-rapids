@@ -17,7 +17,9 @@
 package org.apache.spark.sql.rapids.execution
 
 import ai.rapids.cudf.{NvtxColor, NvtxRange}
-import com.nvidia.spark.rapids.{Arm, GpuColumnVector}
+import com.nvidia.spark.rapids.{Arm, GpuColumnVector, SpillableColumnarBatch}
+import com.nvidia.spark.rapids.RapidsBuffer
+import com.nvidia.spark.rapids.LazySpillableColumnarBatch
 import com.nvidia.spark.rapids.shims.SparkShimImpl
 
 import org.apache.spark.broadcast.Broadcast
@@ -39,14 +41,14 @@ object GpuBroadcastHelper extends Arm {
    * @return a `ColumnarBatch` or throw if the broadcast can't be handled
    */
   def getBroadcastBatch(broadcastRelation: Broadcast[Any],
-                        broadcastSchema: StructType): ColumnarBatch = {
+                        broadcastSchema: StructType): LazySpillableColumnarBatch = {
     broadcastRelation.value match {
       case broadcastBatch: SerializeConcatHostBuffersDeserializeBatch =>
-        withResource(new NvtxRange("getBroadcastBatch", NvtxColor.YELLOW)) { _ =>
-          broadcastBatch.batch.getColumnarBatch()
-        }
+        broadcastBatch.batch
       case v if SparkShimImpl.isEmptyRelation(v) =>
-        GpuColumnVector.emptyBatch(broadcastSchema)
+        withResource(GpuColumnVector.emptyBatch(broadcastSchema)) { emptyBatch =>
+          LazySpillableColumnarBatch(emptyBatch, RapidsBuffer.defaultSpillCallback, "built_batch")
+        }
       case t =>
         throw new IllegalStateException(s"Invalid broadcast batch received $t")
     }
