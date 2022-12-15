@@ -74,12 +74,12 @@ class SerializationSuite extends FunSuite
       val buffer = createDeserializedHostBuffer(gpuExpected)
       val hostBatch = new SerializeConcatHostBuffersDeserializeBatch(Array(buffer), attrs)
       withResource(hostBatch) { _ =>
-        withResource(hostBatch.batch.getColumnarBatch()) { gpuBatch =>
+        withResource(hostBatch.batch.getBatch) { gpuBatch =>
           TestUtils.compareBatches(gpuExpected, gpuBatch)
         }
         // clone via serialization after manifesting the GPU batch
         withResource(SerializationUtils.clone(hostBatch)) { clonedObj =>
-          withResource(clonedObj.batch.getColumnarBatch()) { gpuClonedBatch =>
+          withResource(clonedObj.batch.getBatch) { gpuClonedBatch =>
             TestUtils.compareBatches(gpuExpected, gpuClonedBatch)
           }
           // try to clone it again from the cloned object
