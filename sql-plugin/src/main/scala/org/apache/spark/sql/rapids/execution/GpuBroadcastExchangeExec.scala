@@ -99,9 +99,9 @@ class SerializeConcatHostBuffersDeserializeBatch(
   @transient private var buffers = data.map(_.buffer)
 
   // used for memoization of deserialization to GPU on Executor
-  @transient private var batchInternal: SpillableColumnarBatch = null
+  @transient private var batchInternal: LazySpillableColumnarBatch = null
 
-  def batch: SpillableColumnarBatch = this.synchronized {
+  def batch: LazySpillableColumnarBatch = this.synchronized {
     Option(batchInternal).getOrElse {
       if (headers.length > 1) {
         // This should only happen if the driver is trying to access the batch. That should not be
@@ -117,19 +117,28 @@ class SerializeConcatHostBuffersDeserializeBatch(
       withResource(new NvtxRange("broadcast manifest batch", NvtxColor.PURPLE)) { _ =>
         try {
           val res = if (headers.isEmpty) {
-            SpillableColumnarBatch(GpuColumnVector.emptyBatchFromTypes(dataTypes),
-            SpillPriorities.ACTIVE_BATCHING_PRIORITY, RapidsBuffer.defaultSpillCallback)
+            withResource(GpuColumnVector.emptyBatchFromTypes(dataTypes)) { cb =>
+              LazySpillableColumnarBatch(cb,
+                RapidsBuffer.defaultSpillCallback,
+                "built_batch")
+            }
           } else {
             withResource(JCudfSerialization.readTableFrom(headers.head, buffers.head)) {
               tableInfo =>
                 val table = tableInfo.getContiguousTable
                 if (table == null) {
                   val numRows = tableInfo.getNumRows
-                  SpillableColumnarBatch(new ColumnarBatch(Array.empty[ColumnVector], numRows),
-                    SpillPriorities.ACTIVE_BATCHING_PRIORITY, RapidsBuffer.defaultSpillCallback)
+                  withResource(new ColumnarBatch(Array.empty[ColumnVector], numRows)) { cb =>
+                    LazySpillableColumnarBatch(cb,
+                      RapidsBuffer.defaultSpillCallback,
+                      "built_batch")
+                  }
                 } else {
-                  SpillableColumnarBatch(table, dataTypes,
-                    SpillPriorities.ACTIVE_BATCHING_PRIORITY, RapidsBuffer.defaultSpillCallback)
+                  withResource(GpuColumnVector.from(table.getTable, dataTypes)) { cb =>
+                    LazySpillableColumnarBatch(cb,
+                      RapidsBuffer.defaultSpillCallback,
+                      "built_batch")
+                  }
                 }
             }
           }
@@ -154,7 +163,7 @@ class SerializeConcatHostBuffersDeserializeBatch(
    */
   def hostBatches: Array[ColumnarBatch] = this.synchronized {
     Option(batchInternal).map { spillable =>
-      withResource(spillable.getColumnarBatch()) { batch =>
+      withResource(spillable.getBatch) { batch =>
         val hostColumns: Array[ColumnVector] = GpuColumnVector
           .extractColumns(batch)
           .safeMap(_.copyToHost())
@@ -178,7 +187,7 @@ class SerializeConcatHostBuffersDeserializeBatch(
 
   private def writeObject(out: ObjectOutputStream): Unit = {
     Option(batchInternal).map { spillable =>
-      val table = withResource(spillable.getColumnarBatch()) { cb =>
+      val table = withResource(spillable.getBatch) { cb =>
         GpuColumnVector.from(cb)
       }
       withResource(table) { _ =>
@@ -217,14 +226,15 @@ class SerializeConcatHostBuffersDeserializeBatch(
   }
 
   def numRows: Int = Option(batchInternal)
-    .map(_.numRows())
+    .map(_.numRows)
     .getOrElse(headers.map(_.getNumRows).sum)
 
   def dataSize: Long = Option(batchInternal)
-    .map(_.sizeInBytes)
+    .map(_.deviceMemorySize)
     .getOrElse(buffers.map(_.getLength).sum)
 
   override def close(): Unit = this.synchronized {
+    logInfo("At close in `SerializeConcatHostBuffersDeserializeBatch`")
     buffers.safeClose()
     Option(batchInternal).foreach(_.close())
   }
