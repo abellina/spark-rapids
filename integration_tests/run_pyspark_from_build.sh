@@ -220,8 +220,8 @@ else
         export PYSP_TEST_spark_jars="${ALL_JARS//:/,}"
     fi
 
-    export PYSP_TEST_spark_driver_extraJavaOptions="-ea -Duser.timezone=UTC $COVERAGE_SUBMIT_FLAGS"
-    export PYSP_TEST_spark_executor_extraJavaOptions='-ea -Duser.timezone=UTC'
+    export PYSP_TEST_spark_driver_extraJavaOptions="-ea -Dai.rapids.refcount.debug=true -Duser.timezone=UTC $COVERAGE_SUBMIT_FLAGS"
+    export PYSP_TEST_spark_executor_extraJavaOptions='-ea -Dai.rapids.refcount.debug=true  -Duser.timezone=UTC'
     export PYSP_TEST_spark_ui_showConsoleProgress='false'
     export PYSP_TEST_spark_sql_session_timeZone='UTC'
     export PYSP_TEST_spark_sql_shuffle_partitions='4'
