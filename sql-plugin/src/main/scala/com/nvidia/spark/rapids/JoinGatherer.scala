@@ -297,12 +297,15 @@ class LazySpillableColumnarBatchImpl(
   override def releaseBatch(): ColumnarBatch = {
     val result = if (cached.isEmpty) {
       closeOnExcept(spill.map(_.releaseBatch())) { batch =>
-        close()
         batch.getOrElse(throw new IllegalStateException("batch is closed"))
       }
     } else {
-      cached.getOrElse(throw new IllegalStateException("cached is closed"))
+      logInfo("at releaseBatch, leaking cached")
+      val res = cached.getOrElse(throw new IllegalStateException("cached is closed"))
+      cached = None
+      res
     }
+    close()
     cached = None
     releaseStack = dumpStack
     result
@@ -329,6 +332,7 @@ class LazySpillableColumnarBatchImpl(
   var refCount = 1
 
   def incRefCount(): LazySpillableColumnarBatch = {
+    logInfo(s"At LazySpillableColumnarBatchImpl incRefCount with ${refCount}. $this")
     if (refCount == 0) {
       throw new IllegalStateException("refCount was 0! for $this")
     }
@@ -337,6 +341,7 @@ class LazySpillableColumnarBatchImpl(
   }
 
   override def close(): Unit = {
+    logInfo(s"At LazySpillableColumnarBatchImpl close with ${refCount}. $this")
     if (refCount <= 0) {
       throw new IllegalStateException(s"Closed too many times! $this")
     }
