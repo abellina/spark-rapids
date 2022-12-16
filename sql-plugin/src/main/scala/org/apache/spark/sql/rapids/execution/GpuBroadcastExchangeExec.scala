@@ -142,6 +142,10 @@ class SerializeConcatHostBuffersDeserializeBatch(
                 }
             }
           }
+          // the original idea was not to make it spillable, unless we really need it
+          // ideally in the future this becomes a spillable that doesn't spill, but instead
+          // keeps host version of it and re-materializes from the host backing
+          res.allowSpilling()
           batchInternal = res
           res
         } finally {

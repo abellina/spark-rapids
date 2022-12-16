@@ -21,7 +21,7 @@ import com.nvidia.spark.rapids.{Arm, GpuColumnVector, SpillableColumnarBatch}
 import com.nvidia.spark.rapids.RapidsBuffer
 import com.nvidia.spark.rapids.LazySpillableColumnarBatch
 import com.nvidia.spark.rapids.shims.SparkShimImpl
-
+import org.apache.spark.TaskContext
 import org.apache.spark.broadcast.Broadcast
 import org.apache.spark.sql.types.StructType
 import org.apache.spark.sql.vectorized.ColumnarBatch
@@ -47,7 +47,13 @@ object GpuBroadcastHelper extends Arm {
         broadcastBatch.batch
       case v if SparkShimImpl.isEmptyRelation(v) =>
         withResource(GpuColumnVector.emptyBatch(broadcastSchema)) { emptyBatch =>
-          LazySpillableColumnarBatch(emptyBatch, RapidsBuffer.defaultSpillCallback, "built_batch")
+          val empty =
+            LazySpillableColumnarBatch(
+              emptyBatch,
+              RapidsBuffer.defaultSpillCallback,
+              "empty_built_batch")
+          empty.allowSpilling()
+          empty
         }
       case t =>
         throw new IllegalStateException(s"Invalid broadcast batch received $t")
