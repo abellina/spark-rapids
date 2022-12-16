@@ -167,12 +167,12 @@ case class GpuBroadcastHashJoinExec(
    * TODO: This could try to trigger the broadcast materialization on the host before
    *   getting started on the stream side (e.g. call `broadcastRelation.value`).
    */
-  private def getBroadcastBuiltBatchAndStreamIter(
+  private def getStreamIter(
       broadcastRelation: Broadcast[Any],
       buildSchema: StructType,
       streamIter: Iterator[ColumnarBatch],
       coalesceMetricsMap: Map[String, GpuMetric]):
-        (LazySpillableColumnarBatch, Iterator[ColumnarBatch]) = {
+        Iterator[ColumnarBatch] = {
     val semWait = coalesceMetricsMap(GpuMetric.SEMAPHORE_WAIT_TIME)
 
     val bufferedStreamIter = new CloseableBufferedIterator(streamIter.buffered)
@@ -185,9 +185,7 @@ case class GpuBroadcastHashJoinExec(
         }
       }
 
-      val buildBatch =
-        GpuBroadcastHelper.getBroadcastBatch(broadcastRelation, buildSchema)
-      (buildBatch, bufferedStreamIter)
+      bufferedStreamIter
     }
   }
 
@@ -207,9 +205,10 @@ case class GpuBroadcastHashJoinExec(
 
     val rdd = streamedPlan.executeColumnar()
     val buildSchema = buildPlan.schema
+    lazy val builtBatch = GpuBroadcastHelper.getBroadcastBatch(broadcastRelation, buildSchema)
     rdd.mapPartitions { it =>
-      val (builtBatch, streamIter) =
-        getBroadcastBuiltBatchAndStreamIter(
+      val streamIter =
+        getStreamIter(
           broadcastRelation,
           buildSchema,
           new CollectTimeIterator("broadcast join stream", it, streamTime),
