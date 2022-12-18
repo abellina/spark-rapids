@@ -240,7 +240,9 @@ class SerializeConcatHostBuffersDeserializeBatch(
   override def close(): Unit = this.synchronized {
     logInfo("At close in `SerializeConcatHostBuffersDeserializeBatch`")
     buffers.safeClose()
+    buffers = Array.empty[HostMemoryBuffer]
     Option(batchInternal).foreach(_.close())
+    batchInternal = null
   }
 
   @scala.annotation.nowarn("msg=method finalize in class Object is deprecated")
