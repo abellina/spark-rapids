@@ -18,7 +18,7 @@ package org.apache.spark.sql.rapids.execution
 import ai.rapids.cudf.{DType, GatherMap, GroupByAggregation, NullEquality, NullPolicy, NvtxColor, ReductionAggregation, Table}
 import ai.rapids.cudf.ast.CompiledExpression
 import com.nvidia.spark.rapids._
-
+import org.apache.spark.broadcast.Broadcast
 import org.apache.spark.sql.catalyst.expressions.{Attribute, AttributeReference, Expression, NamedExpression}
 import org.apache.spark.sql.catalyst.plans.{Cross, ExistenceJoin, FullOuter, Inner, InnerLike, JoinType, LeftAnti, LeftExistence, LeftOuter, LeftSemi, RightOuter}
 import org.apache.spark.sql.execution.SparkPlan
@@ -766,4 +766,5 @@ trait GpuHashJoin extends GpuExec {
       cb
     }
   }
+
 }
