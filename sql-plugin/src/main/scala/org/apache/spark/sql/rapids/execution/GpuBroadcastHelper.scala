@@ -25,8 +25,9 @@ import org.apache.spark.TaskContext
 import org.apache.spark.broadcast.Broadcast
 import org.apache.spark.sql.types.StructType
 import org.apache.spark.sql.vectorized.ColumnarBatch
+import org.apache.spark.internal.Logging
 
-object GpuBroadcastHelper extends Arm {
+object GpuBroadcastHelper extends Arm with Logging {
   /**
    * Given a broadcast relation get a ColumnarBatch that can be used on the GPU.
    *
@@ -41,22 +42,41 @@ object GpuBroadcastHelper extends Arm {
    * @return a `ColumnarBatch` or throw if the broadcast can't be handled
    */
   def getBroadcastBatch(broadcastRelation: Broadcast[Any],
-                        broadcastSchema: StructType): LazySpillableColumnarBatch = {
+                        broadcastSchema: StructType): Option[LazySpillableColumnarBatch] = {
     broadcastRelation.value match {
       case broadcastBatch: SerializeConcatHostBuffersDeserializeBatch =>
-        broadcastBatch.batch
-      case v if SparkShimImpl.isEmptyRelation(v) =>
-        withResource(GpuColumnVector.emptyBatch(broadcastSchema)) { emptyBatch =>
-          val empty =
-            LazySpillableColumnarBatch(
-              emptyBatch,
-              RapidsBuffer.defaultSpillCallback,
-              "empty_built_batch")
-          empty.allowSpilling()
-          empty
-        }
+        Some(broadcastBatch.batch) case v if SparkShimImpl.isEmptyRelation(v) =>
+        None
+        //withResource(GpuColumnVector.emptyBatch(broadcastSchema)) { emptyBatch =>
+        //  val empty =
+        //    LazySpillableColumnarBatch(
+        //      emptyBatch,
+        //      RapidsBuffer.defaultSpillCallback,
+        //      "empty_built_batch")
+        //  empty.allowSpilling()
+        //  empty
+        //}
       case t =>
         throw new IllegalStateException(s"Invalid broadcast batch received $t")
+    }
+  }
+
+  def builtOrEmpty(maybeLazyBatch: Option[LazySpillableColumnarBatch],
+                   broadcastSchema: StructType): LazySpillableColumnarBatch = {
+    maybeLazyBatch.map { lb =>
+      logWarning(s"Got lazy batch ${lb} incRefCount ${lb}")
+      lb.incRefCount()
+    }.getOrElse {
+      withResource(GpuColumnVector.emptyBatch(broadcastSchema)) { emptyBatch =>
+        val empty =
+          LazySpillableColumnarBatch(
+            emptyBatch,
+            RapidsBuffer.defaultSpillCallback,
+            "empty_built_batch")
+        logWarning(s"Made empty batch ${empty}")
+        empty.allowSpilling()
+        empty
+      }
     }
   }
 

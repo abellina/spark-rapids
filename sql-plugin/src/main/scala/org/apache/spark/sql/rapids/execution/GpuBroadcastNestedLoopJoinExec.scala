@@ -33,6 +33,7 @@ import org.apache.spark.sql.execution.adaptive.BroadcastQueryStageExec
 import org.apache.spark.sql.execution.exchange.ReusedExchangeExec
 import org.apache.spark.sql.execution.joins.BroadcastNestedLoopJoinExec
 import org.apache.spark.sql.vectorized.{ColumnarBatch, ColumnVector}
+import org.apache.spark.internal.Logging
 
 class GpuBroadcastNestedLoopJoinMeta(
     join: BroadcastNestedLoopJoinExec,
@@ -158,10 +159,10 @@ class CrossJoinIterator(
     // Don't include stream in op time.
     opTime.ns {
       // Don't close the built side because it will be used for each stream and closed
-      // when the iterator is done.
+      // when the iterator is done. And closed by the gatherer
       val (leftBatch, rightBatch) = buildSide match {
-        case GpuBuildLeft => (builtBatch, streamBatch)
-        case GpuBuildRight => (streamBatch, builtBatch)
+        case GpuBuildLeft => (builtBatch.incRefCount(), streamBatch)
+        case GpuBuildRight => (streamBatch, builtBatch.incRefCount())
       }
 
       val leftMap = LazySpillableGatherMap.leftCross(leftBatch.numRows, rightBatch.numRows)
@@ -213,10 +214,15 @@ class ConditionalNestedLoopJoinIterator(
       spillCallback,
       opTime = opTime,
       joinTime = joinTime) {
+
+  // TODO: fiddled with theses
+  //builtBatch.incRefCount()
   override def close(): Unit = {
     if (!closed) {
+      logWarning(s"closing this thing ${builtBatch}")
       super.close()
       condition.close()
+      //builtBatch.close()
     }
   }
 
@@ -246,6 +252,7 @@ class ConditionalNestedLoopJoinIterator(
       // nothing matched
       return None
     }
+    // this one is getting leaked (the CB returned by builtBatch.getBatch)
     withResource(GpuColumnVector.from(builtBatch.getBatch)) { builtTable =>
       withResource(GpuColumnVector.from(cb)) { streamTable =>
         closeOnExcept(LazySpillableColumnarBatch(cb, spillCallback, "stream_data")) { streamBatch =>
@@ -303,7 +310,7 @@ class ConditionalNestedLoopJoinIterator(
   }
 }
 
-object GpuBroadcastNestedLoopJoinExec extends Arm {
+object GpuBroadcastNestedLoopJoinExec extends Arm with Logging {
   def nestedLoopJoin(
       joinType: JoinType,
       buildSide: GpuBuildSide,
@@ -331,16 +338,17 @@ object GpuBroadcastNestedLoopJoinExec extends Arm {
         new ConditionalNestedLoopExistenceJoinIterator(
           builtBatch, stream, compiledAst, opTime, joinTime)
       } else {
+        logWarning(s"ConditionalNestedLoopJoinIterator with ${builtBatch}")
         new ConditionalNestedLoopJoinIterator(joinType, buildSide, builtBatch,
           stream, streamAttributes, targetSize, compiledAst, spillCallback,
           opTime = opTime, joinTime = joinTime)
       }
     }
     joinIterator.map { cb =>
-        joinOutputRows += cb.numRows()
-        numOutputRows += cb.numRows()
-        numOutputBatches += 1
-        cb
+      joinOutputRows += cb.numRows()
+      numOutputRows += cb.numRows()
+      numOutputBatches += 1
+      cb
     }
   }
 
@@ -443,11 +451,11 @@ case class GpuBroadcastNestedLoopJoinExec(
   private[this] def makeBuiltBatch(
       broadcastRelation: Broadcast[Any],
       buildTime: GpuMetric,
-      buildDataSize: GpuMetric): LazySpillableColumnarBatch= {
+      buildDataSize: GpuMetric): Option[LazySpillableColumnarBatch] = {
     withResource(new NvtxWithMetrics("build join table", NvtxColor.GREEN, buildTime)) { _ =>
-      val builtBatch: LazySpillableColumnarBatch =
+      val builtBatch =
         GpuBroadcastHelper.getBroadcastBatch(broadcastRelation, broadcast.schema)
-      buildDataSize += builtBatch.deviceMemorySize
+      buildDataSize += builtBatch.map(_.deviceMemorySize).getOrElse(0)
       builtBatch
     }
   }
@@ -552,7 +560,7 @@ case class GpuBroadcastNestedLoopJoinExec(
               }
             }
             new CrossJoinIterator(
-              builtBatch.incRefCount(),
+              GpuBroadcastHelper.builtOrEmpty(builtBatch, broadcast.schema),
               lazyStream,
               targetSizeBytes,
               buildSide,
@@ -629,9 +637,10 @@ case class GpuBroadcastNestedLoopJoinExec(
         }
       }
 
+      logWarning(s"making a new nestedLoopJoin with ${builtBatch}")
       GpuBroadcastNestedLoopJoinExec.nestedLoopJoin(
         nestedLoopJoinType, buildSide, numFirstTableColumns,
-        builtBatch.incRefCount(),
+        GpuBroadcastHelper.builtOrEmpty(builtBatch, broadcast.schema),
         lazyStream, streamAttributes, targetSizeBytes, boundCondition, spillCallback,
         numOutputRows = numOutputRows,
         joinOutputRows = joinOutputRows,

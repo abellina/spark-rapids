@@ -230,6 +230,8 @@ class LazySpillableColumnarBatchImpl(
     spillCallback: SpillCallback,
     name: String) extends LazySpillableColumnarBatch with Arm with Logging {
 
+  val id = java.util.UUID.randomUUID()
+
   private var cached: Option[ColumnarBatch] = Some(GpuColumnVector.incRefCounts(cb))
   private var spill: Option[SpillableColumnarBatch] = None
   override val numRows: Int = cb.numRows()
@@ -237,7 +239,7 @@ class LazySpillableColumnarBatchImpl(
   override val dataTypes: Array[DataType] = GpuColumnVector.extractTypes(cb)
   override val numCols: Int = dataTypes.length
 
-  override def getBatch: ColumnarBatch = {
+  override def getBatch: ColumnarBatch = synchronized {
     if (cached.isEmpty) {
       withResource(new NvtxRange("get batch " + name, NvtxColor.RED)) { _ =>
         cached = spill.map(_.getColumnarBatch())
@@ -250,7 +252,8 @@ class LazySpillableColumnarBatchImpl(
     cached.getOrElse(throw new IllegalStateException("batch is closed"))
   }
 
-  override def releaseBatch(): ColumnarBatch = {
+  override def releaseBatch(): ColumnarBatch = synchronized {
+    logWarning(s"releaseBatch for ${this}")
     val result = if (cached.isEmpty) {
       closeOnExcept(spill.map(_.releaseBatch())) { batch =>
         batch.getOrElse(throw new IllegalStateException("batch is closed"))
@@ -267,7 +270,8 @@ class LazySpillableColumnarBatchImpl(
     result
   }
 
-  override def allowSpilling(): Unit = {
+  override def allowSpilling(): Unit = synchronized {
+    logWarning(s"At allowSpilling for ${this}")
     if (spill.isEmpty && cached.isDefined) {
       withResource(new NvtxRange("spill batch " + name, NvtxColor.RED)) { _ =>
         // First time we need to allow for spilling
@@ -287,21 +291,23 @@ class LazySpillableColumnarBatchImpl(
 
   var refCount = 1
 
-  def incRefCount(): LazySpillableColumnarBatch = {
-    logInfo(s"At LazySpillableColumnarBatchImpl incRefCount with ${refCount}. $this")
+  def incRefCount(): LazySpillableColumnarBatch = synchronized {
     if (refCount == 0) {
       throw new IllegalStateException("refCount was 0! for $this")
     }
     refCount += 1
+    logWarning(s"At LazySpillableColumnarBatchImpl incRefCount with ${refCount}. $this")
     this
   }
 
-  override def close(): Unit = {
-    logInfo(s"At LazySpillableColumnarBatchImpl close with ${refCount}. $this")
+  override def close(): Unit = synchronized {
     if (refCount <= 0) {
-      throw new IllegalStateException(s"Closed too many times! $this")
+      logError(s"Closed too many times! $this ${dumpStack}")
+      return
+      //throw new IllegalStateException(s"Closed too many times! $this")
     }
     refCount -= 1
+    logWarning(s"At LazySpillableColumnarBatchImpl close with ${refCount}. $this")
     if (refCount == 0) {
       cached.foreach(_.close())
       cached = None
@@ -319,7 +325,7 @@ class LazySpillableColumnarBatchImpl(
     sb.toString()
   }
 
-  override def toString: String = s"SpillableBatch $name $numCols X $numRows"
+  override def toString: String = s"SpillableBatch($id) $name $numCols X $numRows"
 }
 
 trait LazySpillableGatherMap extends LazySpillable with Arm {
@@ -506,7 +512,9 @@ object JoinGathererImpl {
 class JoinGathererImpl(
     private val gatherMap: LazySpillableGatherMap,
     private val data: LazySpillableColumnarBatch,
-    boundsCheckPolicy: OutOfBoundsPolicy) extends JoinGatherer {
+    boundsCheckPolicy: OutOfBoundsPolicy) extends JoinGatherer with Logging  {
+
+  logWarning(s"Built JoinGathererImpl with ${data}")
 
   assert(data.numCols > 0, "data with no columns should have been filtered out already")
 
@@ -598,6 +606,7 @@ class JoinGathererImpl(
   }
 
   override def close(): Unit = {
+    logWarning(s"join gatherer closing ${data}")
     gatherMap.close()
     data.close()
   }
