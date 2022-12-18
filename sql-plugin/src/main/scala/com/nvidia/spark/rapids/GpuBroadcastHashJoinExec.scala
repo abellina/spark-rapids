@@ -213,7 +213,8 @@ case class GpuBroadcastHashJoinExec(
           buildSchema,
           new CollectTimeIterator("broadcast join stream", it, streamTime),
           allMetrics)
-      doJoin(builtBatch, streamIter, targetSize, spillCallback,
+      doJoin(GpuBroadcastHelper.builtOrEmpty(builtBatch, broadcastExchange.schema),
+        streamIter, targetSize, spillCallback,
         numOutputRows, joinOutputRows, numOutputBatches, opTime, joinTime)
     }
   }
