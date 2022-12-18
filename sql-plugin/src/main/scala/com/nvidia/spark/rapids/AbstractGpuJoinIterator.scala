@@ -245,6 +245,7 @@ abstract class SplittableJoinIterator(
   override def close(): Unit = {
     if (!closed) {
       super.close()
+      logWarning(s"realling closing ${builtBatch}")
       builtBatch.close()
       pendingSplits.foreach(_.close())
       pendingSplits.clear()
