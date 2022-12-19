@@ -267,7 +267,7 @@ else
         # We are limiting the number of tasks in local mode to 4 because it helps to reduce the
         # total memory usage, especially host memory usage because when copying data to the GPU
         # buffers as large as batchSizeBytes can be allocated, and the fewer of them we have the better.
-        LOCAL_PARALLEL=$(( $CPU_CORES > 4 ? 4 : $CPU_CORES ))
+        LOCAL_PARALLEL=2 #$(( $CPU_CORES > 4 ? 4 : $CPU_CORES ))
         export PYSP_TEST_spark_master="local[$LOCAL_PARALLEL,$SPARK_TASK_MAXFAILURES]"
       fi
     fi
