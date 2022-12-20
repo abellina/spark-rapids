@@ -61,9 +61,18 @@ object GpuBroadcastHelper extends Arm with Logging {
     }
   }
 
+  /**
+   * Users of this function must close the lazy batch returned after use
+   * @param maybeLazyBatch - could or could not contain a lazy batch
+   *                       if not, this is the signal to return an empty batch given the
+   *                       schema provided.
+   * @param broadcastSchema - schema to use to generate empty batches
+   * @return - a lazy batch
+   */
   def builtOrEmpty(maybeLazyBatch: Option[LazySpillableColumnarBatch],
                    broadcastSchema: StructType): LazySpillableColumnarBatch = {
     maybeLazyBatch.map { lb =>
+      // we refCount++ our lazy batch, so multiple tasks are sharing this
       logWarning(s"Got lazy batch ${lb} incRefCount ${lb}")
       lb.incRefCount()
     }.getOrElse {

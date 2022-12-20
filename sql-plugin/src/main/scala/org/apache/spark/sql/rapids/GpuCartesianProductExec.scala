@@ -187,9 +187,10 @@ class GpuCartesianRDD(
         spillBatchBuffer.toIterator.map(_.incRefCount())
       }
 
+      logWarning("making a new cartesian nestedLoopJoin")
       GpuBroadcastNestedLoopJoinExec.nestedLoopJoin(
         Cross, GpuBuildLeft, numFirstTableColumns,
-        batch.incRefCount(), streamIterator, streamAttributes,
+        batch, streamIterator, streamAttributes,
         targetSize, boundCondition, spillCallback,
         numOutputRows = numOutputRows,
         joinOutputRows = joinOutputRows,

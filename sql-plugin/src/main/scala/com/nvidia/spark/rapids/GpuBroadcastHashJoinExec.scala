@@ -213,7 +213,23 @@ case class GpuBroadcastHashJoinExec(
           buildSchema,
           new CollectTimeIterator("broadcast join stream", it, streamTime),
           allMetrics)
-      doJoin(GpuBroadcastHelper.builtOrEmpty(builtBatch, broadcastExchange.schema),
+      val builtAnyNullable = compareNullsEqual && buildKeys.exists(_.nullable)
+
+      val builtOrEmpty = GpuBroadcastHelper.builtOrEmpty(builtBatch, broadcastExchange.schema)
+
+      val lazySpill =
+        if (builtAnyNullable) {
+          withResource(builtOrEmpty) { _ =>
+            withResource(
+              GpuHashJoin.filterNulls(builtOrEmpty.getBatch, boundBuildKeys)) { filtered =>
+              LazySpillableColumnarBatch(filtered, RapidsBuffer.defaultSpillCallback, "built_batch")
+            }
+          }
+        } else {
+          logWarning(s"over there with ${builtOrEmpty}")
+          builtOrEmpty
+        }
+      doJoin(lazySpill,
         streamIter, targetSize, spillCallback,
         numOutputRows, joinOutputRows, numOutputBatches, opTime, joinTime)
     }
