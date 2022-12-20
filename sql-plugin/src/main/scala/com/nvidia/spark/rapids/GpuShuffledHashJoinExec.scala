@@ -173,11 +173,20 @@ case class GpuShuffledHashJoinExec(
             spillCallback,
             coalesceMetricsMap)
 
+        buildDataSize += GpuColumnVector.getTotalDeviceMemoryUsed(builtBatch)
+
+        val builtAnyNullable = compareNullsEqual && buildKeys.exists(_.nullable)
         val lazySpill = withResource(builtBatch) { _ =>
-          LazySpillableColumnarBatch(builtBatch, RapidsBuffer.defaultSpillCallback, "built_batch")
+          if (builtAnyNullable) {
+            withResource(GpuHashJoin.filterNulls(builtBatch, boundBuildKeys)) { filtered =>
+              LazySpillableColumnarBatch(filtered, RapidsBuffer.defaultSpillCallback, "built_batch")
+            }
+          } else {
+            logWarning(s"over here with ${builtBatch}")
+            LazySpillableColumnarBatch(builtBatch, RapidsBuffer.defaultSpillCallback, "built_batch")
+          }
         }
         // doJoin will increment the reference counts as needed for the builtBatch
-        buildDataSize += GpuColumnVector.getTotalDeviceMemoryUsed(builtBatch)
         doJoin(lazySpill, maybeBufferedStreamIter,
           batchSizeBytes, spillCallback, numOutputRows, joinOutputRows, numOutputBatches,
           opTime, joinTime)

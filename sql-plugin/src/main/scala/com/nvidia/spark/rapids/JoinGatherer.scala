@@ -240,6 +240,7 @@ class LazySpillableColumnarBatchImpl(
   override val numCols: Int = dataTypes.length
 
   override def getBatch: ColumnarBatch = synchronized {
+    logWarning(s"at getBatch for ${this}")
     if (cached.isEmpty) {
       withResource(new NvtxRange("get batch " + name, NvtxColor.RED)) { _ =>
         cached = spill.map(_.getColumnarBatch())
@@ -252,7 +253,13 @@ class LazySpillableColumnarBatchImpl(
     cached.getOrElse(throw new IllegalStateException("batch is closed"))
   }
 
+  var released = false
+
   override def releaseBatch(): ColumnarBatch = synchronized {
+    if (released) {
+      throw new IllegalStateException(s"already released ${this}")
+    }
+    released = true
     logWarning(s"releaseBatch for ${this}")
     val result = if (cached.isEmpty) {
       closeOnExcept(spill.map(_.releaseBatch())) { batch =>
@@ -264,7 +271,6 @@ class LazySpillableColumnarBatchImpl(
       cached = None
       res
     }
-    close()
     cached = None
     releaseStack = dumpStack
     result
@@ -273,13 +279,19 @@ class LazySpillableColumnarBatchImpl(
   override def allowSpilling(): Unit = synchronized {
     logWarning(s"At allowSpilling for ${this}")
     if (spill.isEmpty && cached.isDefined) {
-      withResource(new NvtxRange("spill batch " + name, NvtxColor.RED)) { _ =>
-        // First time we need to allow for spilling
-        spill = Some(SpillableColumnarBatch(cached.get,
-          SpillPriorities.ACTIVE_ON_DECK_PRIORITY,
-          spillCallback))
-        // Putting data in a SpillableColumnarBatch takes ownership of it.
-        cached = None
+      try {
+        withResource(new NvtxRange("spill batch " + name, NvtxColor.RED)) { _ =>
+          // First time we need to allow for spilling
+          spill = Some(SpillableColumnarBatch(cached.get,
+            SpillPriorities.ACTIVE_ON_DECK_PRIORITY,
+            spillCallback))
+          // Putting data in a SpillableColumnarBatch takes ownership of it.
+          cached = None
+        }
+      } catch {
+        case e: Throwable =>
+          logError(s"allowSpilling failed for ${this}")
+          throw e
       }
     }
     cached.foreach(_.close())

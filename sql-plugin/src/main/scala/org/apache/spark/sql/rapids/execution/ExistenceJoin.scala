@@ -17,7 +17,7 @@ package org.apache.spark.sql.rapids.execution
 
 import ai.rapids.cudf.{ColumnVector, GatherMap, NvtxColor, Scalar, Table}
 import com.nvidia.spark.rapids.{Arm, GpuColumnVector, GpuMetric, LazySpillableColumnarBatch, NvtxWithMetrics, TaskAutoCloseableResource}
-
+import org.apache.spark.internal.Logging
 import org.apache.spark.sql.types.BooleanType
 import org.apache.spark.sql.vectorized.ColumnarBatch
 
@@ -47,7 +47,7 @@ abstract class ExistenceJoinIterator(
     opTime: GpuMetric,
     joinTime: GpuMetric
 ) extends Iterator[ColumnarBatch]()
-    with TaskAutoCloseableResource with Arm {
+    with TaskAutoCloseableResource with Arm with Logging {
 
   use(spillableBuiltBatch)
 
@@ -74,9 +74,12 @@ abstract class ExistenceJoinIterator(
     withResource(lazyStream.next()) { lazyBatch =>
       withResource(new NvtxWithMetrics("existence join batch", NvtxColor.ORANGE, joinTime)) { _ =>
         opTime.ns {
-          val ret = existenceJoinNextBatch(lazyBatch.releaseBatch())
-          spillableBuiltBatch.allowSpilling()
-          ret
+          withResource(lazyBatch.releaseBatch()) { released =>
+            val ret = existenceJoinNextBatch(released)
+            logWarning(s"allowing spilling!! ${this}")
+            spillableBuiltBatch.allowSpilling()
+            ret
+          }
         }
       }
     }

@@ -698,7 +698,7 @@ trait GpuHashJoin extends GpuExec {
   }
 
   def doJoin(
-      builtBatch: LazySpillableColumnarBatch,
+      spillableBuiltBatch: LazySpillableColumnarBatch,
       stream: Iterator[ColumnarBatch],
       targetSize: Long,
       spillCallback: SpillCallback,
@@ -712,17 +712,17 @@ trait GpuHashJoin extends GpuExec {
 
     // Filtering nulls on the build side is a workaround for Struct joins with nullable children
     // see https://github.com/NVIDIA/spark-rapids/issues/2126 for more info
-    val builtAnyNullable = compareNullsEqual && buildKeys.exists(_.nullable)
+    //val builtAnyNullable = compareNullsEqual && buildKeys.exists(_.nullable)
 
-    val spillableBuiltBatch = if (builtAnyNullable) {
-      // use `getBatch` because multiple partitions are going to reuse `builtBatch`
-      LazySpillableColumnarBatch(
-        GpuHashJoin.filterNulls(builtBatch.getBatch, boundBuildKeys),
-        spillCallback,
-        "built")
-    } else {
-      builtBatch
-    }
+    //val spillableBuiltBatch = if (builtAnyNullable) {
+    //  // use `getBatch` because multiple partitions are going to reuse `builtBatch`
+    //  LazySpillableColumnarBatch(
+    //    GpuHashJoin.filterNulls(builtBatch.getBatch, boundBuildKeys),
+    //    spillCallback,
+    //    "built")
+    //} else {
+    //  builtBatch
+    //}
 
     val lazyStream = stream.map { cb =>
       withResource(cb) { cb =>
@@ -734,6 +734,7 @@ trait GpuHashJoin extends GpuExec {
     // them when it is done
     val joinIterator = joinType match {
       case ExistenceJoin(_) =>
+        logWarning("new hashed existence join iterator")
         new HashedExistenceJoinIterator(
           spillableBuiltBatch,
           boundBuildKeys,
