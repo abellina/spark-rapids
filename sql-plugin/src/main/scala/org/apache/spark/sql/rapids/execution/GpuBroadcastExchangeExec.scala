@@ -171,7 +171,7 @@ class SerializeConcatHostBuffersDeserializeBatch(
       //   in the lazy spillable, we close it twice then, as it is also
       //   called when this `SerializedConcatHostBuffersDeserializeBatch` is
       //   GCed
-      withResource(spillable.getBatch) { batch =>
+      spillable.withBatch { batch =>
         val hostColumns: Array[ColumnVector] = GpuColumnVector
           .extractColumns(batch)
           .safeMap(_.copyToHost())
@@ -199,10 +199,7 @@ class SerializeConcatHostBuffersDeserializeBatch(
       //   in the lazy spillable, we close it twice then, as it is also
       //   called when this `SerializedConcatHostBuffersDeserializeBatch` is
       //   GCed
-      val table = withResource(spillable.getBatch) { cb =>
-        GpuColumnVector.from(cb)
-      }
-      withResource(table) { _ =>
+      spillable.withTable { table =>
         JCudfSerialization.writeToStream(table, out, 0, table.getRowCount)
       }
       out.writeObject(dataTypes)
