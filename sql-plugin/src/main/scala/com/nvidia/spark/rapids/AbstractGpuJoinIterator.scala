@@ -151,7 +151,6 @@ abstract class AbstractGpuJoinIterator(
  * @param gatherNvtxName name to use for the NVTX range when producing the join gather maps
  * @param stream iterator to produce the batches for the streaming side input of the join
  * @param streamAttributes attributes corresponding to the streaming side input
- * @param builtBatch batch for the built side input of the join
  * @param targetSize configured target batch size in bytes
  * @param spillCallback callback to use when spilling
  * @param opTime metric to record time spent for this operation
@@ -161,7 +160,6 @@ abstract class SplittableJoinIterator(
     gatherNvtxName: String,
     stream: Iterator[LazySpillableColumnarBatch],
     streamAttributes: Seq[Attribute],
-    builtBatch: LazySpillableColumnarBatch,
     targetSize: Long,
     spillCallback: SpillCallback,
     opTime: GpuMetric,
@@ -245,8 +243,6 @@ abstract class SplittableJoinIterator(
   override def close(): Unit = {
     if (!closed) {
       super.close()
-      logWarning(s"realling closing ${builtBatch}")
-      builtBatch.close()
       pendingSplits.foreach(_.close())
       pendingSplits.clear()
     }

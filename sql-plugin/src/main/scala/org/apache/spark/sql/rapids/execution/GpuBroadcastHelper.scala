@@ -45,7 +45,8 @@ object GpuBroadcastHelper extends Arm with Logging {
                         broadcastSchema: StructType): Option[LazySpillableColumnarBatch] = {
     broadcastRelation.value match {
       case broadcastBatch: SerializeConcatHostBuffersDeserializeBatch =>
-        Some(broadcastBatch.batch) case v if SparkShimImpl.isEmptyRelation(v) =>
+        Some(broadcastBatch.batch)
+      case v if SparkShimImpl.isEmptyRelation(v) =>
         None
         //withResource(GpuColumnVector.emptyBatch(broadcastSchema)) { emptyBatch =>
         //  val empty =
