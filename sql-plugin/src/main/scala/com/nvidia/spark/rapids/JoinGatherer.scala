@@ -178,6 +178,33 @@ object JoinGatherer extends Arm {
  * Holds a Columnar batch that is LazySpillable.
  */
 trait LazySpillableColumnarBatch extends LazySpillable {
+  // TODO: this should not be synchronized. We want to allow
+  //  multipe operations on this lazy batch at the same time
+  //  but this context should allow us to stop other things from happening
+  //  like allowSpillable
+  def withBatch[T](fn: ColumnarBatch => T): T = {
+    val b = synchronized {
+      val res = getBatch
+      // ensure that the cached batch won't be closed under us
+      // TODO: increfcount is not enough. It keeps the batch alive, which is
+      //  good, but another thread could be calling `allowSpillable` shortly.
+      //  That means we will spill and this buffer is still in GPU memory and
+      //  locked by the ref count. We need to queue up or mark for "allow spillable"
+      //  then allow spillable once some sort of ref count reaches 0
+      GpuColumnVector.incRefCounts(res)
+      res
+    }
+    fn(b)
+    b.close() // release our lock
+  }
+
+  def withTable[T](fn: Table => T): T = {
+    withBatch { batch =>
+      withResource(GpuColumnVector.from(b)) { tbl =>
+        fn(tbl)
+      }
+    }
+  }
   /**
    * How many rows are in the underlying batch. Should not unspill the batch to get this into.
    */
@@ -204,7 +231,7 @@ trait LazySpillableColumnarBatch extends LazySpillable {
   /**
    * Get the batch that this wraps and unspill it if needed.
    */
-  def getBatch: ColumnarBatch
+  protected def getBatch: ColumnarBatch
 
   /**
    * Release the underlying batch to the caller who is responsible for closing it. The resulting
@@ -563,8 +590,7 @@ class JoinGathererImpl(
     val start = gatheredUpTo
     assert((start + n) <= totalRows)
     val ret = withResource(gatherMap.toColumnView(start, n)) { gatherView =>
-      val batch = data.getBatch
-      val gatheredTable = withResource(GpuColumnVector.from(batch)) { table =>
+      val gatheredTable = data.withTable { table =>
         table.gather(gatherView, boundsCheckPolicy)
       }
       withResource(gatheredTable) { gt =>
@@ -586,8 +612,7 @@ class JoinGathererImpl(
   }
 
   override def getBitSizeMap(n: Int): ColumnView = {
-    val cb = data.getBatch
-    val inputBitCounts = withResource(GpuColumnVector.from(cb)) { table =>
+    val inputBitCounts = data.withTable { table =>
       withResource(table.rowBitCount()) { bits =>
         bits.castTo(DType.INT64)
       }

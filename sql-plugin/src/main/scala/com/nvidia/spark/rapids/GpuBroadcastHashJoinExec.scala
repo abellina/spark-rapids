@@ -224,10 +224,13 @@ case class GpuBroadcastHashJoinExec(
       val lazySpill =
         if (builtAnyNullable) {
           withResource(builtOrEmpty) { _ =>
-            withResource(GpuHashJoin.filterNulls(
-                builtOrEmpty.getBatch, boundBuildKeys)) { filtered =>
-              LazySpillableColumnarBatch(
-                filtered, RapidsBuffer.defaultSpillCallback, "built_batch")
+            builtOrEmpty.withBatch { batch =>
+              withResource(GpuHashJoin.filterNulls(batch, boundBuildKeys)) { filtered =>
+                LazySpillableColumnarBatch(
+                  filtered,
+                  RapidsBuffer.defaultSpillCallback,
+                  "built_batch")
+              }
             }
           }
         } else {

@@ -230,7 +230,7 @@ class ConditionalNestedLoopJoinIterator(
   }
 
   override def computeNumJoinRows(cb: ColumnarBatch): Long = {
-    withResource(GpuColumnVector.from(builtBatch.getBatch)) { builtTable =>
+    builtBatch.withTable { builtTable =>
       withResource(GpuColumnVector.from(cb)) { streamTable =>
         val (left, right) = buildSide match {
           case GpuBuildLeft => (builtTable, streamTable)
@@ -256,9 +256,10 @@ class ConditionalNestedLoopJoinIterator(
       return None
     }
     // this one is getting leaked (the CB returned by builtBatch.getBatch)
-    withResource(GpuColumnVector.from(builtBatch.getBatch)) { builtTable =>
+    builtBatch.withTable { builtTable =>
       withResource(GpuColumnVector.from(cb)) { streamTable =>
-        closeOnExcept(LazySpillableColumnarBatch(cb, spillCallback, "stream_data")) { streamBatch =>
+        closeOnExcept(
+          LazySpillableColumnarBatch(cb, spillCallback, "stream_data")) { streamBatch =>
           val (leftTable, leftBatch, rightTable, rightBatch) = buildSide match {
             case GpuBuildLeft => (builtTable, builtBatch.incRefCount(), streamTable, streamBatch)
             case GpuBuildRight => (streamTable, streamBatch, builtTable, builtBatch.incRefCount())
@@ -668,7 +669,7 @@ class ConditionalNestedLoopExistenceJoinIterator(
     withResource(
       new NvtxWithMetrics("existence join scatter map", NvtxColor.ORANGE, joinTime)) { _ =>
       withResource(GpuColumnVector.from(leftColumnarBatch)) { leftTab =>
-        withResource(GpuColumnVector.from(spillableBuiltBatch.getBatch)) { rightTab =>
+        spillableBuiltBatch.withTable { rightTab =>
           leftTab.conditionalLeftSemiJoinGatherMap(rightTab, condition)
         }
       }
