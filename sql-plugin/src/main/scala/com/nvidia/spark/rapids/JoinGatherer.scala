@@ -250,6 +250,8 @@ class LazySpillableColumnarBatchImpl(
       throw new IllegalStateException(
         s"cached is empty! ${releaseStack} ${closedStack}")
     }
+
+    // both cached and spill will be defined here
     cached.getOrElse(throw new IllegalStateException("batch is closed"))
   }
 

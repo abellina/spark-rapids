@@ -164,8 +164,8 @@ class GpuCartesianRDD(
     // happen if there exists specific plans like `LimitExec`.
     context.addTaskCompletionListener[Unit](_ => close())
 
-    rdd1.iterator(currSplit.s1, context).flatMap { lhs =>
-      val batch = withResource(lhs.getBatch) { lhsBatch =>
+    rdd1.iterator(currSplit.s1, context).flatMap { lhs: GpuSerializableBatch =>
+      val builtBatch = withResource(lhs.getBatch) { lhsBatch =>
         LazySpillableColumnarBatch(lhsBatch, spillCallback, "cross_lhs")
       }
       // Introduce sentinel `streamSideCached` to record whether stream-side data is cached or
@@ -190,7 +190,7 @@ class GpuCartesianRDD(
       logWarning("making a new cartesian nestedLoopJoin")
       GpuBroadcastNestedLoopJoinExec.nestedLoopJoin(
         Cross, GpuBuildLeft, numFirstTableColumns,
-        batch, streamIterator, streamAttributes,
+        builtBatch, streamIterator, streamAttributes,
         targetSize, boundCondition, spillCallback,
         numOutputRows = numOutputRows,
         joinOutputRows = joinOutputRows,

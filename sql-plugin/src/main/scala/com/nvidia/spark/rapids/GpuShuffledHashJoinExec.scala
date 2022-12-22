@@ -176,6 +176,11 @@ case class GpuShuffledHashJoinExec(
         buildDataSize += GpuColumnVector.getTotalDeviceMemoryUsed(builtBatch)
 
         val builtAnyNullable = compareNullsEqual && buildKeys.exists(_.nullable)
+
+        // in this scenario, for each partition we have both a stream and a build iterator
+        // we build a lazy spillable per partition
+        // Filtering nulls on the build side is a workaround for Struct joins with nullable children
+        // see https://github.com/NVIDIA/spark-rapids/issues/2126 for more info
         val lazySpill = withResource(builtBatch) { _ =>
           if (builtAnyNullable) {
             withResource(GpuHashJoin.filterNulls(builtBatch, boundBuildKeys)) { filtered =>

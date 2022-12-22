@@ -209,7 +209,6 @@ class ConditionalNestedLoopJoinIterator(
       s"$joinType join gather",
       stream,
       streamAttributes,
-      builtBatch,
       targetSize,
       spillCallback,
       opTime = opTime,
@@ -217,12 +216,16 @@ class ConditionalNestedLoopJoinIterator(
 
   // TODO: fiddled with theses
   //builtBatch.incRefCount()
+
+  /**
+   * Closed by the task on completion
+   */
   override def close(): Unit = {
     if (!closed) {
       logWarning(s"closing this thing ${builtBatch}")
       super.close()
       condition.close()
-      //builtBatch.close()
+      builtBatch.close()
     }
   }
 
@@ -234,7 +237,7 @@ class ConditionalNestedLoopJoinIterator(
           case GpuBuildRight => (streamTable, builtTable)
         }
         joinType match {
-          case _: InnerLike =>left.conditionalInnerJoinRowCount(right, condition)
+          case _: InnerLike => left.conditionalInnerJoinRowCount(right, condition)
           case LeftOuter => left.conditionalLeftJoinRowCount(right, condition)
           case RightOuter => right.conditionalLeftJoinRowCount(left, condition)
           case LeftSemi => left.conditionalLeftSemiJoinRowCount(right, condition)

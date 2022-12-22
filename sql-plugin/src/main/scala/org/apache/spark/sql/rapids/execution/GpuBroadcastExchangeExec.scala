@@ -167,6 +167,10 @@ class SerializeConcatHostBuffersDeserializeBatch(
    */
   def hostBatches: Array[ColumnarBatch] = this.synchronized {
     Option(batchInternal).map { spillable =>
+      // TODO: this code doesn't seem to be called. getBatch sets `cached`
+      //   in the lazy spillable, we close it twice then, as it is also
+      //   called when this `SerializedConcatHostBuffersDeserializeBatch` is
+      //   GCed
       withResource(spillable.getBatch) { batch =>
         val hostColumns: Array[ColumnVector] = GpuColumnVector
           .extractColumns(batch)
@@ -191,6 +195,10 @@ class SerializeConcatHostBuffersDeserializeBatch(
 
   private def writeObject(out: ObjectOutputStream): Unit = {
     Option(batchInternal).map { spillable =>
+      // TODO: this code doesn't seem to be called. getBatch sets `cached`
+      //   in the lazy spillable, we close it twice then, as it is also
+      //   called when this `SerializedConcatHostBuffersDeserializeBatch` is
+      //   GCed
       val table = withResource(spillable.getBatch) { cb =>
         GpuColumnVector.from(cb)
       }

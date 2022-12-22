@@ -243,11 +243,19 @@ abstract class BaseHashJoinIterator(
       s"hash $joinType gather",
       stream,
       streamAttributes,
-      built,
       targetSize,
       spillCallback,
       opTime = opTime,
       joinTime = joinTime) {
+
+  /**
+   * Closed by the task on completion
+   */
+  override def close(): Unit = {
+    super.close()
+    built.close()
+  }
+
   // We can cache this because the build side is not changing
   private lazy val streamMagnificationFactor = joinType match {
     case _: InnerLike | LeftOuter | RightOuter =>
@@ -709,20 +717,6 @@ trait GpuHashJoin extends GpuExec {
       joinTime: GpuMetric): Iterator[ColumnarBatch] = {
     // The 10k is mostly for tests, hopefully no one is setting anything that low in production.
     val realTarget = Math.max(targetSize, 10 * 1024)
-
-    // Filtering nulls on the build side is a workaround for Struct joins with nullable children
-    // see https://github.com/NVIDIA/spark-rapids/issues/2126 for more info
-    //val builtAnyNullable = compareNullsEqual && buildKeys.exists(_.nullable)
-
-    //val spillableBuiltBatch = if (builtAnyNullable) {
-    //  // use `getBatch` because multiple partitions are going to reuse `builtBatch`
-    //  LazySpillableColumnarBatch(
-    //    GpuHashJoin.filterNulls(builtBatch.getBatch, boundBuildKeys),
-    //    spillCallback,
-    //    "built")
-    //} else {
-    //  builtBatch
-    //}
 
     val lazyStream = stream.map { cb =>
       withResource(cb) { cb =>
