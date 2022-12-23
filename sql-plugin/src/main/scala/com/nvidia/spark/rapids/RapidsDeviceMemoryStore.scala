@@ -182,6 +182,8 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
       with MemoryBuffer.EventHandler {
     override val storageTier: StorageTier = StorageTier.DEVICE
 
+    logWarning(s"ADDED BUFFER ${id} $contigBuffer with refCount ${contigBuffer.getRefCount()} ")
+
     val sb = new mutable.StringBuilder()
     Thread.currentThread().getStackTrace.foreach { stackTraceElement =>
       sb.append("    " + stackTraceElement + "\n")
@@ -227,7 +229,7 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
 
     override def onClosed(refCount: Int): Unit = {
       logWarning(
-        s"At onClosed for ${id} with buffer refCount=$refCount and refcount=$refcount")
+        s"At onClosed for ${id} with buffer $buffer refCount=$refCount and refcount=$refcount")
     }
   }
 }
