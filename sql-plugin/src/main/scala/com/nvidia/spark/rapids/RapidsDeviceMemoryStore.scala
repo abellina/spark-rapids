@@ -229,7 +229,7 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
 
     override def onClosed(refCount: Int): Unit = {
       logWarning(
-        s"At onClosed for ${id} with buffer $buffer refCount=$refCount and refcount=$refcount")
+        s"At onClosed for ${id} with buffer $contigBuffer refCount=$refCount and refcount=$refcount")
     }
   }
 }
