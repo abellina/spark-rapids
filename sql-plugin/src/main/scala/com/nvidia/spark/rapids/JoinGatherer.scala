@@ -177,7 +177,7 @@ object JoinGatherer extends Arm {
 /**
  * Holds a Columnar batch that is LazySpillable.
  */
-trait LazySpillableColumnarBatch extends LazySpillable {
+trait LazySpillableColumnarBatch extends LazySpillable with Arm {
   // TODO: this should not be synchronized. We want to allow
   //  multipe operations on this lazy batch at the same time
   //  but this context should allow us to stop other things from happening
@@ -194,13 +194,14 @@ trait LazySpillableColumnarBatch extends LazySpillable {
       GpuColumnVector.incRefCounts(res)
       res
     }
-    fn(b)
+    val res = fn(b)
     b.close() // release our lock
+    res
   }
 
   def withTable[T](fn: Table => T): T = {
     withBatch { batch =>
-      withResource(GpuColumnVector.from(b)) { tbl =>
+      withResource(GpuColumnVector.from(batch)) { tbl =>
         fn(tbl)
       }
     }
@@ -590,11 +591,14 @@ class JoinGathererImpl(
     val start = gatheredUpTo
     assert((start + n) <= totalRows)
     val ret = withResource(gatherMap.toColumnView(start, n)) { gatherView =>
-      val gatheredTable = data.withTable { table =>
-        table.gather(gatherView, boundsCheckPolicy)
+      val (gatheredTable, types) = data.withBatch { batch =>
+        withResource(GpuColumnVector.from(batch)) { table =>
+          (table.gather(gatherView, boundsCheckPolicy), 
+            GpuColumnVector.extractTypes(batch))
+        }
       }
       withResource(gatheredTable) { gt =>
-        GpuColumnVector.from(gt, GpuColumnVector.extractTypes(batch))
+        GpuColumnVector.from(gt, types)
       }
     }
     gatheredUpTo += n

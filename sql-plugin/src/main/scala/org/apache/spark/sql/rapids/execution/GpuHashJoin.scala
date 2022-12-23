@@ -418,7 +418,7 @@ class HashJoinIterator(
           }
           joinType match {
             case LeftOuter =>
-              leftKeysTable.leftJoinGatherMaps(rightKeys, compareNullsEqual)
+              leftKeysTable.leftJoinGatherMaps(rightKeysTable, compareNullsEqual)
             case RightOuter =>
               // Reverse the output of the join, because we expect the right gather map to
               // always be on the right
@@ -436,7 +436,8 @@ class HashJoinIterator(
                 s" supported")
           }
         }
-        makeGatherer(maps, leftData, rightData, joinType)
+      }
+      makeGatherer(maps, leftData, rightData, joinType)
     }
   }
 }
@@ -558,50 +559,54 @@ class HashedExistenceJoinIterator(
   }
 
   private def conditionalBatchLeftSemiJoin(
+    builtBatch: ColumnarBatch,
+    leftKeysTab: Table,
+    rightKeysTab: Table,
     leftColumnarBatch: ColumnarBatch,
     compiledCondition: CompiledExpression): GatherMap = {
-    withResource(leftKeysTable(leftColumnarBatch)) { leftKeysTab =>
-      spillableBuiltBatch.withBatch { builtBatch =>
-        withResource(GpuProjectExec.project(builtBatch, boundBuildKeys)) {
-          withResource(GpuColumnVector.from(_)) { rightKeysTab =>
-            withResource(GpuColumnVector.from(leftColumnarBatch)) { leftTab =>
-              withResource(GpuColumnVector.from(builtBatch)) { rightTab =>
-                Table.mixedLeftSemiJoinGatherMap(
-                  leftKeysTab,
-                  rightKeysTab,
-                  leftTab,
-                  rightTab,
-                  compiledCondition,
-                  if (compareNullsEqual) NullEquality.EQUAL else NullEquality.UNEQUAL)
-              }
-            }
-          }
+      withResource(GpuColumnVector.from(leftColumnarBatch)) { leftTab =>
+        withResource(GpuColumnVector.from(builtBatch)) { rightTab =>
+          Table.mixedLeftSemiJoinGatherMap(
+            leftKeysTab,
+            rightKeysTab,
+            leftTab,
+            rightTab,
+            compiledCondition,
+            if (compareNullsEqual) NullEquality.EQUAL else NullEquality.UNEQUAL)
         }
       }
-    }
   }
 
   private def unconditionalBatchLeftSemiJoin(
     leftKeysTab: Table,
-    rightKeysTab: Table
-  ): GatherMap = {
+    rightKeysTab: Table): GatherMap = {
     leftKeysTab.leftSemiJoinGatherMap(rightKeysTab, compareNullsEqual)
   }
 
   override def existsScatterMap(leftColumnarBatch: ColumnarBatch): GatherMap = {
     withResource(
-      new NvtxWithMetrics("existence join scatter map", NvtxColor.ORANGE, joinTime)
-    ) { _ =>
-          compiledConditionRes.map { compiledCondition =>
-            conditionalBatchLeftSemiJoin(
-              leftColumnarBatch,
-              compiledCondition)
-          }.getOrElse {
-            unconditionalBatchLeftSemiJoin(leftKeysTab, rightKeysTab)
+      new NvtxWithMetrics("existence join scatter map", NvtxColor.ORANGE, joinTime)) { _ =>
+        withResource(leftKeysTable(leftColumnarBatch)) { leftKeysTab =>
+          spillableBuiltBatch.withBatch { builtBatch =>
+            withResource(GpuProjectExec.project(builtBatch, boundBuildKeys)) { rightKeys =>
+              withResource(GpuColumnVector.from(rightKeys)) { rightKeysTab =>
+                compiledConditionRes.map { compiledCondition =>
+                  conditionalBatchLeftSemiJoin(
+                    builtBatch,
+                    leftKeysTab,
+                    rightKeysTab,
+                    leftColumnarBatch, 
+                    compiledCondition)
+                  }.getOrElse {
+                    unconditionalBatchLeftSemiJoin(
+                      leftKeysTab, 
+                      rightKeysTab)
+                  }
+              }
+            }
           }
         }
       }
-    }
   }
 }
 
