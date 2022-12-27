@@ -119,6 +119,8 @@ trait RapidsBuffer extends AutoCloseable {
    */
   def getColumnarBatch(sparkTypes: Array[DataType]): ColumnarBatch
 
+  def withColumnarBatch[T](sparkTypes: Array[DataType])(fn: ColumnarBatch => T): T
+
   /**
    * Get the underlying memory buffer. This may be either a HostMemoryBuffer or a DeviceMemoryBuffer
    * depending on where the buffer currently resides.

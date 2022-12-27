@@ -77,12 +77,11 @@ class JustRowsColumnarBatch(numRows: Int, semWait: GpuMetric) extends SpillableC
  *       ownership of the life cycle of the batch.  So don't call this constructor directly please
  *       use `SpillableColumnarBatch.apply` instead.
  */
-class SpillableColumnarBatchImpl (id: TempSpillBufferId,
+class SpillableColumnarBatchImpl (
+    spillableBuffer: SpillableBuffer,
     rowCount: Int,
-    sparkTypes: Array[DataType],
-    semWait: GpuMetric)
+    sparkTypes: Array[DataType])
     extends  SpillableColumnarBatch with Arm {
-  private var closed = false
 
   /**
    * The number of rows stored in this batch.
@@ -95,19 +94,13 @@ class SpillableColumnarBatchImpl (id: TempSpillBufferId,
    */
   def spillId: TempSpillBufferId = id
 
-  override lazy val sizeInBytes: Long =
-    withResource(RapidsBufferCatalog.acquireBuffer(id)) { buff =>
-      buff.size
-    }
+  override lazy val sizeInBytes: Long = spillableBuffer.sizeInBytes
 
   /**
    * Set a new spill priority.
    */
-  override def setSpillPriority(priority: Long): Unit = {
-    withResource(RapidsBufferCatalog.acquireBuffer(id)) { rapidsBuffer =>
-      rapidsBuffer.setSpillPriority(priority)
-    }
-  }
+  override def setSpillPriority(priority: Long): Unit =
+    spillableBuffer.setSpillPriority(priority)
 
   /**
    * Get the columnar batch.
@@ -117,15 +110,21 @@ class SpillableColumnarBatchImpl (id: TempSpillBufferId,
    *       with decompressing the data if necessary.
    */
   override def getColumnarBatch(): ColumnarBatch = {
-    withResource(RapidsBufferCatalog.acquireBuffer(id)) { rapidsBuffer =>
-      GpuSemaphore.acquireIfNecessary(TaskContext.get(), semWait)
+    spillableBuffer.withRapidsBuffer { rapidsBuffer =>
       rapidsBuffer.getColumnarBatch(sparkTypes)
     }
   }
 
+  override def withColumnarBatch[T](fn: ColumnarBatch => T): T = {
+    spillableBuffer.withRapidsBuffer { rapidsBuffer =>
+      rapidsBuffer.withColumnarBatch(sparkTypes) { cb =>
+        fn(cb)
+      }
+    }
+  }
+
   override def releaseBatch(): ColumnarBatch = {
-    withResource(RapidsBufferCatalog.acquireBuffer(id)) { rapidsBuffer =>
-      GpuSemaphore.acquireIfNecessary(TaskContext.get(), semWait)
+    spillableBuffer.withRapidsBuffer { rapidsBuffer =>
       val released = rapidsBuffer.releaseBatch(sparkTypes)
       close()
       released
@@ -136,10 +135,7 @@ class SpillableColumnarBatchImpl (id: TempSpillBufferId,
    * Remove the `ColumnarBatch` from the cache.
    */
   override def close(): Unit = {
-    if (!closed) {
-      RapidsBufferCatalog.removeBuffer(id)
-      closed = true
-    }
+    spillableBuffer.close()
   }
 }
 
@@ -163,8 +159,9 @@ object SpillableColumnarBatch extends Arm {
     } else {
       val types =  GpuColumnVector.extractTypes(batch)
       val id = TempSpillBufferId()
+      val spillBuff = SpillableBuffer(id, spillCallback.semaphoreWaitTime)
       addBatch(id, batch, priority, spillCallback)
-      new SpillableColumnarBatchImpl(id, numRows, types, spillCallback.semaphoreWaitTime)
+      new SpillableColumnarBatchImpl(spillBuff, numRows, types)
     }
   }
 
@@ -184,8 +181,8 @@ object SpillableColumnarBatch extends Arm {
       spillCallback: SpillCallback): SpillableColumnarBatch = {
     val id = TempSpillBufferId()
     RapidsBufferCatalog.addContiguousTable(id, ct, priority, spillCallback)
-    new SpillableColumnarBatchImpl(id, ct.getRowCount.toInt, sparkTypes,
-      spillCallback.semaphoreWaitTime)
+    val spillBuff = SpillableBuffer(id, spillCallback.semaphoreWaitTime)
+    new SpillableColumnarBatchImpl(spillBuff, ct.getRowCount.toInt, sparkTypes)
   }
 
   private[this] def addBatch(
@@ -231,7 +228,9 @@ object SpillableColumnarBatch extends Arm {
 /**
  * Just like a SpillableColumnarBatch but for buffers.
  */
-class SpillableBuffer (id: TempSpillBufferId, semWait: GpuMetric) extends AutoCloseable with Arm {
+class SpillableBuffer (
+    id: TempSpillBufferId,
+    semWait: GpuMetric) extends AutoCloseable with Arm {
   private var closed = false
 
   /**
@@ -262,6 +261,12 @@ class SpillableBuffer (id: TempSpillBufferId, semWait: GpuMetric) extends AutoCl
     withResource(RapidsBufferCatalog.acquireBuffer(id)) { rapidsBuffer =>
       GpuSemaphore.acquireIfNecessary(TaskContext.get(), semWait)
       rapidsBuffer.getDeviceMemoryBuffer
+    }
+  }
+
+  def withRapidsBuffer[T](fn: RapidsBuffer => T): T = {
+    withResource(RapidsBufferCatalog.acquireBuffer(id)) { rapidsBuffer =>
+      fn(rapidsBuffer)
     }
   }
 

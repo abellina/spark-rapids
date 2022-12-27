@@ -343,6 +343,7 @@ object GpuBroadcastNestedLoopJoinExec extends Arm with Logging {
           builtBatch, stream, compiledAst, opTime, joinTime)
       } else {
         logWarning(s"ConditionalNestedLoopJoinIterator with ${builtBatch}")
+        // TODO: builtBatch is never made spillable for this type of join
         new ConditionalNestedLoopJoinIterator(joinType, buildSide, builtBatch,
           stream, streamAttributes, targetSize, compiledAst, spillCallback,
           opTime = opTime, joinTime = joinTime)

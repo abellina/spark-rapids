@@ -178,26 +178,10 @@ object JoinGatherer extends Arm {
  * Holds a Columnar batch that is LazySpillable.
  */
 trait LazySpillableColumnarBatch extends LazySpillable with Arm {
-  // TODO: this should not be synchronized. We want to allow
-  //  multipe operations on this lazy batch at the same time
-  //  but this context should allow us to stop other things from happening
-  //  like allowSpillable
-  def withBatch[T](fn: ColumnarBatch => T): T = {
-    val b = synchronized {
-      val res = getBatch
-      // ensure that the cached batch won't be closed under us
-      // TODO: increfcount is not enough. It keeps the batch alive, which is
-      //  good, but another thread could be calling `allowSpillable` shortly.
-      //  That means we will spill and this buffer is still in GPU memory and
-      //  locked by the ref count. We need to queue up or mark for "allow spillable"
-      //  then allow spillable once some sort of ref count reaches 0
-      GpuColumnVector.incRefCounts(res)
-      res
-    }
-    val res = fn(b)
-    b.close() // release our lock
-    res
-  }
+  /**
+   * Get the batch that this wraps and unspill it if needed.
+   */
+  protected def withBatch[T](fn: ColumnarBatch => T): T
 
   def withTable[T](fn: Table => T): T = {
     withBatch { batch =>
@@ -227,12 +211,6 @@ trait LazySpillableColumnarBatch extends LazySpillable with Arm {
    * info.
    */
   def dataTypes: Array[DataType]
-
-
-  /**
-   * Get the batch that this wraps and unspill it if needed.
-   */
-  protected def getBatch: ColumnarBatch
 
   /**
    * Release the underlying batch to the caller who is responsible for closing it. The resulting
@@ -266,24 +244,46 @@ class LazySpillableColumnarBatchImpl(
   override val deviceMemorySize: Long = GpuColumnVector.getTotalDeviceMemoryUsed(cb)
   override val dataTypes: Array[DataType] = GpuColumnVector.extractTypes(cb)
   override val numCols: Int = dataTypes.length
+  private var released: Boolean = false
 
-  override def getBatch: ColumnarBatch = synchronized {
-    logWarning(s"at getBatch for ${this}")
-    if (cached.isEmpty) {
-      withResource(new NvtxRange("get batch " + name, NvtxColor.RED)) { _ =>
-        cached = spill.map(_.getColumnarBatch())
+  // TODO: this should not be synchronized. We want to allow
+  //  multipe operations on this lazy batch at the same time
+  //  but this context should allow us to stop other things from happening
+  //  like allowSpillable
+  override def withBatch[T](fn: ColumnarBatch => T): T = {
+    val b = synchronized {
+      // TODO: if spillable, tell spillable to not spill us
+      if (released) {
+        throw new IllegalStateException(s"already released ${this}")
       }
-    }
-    if (cached.isEmpty) {
-      throw new IllegalStateException(
-        s"cached is empty! ${releaseStack} ${closedStack}")
-    }
+      logWarning(s"at withBatch for ${this}")
+      if (cached.isEmpty) {
+        withResource(new NvtxRange("get batch " + name, NvtxColor.RED)) { _ =>
+          cached = spill.map(_.getColumnarBatch())
+        }
+      }
+      if (cached.isEmpty) {
+        throw new IllegalStateException(
+          s"cached is empty! ${releaseStack} ${closedStack}")
+      }
 
-    // both cached and spill will be defined here
-    cached.getOrElse(throw new IllegalStateException("batch is closed"))
+      // both cached and spill will be defined here
+      val res = cached.getOrElse(throw new IllegalStateException("batch is closed"))
+      // ensure that the cached batch won't be closed under us
+      // TODO: increfcount is not enough. It keeps the batch alive, which is
+      //  good, but another thread could be calling `allowSpillable` shortly.
+      //  That means we will spill and this buffer is still in GPU memory and
+      //  locked by the ref count. We need to queue up or mark for "allow spillable"
+      //  then allow spillable once some sort of ref count reaches 0
+      GpuColumnVector.incRefCounts(res)
+    }
+    withResource(b) { _ =>
+      fn(b)
+      // TODO: tell spillable we can now be spilled. Note the cached batch needs to be closed
+      // alltogether if we are candidates for spill... e.g. we need a callback that
+      // terminates our cache
+    }
   }
-
-  var released = false
 
   override def releaseBatch(): ColumnarBatch = synchronized {
     if (released) {

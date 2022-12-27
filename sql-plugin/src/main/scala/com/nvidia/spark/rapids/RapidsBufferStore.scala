@@ -324,6 +324,23 @@ abstract class RapidsBufferStore(
       }
     }
 
+    var cache: Option[ColumnarBatch] = None
+
+    override def withColumnarBatch[T](
+        sparkTypes: Array[DataType])(fn: ColumnarBatch => T): T = {
+      val cb = synchronized {
+        if (cache.isDefined) {
+          cache.foreach(c => GpuColumnVector.incRefCounts(c))
+        } else {
+          cache = getColumnarBatch(sparkTypes)
+        }
+        cache.get
+      }
+      withResource(cb) {
+        fn(cb)
+      }
+    }
+
     protected def columnarBatchFromDeviceBuffer(devBuffer: DeviceMemoryBuffer,
         sparkTypes: Array[DataType]): ColumnarBatch = {
       val bufferMeta = meta.bufferMeta()
