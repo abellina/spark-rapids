@@ -26,6 +26,7 @@ import org.apache.spark.broadcast.Broadcast
 import org.apache.spark.sql.types.StructType
 import org.apache.spark.sql.vectorized.ColumnarBatch
 import org.apache.spark.internal.Logging
+import com.nvidia.spark.rapids.GpuExpression
 
 object GpuBroadcastHelper extends Arm with Logging {
   /**
@@ -42,10 +43,12 @@ object GpuBroadcastHelper extends Arm with Logging {
    * @return a `ColumnarBatch` or throw if the broadcast can't be handled
    */
   def getBroadcastBatch(broadcastRelation: Broadcast[Any],
-                        broadcastSchema: StructType): Option[LazySpillableColumnarBatch] = {
+                        broadcastSchema: StructType,
+                        builtAnyNullable: Boolean,
+                        boundBuiltKeys: Seq[GpuExpression]): Option[SpillableColumnarBatch] = {
     broadcastRelation.value match {
       case broadcastBatch: SerializeConcatHostBuffersDeserializeBatch =>
-        Some(broadcastBatch.batch)
+        Some(broadcastBatch.batch(builtAnyNullable, boundBuiltKeys))
       case v if SparkShimImpl.isEmptyRelation(v) =>
         None
         //withResource(GpuColumnVector.emptyBatch(broadcastSchema)) { emptyBatch =>
@@ -70,21 +73,20 @@ object GpuBroadcastHelper extends Arm with Logging {
    * @param broadcastSchema - schema to use to generate empty batches
    * @return - a lazy batch
    */
-  def builtOrEmpty(maybeLazyBatch: Option[LazySpillableColumnarBatch],
-                   broadcastSchema: StructType): LazySpillableColumnarBatch = {
-    maybeLazyBatch.map { lb =>
+  def builtOrEmpty(maybeSpillableBatch: Option[SpillableColumnarBatch],
+                   broadcastSchema: StructType): SpillableColumnarBatch = {
+    maybeSpillableBatch.map { lb =>
       // we refCount++ our lazy batch, so multiple tasks are sharing this
       logWarning(s"Got lazy batch ${lb} incRefCount ${lb}")
       lb.incRefCount()
     }.getOrElse {
       withResource(GpuColumnVector.emptyBatch(broadcastSchema)) { emptyBatch =>
         val empty =
-          LazySpillableColumnarBatch(
+          SpillableColumnarBatch(
             emptyBatch,
-            RapidsBuffer.defaultSpillCallback,
-            "empty_built_batch")
+            -1,
+            RapidsBuffer.defaultSpillCallback)
         logWarning(s"Made empty batch ${empty}")
-        empty.allowSpilling()
         empty
       }
     }

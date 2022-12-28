@@ -925,6 +925,8 @@ class RapidsCachingWriter[K, V](
                 bufferId,
                 contigTable,
                 SpillPriorities.OUTPUT_FOR_SHUFFLE_INITIAL_PRIORITY,
+                RapidsBuffer.defaultSpillCallback,
+                isSpillable = true,
                 // we don't need to sync here, because we sync on the cuda
                 // stream after sliceInternalOnGpu (contiguous_split)
                 needsSync = false)
@@ -941,6 +943,8 @@ class RapidsCachingWriter[K, V](
                 buffer,
                 tableMeta,
                 SpillPriorities.OUTPUT_FOR_SHUFFLE_INITIAL_PRIORITY,
+                RapidsBuffer.defaultSpillCallback,
+                isSpillable = true,
                 // we don't need to sync here, because we sync on the cuda
                 // stream after compression.
                 needsSync = false)

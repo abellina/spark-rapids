@@ -158,7 +158,7 @@ abstract class AbstractGpuJoinIterator(
  */
 abstract class SplittableJoinIterator(
     gatherNvtxName: String,
-    stream: Iterator[LazySpillableColumnarBatch],
+    stream: Iterator[ColumnarBatch],
     streamAttributes: Seq[Attribute],
     targetSize: Long,
     spillCallback: SpillCallback,
@@ -200,12 +200,7 @@ abstract class SplittableJoinIterator(
           }
         }
       } else {
-        val batch = closeOnExcept(stream.next()) { lazyBatch =>
-          opTime.ns {
-            lazyBatch.releaseBatch()
-          }
-        }
-        batch
+        stream.next()
       }
       opTime.ns {
         withResource(cb) { cb =>

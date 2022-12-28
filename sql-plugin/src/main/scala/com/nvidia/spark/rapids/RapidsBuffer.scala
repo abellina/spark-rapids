@@ -121,6 +121,8 @@ trait RapidsBuffer extends AutoCloseable {
 
   def withColumnarBatch[T](sparkTypes: Array[DataType])(fn: ColumnarBatch => T): T
 
+  def allowSpillable(): Unit
+
   /**
    * Get the underlying memory buffer. This may be either a HostMemoryBuffer or a DeviceMemoryBuffer
    * depending on where the buffer currently resides.
@@ -216,6 +218,16 @@ sealed class DegenerateRapidsBuffer(
     }
   }
 
+  override def withColumnarBatch[T](sparkTypes: Array[DataType])(fn: ColumnarBatch => T): T = {
+    withResource(getColumnarBatch(sparkTypes)) { cb =>
+      fn(cb)
+    }
+  }
+
+  override def allowSpillable(): Unit = {
+    // noop
+  }
+
   override def free(): Unit = {}
 
   override def getMemoryBuffer: MemoryBuffer =
@@ -237,4 +249,5 @@ sealed class DegenerateRapidsBuffer(
   override def close(): Unit = {}
 
   override val spillCallback: SpillCallback = RapidsBuffer.defaultSpillCallback
+
 }

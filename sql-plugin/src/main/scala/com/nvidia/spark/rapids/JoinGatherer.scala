@@ -181,7 +181,7 @@ trait LazySpillableColumnarBatch extends LazySpillable with Arm {
   /**
    * Get the batch that this wraps and unspill it if needed.
    */
-  protected def withBatch[T](fn: ColumnarBatch => T): T
+  def withBatch[T](fn: ColumnarBatch => T): T
 
   def withTable[T](fn: Table => T): T = {
     withBatch { batch =>

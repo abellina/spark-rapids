@@ -217,7 +217,7 @@ class GpuHashAggregateIterator(
   private[this] val isReductionOnly = groupingExpressions.isEmpty
   private[this] val boundExpressions = setupReferences()
   private[this] val targetMergeBatchSize = computeTargetMergeBatchSize(configuredTargetBatchSize)
-  private[this] val aggregatedBatches = new util.ArrayDeque[LazySpillableColumnarBatch]
+  private[this] val aggregatedBatches = new util.ArrayDeque[SpillableColumnarBatch]
   private[this] var outOfCoreIter: Option[GpuOutOfCoreSortIterator] = None
 
   /** Iterator for fetching aggregated batches if a sort-based fallback has occurred */
@@ -236,12 +236,21 @@ class GpuHashAggregateIterator(
   override def next(): ColumnarBatch = {
     val batch = sortFallbackIter.map(_.next()).getOrElse {
       // aggregate and merge all pending inputs
+      var singleInputBatch: Option[ColumnarBatch] = None
       if (cbIter.hasNext) {
-        aggregateInputBatches()
-        tryMergeAggregatedBatches()
+        singleInputBatch = aggregateInputBatches()
+        if (singleInputBatch.isEmpty) {
+          // must try to merge
+          singleInputBatch = tryMergeAggregatedBatches()
+        }
       }
 
-      if (aggregatedBatches.size() > 1) {
+      if (singleInputBatch.isDefined) {
+        // we either got the input batch in the first pass
+        // or were able to merge it into a single batch in the second
+        // attempt
+        singleInputBatch.get
+      } else if (aggregatedBatches.size() > 1) {
         // Unable to merge to a single output, so must fall back to a sort-based approach.
         sortFallbackIter = Some(buildSortFallbackIterator())
         sortFallbackIter.get.next()
@@ -279,29 +288,30 @@ class GpuHashAggregateIterator(
   }
 
   /** Aggregate all input batches and place the results in the aggregatedBatches queue. */
-  private def aggregateInputBatches(): Unit = {
+  private def aggregateInputBatches(): Option[ColumnarBatch] = {
     val aggHelper = new AggHelper(forceMerge = false, useTieredProject = useTieredProject)
+    var onlyResult: Option[ColumnarBatch] = None
     while (cbIter.hasNext) {
       val childBatch = cbIter.next()
       val isLastInputBatch = GpuColumnVector.isTaggedAsFinalBatch(childBatch)
 
-      val spillableBatch =
-        withResource(computeAggregateAndClose(childBatch, aggHelper)) { aggBatch =>
-          LazySpillableColumnarBatch(aggBatch, metrics.spillCallback, "aggbatch")
-        }
-      // Avoid making batch spillable for the common case of the last and only batch
-      if (!(isLastInputBatch && aggregatedBatches.isEmpty)) {
-        spillableBatch.allowSpilling()
+      val aggregated = computeAggregateAndClose(childBatch, aggHelper)
+      if (isLastInputBatch && aggregatedBatches.isEmpty) {
+        onlyResult = Some(aggregated)
+      } else {
+        val spillable = SpillableColumnarBatch(aggregated, -1, metrics.spillCallback)
+        aggregatedBatches.add(spillable)
       }
-      aggregatedBatches.add(spillableBatch)
     }
+    onlyResult
   }
 
   /**
    * Attempt to merge adjacent batches in the aggregatedBatches queue until either there is only
    * one batch or merging adjacent batches would exceed the target batch size.
    */
-  private def tryMergeAggregatedBatches(): Unit = {
+  private def tryMergeAggregatedBatches(): Option[ColumnarBatch] = {
+    var onlyResult: Option[ColumnarBatch] = None
     while (aggregatedBatches.size() > 1) {
       val concatTime = metrics.concatTime
       val opTime = metrics.opTime
@@ -320,19 +330,20 @@ class GpuHashAggregateIterator(
                 s"target batch limit of $targetMergeBatchSize, attempting to merge remaining " +
                 s"${aggregatedBatches.size()} batches beyond limit")
             // withResources?
-            closeOnExcept(mutable.ArrayBuffer[LazySpillableColumnarBatch]()) { batchesToConcat =>
+            closeOnExcept(mutable.ArrayBuffer[SpillableColumnarBatch]()) { batchesToConcat =>
               aggregatedBatches.forEach(b => batchesToConcat += b)
               aggregatedBatches.clear()
-              val batch = concatenateAndMerge(batchesToConcat)
+              val batch = concatenateAndMerge(batchesToConcat.map(_.releaseBatch()))
               // batch does not need to be marked spillable since it is the last and only batch
               // and will be immediately retrieved on the next() call.
-              aggregatedBatches.add(batch)
+              onlyResult = Some(batch)
             }
           }
-          return
+          return onlyResult
         }
       }
     }
+    None
   }
 
   /**
@@ -340,7 +351,7 @@ class GpuHashAggregateIterator(
    * @return true if at least one merge operation occurred
    */
   private def mergePass(): Boolean = {
-    val batchesToConcat: mutable.ArrayBuffer[LazySpillableColumnarBatch] = mutable.ArrayBuffer.empty
+    val batchesToConcat: mutable.ArrayBuffer[SpillableColumnarBatch] = mutable.ArrayBuffer.empty
     var wasBatchMerged = false
     // Current size in bytes of the batches targeted for the next concatenation
     var concatSize: Long = 0L
@@ -355,7 +366,7 @@ class GpuHashAggregateIterator(
         // order of aggregated batches.
         while (batchesLeftInPass > 0 && !isConcatSearchFinished) {
           val candidate = aggregatedBatches.getFirst
-          val potentialSize = concatSize + candidate.deviceMemorySize
+          val potentialSize = concatSize + candidate.sizeInBytes
           isConcatSearchFinished = concatSize > 0 && potentialSize > targetMergeBatchSize
           if (!isConcatSearchFinished) {
             batchesLeftInPass -= 1
@@ -368,10 +379,9 @@ class GpuHashAggregateIterator(
       val mergedBatch = if (batchesToConcat.length > 1) {
         wasBatchMerged = true
         val batch = closeOnExcept(batchesToConcat) { _ =>
-          concatenateAndMerge(batchesToConcat)
+          concatenateAndMerge(batchesToConcat.map(_.releaseBatch()))
         }
-        batch.allowSpilling()
-        batch
+        SpillableColumnarBatch(batch, -1, metrics.spillCallback)
       } else {
         // Unable to find a neighboring buffer to produce a valid merge in this pass,
         // so simply put this buffer back on the queue for other passes.
@@ -398,17 +408,14 @@ class GpuHashAggregateIterator(
    * @param batches batches to concatenate and merge aggregate
    * @return lazy spillable batch which has NOT been marked spillable
    */
-  private def concatenateAndMerge(
-      batches: mutable.ArrayBuffer[LazySpillableColumnarBatch]): LazySpillableColumnarBatch = {
+  private def concatenateAndMerge(batches: mutable.ArrayBuffer[ColumnarBatch]): ColumnarBatch = {
     // closeOnExcept?
     val concatBatch = withResource(batches) { _ =>
       val concat = concatenateBatches(batches)
       batches.clear()
       concat
     }
-    withResource(computeAggregateAndClose(concatBatch, concatAndMergeHelper)) { mergedBatch =>
-      LazySpillableColumnarBatch(mergedBatch, metrics.spillCallback, "agg merged batch")
-    }
+    computeAggregateAndClose(concatBatch, concatAndMergeHelper)
   }
 
   /** Build an iterator that uses a sort-based approach to merge aggregated batches together. */
@@ -538,12 +545,11 @@ class GpuHashAggregateIterator(
    * @return concatenated batch result
    */
   private def concatenateBatches(
-      spillableBatchesToConcat: mutable.ArrayBuffer[LazySpillableColumnarBatch]): ColumnarBatch = {
+      batchesToConcat: mutable.ArrayBuffer[ColumnarBatch]): ColumnarBatch = {
     val concatTime = metrics.concatTime
     val opTime = metrics.opTime
     withResource(new NvtxWithMetrics("concatenateBatches", NvtxColor.BLUE, concatTime,
       opTime)) { _ =>
-      val batchesToConcat = spillableBatchesToConcat.map(_.releaseBatch())
       withResource(batchesToConcat) { _ =>
         val numCols = batchesToConcat.head.numCols()
         val dataTypes = (0 until numCols).map {

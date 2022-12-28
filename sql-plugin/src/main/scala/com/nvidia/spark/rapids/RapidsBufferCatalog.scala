@@ -262,8 +262,10 @@ object RapidsBufferCatalog extends Logging with Arm {
       contigBuffer: DeviceMemoryBuffer,
       tableMeta: TableMeta,
       initialSpillPriority: Long,
-      spillCallback: SpillCallback = RapidsBuffer.defaultSpillCallback): Unit =
-    deviceStorage.addTable(id, table, contigBuffer, tableMeta, initialSpillPriority, spillCallback)
+      spillCallback: SpillCallback,
+      isSpillable: Boolean): Unit =
+    deviceStorage.addTable(
+      id, table, contigBuffer, tableMeta, initialSpillPriority, spillCallback, isSpillable)
 
   /**
    * Adds a contiguous table to the device storage, taking ownership of the table.
@@ -277,8 +279,10 @@ object RapidsBufferCatalog extends Logging with Arm {
       id: RapidsBufferId,
       contigTable: ContiguousTable,
       initialSpillPriority: Long,
-      spillCallback: SpillCallback = RapidsBuffer.defaultSpillCallback): Unit =
-    deviceStorage.addContiguousTable(id, contigTable, initialSpillPriority, spillCallback)
+      spillCallback: SpillCallback,
+      isSpillable: Boolean = true): Unit =
+    deviceStorage.addContiguousTable(
+      id, contigTable, initialSpillPriority, spillCallback, isSpillable)
 
   /**
    * Adds a buffer to the device storage, taking ownership of the buffer.
@@ -294,8 +298,10 @@ object RapidsBufferCatalog extends Logging with Arm {
       buffer: DeviceMemoryBuffer,
       tableMeta: TableMeta,
       initialSpillPriority: Long,
-      spillCallback: SpillCallback = RapidsBuffer.defaultSpillCallback): Unit =
-    deviceStorage.addBuffer(id, buffer, tableMeta, initialSpillPriority, spillCallback)
+      spillCallback: SpillCallback,
+      isSpillable: Boolean): Unit =
+    deviceStorage.addBuffer(
+      id, buffer, tableMeta, initialSpillPriority, spillCallback, isSpillable)
 
   /**
    * Lookup the buffer that corresponds to the specified buffer ID and acquire it.

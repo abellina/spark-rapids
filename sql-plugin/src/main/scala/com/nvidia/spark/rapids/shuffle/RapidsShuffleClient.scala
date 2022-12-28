@@ -432,6 +432,8 @@ class RapidsShuffleClient(
       // add the buffer to the catalog so it is available for spill
       devStorage.addBuffer(id, buffer, meta,
         SpillPriorities.INPUT_FROM_SHUFFLE_PRIORITY,
+        RapidsBuffer.defaultSpillCallback,
+        isSpillable = true,
         // set needsSync to false because we already have stream synchronized after
         // consuming the bounce buffer, so we know these buffers are synchronized
         // w.r.t. the CPU

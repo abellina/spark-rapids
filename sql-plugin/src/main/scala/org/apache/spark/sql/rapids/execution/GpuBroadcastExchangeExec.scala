@@ -99,9 +99,11 @@ class SerializeConcatHostBuffersDeserializeBatch(
   @transient private var buffers = data.map(_.buffer)
 
   // used for memoization of deserialization to GPU on Executor
-  @transient private var batchInternal: LazySpillableColumnarBatch = null
+  @transient private var batchInternal: SpillableColumnarBatch = null
 
-  def batch: LazySpillableColumnarBatch = this.synchronized {
+  def batch(
+      builtAnyNullable: Boolean,
+      boundBuiltKeys: Seq[GpuExpression]): SpillableColumnarBatch = this.synchronized {
     Option(batchInternal).getOrElse {
       if (headers.length > 1) {
         // This should only happen if the driver is trying to access the batch. That should not be
@@ -118,9 +120,9 @@ class SerializeConcatHostBuffersDeserializeBatch(
         try {
           val res = if (headers.isEmpty) {
             withResource(GpuColumnVector.emptyBatchFromTypes(dataTypes)) { cb =>
-              LazySpillableColumnarBatch(cb,
-                RapidsBuffer.defaultSpillCallback,
-                "built_batch")
+              SpillableColumnarBatch(cb,
+                -1,
+                RapidsBuffer.defaultSpillCallback)
             }
           } else {
             withResource(JCudfSerialization.readTableFrom(headers.head, buffers.head)) {
@@ -129,15 +131,15 @@ class SerializeConcatHostBuffersDeserializeBatch(
                 if (table == null) {
                   val numRows = tableInfo.getNumRows
                   withResource(new ColumnarBatch(Array.empty[ColumnVector], numRows)) { cb =>
-                    LazySpillableColumnarBatch(cb,
-                      RapidsBuffer.defaultSpillCallback,
-                      "built_batch")
+                    SpillableColumnarBatch(cb,
+                      -1,
+                      RapidsBuffer.defaultSpillCallback)
                   }
                 } else {
                   withResource(GpuColumnVector.from(table.getTable, dataTypes)) { cb =>
-                    LazySpillableColumnarBatch(cb,
-                      RapidsBuffer.defaultSpillCallback,
-                      "built_batch")
+                    SpillableColumnarBatch(cb,
+                      -1,
+                      RapidsBuffer.defaultSpillCallback)
                   }
                 }
             }
@@ -145,9 +147,23 @@ class SerializeConcatHostBuffersDeserializeBatch(
           // the original idea was not to make it spillable, unless we really need it
           // ideally in the future this becomes a spillable that doesn't spill, but instead
           // keeps host version of it and re-materializes from the host backing
-          res.allowSpilling()
-          batchInternal = res
-          res
+
+          // Filtering nulls on the build side is a workaround for Struct joins with
+          // nullable children see https://github.com/NVIDIA/spark-rapids/issues/2126
+          // for more info
+          if (builtAnyNullable) {
+            batchInternal = withResource(res.releaseBatch()) { cb =>
+              withResource(GpuHashJoin.filterNulls(cb, boundBuiltKeys)) { filtered =>
+                SpillableColumnarBatch(
+                  filtered,
+                  -1,
+                  RapidsBuffer.defaultSpillCallback)
+              }
+            }
+          } else {
+            batchInternal = res
+          }
+          batchInternal
         } finally {
           // At this point we no longer need the host data and should not need to touch it again.
           buffers.safeClose()

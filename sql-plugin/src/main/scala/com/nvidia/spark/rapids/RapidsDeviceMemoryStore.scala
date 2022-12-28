@@ -17,7 +17,7 @@
 package com.nvidia.spark.rapids
 
 import ai.rapids.cudf.{ContiguousTable, Cuda, DeviceMemoryBuffer, HostMemoryBuffer, MemoryBuffer, Table}
-import com.nvidia.spark.rapids.StorageTier.StorageTier
+import com.nvidia.spark.rapids.StorageTier.{DEVICE, StorageTier}
 import com.nvidia.spark.rapids.format.TableMeta
 import org.apache.spark.sql.types.DataType
 import org.apache.spark.sql.vectorized.ColumnarBatch
@@ -47,8 +47,14 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
         case b => throw new IllegalStateException(s"Unrecognized buffer: $b")
       }
     }
-    new RapidsDeviceMemoryBuffer(other.id, other.size, other.meta, None,
-      deviceBuffer, other.getSpillPriority, other.spillCallback)
+    new RapidsDeviceMemoryBuffer(
+      other.id,
+      other.size,
+      other.meta,
+      None,
+      deviceBuffer,
+      other.getSpillPriority,
+      other.spillCallback)
   }
 
   /**
@@ -67,7 +73,8 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
       contigBuffer: DeviceMemoryBuffer,
       tableMeta: TableMeta,
       initialSpillPriority: Long,
-      spillCallback: SpillCallback = RapidsBuffer.defaultSpillCallback): Unit = {
+      spillCallback: SpillCallback,
+      isSpillable: Boolean): Unit = {
     freeOnExcept(
       new RapidsDeviceMemoryBuffer(
         id,
@@ -79,7 +86,7 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
         spillCallback)) { buffer =>
       logDebug(s"Adding table for: [id=$id, size=${buffer.size}, " +
           s"meta_id=${buffer.meta.bufferMeta.id}, meta_size=${buffer.meta.bufferMeta.size}]")
-      addDeviceBuffer(buffer, needsSync = true)
+      addDeviceBuffer(buffer, needsSync = true, isSpillable)
     }
   }
 
@@ -100,7 +107,8 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
       id: RapidsBufferId,
       contigTable: ContiguousTable,
       initialSpillPriority: Long,
-      spillCallback: SpillCallback = RapidsBuffer.defaultSpillCallback,
+      spillCallback: SpillCallback,
+      isSpillable: Boolean,
       needsSync: Boolean = true): Unit = {
     val contigBuffer = contigTable.getBuffer
     val size = contigBuffer.getLength
@@ -118,7 +126,7 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
       logDebug(s"Adding table for: [id=$id, size=${buffer.size}, " +
           s"uncompressed=${buffer.meta.bufferMeta.uncompressedSize}, " +
           s"meta_id=${buffer.meta.bufferMeta.id}, meta_size=${buffer.meta.bufferMeta.size}]")
-      addDeviceBuffer(buffer, needsSync)
+      addDeviceBuffer(buffer, needsSync, isSpillable)
     }
   }
 
@@ -138,7 +146,8 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
       buffer: DeviceMemoryBuffer,
       tableMeta: TableMeta,
       initialSpillPriority: Long,
-      spillCallback: SpillCallback = RapidsBuffer.defaultSpillCallback,
+      spillCallback: SpillCallback,
+      isSpillable: Boolean,
       needsSync: Boolean = true): Unit = {
     freeOnExcept(
       new RapidsDeviceMemoryBuffer(
@@ -153,7 +162,7 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
           s"uncompressed=${buff.meta.bufferMeta.uncompressedSize}, " +
           s"meta_id=${tableMeta.bufferMeta.id}, " +
           s"meta_size=${tableMeta.bufferMeta.size}]")
-      addDeviceBuffer(buff, needsSync)
+      addDeviceBuffer(buff, needsSync, isSpillable)
     }
   }
 
@@ -163,11 +172,14 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
    * as part of the spill.
    * @param needsSync true if we should stream synchronize before adding the buffer
    */
-  private def addDeviceBuffer(buffer: RapidsDeviceMemoryBuffer, needsSync: Boolean): Unit = {
+  private def addDeviceBuffer(
+    buffer: RapidsDeviceMemoryBuffer,
+    needsSync: Boolean,
+    isSpillable: Boolean): Unit = {
     if (needsSync) {
       Cuda.DEFAULT_STREAM.sync()
     }
-    addBuffer(buffer);
+    addBuffer(buffer, isSpillable)
   }
 
   class RapidsDeviceMemoryBuffer(

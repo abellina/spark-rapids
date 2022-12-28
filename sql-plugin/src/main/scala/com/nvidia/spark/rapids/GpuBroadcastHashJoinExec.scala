@@ -205,7 +205,14 @@ case class GpuBroadcastHashJoinExec(
 
     val rdd = streamedPlan.executeColumnar()
     val buildSchema = buildPlan.schema
-    lazy val builtBatch = GpuBroadcastHelper.getBroadcastBatch(broadcastRelation, buildSchema)
+    val builtAnyNullable = compareNullsEqual && buildKeys.exists(_.nullable)
+     val builtBatch =
+      GpuBroadcastHelper.getBroadcastBatch(
+        broadcastRelation,
+        buildSchema,
+        builtAnyNullable,
+        boundBuildKeys)
+
     rdd.mapPartitions { it =>
       val streamIter =
         getStreamIter(
@@ -213,31 +220,12 @@ case class GpuBroadcastHashJoinExec(
           buildSchema,
           new CollectTimeIterator("broadcast join stream", it, streamTime),
           allMetrics)
-      val builtAnyNullable = compareNullsEqual && buildKeys.exists(_.nullable)
 
       // builtOrEmpty is going to increase refcount of a broadcast lazy spillable batch, if any
       // or create a brand new empty lazy spillable batch.
       val builtOrEmpty = GpuBroadcastHelper.builtOrEmpty(builtBatch, broadcastExchange.schema)
 
-      // Filtering nulls on the build side is a workaround for Struct joins with nullable children
-      // see https://github.com/NVIDIA/spark-rapids/issues/2126 for more info
-      val lazySpill =
-        if (builtAnyNullable) {
-          withResource(builtOrEmpty) { _ =>
-            builtOrEmpty.withBatch { batch =>
-              withResource(GpuHashJoin.filterNulls(batch, boundBuildKeys)) { filtered =>
-                LazySpillableColumnarBatch(
-                  filtered,
-                  RapidsBuffer.defaultSpillCallback,
-                  "built_batch")
-              }
-            }
-          }
-        } else {
-          logWarning(s"over there with ${builtOrEmpty}")
-          builtOrEmpty
-        }
-      doJoin(lazySpill,
+      doJoin(builtOrEmpty,
         streamIter, targetSize, spillCallback,
         numOutputRows, joinOutputRows, numOutputBatches, opTime, joinTime)
     }

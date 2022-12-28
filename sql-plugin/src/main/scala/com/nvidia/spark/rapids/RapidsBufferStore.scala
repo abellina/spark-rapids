@@ -51,23 +51,58 @@ abstract class RapidsBufferStore(
       (o1: RapidsBufferBase, o2: RapidsBufferBase) =>
         java.lang.Long.compare(o1.getSpillPriority, o2.getSpillPriority)
     private[this] val buffers = new java.util.HashMap[RapidsBufferId, RapidsBufferBase]
+    private[this] val bufferLeases = new java.util.HashMap[RapidsBufferId, Int]
     private[this] val spillable = new HashedPriorityQueue[RapidsBufferBase](comparator)
     private[this] var totalBytesStored: Long = 0L
+    private[this] var totalBytesSpillable: Long = 0L
 
-    def add(buffer: RapidsBufferBase): Unit = synchronized {
+    def add(buffer: RapidsBufferBase, isSpillable: Boolean): Unit = synchronized {
       val old = buffers.put(buffer.id, buffer)
       if (old != null) {
         throw new DuplicateBufferException(s"duplicate buffer registered: ${buffer.id}")
       }
-      spillable.offer(buffer)
+      bufferLeases.put(buffer.id, 0)
+      if (isSpillable) {
+        spillable.offer(buffer)
+        totalBytesSpillable += buffer.size
+      }
       totalBytesStored += buffer.size
+    }
+
+    class BufferLease(buffer: RapidsBufferBase) extends AutoCloseable {
+      override def close(): Unit = {
+        allowSpillable(buffer)
+      }
+    }
+
+    private def allowSpillable(buffer: RapidsBufferBase): Unit = synchronized {
+      var leaseCount = bufferLeases.get(buffer.id)
+      if (leaseCount <= 1) {
+        leaseCount = 0
+        if (spillable.offer(buffer)) {
+          totalBytesSpillable += buffer.size
+        }
+      } else {
+        leaseCount -= 1
+      }
+    }
+
+    def leaseSpillable(buffer: RapidsBufferBase): BufferLease = synchronized {
+      var leaseCount = bufferLeases.get(buffer.id)
+      if (spillable.remove(buffer)) {
+        totalBytesSpillable -= buffer.size
+      }
+      leaseCount += 1
+      bufferLeases.put(buffer.id, leaseCount)
+      new BufferLease(buffer)
     }
 
     def remove(id: RapidsBufferId): Unit = synchronized {
       val obj = buffers.remove(id)
       if (obj != null) {
-        spillable.remove(obj)
-        totalBytesStored -= obj.size
+        if (spillable.remove(obj)) {
+          totalBytesStored -= obj.size
+        }
       }
     }
 
@@ -139,7 +174,7 @@ abstract class RapidsBufferStore(
   def copyBuffer(buffer: RapidsBuffer, memoryBuffer: MemoryBuffer, stream: Cuda.Stream)
   : RapidsBufferBase = {
     freeOnExcept(createBuffer(buffer, memoryBuffer, stream)) { newBuffer =>
-      addBuffer(newBuffer)
+      addBuffer(newBuffer, isSpillable = true)
       newBuffer
     }
   }
@@ -220,8 +255,10 @@ abstract class RapidsBufferStore(
   : RapidsBufferBase
 
   /** Update bookkeeping for a new buffer */
-  protected def addBuffer(buffer: RapidsBufferBase): Unit = synchronized {
-    buffers.add(buffer)
+  protected def addBuffer(
+    buffer: RapidsBufferBase,
+    isSpillable: Boolean): Unit = synchronized {
+    buffers.add(buffer, isSpillable)
     catalog.registerNewBuffer(buffer)
   }
 
@@ -325,19 +362,34 @@ abstract class RapidsBufferStore(
     }
 
     var cache: Option[ColumnarBatch] = None
+    var cacheLease: Option[AutoCloseable] = None
 
     override def withColumnarBatch[T](
         sparkTypes: Array[DataType])(fn: ColumnarBatch => T): T = {
-      val cb = synchronized {
-        if (cache.isDefined) {
-          cache.foreach(c => GpuColumnVector.incRefCounts(c))
-        } else {
-          cache = getColumnarBatch(sparkTypes)
+
+      withResource(buffers.leaseSpillable(this)) { _ =>
+        val cb = synchronized {
+          if (cache.isDefined) {
+            cache.foreach(c => GpuColumnVector.incRefCounts(c))
+          } else {
+            cache = Some(getColumnarBatch(sparkTypes))
+            // lease again, this is because we are holding on to the cached batch
+            cacheLease = Some(buffers.leaseSpillable(this))
+          }
+          cache.get
         }
-        cache.get
+        withResource(cb) { _ =>
+          fn(cb)
+        }
       }
-      withResource(cb) {
-        fn(cb)
+    }
+
+    def allowSpillable(): Unit = synchronized {
+      if (cache.isDefined) {
+        cache.foreach(_.close())
+        cache = None
+        cacheLease.foreach(_.close())
+        cacheLease = None
       }
     }
 
@@ -458,4 +510,5 @@ abstract class RapidsBufferStore(
 
     override def toString: String = s"$name buffer size=$size"
   }
+
 }

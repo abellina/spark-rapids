@@ -16,7 +16,7 @@
 package org.apache.spark.sql.rapids.execution
 
 import ai.rapids.cudf.{ColumnVector, GatherMap, NvtxColor, Scalar, Table}
-import com.nvidia.spark.rapids.{Arm, GpuColumnVector, GpuMetric, LazySpillableColumnarBatch, NvtxWithMetrics, TaskAutoCloseableResource}
+import com.nvidia.spark.rapids.{Arm, GpuColumnVector, GpuMetric, SpillableColumnarBatch, NvtxWithMetrics, TaskAutoCloseableResource}
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.types.BooleanType
 import org.apache.spark.sql.vectorized.ColumnarBatch
@@ -42,8 +42,8 @@ import org.apache.spark.sql.vectorized.ColumnarBatch
  * </code>
  */
 abstract class ExistenceJoinIterator(
-    spillableBuiltBatch: LazySpillableColumnarBatch,
-    lazyStream: Iterator[LazySpillableColumnarBatch],
+    spillableBuiltBatch: SpillableColumnarBatch,
+    stream: Iterator[ColumnarBatch],
     opTime: GpuMetric,
     joinTime: GpuMetric
 ) extends Iterator[ColumnarBatch]()
@@ -63,7 +63,7 @@ abstract class ExistenceJoinIterator(
   def existsScatterMap(leftColumnarBatch: ColumnarBatch): GatherMap
 
   override def hasNext: Boolean = {
-    val streamHasNext = lazyStream.hasNext
+    val streamHasNext = stream.hasNext
     if (!streamHasNext) {
       close()
     }
@@ -71,15 +71,10 @@ abstract class ExistenceJoinIterator(
   }
 
   override def next(): ColumnarBatch = {
-    withResource(lazyStream.next()) { lazyBatch =>
+    withResource(stream.next()) { streamBatch =>
       withResource(new NvtxWithMetrics("existence join batch", NvtxColor.ORANGE, joinTime)) { _ =>
         opTime.ns {
-          withResource(lazyBatch.releaseBatch()) { released =>
-            val ret = existenceJoinNextBatch(released)
-            logWarning(s"allowing spilling!! ${this}")
-            spillableBuiltBatch.allowSpilling()
-            ret
-          }
+          existenceJoinNextBatch(streamBatch)
         }
       }
     }
