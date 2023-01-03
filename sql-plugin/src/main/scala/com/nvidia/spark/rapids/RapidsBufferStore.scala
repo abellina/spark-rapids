@@ -53,6 +53,7 @@ abstract class RapidsBufferStore(
     private[this] val buffers = new java.util.HashMap[RapidsBufferId, RapidsBufferBase]
     private[this] val spillable = new HashedPriorityQueue[RapidsBufferBase](comparator)
     private[this] var totalBytesStored: Long = 0L
+    private[this] var totalBytesSpillable: Long = 0L
 
     def add(buffer: RapidsBufferBase): Unit = synchronized {
       val old = buffers.put(buffer.id, buffer)
@@ -61,6 +62,7 @@ abstract class RapidsBufferStore(
       }
       spillable.offer(buffer)
       totalBytesStored += buffer.size
+      totalBytesSpillable += buffer.size
     }
 
     def remove(id: RapidsBufferId): Unit = synchronized {
@@ -68,6 +70,7 @@ abstract class RapidsBufferStore(
       if (obj != null) {
         spillable.remove(obj)
         totalBytesStored -= obj.size
+        totalBytesSpillable -= obj.size
       }
     }
 
@@ -94,6 +97,24 @@ abstract class RapidsBufferStore(
     }
 
     def getTotalBytes: Long = synchronized { totalBytesStored }
+
+    def removeSpillable(id: RapidsBufferId): Unit = synchronized {
+      logInfo(s"Removing from spillable id: $id")
+      val buff = buffers.get(id)
+      if (buff != null) {
+        spillable.remove(buff)
+        totalBytesSpillable -= buff.size
+      }
+    }
+
+    def makeSpillable(id: RapidsBufferId): Unit = synchronized {
+      logInfo(s"Making spillable id: $id")
+      val buff = buffers.get(id)
+      if (buff != null) {
+        spillable.add(buff)
+        totalBytesSpillable += buff.size
+      }
+    }
   }
 
   private[this] val pendingFreeBytes = new AtomicLong(0L)
@@ -326,12 +347,9 @@ abstract class RapidsBufferStore(
 
     var cache: Option[ColumnarBatch] = None
 
-    def removeSpillable(): Unit = {}
-    def makeSpillable(): Unit = {}
-
     override def withColumnarBatch[T](
         sparkTypes: Array[DataType])(fn: ColumnarBatch => T): T = {
-      removeSpillable()
+      buffers.removeSpillable(id)
       val cb = synchronized {
         if (cache.isDefined) {
           cache.foreach(c => GpuColumnVector.incRefCounts(c))
@@ -340,10 +358,11 @@ abstract class RapidsBufferStore(
         }
         cache.get
       }
-      withResource(cb) { _ =>
+      val res = withResource(cb) { _ =>
         fn(cb)
       }
-      makeSpillable()
+      buffers.makeSpillable(id)
+      res
     }
 
     protected def columnarBatchFromDeviceBuffer(devBuffer: DeviceMemoryBuffer,
