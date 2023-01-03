@@ -44,8 +44,6 @@ trait SpillableColumnarBatch extends AutoCloseable {
    *       `GpuCompressedColumnVector`, and it is the responsibility of the caller to deal
    *       with decompressing the data if necessary.
    */
-  def getColumnarBatch(): ColumnarBatch
-
   def withColumnarBatch[T](fn: ColumnarBatch => T): T
 
   def releaseBatch(): ColumnarBatch
@@ -62,7 +60,8 @@ class JustRowsColumnarBatch(numRows: Int, semWait: GpuMetric)
     extends SpillableColumnarBatch with Arm {
   override def numRows(): Int = numRows
   override def setSpillPriority(priority: Long): Unit = () // NOOP nothing to spill
-  override def getColumnarBatch(): ColumnarBatch = {
+
+  private def makeJustRowsBatch(): ColumnarBatch = {
     GpuSemaphore.acquireIfNecessary(TaskContext.get(), semWait)
     new ColumnarBatch(Array.empty, numRows)
   }
@@ -70,10 +69,11 @@ class JustRowsColumnarBatch(numRows: Int, semWait: GpuMetric)
   override val sizeInBytes: Long = 0L
 
   override def releaseBatch(): ColumnarBatch = {
-    getColumnarBatch()
+    makeJustRowsBatch()
   }
+
   def withColumnarBatch[T](fn: ColumnarBatch => T): T = {
-    withResource(getColumnarBatch()) { cb =>
+    withResource(makeJustRowsBatch()) { cb =>
       fn(cb)
     }
   }
@@ -109,19 +109,6 @@ class SpillableColumnarBatchImpl (
    */
   override def setSpillPriority(priority: Long): Unit =
     withRapidsBuffer(_.setSpillPriority(priority))
-
-  /**
-   * Get the columnar batch.
-   * @note It is the responsibility of the caller to close the batch.
-   * @note If the buffer is compressed data then the resulting batch will be built using
-   *       `GpuCompressedColumnVector`, and it is the responsibility of the caller to deal
-   *       with decompressing the data if necessary.
-   */
-  override def getColumnarBatch(): ColumnarBatch = {
-    withRapidsBuffer { rapidsBuffer =>
-      rapidsBuffer.getColumnarBatch(sparkTypes)
-    }
-  }
 
   override def withColumnarBatch[T](fn: ColumnarBatch => T): T = {
     withRapidsBuffer { rapidsBuffer =>

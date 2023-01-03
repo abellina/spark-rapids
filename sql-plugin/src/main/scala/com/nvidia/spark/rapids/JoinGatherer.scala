@@ -246,10 +246,6 @@ class LazySpillableColumnarBatchImpl(
   override val numCols: Int = dataTypes.length
   private var released: Boolean = false
 
-  // TODO: this should not be synchronized. We want to allow
-  //  multipe operations on this lazy batch at the same time
-  //  but this context should allow us to stop other things from happening
-  //  like allowSpillable
   private def withCached[T](cb: ColumnarBatch)(fn: ColumnarBatch => T): T = {
     withResource(cb) { _ =>
       fn(cb)
@@ -281,6 +277,7 @@ class LazySpillableColumnarBatchImpl(
       closeOnExcept(spill.map(_.releaseBatch())) { batch =>
         batch.getOrElse(throw new IllegalStateException("batch is closed"))
       }
+      spill = None
     } else {
       logInfo("at releaseBatch, leaking cached")
       val res = cached.getOrElse(throw new IllegalStateException("cached is closed"))

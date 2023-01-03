@@ -326,8 +326,12 @@ abstract class RapidsBufferStore(
 
     var cache: Option[ColumnarBatch] = None
 
+    def removeSpillable(): Unit = {}
+    def makeSpillable(): Unit = {}
+
     override def withColumnarBatch[T](
         sparkTypes: Array[DataType])(fn: ColumnarBatch => T): T = {
+      removeSpillable()
       val cb = synchronized {
         if (cache.isDefined) {
           cache.foreach(c => GpuColumnVector.incRefCounts(c))
@@ -339,6 +343,7 @@ abstract class RapidsBufferStore(
       withResource(cb) { _ =>
         fn(cb)
       }
+      makeSpillable()
     }
 
     protected def columnarBatchFromDeviceBuffer(devBuffer: DeviceMemoryBuffer,
