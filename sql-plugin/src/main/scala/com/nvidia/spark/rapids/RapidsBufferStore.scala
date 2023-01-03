@@ -332,11 +332,11 @@ abstract class RapidsBufferStore(
         if (cache.isDefined) {
           cache.foreach(c => GpuColumnVector.incRefCounts(c))
         } else {
-          cache = getColumnarBatch(sparkTypes)
+          cache = Some(getColumnarBatch(sparkTypes))
         }
         cache.get
       }
-      withResource(cb) {
+      withResource(cb) { _ =>
         fn(cb)
       }
     }

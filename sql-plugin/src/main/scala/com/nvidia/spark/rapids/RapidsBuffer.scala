@@ -218,6 +218,12 @@ sealed class DegenerateRapidsBuffer(
 
   override def free(): Unit = {}
 
+  override def withColumnarBatch[T](sparkTypes: Array[DataType])(fn: ColumnarBatch => T): T = {
+    withResource(getColumnarBatch(sparkTypes)) { cb =>
+      fn(cb)
+    }
+  }
+
   override def getMemoryBuffer: MemoryBuffer =
     throw new UnsupportedOperationException("degenerate buffer has no memory buffer")
 

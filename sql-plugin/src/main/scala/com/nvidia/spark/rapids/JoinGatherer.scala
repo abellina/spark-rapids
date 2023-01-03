@@ -181,7 +181,7 @@ trait LazySpillableColumnarBatch extends LazySpillable with Arm {
   /**
    * Get the batch that this wraps and unspill it if needed.
    */
-  protected def withBatch[T](fn: ColumnarBatch => T): T
+  def withBatch[T](fn: ColumnarBatch => T): T
 
   def withTable[T](fn: Table => T): T = {
     withBatch { batch =>
@@ -250,38 +250,24 @@ class LazySpillableColumnarBatchImpl(
   //  multipe operations on this lazy batch at the same time
   //  but this context should allow us to stop other things from happening
   //  like allowSpillable
-  override def withBatch[T](fn: ColumnarBatch => T): T = {
-    val b = synchronized {
-      // TODO: if spillable, tell spillable to not spill us
-      if (released) {
-        throw new IllegalStateException(s"already released ${this}")
-      }
-      logWarning(s"at withBatch for ${this}")
-      if (cached.isEmpty) {
-        withResource(new NvtxRange("get batch " + name, NvtxColor.RED)) { _ =>
-          cached = spill.map(_.getColumnarBatch())
-        }
-      }
-      if (cached.isEmpty) {
-        throw new IllegalStateException(
-          s"cached is empty! ${releaseStack} ${closedStack}")
-      }
-
-      // both cached and spill will be defined here
-      val res = cached.getOrElse(throw new IllegalStateException("batch is closed"))
-      // ensure that the cached batch won't be closed under us
-      // TODO: increfcount is not enough. It keeps the batch alive, which is
-      //  good, but another thread could be calling `allowSpillable` shortly.
-      //  That means we will spill and this buffer is still in GPU memory and
-      //  locked by the ref count. We need to queue up or mark for "allow spillable"
-      //  then allow spillable once some sort of ref count reaches 0
-      GpuColumnVector.incRefCounts(res)
+  private def withCached[T](cb: ColumnarBatch)(fn: ColumnarBatch => T): T = {
+    withResource(cb) { _ =>
+      fn(cb)
     }
-    withResource(b) { _ =>
+  }
+
+  override def withBatch[T](fn: ColumnarBatch => T): T = {
+    val cbFn = synchronized {
+      if (cached.isDefined) {
+        cached.foreach(GpuColumnVector.incRefCounts)
+        withCached[T](cached.get)(_)
+      } else {
+        spill.get.withColumnarBatch[T](_)
+      }
+    }
+
+    cbFn { b =>
       fn(b)
-      // TODO: tell spillable we can now be spilled. Note the cached batch needs to be closed
-      // alltogether if we are candidates for spill... e.g. we need a callback that
-      // terminates our cache
     }
   }
 
@@ -324,8 +310,6 @@ class LazySpillableColumnarBatchImpl(
           throw e
       }
     }
-    cached.foreach(_.close())
-    cached = None
   }
 
   var closedStack: String = "not closed"
@@ -559,6 +543,13 @@ class JoinGathererImpl(
   logWarning(s"Built JoinGathererImpl with ${data}")
 
   assert(data.numCols > 0, "data with no columns should have been filtered out already")
+
+  // TODO: this doesn't work because now you have independent Spillables that
+  //   could mean multiple tasks have their own spillable against the same device memory
+  //   buffer. This should be concentrated in the Lazy spillable, which should only go one way
+  //   cached => spillable (but not back)
+  private var spillableData: Option[SpillableColumnarBatch] = None
+  private var spillableGatherMap: Option[SpillableBuffer] = None
 
   // How much of the gather map we have output so far
   private var gatheredUpTo: Long = 0
