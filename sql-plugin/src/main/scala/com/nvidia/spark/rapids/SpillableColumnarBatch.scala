@@ -154,6 +154,7 @@ object SpillableColumnarBatch extends Arm {
     } else {
       val types =  GpuColumnVector.extractTypes(batch)
       val id = TempSpillBufferId()
+      addBatch(id, batch, priority, spillCallback)
       new SpillableColumnarBatchImpl(id, numRows, types)
     }
   }

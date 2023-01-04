@@ -283,7 +283,7 @@ abstract class BaseHashJoinIterator(
       cb: ColumnarBatch,
       numJoinRows: Option[Long]): Option[JoinGatherer] = {
     try {
-      joinGatherer(boundBuiltKeys, built, cb)
+      joinGatherer(boundBuiltKeys, built.incRefCount(), cb)
     } catch {
       // This should work for all join types except for FullOuter. There should be no need
       // to do this for any of the existence joins because the output rows will never be
@@ -437,7 +437,8 @@ class HashJoinIterator(
           }
         }
       }
-      makeGatherer(maps, leftData, rightData, joinType)
+      logWarning(s"making gatherer with ${leftData} and ${rightData}")
+      makeGatherer(maps, leftData.incRefCount(), rightData.incRefCount(), joinType)
     }
   }
 }
@@ -524,7 +525,8 @@ class ConditionalHashJoinIterator(
           }
         }
       }
-      makeGatherer(maps, leftData, rightData, joinType)
+      logWarning(s"making cond gatherer with ${leftData} and ${rightData}")
+      makeGatherer(maps, leftData.incRefCount(), rightData.incRefCount(), joinType)
     }
   }
 

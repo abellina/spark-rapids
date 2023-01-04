@@ -77,14 +77,18 @@ public final class HashedPriorityQueue<T> extends AbstractQueue<T> {
 
   @Override
   public boolean offer(T obj) {
-    ensureCapacityToInsert();
-    // Start with the new object at the bottom of the heap and sift it up
-    // until heap properties are restored.
-    MutableInt location = new MutableInt(size);
-    locationMap.put(obj, location);
-    size += 1;
-    siftUp(obj, location);
-    return true;
+    if (!locationMap.containsKey(obj)) {
+      ensureCapacityToInsert();
+      // Start with the new object at the bottom of the heap and sift it up
+      // until heap properties are restored.
+      MutableInt location = new MutableInt(size);
+      locationMap.put(obj, location);
+      size += 1;
+      siftUp(obj, location);
+      return true;
+    } else {
+      return false;
+    }
   }
 
   @Override

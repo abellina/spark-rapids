@@ -229,7 +229,7 @@ case class GpuBroadcastHashJoinExec(
                 LazySpillableColumnarBatch(
                   filtered,
                   RapidsBuffer.defaultSpillCallback,
-                  "built_batch")
+                  "broadcast_filtered_built_batch")
               }
             }
           }

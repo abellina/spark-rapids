@@ -63,14 +63,19 @@ abstract class RapidsBufferStore(
       spillable.offer(buffer)
       totalBytesStored += buffer.size
       totalBytesSpillable += buffer.size
+      logWarning(
+        s"After adding a buffer id: ${buffer.id}, total stored=${totalBytesStored}, " +
+          s"total spillable=${totalBytesSpillable}")
     }
 
     def remove(id: RapidsBufferId): Unit = synchronized {
       val obj = buffers.remove(id)
+      totalBytesStored -= obj.size
       if (obj != null) {
-        spillable.remove(obj)
-        totalBytesStored -= obj.size
         totalBytesSpillable -= obj.size
+        logWarning(
+          s"After removing buffer id: $id, total stored=${totalBytesStored}, " +
+            s"total spillable=${totalBytesSpillable}")
       }
     }
 
@@ -99,20 +104,34 @@ abstract class RapidsBufferStore(
     def getTotalBytes: Long = synchronized { totalBytesStored }
 
     def removeSpillable(id: RapidsBufferId): Unit = synchronized {
-      logInfo(s"Removing from spillable id: $id")
+      logWarning(s"Removing from spillable id: $id")
       val buff = buffers.get(id)
       if (buff != null) {
-        spillable.remove(buff)
-        totalBytesSpillable -= buff.size
+        if (spillable.remove(buff)) {
+          totalBytesSpillable -= buff.size
+          logWarning(
+            s"After removing from spillable id: $id, total stored=${totalBytesStored}, " +
+              s"total spillable=${totalBytesSpillable}")
+        }
+      } else {
+        throw new IllegalStateException(s"Tried to remove ${id} spillable, but couldn't " +
+          s"find the buffer in the store!")
       }
-    }
+  }
 
-    def makeSpillable(id: RapidsBufferId): Unit = synchronized {
-      logInfo(s"Making spillable id: $id")
+  def makeSpillable(id: RapidsBufferId): Unit = synchronized {
+      logWarning(s"Making spillable id: $id")
       val buff = buffers.get(id)
       if (buff != null) {
-        spillable.add(buff)
-        totalBytesSpillable += buff.size
+        if (spillable.offer(buff)) {
+          totalBytesSpillable += buff.size
+          logWarning(
+            s"After adding to spillable id: $id, total stored=${totalBytesStored}, " +
+              s"total spillable=${totalBytesSpillable}")
+        }
+      } else {
+        throw new IllegalStateException(s"Tried to make ${id} spillable, but couldn't " +
+          s"find the buffer in the store!")
       }
     }
   }
@@ -351,11 +370,10 @@ abstract class RapidsBufferStore(
         sparkTypes: Array[DataType])(fn: ColumnarBatch => T): T = {
       buffers.removeSpillable(id)
       val cb = synchronized {
-        if (cache.isDefined) {
-          cache.foreach(c => GpuColumnVector.incRefCounts(c))
-        } else {
+        if (!cache.isDefined) {
           cache = Some(getColumnarBatch(sparkTypes))
         }
+        cache.foreach(c => GpuColumnVector.incRefCounts(c))
         cache.get
       }
       val res = withResource(cb) { _ =>
@@ -437,6 +455,8 @@ abstract class RapidsBufferStore(
       }
       refcount -= 1
       if (refcount == 0 && !isValid) {
+        cache.foreach(_.close())
+        cache = None
         pendingFreeBuffers.remove(id)
         pendingFreeBytes.addAndGet(-size)
         freeBuffer()
