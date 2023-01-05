@@ -252,8 +252,10 @@ abstract class BaseHashJoinIterator(
    * Closed by the task on completion
    */
   override def close(): Unit = {
-    super.close()
-    built.close()
+    if (!closed) {
+      super.close()
+      built.close()
+    }
   }
 
   // We can cache this because the build side is not changing

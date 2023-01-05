@@ -325,7 +325,7 @@ class LazySpillableColumnarBatchImpl(
 
   override def close(): Unit = synchronized {
     if (refCount <= 0) {
-      logError(s"Closed too many times! $this ${dumpStack}")
+      logError(s"Closed too many times! $this ${dumpStack}, prior close was ${closedStack}")
       return
       //throw new IllegalStateException(s"Closed too many times! $this")
     }
