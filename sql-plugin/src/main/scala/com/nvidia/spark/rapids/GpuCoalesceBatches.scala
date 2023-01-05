@@ -614,10 +614,11 @@ class GpuCompressionAwareCoalesceIterator(
   private[this] var codec: TableCompressionCodec = _
 
   override protected def popAll(): Array[ColumnarBatch] = {
-    closeOnExcept(batches.toArray.safeMap(_.releaseBatch())) { wip =>
-      batches.safeClose()
-      batches.clear()
-
+    val released = withResource(batches) { _ =>
+      batches.toArray.safeMap(_.releaseBatch())
+    }
+    batches.clear()
+    closeOnExcept(released) { wip =>
       val compressedBatchIndices = wip.zipWithIndex.filter { pair =>
         GpuCompressedColumnVector.isBatchCompressed(pair._1)
       }.map(_._2)

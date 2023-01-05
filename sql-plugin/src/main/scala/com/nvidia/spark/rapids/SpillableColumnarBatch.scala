@@ -120,11 +120,11 @@ class SpillableColumnarBatchImpl (
     }
   }
 
+  private var released = false
+
   override def releaseBatch(): ColumnarBatch = {
     withRapidsBuffer { rapidsBuffer =>
-      val released = rapidsBuffer.releaseBatch(sparkTypes)
-      close()
-      released
+      rapidsBuffer.releaseBatch(sparkTypes)
     }
   }
 

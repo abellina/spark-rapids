@@ -273,8 +273,10 @@ class LazySpillableColumnarBatchImpl(
     released = true
     logWarning(s"releaseBatch for ${this}")
     val result = if (cached.isEmpty) {
-      val res = closeOnExcept(spill.map(_.releaseBatch())) { batch =>
-        batch.getOrElse(throw new IllegalStateException("batch is closed"))
+      val res = withResource(spill) { _ =>
+        closeOnExcept(spill.map(_.releaseBatch())) { batch =>
+          batch.getOrElse(throw new IllegalStateException("batch is closed"))
+        }
       }
       spill = None
       res

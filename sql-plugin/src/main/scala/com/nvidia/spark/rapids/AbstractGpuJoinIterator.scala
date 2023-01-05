@@ -195,12 +195,12 @@ abstract class SplittableJoinIterator(
     if (pendingSplits.nonEmpty || stream.hasNext) {
       val cb = if (pendingSplits.nonEmpty) {
         opTime.ns {
-          closeOnExcept(pendingSplits.dequeue()) {
+          withResource(pendingSplits.dequeue()) {
             _.releaseBatch()
           }
         }
       } else {
-        val batch = closeOnExcept(stream.next()) { lazyBatch =>
+        val batch = withResource(stream.next()) { lazyBatch =>
           opTime.ns {
             lazyBatch.releaseBatch()
           }

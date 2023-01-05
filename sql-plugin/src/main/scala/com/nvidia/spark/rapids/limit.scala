@@ -276,8 +276,9 @@ object GpuTopN extends Arm {
                   spillCallback))
           }
         }
-        val ret = pending.get.releaseBatch()
-        pending.get.close()
+        val ret = withResource(pending.get) { p =>
+          p.releaseBatch()
+        }
         pending = None
         outputBatches += 1
         outputRows += ret.numRows()

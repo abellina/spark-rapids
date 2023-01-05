@@ -255,7 +255,7 @@ class GpuHashAggregateIterator(
       } else {
         // this will be the last batch
         hasReductionOnlyBatch = false
-        closeOnExcept(aggregatedBatches.pop()) { lazyBatch =>
+        withResource(aggregatedBatches.pop()) { lazyBatch =>
           lazyBatch.releaseBatch()
         }
       }
@@ -419,7 +419,7 @@ class GpuHashAggregateIterator(
       override def hasNext: Boolean = !aggregatedBatches.isEmpty
 
       override def next(): ColumnarBatch = {
-        closeOnExcept(aggregatedBatches.removeFirst()) { lazyBatch =>
+        withResource(aggregatedBatches.removeFirst()) { lazyBatch =>
           lazyBatch.releaseBatch()
         }
       }
