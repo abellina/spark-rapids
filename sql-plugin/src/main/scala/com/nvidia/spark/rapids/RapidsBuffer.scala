@@ -89,7 +89,21 @@ object RapidsBuffer {
 
 /** Interface provided by all types of RAPIDS buffers */
 trait RapidsBuffer extends AutoCloseable {
+  protected var released = false
+
+  /**
+   * Calling releaseBatch indicates the RapidsBuffer is about to be closed,
+   * and that no columnar batches should be released or used from this instance.
+   * @param sparkTypes
+   * @return
+   */
   def releaseBatch(sparkTypes: Array[DataType]): ColumnarBatch = {
+    synchronized {
+      if (released) {
+        throw new IllegalStateException(s"RapidsBuffer ${id} already released")
+      }
+      released = true
+    }
     getColumnarBatch(sparkTypes)
   }
 

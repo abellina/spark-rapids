@@ -374,14 +374,18 @@ abstract class RapidsBufferStore(
         sparkTypes: Array[DataType])(fn: ColumnarBatch => T): T = {
       logWarning(s"At withColumnarBatch for ${id}")
       var cache: Option[ColumnarBatch] = None
-      buffers.removeSpillable(id)
       val cb = synchronized {
+        if (released) {
+          throw new IllegalStateException(
+            s"Cannot use a ColumnarBatch from already released RapidsBuffer ${id}")
+        }
         if (cache.isEmpty) {
           cache = Some(getColumnarBatch(sparkTypes))
         }
         //cache.foreach(c => GpuColumnVector.incRefCounts(c))
         cache.get
       }
+      buffers.removeSpillable(id)
       val res = withResource(cb) { _ =>
         fn(cb)
       }

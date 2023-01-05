@@ -354,7 +354,7 @@ class RapidsShuffleIterator(
           NvtxColor.PURPLE)
         try {
           sb = catalog.acquireBuffer(bufferId)
-          cb = sb.getColumnarBatch(sparkTypes)
+          cb = sb.releaseBatch(sparkTypes)
           metricsUpdater.update(blockedTime, 1, sb.size, cb.numRows())
         } finally {
           nvtxRangeAfterGettingBatch.close()
