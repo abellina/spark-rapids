@@ -117,9 +117,9 @@ abstract class RapidsBufferStore(
         throw new IllegalStateException(s"Tried to remove ${id} spillable, but couldn't " +
           s"find the buffer in the store!")
       }
-  }
+    }
 
-  def makeSpillable(id: RapidsBufferId): Unit = synchronized {
+    def makeSpillable(id: RapidsBufferId): Unit = synchronized {
       logWarning(s"Making spillable id: $id")
       val buff = buffers.get(id)
       if (buff != null) {
@@ -364,16 +364,19 @@ abstract class RapidsBufferStore(
       }
     }
 
-    var cache: Option[ColumnarBatch] = None
+    //var cache: Option[ColumnarBatch] = None
 
+    // TODO: move to device memory buffer?
     override def withColumnarBatch[T](
         sparkTypes: Array[DataType])(fn: ColumnarBatch => T): T = {
+      logWarning(s"At withColumnarBatch for ${id}")
+      var cache: Option[ColumnarBatch] = None
       buffers.removeSpillable(id)
       val cb = synchronized {
-        if (!cache.isDefined) {
+        if (cache.isEmpty) {
           cache = Some(getColumnarBatch(sparkTypes))
         }
-        cache.foreach(c => GpuColumnVector.incRefCounts(c))
+        //cache.foreach(c => GpuColumnVector.incRefCounts(c))
         cache.get
       }
       val res = withResource(cb) { _ =>
@@ -455,8 +458,9 @@ abstract class RapidsBufferStore(
       }
       refcount -= 1
       if (refcount == 0 && !isValid) {
-        cache.foreach(_.close())
-        cache = None
+        //logWarning(s"closing cached ${id}")
+        //cache.foreach(_.close())
+        //cache = None
         pendingFreeBuffers.remove(id)
         pendingFreeBytes.addAndGet(-size)
         freeBuffer()

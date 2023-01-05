@@ -407,38 +407,46 @@ class HashJoinIterator(
       leftData: LazySpillableColumnarBatch,
       rightKeys: Seq[Expression],
       rightData: LazySpillableColumnarBatch): Option[JoinGatherer] = {
+    // TODO: I'd like to hand to the gather map the onwership of the tables, and release
+    //  from the lazy spillable. Is that possible?
     withResource(new NvtxWithMetrics("hash join gather map", NvtxColor.ORANGE, joinTime)) { _ =>
       val maps = leftData.withBatch { leftBatch =>
-        val leftKeysTable = withResource(GpuProjectExec.project(leftBatch, leftKeys)) { leftKeysBatch =>
-          GpuColumnVector.from(leftKeysBatch)
-        }
-        rightData.withBatch { rightBatch =>
-          val rightKeysTable = withResource(GpuProjectExec.project(rightBatch, rightKeys)) { rightKeysBatch =>
-            GpuColumnVector.from(rightKeysBatch)
+        val leftKeysTable =
+          withResource(GpuProjectExec.project(leftBatch, leftKeys)) { leftKeysBatch =>
+            GpuColumnVector.from(leftKeysBatch)
           }
-          joinType match {
-            case LeftOuter =>
-              leftKeysTable.leftJoinGatherMaps(rightKeysTable, compareNullsEqual)
-            case RightOuter =>
-              // Reverse the output of the join, because we expect the right gather map to
-              // always be on the right
-              rightKeysTable.leftJoinGatherMaps(leftKeysTable, compareNullsEqual).reverse
-            case _: InnerLike =>
-              leftKeysTable.innerJoinGatherMaps(rightKeysTable, compareNullsEqual)
-            case LeftSemi =>
-              Array(leftKeysTable.leftSemiJoinGatherMap(rightKeysTable, compareNullsEqual))
-            case LeftAnti =>
-              Array(leftKeysTable.leftAntiJoinGatherMap(rightKeysTable, compareNullsEqual))
-            case FullOuter =>
-              leftKeysTable.fullJoinGatherMaps(rightKeysTable, compareNullsEqual)
-            case _ =>
-              throw new NotImplementedError(s"Joint Type ${joinType.getClass} is not currently" +
-                s" supported")
+        rightData.withBatch { rightBatch =>
+          val rightKeysTable =
+            withResource(GpuProjectExec.project(rightBatch, rightKeys)) { rightKeysBatch =>
+              GpuColumnVector.from(rightKeysBatch)
+            }
+          withResource(leftKeysTable) { _ =>
+            withResource(rightKeysTable) { _ =>
+              joinType match {
+                case LeftOuter =>
+                  leftKeysTable.leftJoinGatherMaps(rightKeysTable, compareNullsEqual)
+                case RightOuter =>
+                  // Reverse the output of the join, because we expect the right gather map to
+                  // always be on the right
+                  rightKeysTable.leftJoinGatherMaps(leftKeysTable, compareNullsEqual).reverse
+                case _: InnerLike =>
+                  leftKeysTable.innerJoinGatherMaps(rightKeysTable, compareNullsEqual)
+                case LeftSemi =>
+                  Array(leftKeysTable.leftSemiJoinGatherMap(rightKeysTable, compareNullsEqual))
+                case LeftAnti =>
+                  Array(leftKeysTable.leftAntiJoinGatherMap(rightKeysTable, compareNullsEqual))
+                case FullOuter =>
+                  leftKeysTable.fullJoinGatherMaps(rightKeysTable, compareNullsEqual)
+                case _ =>
+                  throw new NotImplementedError(
+                    s"Joint Type ${joinType.getClass} is not currently supported")
+              }
+            }
           }
         }
       }
       logWarning(s"making gatherer with ${leftData} and ${rightData}")
-      makeGatherer(maps, leftData.incRefCount(), rightData.incRefCount(), joinType)
+      makeGatherer(maps, leftData, rightData, joinType)
     }
   }
 }
@@ -481,52 +489,58 @@ class ConditionalHashJoinIterator(
     val nullEquality = if (compareNullsEqual) NullEquality.EQUAL else NullEquality.UNEQUAL
     withResource(new NvtxWithMetrics("hash join gather map", NvtxColor.ORANGE, joinTime)) { _ =>
       val maps = leftData.withBatch { leftBatch =>
-        val leftKeysTable = withResource(GpuProjectExec.project(leftBatch, leftKeys)) { leftKeysBatch =>
-          GpuColumnVector.from(leftKeysBatch)
-        }
-        rightData.withBatch { rightBatch =>
-          val rightKeysTable = withResource(GpuProjectExec.project(rightBatch, rightKeys)) { rightKeysBatch =>
-            GpuColumnVector.from(rightKeysBatch)
+        val leftKeysTable =
+          withResource(GpuProjectExec.project(leftBatch, leftKeys)) { leftKeysBatch =>
+            GpuColumnVector.from(leftKeysBatch)
           }
-          withResource(GpuColumnVector.from(leftBatch)) { leftTable =>
-            withResource(GpuColumnVector.from(rightBatch)) { rightTable =>
-              joinType match {
-                case _: InnerLike =>
-                  Table.mixedInnerJoinGatherMaps(
-                    leftKeysTable, rightKeysTable, leftTable, rightTable,
-                    compiledCondition, nullEquality)
-                case LeftOuter =>
-                  Table.mixedLeftJoinGatherMaps(
-                    leftKeysTable, rightKeysTable, leftTable, rightTable,
-                    compiledCondition, nullEquality)
-                case RightOuter =>
-                  // Reverse the output of the join, because we expect the right gather map to
-                  // always be on the right
-                  Table.mixedLeftJoinGatherMaps(
-                    rightKeysTable, leftKeysTable, rightTable, leftTable,
-                    compiledCondition, nullEquality).reverse
-                case FullOuter =>
-                  Table.mixedFullJoinGatherMaps(
-                    leftKeysTable, rightKeysTable, leftTable, rightTable,
-                    compiledCondition, nullEquality)
-                case LeftSemi =>
-                  Array(Table.mixedLeftSemiJoinGatherMap(
-                    leftKeysTable, rightKeysTable, leftTable, rightTable,
-                    compiledCondition, nullEquality))
-                case LeftAnti =>
-                  Array(Table.mixedLeftAntiJoinGatherMap(
-                    leftKeysTable, rightKeysTable, leftTable, rightTable,
-                    compiledCondition, nullEquality))
-                case _ =>
-                  throw new NotImplementedError(s"Joint Type ${joinType.getClass} is not currently" +
-                    s" supported")
+        rightData.withBatch { rightBatch =>
+          val rightKeysTable =
+            withResource(GpuProjectExec.project(rightBatch, rightKeys)) { rightKeysBatch =>
+              GpuColumnVector.from(rightKeysBatch)
+            }
+          withResource(rightKeysTable) { _ =>
+            withResource(leftKeysTable) { _ =>
+              withResource(GpuColumnVector.from(leftBatch)) { leftTable =>
+                withResource(GpuColumnVector.from(rightBatch)) { rightTable =>
+                  joinType match {
+                    case _: InnerLike =>
+                      Table.mixedInnerJoinGatherMaps(
+                        leftKeysTable, rightKeysTable, leftTable, rightTable,
+                        compiledCondition, nullEquality)
+                    case LeftOuter =>
+                      Table.mixedLeftJoinGatherMaps(
+                        leftKeysTable, rightKeysTable, leftTable, rightTable,
+                        compiledCondition, nullEquality)
+                    case RightOuter =>
+                      // Reverse the output of the join, because we expect the right gather map to
+                      // always be on the right
+                      Table.mixedLeftJoinGatherMaps(
+                        rightKeysTable, leftKeysTable, rightTable, leftTable,
+                        compiledCondition, nullEquality).reverse
+                    case FullOuter =>
+                      Table.mixedFullJoinGatherMaps(
+                        leftKeysTable, rightKeysTable, leftTable, rightTable,
+                        compiledCondition, nullEquality)
+                    case LeftSemi =>
+                      Array(Table.mixedLeftSemiJoinGatherMap(
+                        leftKeysTable, rightKeysTable, leftTable, rightTable,
+                        compiledCondition, nullEquality))
+                    case LeftAnti =>
+                      Array(Table.mixedLeftAntiJoinGatherMap(
+                        leftKeysTable, rightKeysTable, leftTable, rightTable,
+                        compiledCondition, nullEquality))
+                    case _ =>
+                      throw new NotImplementedError(
+                        s"Joint Type ${joinType.getClass} is not currently supported")
+                  }
+                }
               }
             }
           }
         }
       }
       logWarning(s"making cond gatherer with ${leftData} and ${rightData}")
-      makeGatherer(maps, leftData.incRefCount(), rightData.incRefCount(), joinType)
+      makeGatherer(maps, leftData, rightData, joinType)
     }
   }
 
