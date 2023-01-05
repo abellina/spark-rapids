@@ -17,8 +17,8 @@
 package com.nvidia.spark.rapids
 
 import ai.rapids.cudf.{ContiguousTable, DeviceMemoryBuffer}
-
 import org.apache.spark.TaskContext
+import org.apache.spark.internal.Logging
 import org.apache.spark.sql.rapids.TempSpillBufferId
 import org.apache.spark.sql.types.DataType
 import org.apache.spark.sql.vectorized.ColumnarBatch
@@ -89,7 +89,9 @@ class SpillableColumnarBatchImpl (
     id: RapidsBufferId,
     rowCount: Int,
     sparkTypes: Array[DataType])
-    extends  SpillableColumnarBatch with Arm {
+    extends  SpillableColumnarBatch with Arm with Logging {
+
+  private var closed = false
 
   /**
    * The number of rows stored in this batch.
@@ -130,7 +132,11 @@ class SpillableColumnarBatchImpl (
    * Remove the `ColumnarBatch` from the cache.
    */
   override def close(): Unit = {
-    RapidsBufferCatalog.removeBuffer(id)
+    logWarning(s"At close for ${id}")
+    if (!closed) {
+      RapidsBufferCatalog.removeBuffer(id)
+      closed = true
+    }
   }
 }
 

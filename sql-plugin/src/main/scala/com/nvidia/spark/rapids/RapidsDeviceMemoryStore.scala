@@ -199,6 +199,7 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
     }
 
     override protected def releaseResources(): Unit = {
+      logWarning(s"At releaseResources for ${id} with refCount=${contigBuffer.getRefCount}")
       contigBuffer.close()
       table.foreach(_.close())
     }

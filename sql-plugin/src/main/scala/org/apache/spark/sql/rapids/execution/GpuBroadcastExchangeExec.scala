@@ -243,7 +243,7 @@ class SerializeConcatHostBuffersDeserializeBatch(
     .getOrElse(buffers.map(_.getLength).sum)
 
   override def close(): Unit = this.synchronized {
-    logInfo("At close in `SerializeConcatHostBuffersDeserializeBatch`")
+    logWarning("At close in `SerializeConcatHostBuffersDeserializeBatch`")
     buffers.safeClose()
     buffers = Array.empty[HostMemoryBuffer]
     Option(batchInternal).foreach(_.close())

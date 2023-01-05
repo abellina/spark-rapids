@@ -261,7 +261,6 @@ class LazySpillableColumnarBatchImpl(
         spill.get.withColumnarBatch[T](_)
       }
     }
-
     cbFn { b =>
       fn(b)
     }

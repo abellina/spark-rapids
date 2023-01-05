@@ -69,9 +69,11 @@ abstract class RapidsBufferStore(
     }
 
     def remove(id: RapidsBufferId): Unit = synchronized {
+      logWarning(s"REMOVING ${id}")
       val obj = buffers.remove(id)
-      totalBytesStored -= obj.size
+      logWarning(s"DID REMOVE ${id}? ${obj != null}")
       if (obj != null) {
+        totalBytesStored -= obj.size
         totalBytesSpillable -= obj.size
         logWarning(
           s"After removing buffer id: $id, total stored=${totalBytesStored}, " +
@@ -80,6 +82,7 @@ abstract class RapidsBufferStore(
     }
 
     def freeAll(): Unit = {
+      logWarning(s"AT FREEALL!!!!!!! with ${buffers.size()}")
       val values = synchronized {
         val buffs = buffers.values().toArray(new Array[RapidsBufferBase](0))
         buffers.clear()
@@ -473,6 +476,7 @@ abstract class RapidsBufferStore(
      * In that case the resources will be released when the reference count reaches zero.
      */
     override def free(): Unit = synchronized {
+      logWarning(s"AT FREE FOR ${id} refcount=${refcount}")
       if (isValid) {
         isValid = false
         buffers.remove(id)
