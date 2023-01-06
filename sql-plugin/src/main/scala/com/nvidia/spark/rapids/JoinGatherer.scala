@@ -255,9 +255,11 @@ class LazySpillableColumnarBatchImpl(
   override def withBatch[T](fn: ColumnarBatch => T): T = {
     val cbFn = synchronized {
       if (cached.isDefined) {
+        logInfo(s"cached withBatch ${id}")
         cached.foreach(GpuColumnVector.incRefCounts)
         withCached[T](cached.get)(_)
       } else {
+        logInfo(s"spillable withBatch ${id} -- spill = ${spill.get}")
         spill.get.withColumnarBatch[T](_)
       }
     }
