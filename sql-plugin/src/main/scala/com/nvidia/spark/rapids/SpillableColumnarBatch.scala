@@ -122,13 +122,13 @@ class SpillableColumnarBatchImpl (
     }
   }
 
-  private var released = false
-
   override def releaseBatch(): ColumnarBatch = {
-    withRapidsBuffer { rapidsBuffer =>
+    val batch = withRapidsBuffer { rapidsBuffer =>
       GpuSemaphore.acquireIfNecessary(TaskContext.get(), semWait)
       rapidsBuffer.releaseBatch(sparkTypes)
     }
+    close() // force a close
+    batch
   }
 
   /**

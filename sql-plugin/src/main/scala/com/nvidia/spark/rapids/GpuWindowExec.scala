@@ -1816,7 +1816,7 @@ class GpuCachedDoublePassWindowIterator(
         }
       }
     }
-    val cb = withResource(readyForPostProcessing.dequeue()) { sb =>
+    val cb = closeOnExcept(readyForPostProcessing.dequeue()) { sb =>
       sb.releaseBatch()
     }
     withResource(cb) { cb =>

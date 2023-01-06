@@ -58,5 +58,14 @@ class SpillableColumnarBatchSuite extends FunSuite with Arm {
     override def getColumnarBatchInternal(sparkTypes: Array[DataType]): ColumnarBatch = null
     override val spillCallback: SpillCallback = RapidsBuffer.defaultSpillCallback
     override def withColumnarBatch[T](sparkTypes: Array[DataType])(fn: ColumnarBatch => T): T = {fn(null)}
+
+    /**
+     * Calling releaseBatch indicates the RapidsBuffer is about to be closed,
+     * and that no columnar batches should be released or used from this instance.
+     *
+     * @param sparkTypes
+     * @return
+     */
+    override def releaseBatch(sparkTypes: Array[DataType]): ColumnarBatch = null
   }
 }

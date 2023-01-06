@@ -103,7 +103,7 @@ class GroupingIterator(
 
   override def next(): ColumnarBatch = {
     if (groupBatches.nonEmpty) {
-      withResource(groupBatches.dequeue()) { gb =>
+      closeOnExcept(groupBatches.dequeue()) { gb =>
         gb.releaseBatch()
       }
     } else {

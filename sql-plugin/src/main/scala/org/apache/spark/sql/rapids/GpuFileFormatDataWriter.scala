@@ -658,7 +658,7 @@ class GpuDynamicPartitionDataSingleWriter(
    * @return table array
    */
   def convertSpillBatchesToTables(spills: Seq[SpillableColumnarBatch]): ArrayBuffer[Table] = {
-    withResource(spills) { _ =>
+    closeOnExcept(spills) { _ =>
       val subTablesBuffer = new ArrayBuffer[Table]
       spills.foreach { spillableCb =>
         withResource(spillableCb.releaseBatch()) { cb =>

@@ -126,7 +126,7 @@ object SamplingUtils extends Arm {
       return Array.empty
     }
     // Getting a spilled batch will acquire the semaphore if needed
-    val cb = withResource(runningCb) { spb =>
+    val cb = closeOnExcept(runningCb) { spb =>
       runningCb = null
       spb.releaseBatch()
     }
@@ -193,7 +193,7 @@ object SamplingUtils extends Arm {
               SpillPriorities.ACTIVE_ON_DECK_PRIORITY,
               RapidsBuffer.defaultSpillCallback)
           } else {
-            withResource(runningCb) { spb =>
+            closeOnExcept(runningCb) { spb =>
               runningCb = null
               withResource(spb.releaseBatch()) { cb =>
                 val filtered = if (rowsToDrop > 0) {
@@ -223,7 +223,7 @@ object SamplingUtils extends Arm {
       return (Array.empty, numTotalRows)
     }
     // Getting a spilled batch will acquire the semaphore if needed
-    val cb = withResource(runningCb) { spb =>
+    val cb = closeOnExcept(runningCb) { spb =>
       runningCb = null
       spb.releaseBatch()
     }

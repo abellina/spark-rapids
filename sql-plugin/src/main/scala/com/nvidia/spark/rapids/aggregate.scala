@@ -255,7 +255,7 @@ class GpuHashAggregateIterator(
       } else {
         // this will be the last batch
         hasReductionOnlyBatch = false
-        withResource(aggregatedBatches.pop()) { lazyBatch =>
+        closeOnExcept(aggregatedBatches.pop()) { lazyBatch =>
           lazyBatch.releaseBatch()
         }
       }
@@ -400,11 +400,8 @@ class GpuHashAggregateIterator(
    */
   private def concatenateAndMerge(
       batches: mutable.ArrayBuffer[LazySpillableColumnarBatch]): LazySpillableColumnarBatch = {
-    // closeOnExcept?
-    val concatBatch = withResource(batches) { _ =>
-      val concat = concatenateBatches(batches)
-      batches.clear()
-      concat
+    val concatBatch = closeOnExcept(batches) { _ =>
+      concatenateBatches(batches)
     }
     withResource(computeAggregateAndClose(concatBatch, concatAndMergeHelper)) { mergedBatch =>
       LazySpillableColumnarBatch(mergedBatch, metrics.spillCallback, "agg merged batch")
@@ -419,7 +416,7 @@ class GpuHashAggregateIterator(
       override def hasNext: Boolean = !aggregatedBatches.isEmpty
 
       override def next(): ColumnarBatch = {
-        withResource(aggregatedBatches.removeFirst()) { lazyBatch =>
+        closeOnExcept(aggregatedBatches.removeFirst()) { lazyBatch =>
           lazyBatch.releaseBatch()
         }
       }
@@ -544,6 +541,7 @@ class GpuHashAggregateIterator(
     withResource(new NvtxWithMetrics("concatenateBatches", NvtxColor.BLUE, concatTime,
       opTime)) { _ =>
       val batchesToConcat = spillableBatchesToConcat.map(_.releaseBatch())
+      spillableBatchesToConcat.clear()
       withResource(batchesToConcat) { _ =>
         val numCols = batchesToConcat.head.numCols()
         val dataTypes = (0 until numCols).map {

@@ -63,7 +63,7 @@ class RebatchingRoundoffIterator(
   override def hasNext: Boolean = pending.isDefined || wrapped.hasNext
 
   private[this] def popPending(): ColumnarBatch = {
-    withResource(pending.get) { scb =>
+    closeOnExcept(pending.get) { scb =>
       pending = None
       scb.releaseBatch()
     }
@@ -81,7 +81,7 @@ class RebatchingRoundoffIterator(
 
   private[this] def fillConcatAndClose(
       batches: ArrayBuffer[SpillableColumnarBatch]): ColumnarBatch = {
-    withResource(batches) { _ =>
+    closeOnExcept(batches) { _ =>
       var rowsSoFar = batches.map(_.numRows()).sum
       while (wrapped.hasNext && rowsSoFar < targetRoundoff) {
         val got = wrapped.next()
@@ -198,7 +198,7 @@ class BatchQueue extends AutoCloseable with Arm {
     if (queue.isEmpty) {
       null
     } else {
-      withResource(queue.dequeue()) { scp =>
+      closeOnExcept(queue.dequeue()) { scp =>
         scp.releaseBatch()
       }
     }

@@ -97,15 +97,7 @@ trait RapidsBuffer extends AutoCloseable {
    * @param sparkTypes
    * @return
    */
-  def releaseBatch(sparkTypes: Array[DataType]): ColumnarBatch = {
-    synchronized {
-      if (released) {
-        throw new IllegalStateException(s"RapidsBuffer ${id} already released")
-      }
-      released = true
-    }
-    getColumnarBatchInternal(sparkTypes)
-  }
+  def releaseBatch(sparkTypes: Array[DataType]): ColumnarBatch
 
   /** The buffer identifier for this buffer. */
   val id: RapidsBufferId
@@ -257,4 +249,15 @@ sealed class DegenerateRapidsBuffer(
   override def close(): Unit = {}
 
   override val spillCallback: SpillCallback = RapidsBuffer.defaultSpillCallback
+
+  /**
+   * Calling releaseBatch indicates the RapidsBuffer is about to be closed,
+   * and that no columnar batches should be released or used from this instance.
+   *
+   * @param sparkTypes
+   * @return
+   */
+  override def releaseBatch(sparkTypes: Array[DataType]): ColumnarBatch = {
+    getColumnarBatchInternal(sparkTypes)
+  }
 }

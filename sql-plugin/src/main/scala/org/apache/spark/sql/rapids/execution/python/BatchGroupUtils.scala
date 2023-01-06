@@ -313,7 +313,7 @@ private[python] class BatchGroupedIterator private(
         }
       }
 
-      withResource(batchesQueue.dequeue()) { spillableBatch =>
+      closeOnExcept(batchesQueue.dequeue()) { spillableBatch =>
         spillableBatch.releaseBatch()
       }
     }

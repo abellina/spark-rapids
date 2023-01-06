@@ -121,7 +121,7 @@ class CachedGpuBatchIterator private(pending: mutable.Queue[SpillableColumnarBat
     if (pending.isEmpty) {
       throw new NoSuchElementException()
     }
-    withResource(pending.dequeue()) { spillable =>
+    closeOnExcept(pending.dequeue()) { spillable =>
       spillable.releaseBatch()
     }
   }

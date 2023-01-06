@@ -483,7 +483,7 @@ case class GpuOutOfCoreSortIterator(
       var totalBytes = 0L
       while(!sorted.isEmpty && (tables.isEmpty ||
           (totalBytes + sorted.peek().sizeInBytes) < targetSize)) {
-        withResource(sorted.pop()) { tmp =>
+        closeOnExcept(sorted.pop()) { tmp =>
           sortedSize -= tmp.sizeInBytes
           totalBytes += tmp.sizeInBytes
           withResource(tmp.releaseBatch()) { batch =>

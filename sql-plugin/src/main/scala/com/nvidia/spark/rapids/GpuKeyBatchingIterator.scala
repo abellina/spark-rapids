@@ -122,7 +122,7 @@ class GpuKeyBatchingIterator(
       withResource(new NvtxWithMetrics("concat pending", NvtxColor.CYAN, concatTime)) { _ =>
         withResource(mutable.ArrayBuffer[Table]()) { toConcat =>
           while (pending.nonEmpty) {
-            withResource(pending.dequeue()) { spillable =>
+            closeOnExcept(pending.dequeue()) { spillable =>
               withResource(spillable.releaseBatch()) { cb =>
                 peak += GpuColumnVector.getTotalDeviceMemoryUsed(cb)
                 toConcat.append(GpuColumnVector.from(cb))

@@ -275,7 +275,7 @@ class LazySpillableColumnarBatchImpl(
     released = true
     logWarning(s"releaseBatch for ${this}")
     val result = if (cached.isEmpty) {
-      val res = withResource(spill) { _ =>
+      val res = closeOnExcept(spill) { _ =>
         closeOnExcept(spill.map(_.releaseBatch())) { batch =>
           batch.getOrElse(throw new IllegalStateException("batch is closed"))
         }
@@ -290,6 +290,7 @@ class LazySpillableColumnarBatchImpl(
     }
     cached = None
     releaseStack = dumpStack
+    close()
     result
   }
 
@@ -544,13 +545,6 @@ class JoinGathererImpl(
   logWarning(s"Built JoinGathererImpl with ${data}")
 
   assert(data.numCols > 0, "data with no columns should have been filtered out already")
-
-  // TODO: this doesn't work because now you have independent Spillables that
-  //   could mean multiple tasks have their own spillable against the same device memory
-  //   buffer. This should be concentrated in the Lazy spillable, which should only go one way
-  //   cached => spillable (but not back)
-  private var spillableData: Option[SpillableColumnarBatch] = None
-  private var spillableGatherMap: Option[SpillableBuffer] = None
 
   // How much of the gather map we have output so far
   private var gatheredUpTo: Long = 0

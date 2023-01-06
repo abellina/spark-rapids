@@ -106,6 +106,8 @@ abstract class RapidsBufferStore(
 
     def getTotalBytes: Long = synchronized { totalBytesStored }
 
+    def getTotalSpillableBytes: Long = synchronized { totalBytesSpillable }
+
     def removeSpillable(id: RapidsBufferId): Unit = synchronized {
       logWarning(s"Removing from spillable id: $id")
       val buff = buffers.get(id)
@@ -156,6 +158,8 @@ abstract class RapidsBufferStore(
 
   /** Return the current byte total of buffers in this store. */
   def currentSize: Long = buffers.getTotalBytes
+
+  def currentSpillableSize: Long = buffers.getTotalSpillableBytes
 
   /**
    * Specify another store that can be used when this store needs to spill.
@@ -367,12 +371,27 @@ abstract class RapidsBufferStore(
       }
     }
 
-    //var cache: Option[ColumnarBatch] = None
+    override def releaseBatch(sparkTypes: Array[DataType]): ColumnarBatch = {
+      synchronized {
+        if (released) {
+          throw new IllegalStateException(s"RapidsBuffer ${id} already released")
+        }
+        released = true
+        if (cache.isDefined) {
+          val res = cache.get
+          cache = None
+          res
+        } else {
+          getColumnarBatchInternal(sparkTypes)
+        }
+      }
+    }
+
+    var cache: Option[ColumnarBatch] = None
 
     // TODO: move to device memory buffer?
     override def withColumnarBatch[T](sparkTypes: Array[DataType])(fn: ColumnarBatch => T): T = {
       logWarning(s"At withColumnarBatch for ${id}")
-      var cache: Option[ColumnarBatch] = None
       val cb = synchronized {
         if (released) {
           throw new IllegalStateException(
@@ -381,9 +400,9 @@ abstract class RapidsBufferStore(
         if (cache.isEmpty) {
           cache = Some(getColumnarBatchInternal(sparkTypes))
         }
-        //cache.foreach(c => GpuColumnVector.incRefCounts(c))
-        cache.get
+        cache.map(c => GpuColumnVector.incRefCounts(c)).get
       }
+
       buffers.removeSpillable(id)
       val res = withResource(cb) { _ =>
         fn(cb)
@@ -447,7 +466,7 @@ abstract class RapidsBufferStore(
           case h: HostMemoryBuffer =>
             withResource(h) { _ =>
               closeOnExcept(DeviceMemoryBuffer.allocate(size)) { deviceBuffer =>
-                logDebug(s"copying from host $h to device $deviceBuffer")
+                logWarning(s"copying from host $h to device $deviceBuffer")
                 deviceBuffer.copyFromHostBuffer(h)
                 deviceBuffer
               }
@@ -464,9 +483,9 @@ abstract class RapidsBufferStore(
       }
       refcount -= 1
       if (refcount == 0 && !isValid) {
-        //logWarning(s"closing cached ${id}")
-        //cache.foreach(_.close())
-        //cache = None
+        logWarning(s"closing cached ${id}")
+        cache.foreach(_.close())
+        cache = None
         pendingFreeBuffers.remove(id)
         pendingFreeBytes.addAndGet(-size)
         freeBuffer()

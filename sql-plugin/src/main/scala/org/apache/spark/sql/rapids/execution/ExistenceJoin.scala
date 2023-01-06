@@ -71,7 +71,7 @@ abstract class ExistenceJoinIterator(
   }
 
   override def next(): ColumnarBatch = {
-    withResource(lazyStream.next()) { lazyBatch =>
+    closeOnExcept(lazyStream.next()) { lazyBatch =>
       withResource(new NvtxWithMetrics("existence join batch", NvtxColor.ORANGE, joinTime)) { _ =>
         opTime.ns {
           withResource(lazyBatch.releaseBatch()) { released =>

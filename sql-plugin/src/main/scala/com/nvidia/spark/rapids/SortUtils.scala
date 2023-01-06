@@ -240,7 +240,7 @@ class GpuSorter(
     withResource(new NvtxWithMetrics("merge sort", NvtxColor.DARK_GREEN, sortTime)) { _ =>
       if (spillableBatches.size == 1) {
         // Single batch no need for a merge sort
-        withResource(spillableBatches.pop()) { sb =>
+        closeOnExcept(spillableBatches.pop()) { sb =>
           sb.releaseBatch()
         }
       } else {
@@ -255,7 +255,7 @@ class GpuSorter(
               // It is slower, but it works
               val concatenated = closeOnExcept(tablesToMerge) { _ =>
                 while (spillableBatches.nonEmpty) {
-                  withResource(spillableBatches.pop()) { sb =>
+                  closeOnExcept(spillableBatches.pop()) { sb =>
                     withResource(sb.releaseBatch()) { cb =>
                       tablesToMerge.push(GpuColumnVector.from(cb))
                     }
@@ -281,7 +281,7 @@ class GpuSorter(
 
                 // optionally add a table to `tablesToMerge`
                 closeOnExcept(tablesToMerge) { _ =>
-                  withResource(spillableCandidate) {
+                  closeOnExcept(spillableCandidate) {
                     _.foreach { sb =>
                       // materialize a potentially spilled batch
                       withResource(sb.releaseBatch()) { batch =>
