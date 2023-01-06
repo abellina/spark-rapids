@@ -133,7 +133,7 @@ class RapidsHostMemoryStoreSuite extends FunSuite with Arm with MockitoSugar {
                 devStore.synchronousSpill(0)
                 withResource(catalog.acquireBuffer(bufferId)) { buffer =>
                   assertResult(StorageTier.HOST)(buffer.storageTier)
-                  withResource(buffer.getColumnarBatch(sparkTypes)) { actualBatch =>
+                  buffer.withColumnarBatch(sparkTypes) { actualBatch =>
                     TestUtils.compareBatches(expectedBatch, actualBatch)
                   }
                 }
@@ -169,7 +169,7 @@ class RapidsHostMemoryStoreSuite extends FunSuite with Arm with MockitoSugar {
                   ArgumentMatchers.any[Cuda.Stream])
                 withResource(catalog.acquireBuffer(bigBufferId)) { buffer =>
                   assertResult(StorageTier.HOST)(buffer.storageTier)
-                  withResource(buffer.getColumnarBatch(sparkTypes)) { actualBatch =>
+                  buffer.withColumnarBatch(sparkTypes) { actualBatch =>
                     TestUtils.compareBatches(expectedBatch, actualBatch)
                   }
                 }

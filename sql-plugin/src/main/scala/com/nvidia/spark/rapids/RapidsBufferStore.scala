@@ -357,7 +357,7 @@ abstract class RapidsBufferStore(
       isValid
     }
 
-    override def getColumnarBatch(sparkTypes: Array[DataType]): ColumnarBatch = {
+    override def getColumnarBatchInternal(sparkTypes: Array[DataType]): ColumnarBatch = {
       // NOTE: Cannot hold a lock on this buffer here because memory is being
       // allocated. Allocations can trigger synchronous spills which can
       // deadlock if another thread holds the device store lock and is trying
@@ -370,8 +370,7 @@ abstract class RapidsBufferStore(
     //var cache: Option[ColumnarBatch] = None
 
     // TODO: move to device memory buffer?
-    override def withColumnarBatch[T](
-        sparkTypes: Array[DataType])(fn: ColumnarBatch => T): T = {
+    override def withColumnarBatch[T](sparkTypes: Array[DataType])(fn: ColumnarBatch => T): T = {
       logWarning(s"At withColumnarBatch for ${id}")
       var cache: Option[ColumnarBatch] = None
       val cb = synchronized {
@@ -380,7 +379,7 @@ abstract class RapidsBufferStore(
             s"Cannot use a ColumnarBatch from already released RapidsBuffer ${id}")
         }
         if (cache.isEmpty) {
-          cache = Some(getColumnarBatch(sparkTypes))
+          cache = Some(getColumnarBatchInternal(sparkTypes))
         }
         //cache.foreach(c => GpuColumnVector.incRefCounts(c))
         cache.get

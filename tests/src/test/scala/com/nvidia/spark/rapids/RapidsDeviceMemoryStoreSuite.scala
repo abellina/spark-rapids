@@ -119,7 +119,7 @@ class RapidsDeviceMemoryStoreSuite extends FunSuite with Arm with MockitoSugar {
             ct.getBuffer.incRefCount()
             store.addBuffer(bufferId, ct.getBuffer, meta, initialSpillPriority = 3)
             withResource(catalog.acquireBuffer(bufferId)) { buffer =>
-              withResource(buffer.getColumnarBatch(sparkTypes)) { actualBatch =>
+              buffer.withColumnarBatch(sparkTypes) { actualBatch =>
                 TestUtils.compareBatches(expectedBatch, actualBatch)
               }
             }

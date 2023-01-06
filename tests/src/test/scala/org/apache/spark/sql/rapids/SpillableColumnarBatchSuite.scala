@@ -36,8 +36,8 @@ class SpillableColumnarBatchSuite extends FunSuite with Arm {
     val oldBufferCount = catalog.numBuffers
     catalog.registerNewBuffer(mockBuffer)
     assertResult(oldBufferCount + 1)(catalog.numBuffers)
-    val spillableBatch = new SpillableColumnarBatchImpl(id, 5, Array[DataType](IntegerType),
-      NoopMetric)
+    val spillableBatch = new SpillableColumnarBatchImpl(
+      id, 5, Array[DataType](IntegerType), NoopMetric)
     spillableBatch.close()
     assertResult(oldBufferCount)(catalog.numBuffers)
   }
@@ -55,7 +55,8 @@ class SpillableColumnarBatchSuite extends FunSuite with Arm {
     override def getSpillPriority: Long = 0
     override def setSpillPriority(priority: Long): Unit = {}
     override def close(): Unit = {}
-    override def getColumnarBatch(sparkTypes: Array[DataType]): ColumnarBatch = null
+    override def getColumnarBatchInternal(sparkTypes: Array[DataType]): ColumnarBatch = null
     override val spillCallback: SpillCallback = RapidsBuffer.defaultSpillCallback
+    override def withColumnarBatch[T](sparkTypes: Array[DataType])(fn: ColumnarBatch => T): T = {fn(null)}
   }
 }

@@ -186,7 +186,7 @@ class RapidsShuffleIteratorSuite extends RapidsShuffleTestHelper {
 
     val cb = new ColumnarBatch(Array.empty, 10)
 
-    when(mockBuffer.getColumnarBatch(Array.empty)).thenReturn(cb)
+    when(mockBuffer.getColumnarBatchInternal(Array.empty)).thenReturn(cb)
     when(mockCatalog.acquireBuffer(any[ShuffleReceivedBufferId]())).thenReturn(mockBuffer)
     doNothing().when(mockCatalog).removeBuffer(any())
     cl.start()

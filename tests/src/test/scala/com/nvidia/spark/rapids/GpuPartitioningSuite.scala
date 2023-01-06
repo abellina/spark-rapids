@@ -201,7 +201,7 @@ class GpuPartitioningSuite extends FunSuite with Arm {
                 deviceStore.addBuffer(bufferId, devBuffer, gccv.getTableMeta, spillPriority)
                 withResource(buildSubBatch(batch, startRow, endRow)) { expectedBatch =>
                   withResource(catalog.acquireBuffer(bufferId)) { buffer =>
-                    withResource(buffer.getColumnarBatch(sparkTypes)) { batch =>
+                    buffer.withColumnarBatch(sparkTypes) { batch =>
                       compareBatches(expectedBatch, batch)
                     }
                   }

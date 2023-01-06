@@ -88,7 +88,8 @@ class JustRowsColumnarBatch(numRows: Int, semWait: GpuMetric)
 class SpillableColumnarBatchImpl (
     id: RapidsBufferId,
     rowCount: Int,
-    sparkTypes: Array[DataType])
+    sparkTypes: Array[DataType],
+    semWait: GpuMetric)
     extends  SpillableColumnarBatch with Arm with Logging {
 
   private var closed = false
@@ -114,6 +115,7 @@ class SpillableColumnarBatchImpl (
 
   override def withColumnarBatch[T](fn: ColumnarBatch => T): T = {
     withRapidsBuffer { rapidsBuffer =>
+      GpuSemaphore.acquireIfNecessary(TaskContext.get(), semWait)
       rapidsBuffer.withColumnarBatch(sparkTypes) { cb =>
         fn(cb)
       }
@@ -124,6 +126,7 @@ class SpillableColumnarBatchImpl (
 
   override def releaseBatch(): ColumnarBatch = {
     withRapidsBuffer { rapidsBuffer =>
+      GpuSemaphore.acquireIfNecessary(TaskContext.get(), semWait)
       rapidsBuffer.releaseBatch(sparkTypes)
     }
   }
@@ -161,7 +164,7 @@ object SpillableColumnarBatch extends Arm {
       val types =  GpuColumnVector.extractTypes(batch)
       val id = TempSpillBufferId()
       addBatch(id, batch, priority, spillCallback)
-      new SpillableColumnarBatchImpl(id, numRows, types)
+      new SpillableColumnarBatchImpl(id, numRows, types, spillCallback.semaphoreWaitTime)
     }
   }
 
@@ -181,7 +184,8 @@ object SpillableColumnarBatch extends Arm {
       spillCallback: SpillCallback): SpillableColumnarBatch = {
     val id = TempSpillBufferId()
     RapidsBufferCatalog.addContiguousTable(id, ct, priority, spillCallback)
-    new SpillableColumnarBatchImpl(id, ct.getRowCount.toInt, sparkTypes)
+    new SpillableColumnarBatchImpl(
+      id, ct.getRowCount.toInt, sparkTypes, spillCallback.semaphoreWaitTime)
   }
 
   private[this] def addBatch(

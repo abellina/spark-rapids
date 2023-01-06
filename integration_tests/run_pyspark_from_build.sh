@@ -287,6 +287,8 @@ else
     then
         exec python "${RUN_TESTS_COMMAND[@]}" "${TEST_PARALLEL_OPTS[@]}" "${TEST_COMMON_OPTS[@]}"
     else
+        export PYSP_TEST_spark_executor_memory="10GB"
+        export PYSP_TEST_spark_driver_memory="10GB"
         # We set the GPU memory size to be a constant value even if only running with a parallelism of 1
         # because it helps us have consistent test runs.
         jarOpts=()
@@ -321,6 +323,8 @@ else
         exec "$SPARK_HOME"/bin/spark-submit "${jarOpts[@]}" \
             --driver-java-options "$driverJavaOpts" \
             $SPARK_SUBMIT_FLAGS \
+            --driver-memory 10g \
+            --executor-memory 10g \
             --conf 'spark.rapids.memory.gpu.allocSize='"$gpuAllocSize" \
             "${RUN_TESTS_COMMAND[@]}" "${TEST_COMMON_OPTS[@]}"
     fi

@@ -104,7 +104,7 @@ trait RapidsBuffer extends AutoCloseable {
       }
       released = true
     }
-    getColumnarBatch(sparkTypes)
+    getColumnarBatchInternal(sparkTypes)
   }
 
   /** The buffer identifier for this buffer. */
@@ -131,7 +131,7 @@ trait RapidsBuffer extends AutoCloseable {
    *       `GpuCompressedColumnVector`, and it is the responsibility of the caller to deal
    *       with decompressing the data if necessary.
    */
-  def getColumnarBatch(sparkTypes: Array[DataType]): ColumnarBatch
+  def getColumnarBatchInternal(sparkTypes: Array[DataType]): ColumnarBatch
 
   def withColumnarBatch[T](sparkTypes: Array[DataType])(fn: ColumnarBatch => T): T
 
@@ -215,7 +215,7 @@ sealed class DegenerateRapidsBuffer(
   override val size: Long = 0L
   override val storageTier: StorageTier = StorageTier.DEVICE
 
-  override def getColumnarBatch(sparkTypes: Array[DataType]): ColumnarBatch = {
+  override def getColumnarBatchInternal(sparkTypes: Array[DataType]): ColumnarBatch = {
     val rowCount = meta.rowCount
     val packedMeta = meta.packedMetaAsByteBuffer()
     if (packedMeta != null) {
@@ -233,7 +233,7 @@ sealed class DegenerateRapidsBuffer(
   override def free(): Unit = {}
 
   override def withColumnarBatch[T](sparkTypes: Array[DataType])(fn: ColumnarBatch => T): T = {
-    withResource(getColumnarBatch(sparkTypes)) { cb =>
+    withResource(getColumnarBatchInternal(sparkTypes)) { cb =>
       fn(cb)
     }
   }

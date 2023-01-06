@@ -211,7 +211,7 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
 
     override def getMemoryBuffer: MemoryBuffer = getDeviceMemoryBuffer
 
-    override def getColumnarBatch(sparkTypes: Array[DataType]): ColumnarBatch = {
+    override def getColumnarBatchInternal(sparkTypes: Array[DataType]): ColumnarBatch = {
       if (table.isDefined) {
         //REFCOUNT ++ of all columns
         GpuColumnVectorFromBuffer.from(table.get, contigBuffer, meta, sparkTypes)
