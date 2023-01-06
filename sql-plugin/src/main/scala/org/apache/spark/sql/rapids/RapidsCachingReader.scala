@@ -143,6 +143,7 @@ class RapidsCachingReader[K, C](
         val cachedIt = cachedBufferIds.iterator.map(bufferId => {
           // No good way to get a metric in here for semaphore wait time
           GpuSemaphore.acquireIfNecessary(context, NoopMetric)
+          // TODO: make the cached batch highest priority to spill
           val cb = withResource(catalog.acquireBuffer(bufferId)) { buffer: RapidsBuffer =>
             buffer.getColumnarBatchInternal(sparkTypes)
           }

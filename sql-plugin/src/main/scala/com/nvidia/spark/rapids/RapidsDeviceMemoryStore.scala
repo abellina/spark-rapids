@@ -101,7 +101,8 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
       contigTable: ContiguousTable,
       initialSpillPriority: Long,
       spillCallback: SpillCallback = RapidsBuffer.defaultSpillCallback,
-      needsSync: Boolean = true): Unit = {
+      needsSync: Boolean = true,
+      allowAliasing: Boolean = false): Unit = {
     val contigBuffer = contigTable.getBuffer
     val size = contigBuffer.getLength
     val meta = MetaUtils.buildTableMeta(id.tableId, contigTable)
@@ -114,7 +115,8 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
         None,
         contigBuffer,
         initialSpillPriority,
-        spillCallback)) { buffer =>
+        spillCallback,
+        allowAliasing)) { buffer =>
       logDebug(s"Adding table for: [id=$id, size=${buffer.size}, " +
           s"uncompressed=${buffer.meta.bufferMeta.uncompressedSize}, " +
           s"meta_id=${buffer.meta.bufferMeta.id}, meta_size=${buffer.meta.bufferMeta.size}]")
@@ -139,7 +141,8 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
       tableMeta: TableMeta,
       initialSpillPriority: Long,
       spillCallback: SpillCallback = RapidsBuffer.defaultSpillCallback,
-      needsSync: Boolean = true): Unit = {
+      needsSync: Boolean = true,
+      allowAliasing: Boolean = false): Unit = {
     freeOnExcept(
       new RapidsDeviceMemoryBuffer(
         id,
@@ -148,7 +151,8 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
         None,
         buffer,
         initialSpillPriority,
-        spillCallback)) { buff =>
+        spillCallback,
+        allowAliasing)) { buff =>
       logDebug(s"Adding receive side table for: [id=$id, size=${buffer.getLength}, " +
           s"uncompressed=${buff.meta.bufferMeta.uncompressedSize}, " +
           s"meta_id=${tableMeta.bufferMeta.id}, " +
@@ -177,25 +181,28 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
       table: Option[Table],
       contigBuffer: DeviceMemoryBuffer,
       spillPriority: Long,
-      override val spillCallback: SpillCallback)
+      override val spillCallback: SpillCallback,
+      allowAliasing: Boolean = false)
       extends RapidsBufferBase(id, size, meta, spillPriority, spillCallback)
       with MemoryBuffer.EventHandler {
     override val storageTier: StorageTier = StorageTier.DEVICE
 
     logWarning(s"ADDED BUFFER ${id} $contigBuffer with refCount ${contigBuffer.getRefCount()} ")
-
     val sb = new mutable.StringBuilder()
     Thread.currentThread().getStackTrace.foreach { stackTraceElement =>
       sb.append("    " + stackTraceElement + "\n")
     }
     val myStack = sb.toString()
 
-    val prior = contigBuffer.setEventHandler(this)
-
-    if (prior != null) {
-      val pdmb = prior.asInstanceOf[RapidsDeviceMemoryBuffer]
-      throw new IllegalStateException(
-        s"Doubly associating event handler. Previously added in ${pdmb.myStack}")
+    if (!allowAliasing) {
+      val prior = contigBuffer.setEventHandler(this)
+      if (prior != null) {
+        val pdmb = prior.asInstanceOf[RapidsDeviceMemoryBuffer]
+        throw new IllegalStateException(
+          s"Doubly associating event handler. Previously added in ${pdmb.myStack}")
+      }
+    } else {
+      logWarning(s"Allowing aliasing for this buffer ${id}")
     }
 
     override protected def releaseResources(): Unit = {

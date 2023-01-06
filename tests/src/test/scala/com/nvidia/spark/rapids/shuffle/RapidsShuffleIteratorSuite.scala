@@ -20,8 +20,8 @@ import com.nvidia.spark.rapids.{RapidsBuffer, ShuffleReceivedBufferId}
 import org.mockito.ArgumentCaptor
 import org.mockito.ArgumentMatchers._
 import org.mockito.Mockito._
-
 import org.apache.spark.shuffle.rapids.{RapidsShuffleFetchFailedException, RapidsShuffleTimeoutException}
+import org.apache.spark.sql.types.DataType
 import org.apache.spark.sql.vectorized.ColumnarBatch
 
 class RapidsShuffleIteratorSuite extends RapidsShuffleTestHelper {
@@ -182,11 +182,18 @@ class RapidsShuffleIteratorSuite extends RapidsShuffleTestHelper {
     when(mockTransport.makeClient(any())).thenReturn(client)
     doNothing().when(client).doFetch(any(), ac.capture())
     val bufferId = ShuffleReceivedBufferId(1)
-    val mockBuffer = mock[RapidsBuffer]
+    abstract class MockRapidsBuffer extends RapidsBuffer {
+      override def withColumnarBatch[T](
+        sparkTypes: Array[DataType])(fn: ColumnarBatch => T): T = {
+        withResource(getColumnarBatchInternal(sparkTypes)) { cb =>
+          fn(cb)
+        }
+      }
+    }
+    val mockBuffer = mock[MockRapidsBuffer]
 
     val cb = new ColumnarBatch(Array.empty, 10)
-
-    when(mockBuffer.getColumnarBatchInternal(Array.empty)).thenReturn(cb)
+    when(mockBuffer.releaseBatch(Array.empty)).thenReturn(cb)
     when(mockCatalog.acquireBuffer(any[ShuffleReceivedBufferId]())).thenReturn(mockBuffer)
     doNothing().when(mockCatalog).removeBuffer(any())
     cl.start()

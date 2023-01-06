@@ -354,6 +354,8 @@ class RapidsShuffleIterator(
           NvtxColor.PURPLE)
         try {
           sb = catalog.acquireBuffer(bufferId)
+          // these are receive spillable batches and are used only for this
+          // iterator, hence we can release.
           cb = sb.releaseBatch(sparkTypes)
           metricsUpdater.update(blockedTime, 1, sb.size, cb.numRows())
         } finally {
