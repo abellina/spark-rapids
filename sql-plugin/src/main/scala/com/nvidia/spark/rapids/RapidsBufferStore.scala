@@ -74,10 +74,12 @@ abstract class RapidsBufferStore(
       logWarning(s"DID REMOVE ${id}? ${obj != null}")
       if (obj != null) {
         totalBytesStored -= obj.size
-        totalBytesSpillable -= obj.size
-        logWarning(
-          s"After removing buffer id: $id, total stored=${totalBytesStored}, " +
-            s"total spillable=${totalBytesSpillable}")
+        if (spillable.remove(obj)) {
+          totalBytesSpillable -= obj.size
+          logWarning(
+            s"After removing buffer id: $id, total stored=${totalBytesStored}, " +
+              s"total spillable=${totalBytesSpillable}")
+        }
       }
     }
 
