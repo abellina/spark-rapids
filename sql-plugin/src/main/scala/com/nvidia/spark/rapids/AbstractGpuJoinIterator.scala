@@ -195,8 +195,8 @@ abstract class SplittableJoinIterator(
     if (pendingSplits.nonEmpty || stream.hasNext) {
       val streamCb = if (pendingSplits.nonEmpty) {
         opTime.ns {
-          closeOnExcept(pendingSplits.dequeue()) {
-            _.releaseBatch()
+          closeOnExcept(pendingSplits.dequeue()) { ps: SpillableColumnarBatch =>
+            ps.releaseBatch()
           }
         }
       } else {

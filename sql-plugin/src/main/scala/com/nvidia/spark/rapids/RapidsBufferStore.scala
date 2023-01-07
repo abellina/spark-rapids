@@ -98,7 +98,9 @@ abstract class RapidsBufferStore(
     }
 
     def nextSpillableBuffer(): RapidsBufferBase = synchronized {
-      spillable.poll()
+      val sp = spillable.poll()
+      totalBytesSpillable -= sp.size
+      sp
     }
 
     def updateSpillPriority(buffer: RapidsBufferBase, priority:Long): Unit = synchronized {
@@ -486,8 +488,7 @@ abstract class RapidsBufferStore(
       refcount -= 1
       if (refcount == 0 && !isValid) {
         logWarning(s"closing cached ${id}")
-        cache.foreach(_.close())
-        cache = None
+
         pendingFreeBuffers.remove(id)
         pendingFreeBytes.addAndGet(-size)
         freeBuffer()
@@ -526,6 +527,8 @@ abstract class RapidsBufferStore(
 
     /** Must be called with a lock on the buffer */
     private def freeBuffer(): Unit = {
+      cache.foreach(_.close())
+      cache = None
       releaseResources()
       memoryFreedMonitor.synchronized {
         memoryFreedMonitor.notifyAll()

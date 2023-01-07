@@ -210,6 +210,7 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
       logWarning(s"At releaseResources for ${id} with refCount=${contigBuffer.getRefCount}")
       contigBuffer.close()
       table.foreach(_.close())
+      logWarning(s"EXIT releaseResources for ${id} with refCount=${contigBuffer.getRefCount}")
     }
 
     override def getDeviceMemoryBuffer: DeviceMemoryBuffer = {
