@@ -254,6 +254,7 @@ abstract class BaseHashJoinIterator(
   override def close(): Unit = {
     if (!closed) {
       super.close()
+      logInfo(s"closing built ${built}")
       built.close()
     }
   }
@@ -412,6 +413,7 @@ class HashJoinIterator(
     // TODO: I'd like to hand to the gather map the onwership of the tables, and release
     //  from the lazy spillable. Is that possible?
     withResource(new NvtxWithMetrics("hash join gather map", NvtxColor.ORANGE, joinTime)) { _ =>
+      logInfo(s"over at joinGathererLeftRight with ${leftData} and ${rightData}")
       val maps = leftData.withBatch { leftBatch =>
         val leftKeysTable =
           withResource(GpuProjectExec.project(leftBatch, leftKeys)) { leftKeysBatch =>
@@ -779,6 +781,7 @@ trait GpuHashJoin extends GpuExec {
           joinTime)
       case _ =>
         if (boundCondition.isDefined) {
+          logInfo(s"new conditional hash join iterator with ${spillableBuiltBatch}")
           // ConditionalHashJoinIterator will close the compiled condition
           val compiledCondition =
             boundCondition.get.convertToAst(numFirstConditionTableColumns).compile()
@@ -786,6 +789,7 @@ trait GpuHashJoin extends GpuExec {
             boundStreamKeys, streamedPlan.output, compiledCondition,
             realTarget, joinType, buildSide, compareNullsEqual, spillCallback, opTime, joinTime)
         } else {
+          logInfo(s"new hash join iterator with ${spillableBuiltBatch}")
           new HashJoinIterator(spillableBuiltBatch, boundBuildKeys, lazyStream, boundStreamKeys,
             streamedPlan.output, realTarget, joinType, buildSide, compareNullsEqual, spillCallback,
             opTime, joinTime)

@@ -187,10 +187,10 @@ case class GpuShuffledHashJoinExec(
               LazySpillableColumnarBatch(filtered, RapidsBuffer.defaultSpillCallback, "built_batch")
             }
           } else {
-            logWarning(s"over here with ${builtBatch}")
             LazySpillableColumnarBatch(builtBatch, RapidsBuffer.defaultSpillCallback, "built_batch")
           }
         }
+        logWarning(s"over here with ${lazySpill}")
         // doJoin will increment the reference counts as needed for the builtBatch
         doJoin(lazySpill, maybeBufferedStreamIter,
           batchSizeBytes, spillCallback, numOutputRows, joinOutputRows, numOutputBatches,

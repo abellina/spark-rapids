@@ -187,12 +187,13 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
       with MemoryBuffer.EventHandler {
     override val storageTier: StorageTier = StorageTier.DEVICE
 
-    logWarning(s"ADDED BUFFER ${id} $contigBuffer with refCount ${contigBuffer.getRefCount()} ")
+
     val sb = new mutable.StringBuilder()
     Thread.currentThread().getStackTrace.foreach { stackTraceElement =>
       sb.append("    " + stackTraceElement + "\n")
     }
     val myStack = sb.toString()
+    logWarning(s"ADDED BUFFER ${id} $contigBuffer with refCount ${contigBuffer.getRefCount()} ${myStack}")
 
     if (!allowAliasing) {
       val prior = contigBuffer.setEventHandler(this)

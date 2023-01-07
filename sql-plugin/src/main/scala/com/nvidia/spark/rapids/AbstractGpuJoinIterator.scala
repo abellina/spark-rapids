@@ -193,7 +193,7 @@ abstract class SplittableJoinIterator(
     val wasInitialJoin = isInitialJoin
     isInitialJoin = false
     if (pendingSplits.nonEmpty || stream.hasNext) {
-      val cb = if (pendingSplits.nonEmpty) {
+      val streamCb = if (pendingSplits.nonEmpty) {
         opTime.ns {
           closeOnExcept(pendingSplits.dequeue()) {
             _.releaseBatch()
@@ -207,25 +207,25 @@ abstract class SplittableJoinIterator(
         }
       }
       opTime.ns {
-        withResource(cb) { cb =>
-          val numJoinRows = computeNumJoinRows(cb)
+        withResource(streamCb) { _ =>
+          val numJoinRows = computeNumJoinRows(streamCb)
 
           // We want the gather maps size to be around the target size. There are two gather maps
           // that are made up of ints, so compute how many rows on the stream side will produce the
           // desired gather maps size.
           val maxJoinRows = Math.max(1, targetSize / (2 * Integer.BYTES))
-          if (numJoinRows > maxJoinRows && cb.numRows() > 1) {
+          if (numJoinRows > maxJoinRows && streamCb.numRows() > 1) {
             // Need to split the batch to reduce the gather maps size. This takes a simplistic
             // approach of assuming the data is uniformly distributed in the stream table.
-            val numSplits = Math.min(cb.numRows(),
+            val numSplits = Math.min(streamCb.numRows(),
               Math.ceil(numJoinRows.toDouble / maxJoinRows).toInt)
-            splitAndSave(cb, numSplits)
+            splitAndSave(streamCb, numSplits)
 
             // Return no gatherer so the outer loop will try again
             return None
           }
 
-          createGatherer(cb, Some(numJoinRows))
+          createGatherer(streamCb, Some(numJoinRows))
         }
       }
     } else {

@@ -312,6 +312,8 @@ class LazySpillableColumnarBatchImpl(
           throw e
       }
     }
+    cached.foreach(_.close())
+    cached = None
   }
 
   var closedStack: String = "not closed"
@@ -353,7 +355,7 @@ class LazySpillableColumnarBatchImpl(
     sb.toString()
   }
 
-  override def toString: String = s"SpillableBatch($id) $name $numCols X $numRows"
+  override def toString: String = s"SpillableBatch($id) $name $numCols X $numRows (refCount=$refCount)"
 }
 
 trait LazySpillableGatherMap extends LazySpillable with Arm {

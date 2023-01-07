@@ -171,8 +171,7 @@ case class GpuBroadcastHashJoinExec(
       broadcastRelation: Broadcast[Any],
       buildSchema: StructType,
       streamIter: Iterator[ColumnarBatch],
-      coalesceMetricsMap: Map[String, GpuMetric]):
-        Iterator[ColumnarBatch] = {
+      coalesceMetricsMap: Map[String, GpuMetric]): Iterator[ColumnarBatch] = {
     val semWait = coalesceMetricsMap(GpuMetric.SEMAPHORE_WAIT_TIME)
 
     val bufferedStreamIter = new CloseableBufferedIterator(streamIter.buffered)
