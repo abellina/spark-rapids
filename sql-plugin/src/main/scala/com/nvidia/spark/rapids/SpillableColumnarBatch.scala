@@ -144,6 +144,16 @@ class SpillableColumnarBatchImpl (
 }
 
 object SpillableColumnarBatch extends Arm {
+  def apply(rapidsBuffer: RapidsBuffer,
+            sparkTypes: Array[DataType]): SpillableColumnarBatch = {
+    rapidsBuffer.withColumnarBatch (sparkTypes) { cb =>
+      new SpillableColumnarBatchImpl(
+        rapidsBuffer.id,
+        cb.numRows(),
+        sparkTypes,
+        rapidsBuffer.spillCallback.semaphoreWaitTime)
+    }
+  }
   /**
    * Create a new SpillableColumnarBatch.
    * @note This takes over ownership of batch, and batch should not be used after this.

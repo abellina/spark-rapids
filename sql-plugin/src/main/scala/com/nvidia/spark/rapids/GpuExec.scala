@@ -184,17 +184,17 @@ case class WrappedGpuMetric(sqlMetric: SQLMetric) extends GpuMetric {
   override def value: Long = sqlMetric.value
 }
 
-class CollectTimeIterator(
+class CollectTimeIterator[T](
     nvtxName: String,
-    it: Iterator[ColumnarBatch],
-    collectTime: GpuMetric) extends Iterator[ColumnarBatch] {
+    it: Iterator[T],
+    collectTime: GpuMetric) extends Iterator[T] {
   override def hasNext: Boolean = {
     withResource(new NvtxWithMetrics(nvtxName, NvtxColor.BLUE, collectTime)) { _ =>
       it.hasNext
     }
   }
 
-  override def next(): ColumnarBatch = {
+  override def next(): T = {
     withResource(new NvtxWithMetrics(nvtxName, NvtxColor.BLUE, collectTime)) { _ =>
       it.next
     }

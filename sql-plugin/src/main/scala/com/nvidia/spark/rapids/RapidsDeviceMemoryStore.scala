@@ -17,6 +17,7 @@
 package com.nvidia.spark.rapids
 
 import ai.rapids.cudf.{ContiguousTable, Cuda, DeviceMemoryBuffer, HostMemoryBuffer, MemoryBuffer, Table}
+import com.nvidia.spark.rapids.GpuColumnVectorFromBuffer.AliasHandler
 import com.nvidia.spark.rapids.StorageTier.StorageTier
 import com.nvidia.spark.rapids.format.TableMeta
 import org.apache.spark.sql.types.DataType
@@ -184,7 +185,8 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
       override val spillCallback: SpillCallback,
       allowAliasing: Boolean = false)
       extends RapidsBufferBase(id, size, meta, spillPriority, spillCallback)
-      with MemoryBuffer.EventHandler {
+      with MemoryBuffer.EventHandler
+      with AliasHandler {
     override val storageTier: StorageTier = StorageTier.DEVICE
 
 
@@ -220,12 +222,21 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
 
     override def getMemoryBuffer: MemoryBuffer = getDeviceMemoryBuffer
 
-    override def getColumnarBatchInternal(sparkTypes: Array[DataType]): ColumnarBatch = {
+    override protected def getColumnarBatchInternal(sparkTypes: Array[DataType]): ColumnarBatch = {
       if (table.isDefined) {
         //REFCOUNT ++ of all columns
         GpuColumnVectorFromBuffer.from(table.get, contigBuffer, meta, sparkTypes)
       } else {
         columnarBatchFromDeviceBuffer(contigBuffer, sparkTypes)
+      }
+    }
+
+    override def aliasColumnarBatch(sparkTypes: Array[DataType]): ColumnarBatch = synchronized {
+      if (table.isDefined) {
+        //REFCOUNT ++ of all columns
+        GpuColumnVectorFromBuffer.from(table.get, contigBuffer, meta, sparkTypes, this)
+      } else {
+        columnarBatchFromDeviceBuffer(contigBuffer, sparkTypes, this)
       }
     }
 
@@ -239,7 +250,10 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
 
     override def onClosed(refCount: Int): Unit = {
       logWarning(
-        s"At onClosed for ${id} with buffer $contigBuffer refCount=$refCount and refcount=$refcount")
+        s"At onClosed for ${id} with buffer " +
+          s"$contigBuffer refCount=$refCount and refcount=$refcount " +
+          s"aliasCount=$aliasCount")
     }
+
   }
 }

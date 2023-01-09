@@ -17,17 +17,23 @@
 package org.apache.spark.sql.rapids
 
 import scala.collection.mutable.ArrayBuffer
-
 import ai.rapids.cudf.{NvtxColor, NvtxRange}
 import com.nvidia.spark.rapids._
 import com.nvidia.spark.rapids.shuffle.{RapidsShuffleIterator, RapidsShuffleTransport}
-
 import org.apache.spark.{InterruptibleIterator, TaskContext}
 import org.apache.spark.internal.Logging
-import org.apache.spark.shuffle.{ShuffleReader, ShuffleReadMetricsReporter}
+import org.apache.spark.shuffle.{ShuffleReadMetricsReporter, ShuffleReader}
 import org.apache.spark.sql.types.DataType
+import org.apache.spark.sql.vectorized.ColumnarBatch
 import org.apache.spark.storage.{BlockId, BlockManagerId, ShuffleBlockBatchId, ShuffleBlockId}
 import org.apache.spark.util.CompletionIterator
+
+trait ColumnarBatchProvider extends AutoCloseable {
+  def getBatch: ColumnarBatch
+  def numRows: Int
+  def sizeInBytes: Long
+  override def close(): Unit = {}
+}
 
 trait ShuffleMetricsUpdater {
   /**
@@ -144,27 +150,101 @@ class RapidsCachingReader[K, C](
           // No good way to get a metric in here for semaphore wait time
           GpuSemaphore.acquireIfNecessary(context, NoopMetric)
           // TODO: make the cached batch highest priority to spill
-          val cb = withResource(catalog.acquireBuffer(bufferId)) { buffer: RapidsBuffer =>
-            buffer.getColumnarBatchInternal(sparkTypes)
-          }
-          val cachedBytesRead = GpuColumnVector.getTotalDeviceMemoryUsed(cb)
-          metrics.incLocalBytesRead(cachedBytesRead)
-          metrics.incRecordsRead(cb.numRows())
-          (0, cb)
-        }).asInstanceOf[Iterator[(K, C)]]
+          new ColumnarBatchProvider {
+            override def sizeInBytes: Long = {
+              withResource(catalog.acquireBuffer(bufferId)) { buffer =>
+                buffer.size
+              }
+            }
+            override def numRows: Int = {
+              withResource(catalog.acquireBuffer(bufferId)) { buffer =>
+                buffer.withColumnarBatch(sparkTypes) { cb =>
+                  cb.numRows()
+                }
+              }
+            }
 
-        val cbArrayFromUcx: Iterator[(K, C)] = if (blocksForRapidsTransport.nonEmpty) {
-          val rapidsShuffleIterator = new RapidsShuffleIterator(localId, rapidsConf, transport.get,
+            override def getBatch: ColumnarBatch = {
+              withResource(catalog.acquireBuffer(bufferId)) { buffer =>
+                buffer.withColumnarBatch(sparkTypes) { cb =>
+                  val cachedBytesRead = GpuColumnVector.getTotalDeviceMemoryUsed(cb)
+                  metrics.incLocalBytesRead(cachedBytesRead)
+                  metrics.incRecordsRead(cb.numRows())
+                }
+                buffer.aliasColumnarBatch(sparkTypes)
+              }
+            }
+          }
+        })
+
+        val cbArrayFromUcx = if (blocksForRapidsTransport.nonEmpty) {
+          new RapidsShuffleIterator(localId, rapidsConf, transport.get,
             blocksForRapidsTransport.toArray, metricsUpdater, sparkTypes)
-          rapidsShuffleIterator.map(cb => {
-            (0, cb)
-          }).asInstanceOf[Iterator[(K, C)]]
         } else {
           Iterator.empty
         }
 
+        val rapidsBufferIdIter = cachedIt ++ cbArrayFromUcx
+
+
+        val materializeAndConcat = new AbstractSpillableCoalesceIterator(
+          rapidsBufferIdIter,
+          TargetSize(rapidsConf.gpuTargetBatchSizeBytes),
+          NoopMetric,
+          NoopMetric,
+          NoopMetric,
+          NoopMetric,
+          NoopMetric,
+          NoopMetric,
+          NoopMetric,
+          "ucx_coalesce") {
+
+          val batches: ArrayBuffer[ColumnarBatchProvider] = ArrayBuffer.empty
+          var onDeck: Option[ColumnarBatchProvider] = None
+
+          override def addBatchToConcat(batch: ColumnarBatchProvider): Unit = {
+            batches.append(batch)
+          }
+
+          override def cleanupConcatIsDone(): Unit = {
+            // TODO: set peak dev memory metric
+            batches.clear()
+          }
+
+          override protected def clearOnDeck(): Unit = {
+            onDeck.foreach(_.close)
+            onDeck = None
+          }
+
+          override def concatAllAndPutOnGPU(): ColumnarBatch = {
+            val batchesToConcat = batches.toArray.map(_.getBatch)
+            batches.clear()
+            ConcatAndConsumeAll.buildNonEmptyBatchFromTypes(
+                batchesToConcat, sparkTypes)
+          }
+
+          override protected def hasOnDeck: Boolean = {
+            onDeck.isDefined
+          }
+
+          override protected def saveOnDeck(batch: ColumnarBatchProvider): Unit = {
+            onDeck = Some(batch)
+          }
+
+          override protected def popOnDeck(): ColumnarBatchProvider  = {
+            val res = onDeck.get
+            clearOnDeck()
+            res
+          }
+
+          override def initNewBatch(batch: ColumnarBatchProvider): Unit = {
+            batches.foreach(_.close()) // TODO: use safeClose
+            batches.clear()
+          }
+        }
+
         val completionIter = CompletionIterator[(K, C), Iterator[(K, C)]](
-          cachedIt ++ cbArrayFromUcx, {
+          materializeAndConcat.map { cb => (0, cb) }.asInstanceOf[Iterator[(K, C)]], {
             context.taskMetrics().mergeShuffleReadMetrics()
           })
 

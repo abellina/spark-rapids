@@ -26,10 +26,19 @@ import org.apache.spark.sql.vectorized.ColumnarBatch;
 
 import java.util.Arrays;
 
+
 /** GPU column vector carved from a single buffer, like those from cudf's contiguousSplit. */
 public final class GpuColumnVectorFromBuffer extends GpuColumnVector {
+  public interface AliasHandler {
+    void incAliasCount();
+
+    void decAliasCount();
+  }
+
   private final DeviceMemoryBuffer buffer;
   private final TableMeta tableMeta;
+
+  private final AliasHandler handler;
 
   /**
    * Get a ColumnarBatch from a set of columns in a contiguous table. This differs from the
@@ -90,6 +99,37 @@ public final class GpuColumnVectorFromBuffer extends GpuColumnVector {
     }
   }
 
+  public static ColumnarBatch from(
+      Table table, DeviceMemoryBuffer buffer,
+      TableMeta meta, DataType[] colTypes,
+      AliasHandler handler) {
+    assert table != null : "Table cannot be null";
+    assert GpuColumnVector.typeConversionAllowed(table, colTypes) :
+            "Type conversion is not allowed from " + table + " to " + Arrays.toString(colTypes);
+    long rows = table.getRowCount();
+    if (rows != (int) rows) {
+      throw new IllegalStateException("Cannot support a batch larger that MAX INT rows");
+    }
+    int numColumns = table.getNumberOfColumns();
+    GpuColumnVector[] columns = new GpuColumnVector[numColumns];
+    try {
+      for (int i = 0; i < numColumns; ++i) {
+        ColumnVector v = table.getColumn(i);
+        DataType type = colTypes[i];
+        columns[i] = new GpuColumnVectorFromBuffer(
+                type, v.incRefCount(), buffer, meta, handler);
+      }
+      return new ColumnarBatch(columns, (int) rows);
+    } catch (Exception e) {
+      for (GpuColumnVector v : columns) {
+        if (v != null) {
+          v.close();
+        }
+      }
+      throw e;
+    }
+  }
+
   /**
    * Note that this type of [[GpuColumnVector]] takes a single buffer. The buffer is
    * shared between the various components of the vector (data, validity, offsets), and held
@@ -111,6 +151,20 @@ public final class GpuColumnVectorFromBuffer extends GpuColumnVector {
     super(type, cudfColumn);
     this.buffer = buffer;
     this.tableMeta = meta;
+    this.handler = null;
+  }
+
+  public GpuColumnVectorFromBuffer(
+          DataType type, ColumnVector cudfColumn,
+          DeviceMemoryBuffer buffer, TableMeta meta,
+          AliasHandler handler) {
+    super(type, cudfColumn);
+    this.buffer = buffer;
+    this.tableMeta = meta;
+    this.handler = handler;
+    if (handler != null) {
+      handler.incAliasCount();
+    }
   }
 
   /**
@@ -129,5 +183,13 @@ public final class GpuColumnVectorFromBuffer extends GpuColumnVector {
    */
   public TableMeta getTableMeta() {
     return tableMeta;
+  }
+
+  @Override
+  public void close() {
+    super.close();
+    if (handler != null) {
+      handler.decAliasCount();
+    }
   }
 }

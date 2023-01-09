@@ -17,15 +17,13 @@
 package com.nvidia.spark.rapids.shuffle
 
 import java.util.concurrent.{LinkedBlockingQueue, TimeUnit}
-
 import scala.collection.mutable
-
 import ai.rapids.cudf.{NvtxColor, NvtxRange}
-import com.nvidia.spark.rapids.{Arm, GpuSemaphore, NoopMetric, RapidsBuffer, RapidsConf, ShuffleReceivedBufferCatalog, ShuffleReceivedBufferId}
-
+import com.nvidia.spark.rapids.{Arm, GpuSemaphore, NoopMetric, RapidsBuffer, RapidsBufferId, RapidsConf, ShuffleReceivedBufferCatalog, ShuffleReceivedBufferId, SpillableColumnarBatch}
 import org.apache.spark.TaskContext
 import org.apache.spark.internal.Logging
 import org.apache.spark.shuffle.rapids.{RapidsShuffleFetchFailedException, RapidsShuffleTimeoutException}
+import org.apache.spark.sql.rapids.ColumnarBatchProvider
 import org.apache.spark.sql.rapids.{GpuShuffleEnv, ShuffleMetricsUpdater}
 import org.apache.spark.sql.types.DataType
 import org.apache.spark.sql.vectorized.ColumnarBatch
@@ -55,7 +53,7 @@ class RapidsShuffleIterator(
     sparkTypes: Array[DataType],
     catalog: ShuffleReceivedBufferCatalog = GpuShuffleEnv.getReceivedCatalog,
     timeoutSeconds: Long = GpuShuffleEnv.shuffleFetchTimeoutSeconds)
-  extends Iterator[ColumnarBatch]
+  extends Iterator[ColumnarBatchProvider]
     with Logging with Arm {
 
   /**
@@ -314,9 +312,10 @@ class RapidsShuffleIterator(
     Option(resolvedBatches.poll(timeoutSeconds, TimeUnit.SECONDS))
   }
 
-  override def next(): ColumnarBatch = {
-    var cb: ColumnarBatch = null
-    var sb: RapidsBuffer = null
+  override def next(): ColumnarBatchProvider  = {
+    var batchProvider: ColumnarBatchProvider = null
+    //var cb: ColumnarBatch = null
+    //var sb: RapidsBuffer = null
     val range = new NvtxRange(s"RapidshuffleIterator.next", NvtxColor.RED)
 
     // If N tasks downstream are accumulating memory we run the risk OOM
@@ -353,21 +352,31 @@ class RapidsShuffleIterator(
         val nvtxRangeAfterGettingBatch = new NvtxRange("RapidsShuffleIterator.gotBatch",
           NvtxColor.PURPLE)
         try {
-          sb = catalog.acquireBuffer(bufferId)
-          // these are receive spillable batches and are used only for this
-          // iterator, hence we can release.
-          cb = sb.releaseBatch(sparkTypes)
-          metricsUpdater.update(blockedTime, 1, sb.size, cb.numRows())
+          withResource(catalog.acquireBuffer(bufferId)) { sb =>
+            // these are receive spillable batches and are used only for this
+            // iterator, hence we can release.
+            val (_numRows, bufferSize) = sb.withColumnarBatch(sparkTypes) { cb =>
+              metricsUpdater.update(blockedTime, 1, sb.size, cb.numRows())
+              (cb.numRows(), sb.size)
+            }
+            batchProvider = new ColumnarBatchProvider {
+              override def getBatch: ColumnarBatch = {
+                sb.releaseBatch(sparkTypes)
+              }
+              override def numRows: Int = _numRows
+              override def sizeInBytes: Long = bufferSize
+            }
+          }
         } finally {
           nvtxRangeAfterGettingBatch.close()
           range.close()
-          if (sb != null) {
-            sb.close()
-          }
-          catalog.removeBuffer(bufferId)
+          //if (sb != null) {
+          //  sb.close()
+          //}
+          //catalog.removeBuffer(bufferId)
         }
       case Some(
-        TransferError(blockManagerId, shuffleBlockBatchId, mapIndex, errorMessage, throwable)) =>
+      TransferError(blockManagerId, shuffleBlockBatchId, mapIndex, errorMessage, throwable)) =>
         taskContext.foreach(GpuSemaphore.releaseIfNecessary)
         metricsUpdater.update(blockedTime, 0, 0, 0)
         val exp = new RapidsShuffleFetchFailedException(
@@ -390,6 +399,6 @@ class RapidsShuffleIterator(
       case _ =>
         throw new IllegalStateException(s"Invalid result type $result")
     }
-    cb
+    batchProvider
   }
 }

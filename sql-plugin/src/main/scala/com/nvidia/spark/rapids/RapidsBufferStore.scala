@@ -19,12 +19,11 @@ package com.nvidia.spark.rapids
 import java.util.Comparator
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
-
 import ai.rapids.cudf.{BaseDeviceMemoryBuffer, Cuda, DeviceMemoryBuffer, HostMemoryBuffer, MemoryBuffer, NvtxColor, NvtxRange}
+import com.nvidia.spark.rapids.GpuColumnVectorFromBuffer.AliasHandler
 import com.nvidia.spark.rapids.RapidsPluginImplicits._
 import com.nvidia.spark.rapids.StorageTier.{DEVICE, StorageTier}
 import com.nvidia.spark.rapids.format.TableMeta
-
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.types.DataType
 import org.apache.spark.sql.vectorized.ColumnarBatch
@@ -325,7 +324,7 @@ abstract class RapidsBufferStore(
       override val spillCallback: SpillCallback,
       catalog: RapidsBufferCatalog = RapidsBufferCatalog.singleton,
       deviceStorage: RapidsDeviceMemoryStore = RapidsBufferCatalog.getDeviceStorage)
-      extends RapidsBuffer with Arm {
+      extends RapidsBuffer with Arm with AliasHandler {
     private val MAX_UNSPILL_ATTEMPTS = 100
     private[this] var isValid = true
     protected[this] var refcount = 0
@@ -365,13 +364,19 @@ abstract class RapidsBufferStore(
       isValid
     }
 
-    override def getColumnarBatchInternal(sparkTypes: Array[DataType]): ColumnarBatch = {
+    override protected def getColumnarBatchInternal(sparkTypes: Array[DataType]): ColumnarBatch = {
       // NOTE: Cannot hold a lock on this buffer here because memory is being
       // allocated. Allocations can trigger synchronous spills which can
       // deadlock if another thread holds the device store lock and is trying
       // to spill to this store.
       withResource(getDeviceMemoryBuffer) { deviceBuffer =>
         columnarBatchFromDeviceBuffer(deviceBuffer, sparkTypes)
+      }
+    }
+
+    override def aliasColumnarBatch(sparkTypes: Array[DataType]): ColumnarBatch = synchronized {
+      withResource(getDeviceMemoryBuffer) { deviceBuffer =>
+        columnarBatchFromDeviceBuffer(deviceBuffer, sparkTypes, this)
       }
     }
 
@@ -416,11 +421,13 @@ abstract class RapidsBufferStore(
     }
 
     protected def columnarBatchFromDeviceBuffer(devBuffer: DeviceMemoryBuffer,
-        sparkTypes: Array[DataType]): ColumnarBatch = {
+        sparkTypes: Array[DataType],
+        aliasHandler: AliasHandler = null): ColumnarBatch = {
       val bufferMeta = meta.bufferMeta()
       if (bufferMeta == null || bufferMeta.codecBufferDescrsLength == 0) {
-        MetaUtils.getBatchFromMeta(devBuffer, meta, sparkTypes)
+        MetaUtils.getBatchFromMeta(devBuffer, meta, sparkTypes, aliasHandler)
       } else {
+        // TODO: handler?
         GpuCompressedColumnVector.from(devBuffer, meta)
       }
     }
@@ -536,5 +543,17 @@ abstract class RapidsBufferStore(
     }
 
     override def toString: String = s"$name buffer size=$size"
+
+    var aliasCount = 0L
+
+    override def incAliasCount(): Unit = synchronized {
+      aliasCount += 1
+      logWarning(s"INC alias count ${id} count ${aliasCount}")
+    }
+
+    override def decAliasCount(): Unit = synchronized {
+      aliasCount -= 1
+      logWarning(s"DEC alias count ${id} count ${aliasCount}")
+    }
   }
 }

@@ -29,6 +29,7 @@ import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.expressions.{Attribute, Expression, SortOrder}
 import org.apache.spark.sql.catalyst.plans.physical.Partitioning
 import org.apache.spark.sql.execution.SparkPlan
+import org.apache.spark.sql.rapids.ColumnarBatchProvider
 import org.apache.spark.sql.types.{DataType, NullType, StructType}
 import org.apache.spark.sql.vectorized.ColumnarBatch
 
@@ -741,5 +742,191 @@ case class GpuCoalesceBatches(child: SparkPlan, goal: CoalesceGoal)
           }
       }
     }
+  }
+}
+
+abstract class AbstractSpillableCoalesceIterator(
+    batches: Iterator[ColumnarBatchProvider],
+    goal: CoalesceSizeGoal,
+    numInputRows: GpuMetric,
+    numInputBatches: GpuMetric,
+    numOutputRows: GpuMetric,
+    numOutputBatches: GpuMetric,
+    streamTime: GpuMetric,
+    concatTime: GpuMetric,
+    opTime: GpuMetric,
+    opName: String) extends Iterator[ColumnarBatch] with Arm with Logging {
+
+  private val iter = new CollectTimeIterator(s"$opName: collect", batches, streamTime)
+
+  private var batchInitialized: Boolean = false
+
+  /**
+   * Return true if there is something saved on deck for later processing.
+   */
+  protected def hasOnDeck: Boolean
+
+  /**
+   * Save a batch for later processing.
+   */
+  protected def saveOnDeck(batch: ColumnarBatchProvider): Unit
+
+  /**
+   * If there is anything saved on deck close it.
+   */
+  protected def clearOnDeck(): Unit
+
+  /**
+   * Remove whatever is on deck and return it.
+   */
+  protected def popOnDeck(): ColumnarBatchProvider
+
+  /** Perform the necessary cleanup for an input batch */
+  protected def cleanupInputBatch(batch: ColumnarBatchProvider): Unit = batch.close()
+
+  /** Optional row limit */
+  var batchRowLimit: Int = 0
+
+  // note that TaskContext.get() can return null during unit testing so we wrap it in an
+  // option here
+  Option(TaskContext.get())
+    .foreach(_.addTaskCompletionListener[Unit](_ => clearOnDeck()))
+
+  override def hasNext: Boolean = {
+    while (!hasOnDeck && iter.hasNext) {
+      val cb: ColumnarBatchProvider  = iter.next()
+      try {
+        withResource(new MetricRange(opTime)) { _ =>
+          val numRows = cb.numRows
+          numInputBatches += 1
+          numInputRows += numRows
+          if (numRows > 0) {
+            saveOnDeck(cb)
+          } else {
+            cleanupInputBatch(cb)
+          }
+        }
+      } catch {
+        case t: Throwable =>
+          cleanupInputBatch(cb)
+          throw t
+      }
+    }
+    hasOnDeck
+  }
+
+  /**
+   * Called first to initialize any state needed for a new batch to be created.
+   */
+  def initNewBatch(batch: ColumnarBatchProvider): Unit
+
+  /**
+   * Called to add a new batch to the final output batch. The batch passed in will
+   * not be closed.  If it needs to be closed it is the responsibility of the child class
+   * to do it.
+   *
+   * @param batch the batch to add in.
+   */
+  def addBatchToConcat(batch: ColumnarBatchProvider): Unit
+
+  /**
+   * Called after all of the batches have been added in.
+   *
+   * @return the concated batches on the GPU.
+   */
+  def concatAllAndPutOnGPU(): ColumnarBatch
+
+  /**
+   * Called to cleanup any state when a batch is done (even if there was a failure)
+   */
+  def cleanupConcatIsDone(): Unit
+
+  /**
+   * Each call to next() will combine incoming batches up to the limit specified
+   * by [[RapidsConf.GPU_BATCH_SIZE_BYTES]]. However, if any incoming batch is greater
+   * than this size it will be passed through unmodified.
+   *
+   * If the coalesce goal is `RequireSingleBatch` then an exception will be thrown if there
+   * is remaining data after the first batch is produced.
+   *
+   * @return The coalesced batch
+   */
+  override def next(): ColumnarBatch = withResource(new MetricRange(opTime)) { _ =>
+    // reset batch state
+    batchInitialized = false
+    batchRowLimit = 0
+
+    try {
+      var numRows: Long = 0 // to avoid overflows
+      var numBytes: Long = 0
+
+      // check if there is a batch "on deck" from a previous call to next()
+      if (hasOnDeck) {
+        val batch = popOnDeck()
+        numRows += batch.numRows
+        numBytes += batch.sizeInBytes
+        addBatch(batch)
+      }
+
+      // there is a hard limit of 2^31 rows
+      while (numRows < Int.MaxValue && !hasOnDeck && iter.hasNext) {
+        val cbFromIter = iter.next()
+        closeOnExcept(cbFromIter) { _ =>
+          val nextRows = cbFromIter.numRows
+          numInputBatches += 1
+
+          // filter out empty batches
+          if (nextRows > 0) {
+            numInputRows += nextRows
+            val nextBytes = cbFromIter.sizeInBytes
+
+            // calculate the new sizes based on this input batch being added to the current
+            // output batch
+            val wouldBeRows = numRows + nextRows
+            val wouldBeBytes = numBytes + nextBytes
+
+            if (wouldBeRows > Int.MaxValue) {
+              saveOnDeck(cbFromIter)
+            } else if (batchRowLimit > 0 && wouldBeRows > batchRowLimit) {
+              saveOnDeck(cbFromIter)
+            } else if (wouldBeBytes > goal.targetSizeBytes && numBytes > 0) {
+              // There are no explicit checks for the concatenate result exceeding the cudf 2^31
+              // row count limit for any column. We are relying on cudf's concatenate to throw
+              // an exception if this occurs and limiting performance-oriented goals to under
+              // 2GB data total to avoid hitting that error.
+              saveOnDeck(cbFromIter)
+            } else {
+              addBatch(cbFromIter)
+              numRows = wouldBeRows
+              numBytes = wouldBeBytes
+            }
+          } else {
+            cleanupInputBatch(cbFromIter)
+          }
+        }
+      }
+
+      val isLastBatch = !(hasOnDeck || iter.hasNext)
+
+      numOutputRows += numRows
+      numOutputBatches += 1
+      withResource(new NvtxWithMetrics(s"$opName concat", NvtxColor.CYAN, concatTime)) { _ =>
+        val batch = concatAllAndPutOnGPU()
+        if (isLastBatch) {
+          GpuColumnVector.tagAsFinalBatch(batch)
+        }
+        batch
+      }
+    } finally {
+      cleanupConcatIsDone()
+    }
+  }
+
+  private def addBatch(batch: ColumnarBatchProvider): Unit = {
+    if (!batchInitialized) {
+      initNewBatch(batch)
+      batchInitialized = true
+    }
+    addBatchToConcat(batch)
   }
 }
