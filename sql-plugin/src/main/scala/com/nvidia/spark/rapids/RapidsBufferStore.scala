@@ -97,7 +97,9 @@ abstract class RapidsBufferStore(
 
     def nextSpillableBuffer(): RapidsBufferBase = synchronized {
       val sp = spillable.poll()
-      totalBytesSpillable -= sp.size
+      if (sp != null) {
+        totalBytesSpillable -= sp.size
+      }
       sp
     }
 
@@ -377,7 +379,13 @@ abstract class RapidsBufferStore(
 
     def removeSpillable(): Unit = buffers.removeSpillable(id)
 
-    def makeSpillable(): Unit = buffers.makeSpillable(id)
+    def makeSpillable(): Unit = {
+      if (isValid) {
+        buffers.makeSpillable(id)
+      } else {
+        logWarning(s"Skipped making spillable ${id} not valid..")
+      }
+    }
 
     override def releaseBatch(sparkTypes: Array[DataType]): ColumnarBatch = {
       synchronized {

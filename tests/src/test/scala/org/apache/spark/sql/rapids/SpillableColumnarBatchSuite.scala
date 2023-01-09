@@ -55,7 +55,7 @@ class SpillableColumnarBatchSuite extends FunSuite with Arm {
     override def getSpillPriority: Long = 0
     override def setSpillPriority(priority: Long): Unit = {}
     override def close(): Unit = {}
-    override protected def getColumnarBatch(
+    override def getColumnarBatch(
       sparkTypes: Array[DataType]): ColumnarBatch = null
     override val spillCallback: SpillCallback = RapidsBuffer.defaultSpillCallback
     override def withColumnarBatch[T](
