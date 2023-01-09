@@ -20,7 +20,6 @@ import java.nio.{ByteBuffer, ByteOrder}
 import scala.collection.mutable.ArrayBuffer
 import ai.rapids.cudf._
 import com.google.flatbuffers.FlatBufferBuilder
-import com.nvidia.spark.rapids.GpuColumnVectorFromBuffer.AliasHandler
 import com.nvidia.spark.rapids.format._
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.types.DataType
@@ -193,11 +192,9 @@ object MetaUtils extends Arm {
    * @return columnar batch that must be closed by the caller
    */
   def getBatchFromMeta(deviceBuffer: DeviceMemoryBuffer, meta: TableMeta,
-      sparkTypes: Array[DataType],
-      aliasHandler: AliasHandler = null): ColumnarBatch = {
+      sparkTypes: Array[DataType]): ColumnarBatch = {
     withResource(getTableFromMeta(deviceBuffer, meta)) { table =>
-      GpuColumnVectorFromBuffer.from(
-        table, deviceBuffer, meta, sparkTypes, aliasHandler)
+      GpuColumnVectorFromBuffer.from(table, deviceBuffer, meta, sparkTypes)
     }
   }
 }

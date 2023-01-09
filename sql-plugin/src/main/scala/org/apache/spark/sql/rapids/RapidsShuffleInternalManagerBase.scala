@@ -927,8 +927,7 @@ class RapidsCachingWriter[K, V](
                 SpillPriorities.OUTPUT_FOR_SHUFFLE_INITIAL_PRIORITY,
                 // we don't need to sync here, because we sync on the cuda
                 // stream after sliceInternalOnGpu (contiguous_split)
-                needsSync = false,
-                allowAliasing = true)
+                needsSync = false)
             case c: GpuCompressedColumnVector =>
               val buffer = c.getTableBuffer
               buffer.incRefCount()
@@ -944,8 +943,7 @@ class RapidsCachingWriter[K, V](
                 SpillPriorities.OUTPUT_FOR_SHUFFLE_INITIAL_PRIORITY,
                 // we don't need to sync here, because we sync on the cuda
                 // stream after compression.
-                needsSync = false,
-                allowAliasing = true)
+                needsSync = false)
             case c => throw new IllegalStateException(s"Unexpected column type: ${c.getClass}")
           }
           bytesWritten += partSize

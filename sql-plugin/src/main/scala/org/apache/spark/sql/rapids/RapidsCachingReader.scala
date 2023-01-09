@@ -171,7 +171,7 @@ class RapidsCachingReader[K, C](
                   metrics.incLocalBytesRead(cachedBytesRead)
                   metrics.incRecordsRead(cb.numRows())
                 }
-                buffer.aliasColumnarBatch(sparkTypes)
+                buffer.getColumnarBatch(sparkTypes)
               }
             }
           }

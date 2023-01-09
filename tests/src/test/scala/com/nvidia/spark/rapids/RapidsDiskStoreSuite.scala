@@ -93,7 +93,7 @@ class RapidsDiskStoreSuite extends FunSuiteWithTempDir with Arm with MockitoSuga
               addTableToStore(devStore, bufferId, spillPriority)
               val expectedBatch = withResource(catalog.acquireBuffer(bufferId)) { buffer =>
                 assertResult(StorageTier.DEVICE)(buffer.storageTier)
-                buffer.getColumnarBatchInternal(sparkTypes)
+                buffer.getColumnarBatch(sparkTypes)
               }
               withResource(expectedBatch) { expectedBatch =>
                 devStore.synchronousSpill(0)

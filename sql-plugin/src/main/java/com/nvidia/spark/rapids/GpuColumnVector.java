@@ -1115,7 +1115,7 @@ public class GpuColumnVector extends GpuColumnVectorBase {
   }
 
   @Override
-  public void close() {
+  public final void close() {
     // Just pass through the reference counting
     cudfCv.close();
   }

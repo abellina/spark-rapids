@@ -185,7 +185,7 @@ class RapidsShuffleIteratorSuite extends RapidsShuffleTestHelper {
     abstract class MockRapidsBuffer extends RapidsBuffer {
       override def withColumnarBatch[T](
         sparkTypes: Array[DataType])(fn: ColumnarBatch => T): T = {
-        withResource(getColumnarBatchInternal(sparkTypes)) { cb =>
+        withResource(getColumnarBatch(sparkTypes)) { cb =>
           fn(cb)
         }
       }
