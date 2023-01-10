@@ -262,7 +262,7 @@ abstract class BaseHashJoinIterator(
   // We can cache this because the build side is not changing
   private lazy val streamMagnificationFactor = joinType match {
     case _: InnerLike | LeftOuter | RightOuter =>
-      built.withBatch { builtBatch =>
+      built.withColumnarBatch { builtBatch =>
         withResource(GpuProjectExec.project(builtBatch, boundBuiltKeys)) { builtKeys =>
           guessStreamMagnificationFactor(builtKeys)
         }
@@ -414,12 +414,12 @@ class HashJoinIterator(
     //  from the lazy spillable. Is that possible?
     withResource(new NvtxWithMetrics("hash join gather map", NvtxColor.ORANGE, joinTime)) { _ =>
       logInfo(s"over at joinGathererLeftRight with ${leftData} and ${rightData}")
-      val maps = leftData.withBatch { leftBatch =>
+      val maps = leftData.withColumnarBatch { leftBatch =>
         val leftKeysTable =
           withResource(GpuProjectExec.project(leftBatch, leftKeys)) { leftKeysBatch =>
             GpuColumnVector.from(leftKeysBatch)
           }
-        rightData.withBatch { rightBatch =>
+        rightData.withColumnarBatch { rightBatch =>
           val rightKeysTable =
             withResource(GpuProjectExec.project(rightBatch, rightKeys)) { rightKeysBatch =>
               GpuColumnVector.from(rightKeysBatch)
@@ -492,12 +492,12 @@ class ConditionalHashJoinIterator(
       rightData: LazySpillableColumnarBatch): Option[JoinGatherer] = {
     val nullEquality = if (compareNullsEqual) NullEquality.EQUAL else NullEquality.UNEQUAL
     withResource(new NvtxWithMetrics("hash join gather map", NvtxColor.ORANGE, joinTime)) { _ =>
-      val maps = leftData.withBatch { leftBatch =>
+      val maps = leftData.withColumnarBatch { leftBatch =>
         val leftKeysTable =
           withResource(GpuProjectExec.project(leftBatch, leftKeys)) { leftKeysBatch =>
             GpuColumnVector.from(leftKeysBatch)
           }
-        rightData.withBatch { rightBatch =>
+        rightData.withColumnarBatch { rightBatch =>
           val rightKeysTable =
             withResource(GpuProjectExec.project(rightBatch, rightKeys)) { rightKeysBatch =>
               GpuColumnVector.from(rightKeysBatch)
@@ -607,7 +607,7 @@ class HashedExistenceJoinIterator(
     withResource(
       new NvtxWithMetrics("existence join scatter map", NvtxColor.ORANGE, joinTime)) { _ =>
         withResource(leftKeysTable(leftColumnarBatch)) { leftKeysTab =>
-          spillableBuiltBatch.withBatch { builtBatch =>
+          spillableBuiltBatch.withColumnarBatch { builtBatch =>
             withResource(GpuProjectExec.project(builtBatch, boundBuildKeys)) { rightKeys =>
               withResource(GpuColumnVector.from(rightKeys)) { rightKeysTab =>
                 compiledConditionRes.map { compiledCondition =>

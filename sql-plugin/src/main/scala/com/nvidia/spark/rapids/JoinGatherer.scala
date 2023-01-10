@@ -181,10 +181,10 @@ trait LazySpillableColumnarBatch extends LazySpillable with Arm {
   /**
    * Get the batch that this wraps and unspill it if needed.
    */
-  def withBatch[T](fn: ColumnarBatch => T): T
+  def withColumnarBatch[T](fn: ColumnarBatch => T): T
 
   def withTable[T](fn: Table => T): T = {
-    withBatch { batch =>
+    withColumnarBatch { batch =>
       withResource(GpuColumnVector.from(batch)) { tbl =>
         fn(tbl)
       }
@@ -252,7 +252,7 @@ class LazySpillableColumnarBatchImpl(
     }
   }
 
-  override def withBatch[T](fn: ColumnarBatch => T): T = {
+  override def withColumnarBatch[T](fn: ColumnarBatch => T): T = {
     val cbFn = synchronized {
       if (cached.isDefined) {
         logInfo(s"cached withBatch ${id}")
@@ -599,7 +599,7 @@ class JoinGathererImpl(
     val start = gatheredUpTo
     assert((start + n) <= totalRows)
     val ret = gatherMap.withColumnView(start, n) { gatherView =>
-      val (gatheredTable, types) = data.withBatch { batch =>
+      val (gatheredTable, types) = data.withColumnarBatch { batch =>
         withResource(GpuColumnVector.from(batch)) { table =>
           (table.gather(gatherView, boundsCheckPolicy), 
             GpuColumnVector.extractTypes(batch))
