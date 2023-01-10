@@ -351,29 +351,29 @@ class RapidsShuffleIterator(
       case Some(BufferReceived(bufferId)) =>
         val nvtxRangeAfterGettingBatch = new NvtxRange("RapidsShuffleIterator.gotBatch",
           NvtxColor.PURPLE)
+        var sb: RapidsBuffer = null
         try {
-          withResource(catalog.acquireBuffer(bufferId)) { sb =>
-            // these are receive spillable batches and are used only for this
-            // iterator, hence we can release.
-            val (_numRows, bufferSize) = sb.withColumnarBatch(sparkTypes) { cb =>
-              metricsUpdater.update(blockedTime, 1, sb.size, cb.numRows())
-              (cb.numRows(), sb.size)
+          sb = catalog.acquireBuffer(bufferId)
+          // these are receive spillable batches and are used only for this
+          // iterator, hence we can release.
+          val (_numRows, bufferSize) = sb.withColumnarBatch(sparkTypes) { cb =>
+            metricsUpdater.update(blockedTime, 1, sb.size, cb.numRows())
+            (cb.numRows(), sb.size)
+          }
+          batchProvider = new ColumnarBatchProvider {
+            override def getBatch: ColumnarBatch = {
+              sb.releaseBatch(sparkTypes)
             }
-            batchProvider = new ColumnarBatchProvider {
-              override def getBatch: ColumnarBatch = {
-                sb.releaseBatch(sparkTypes)
-              }
-              override def numRows: Int = _numRows
-              override def sizeInBytes: Long = bufferSize
-            }
+            override def numRows: Int = _numRows
+            override def sizeInBytes: Long = bufferSize
           }
         } finally {
           nvtxRangeAfterGettingBatch.close()
           range.close()
-          //if (sb != null) {
-          //  sb.close()
-          //}
-          //catalog.removeBuffer(bufferId)
+          if (sb != null) {
+            sb.close()
+          }
+          catalog.removeBuffer(bufferId)
         }
       case Some(
       TransferError(blockManagerId, shuffleBlockBatchId, mapIndex, errorMessage, throwable)) =>

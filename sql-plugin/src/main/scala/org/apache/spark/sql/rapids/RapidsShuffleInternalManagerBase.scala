@@ -914,6 +914,9 @@ class RapidsCachingWriter[K, V](
         var partSize: Long = 0
         val blockId = ShuffleBlockId(handle.shuffleId, mapId, partId)
         val bufferId = catalog.nextShuffleBufferId(blockId)
+        catalog.registerAlias(
+          bufferId,
+          SpillPriorities.OUTPUT_FOR_SHUFFLE_INITIAL_PRIORITY)
         if (batch.numRows > 0 && batch.numCols > 0) {
           // Add the table to the shuffle store
           batch.column(0) match {
@@ -948,8 +951,6 @@ class RapidsCachingWriter[K, V](
           }
           bytesWritten += partSize
           sizes(partId) += partSize
-          catalog.registerAlias(
-            bufferId, SpillPriorities.OUTPUT_FOR_SHUFFLE_INITIAL_PRIORITY)
         } else {
           // no device data, tracking only metadata
           val tableMeta = MetaUtils.buildDegenerateTableMeta(batch)

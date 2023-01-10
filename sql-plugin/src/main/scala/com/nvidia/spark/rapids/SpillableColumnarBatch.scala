@@ -138,9 +138,10 @@ class SpillableColumnarBatchImpl (
   }
 
   override def releaseBatch(): ColumnarBatch = {
+    logWarning(s"At releaseBatch for ${id}")
     val batch = withRapidsBuffer { rapidsBuffer =>
       GpuSemaphore.acquireIfNecessary(TaskContext.get(), semWait)
-      rapidsBuffer.getColumnarBatch(sparkTypes)
+      rapidsBuffer.releaseBatch(sparkTypes)
     }
     RapidsBufferAliasTracker.stopTracking(id, this)
     closed = true
