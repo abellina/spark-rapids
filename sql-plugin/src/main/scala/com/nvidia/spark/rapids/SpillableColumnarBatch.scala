@@ -397,16 +397,8 @@ class SpillableBuffer (
   }
 
   /**
-   * Get the device buffer.
-   * @note It is the responsibility of the caller to close the buffer.
+   * Use the device buffer.
    */
-  def getDeviceBuffer(): DeviceMemoryBuffer = {
-    withResource(RapidsBufferCatalog.acquireBuffer(id)) { rapidsBuffer =>
-      GpuSemaphore.acquireIfNecessary(TaskContext.get(), semWait)
-      rapidsBuffer.getDeviceMemoryBuffer
-    }
-  }
-
   def withRapidsBuffer[T](fn: RapidsBuffer => T): T = {
     withResource(RapidsBufferCatalog.acquireBuffer(id)) { rapidsBuffer =>
       fn(rapidsBuffer)
