@@ -29,7 +29,7 @@ import java.util.concurrent.ConcurrentHashMap
 /**
  * Holds a ColumnarBatch that the backing buffers on it can be spilled.
  */
-trait SpillableColumnarBatch extends AutoCloseable {
+trait SpillableColumnarBatch extends AutoCloseable with RapidsBufferAlias {
   /**
    * The number of rows stored in this batch.
    */
@@ -80,6 +80,8 @@ class JustRowsColumnarBatch(numRows: Int, semWait: GpuMetric)
       fn(cb)
     }
   }
+
+  override def getSpillPriority: Long = -1
 }
 
 /**
@@ -92,10 +94,14 @@ class SpillableColumnarBatchImpl (
     id: RapidsBufferId,
     rowCount: Int,
     sparkTypes: Array[DataType],
+    var spillPriority: Long,
     semWait: GpuMetric)
-    extends  SpillableColumnarBatch with Arm with Logging {
+    extends SpillableColumnarBatch
+      with RapidsBufferAlias
+      with Arm
+      with Logging {
 
-  SpillableColumnarBatch.trackSpillable(id)
+  RapidsBufferAliasTracker.track(id, this)
 
   private var closed = false
 
@@ -115,8 +121,10 @@ class SpillableColumnarBatchImpl (
   /**
    * Set a new spill priority.
    */
-  override def setSpillPriority(priority: Long): Unit =
-    withRapidsBuffer(_.setSpillPriority(priority))
+  override def setSpillPriority(priority: Long): Unit = {
+    spillPriority = priority
+    RapidsBufferAliasTracker.priorityUpdated(id, this)
+  }
 
   override def withColumnarBatch[T](fn: ColumnarBatch => T): T = {
     withRapidsBuffer { rapidsBuffer =>
@@ -143,56 +151,89 @@ class SpillableColumnarBatchImpl (
     logWarning(s"At close for ${id}")
     if (!closed) {
       // closing my reference
-      SpillableColumnarBatch.closeSpillable(id)
+      RapidsBufferAliasTracker.stopTracking(id, this)
       closed = true
+    }
+  }
+
+  override def getSpillPriority: Long = spillPriority
+}
+
+trait RapidsBufferAlias {
+  def getSpillPriority: Long
+}
+
+object RapidsBufferAliasTracker extends Arm with Logging {
+
+  private val bufferSpillableCount =
+    new ConcurrentHashMap[RapidsBufferId, HashedPriorityQueue[RapidsBufferAlias]]()
+
+  private def comparator(alias1: RapidsBufferAlias, alias2: RapidsBufferAlias): Int = {
+    if (alias1.getSpillPriority == alias2.getSpillPriority) {
+      0
+    } else if (alias1.getSpillPriority > alias2.getSpillPriority) {
+      1
+    } else {
+      -1
+    }
+  }
+
+  def track(rapidsBufferId: RapidsBufferId, alias: RapidsBufferAlias): Unit = {
+    bufferSpillableCount.compute(rapidsBufferId, (_, a) => {
+      var aliases = a
+      if (aliases == null) {
+        aliases = new HashedPriorityQueue[RapidsBufferAlias](comparator)
+      }
+      aliases.offer(alias)
+      aliases
+    })
+  }
+
+  def stopTracking(rapidsBufferId: RapidsBufferId, alias: RapidsBufferAlias): Unit = {
+    val newAliases = bufferSpillableCount.compute(rapidsBufferId, (_, aliases) => {
+      if (aliases == null) {
+        throw new IllegalStateException(
+          s"$rapidsBufferId not found and we attempted to remove spillable!")
+      }
+
+      aliases.remove(alias)
+
+      if (aliases.size() == 0) {
+        null // remove since no more aliases exist
+      } else {
+        aliases
+      }
+    })
+
+    if (newAliases == null) {
+      // we can now remove the underlying RapidsBufferId
+      logWarning(s"Removing buffer ${rapidsBufferId} as spillable count is now 0")
+      RapidsBufferCatalog.removeBuffer(rapidsBufferId)
+    } else {
+      logWarning(s"NOT removing buffer ${rapidsBufferId} as " +
+        s"spillable count is now ${newAliases.size()}")
+    }
+  }
+
+  def priorityUpdated(id: RapidsBufferId, alias: RapidsBufferAlias): Unit = {
+    withResource(RapidsBufferCatalog.acquireBuffer(id)) { buffer =>
+      val newAliases = bufferSpillableCount.compute(id, (_, aliases) => {
+        if (aliases == null) {
+          throw new IllegalStateException(
+            s"Attempted to update priority for unknown RapidsBuffer ${id}")
+        }
+        aliases.priorityUpdated(alias)
+        aliases
+      })
+
+      // update the priority of the underlying RapidsBuffer to be the
+      // maximum priority for all aliases associated with it
+      buffer.setSpillPriority(newAliases.peek().getSpillPriority)
     }
   }
 }
 
 object SpillableColumnarBatch extends Arm with Logging {
-  def apply(rapidsBuffer: RapidsBuffer,
-            sparkTypes: Array[DataType]): SpillableColumnarBatch = {
-    rapidsBuffer.withColumnarBatch (sparkTypes) { cb =>
-      new SpillableColumnarBatchImpl(
-        rapidsBuffer.id,
-        cb.numRows(),
-        sparkTypes,
-        rapidsBuffer.spillCallback.semaphoreWaitTime)
-    }
-  }
-
-  val bufferSpillableCount = new ConcurrentHashMap[RapidsBufferId, java.lang.Integer]()
-
-  def trackSpillable(rapidsBufferId: RapidsBufferId): Unit = {
-    bufferSpillableCount.compute(rapidsBufferId, (_, count) => {
-      if (count == null) {
-        1 // first association
-      } else {
-        count + 1
-      }
-    })
-  }
-
-  def closeSpillable(rapidsBufferId: RapidsBufferId): Unit = {
-    val newCount = bufferSpillableCount.compute(rapidsBufferId, (_, count) => {
-      var newCount: java.lang.Integer = null
-      if (count == null) {
-        throw new IllegalStateException(
-          s"$rapidsBufferId not found and we attempted to remove spillable!")
-      } else if (count > 1) {
-        newCount = count - 1
-      } else {
-        newCount = null // remove the last spillable reference to this
-      }
-      newCount
-    })
-    if (newCount == null) {
-      // we can now remove the underlying RapidsBufferId
-      logWarning(s"Removing buffer ${rapidsBufferId} as spillable count is now 0")
-      RapidsBufferCatalog.removeBuffer(rapidsBufferId)
-    }
-  }
-
   /**
    * Create a new SpillableColumnarBatch.
    *
@@ -213,7 +254,8 @@ object SpillableColumnarBatch extends Arm with Logging {
     } else {
       val types = GpuColumnVector.extractTypes(batch)
       val id = addBatch(batch, priority, spillCallback)
-      new SpillableColumnarBatchImpl(id, numRows, types, spillCallback.semaphoreWaitTime)
+      new SpillableColumnarBatchImpl(
+        id, numRows, types, priority, spillCallback.semaphoreWaitTime)
     }
   }
 
@@ -247,6 +289,7 @@ object SpillableColumnarBatch extends Arm with Logging {
           id,
           ct.getRowCount.toInt,
           sparkTypes,
+          priority,
           spillCallback.semaphoreWaitTime)
       }
     }
@@ -290,12 +333,11 @@ object SpillableColumnarBatch extends Arm with Logging {
           (0 until numColumns)
               .forall(i => batch.column(i).isInstanceOf[GpuColumnVectorFromBuffer])) {
         val cv = batch.column(0).asInstanceOf[GpuColumnVectorFromBuffer]
-        val table = GpuColumnVector.from(batch)
         val buff = cv.getBuffer
-
         buff.getEventHandler match {
           case null =>
             val id = TempSpillBufferId()
+            val table = GpuColumnVector.from(batch)
             buff.incRefCount()
             RapidsBufferCatalog.addTable(id, table, buff, cv.getTableMeta, initialSpillPriority,
               spillCallback)

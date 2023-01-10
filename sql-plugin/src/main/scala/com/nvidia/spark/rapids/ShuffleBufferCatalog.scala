@@ -77,6 +77,15 @@ class ShuffleBufferCatalog(
       new ConcurrentHashMap[ShuffleBlockId, ArrayBuffer[ShuffleBufferId]]))
   }
 
+  var shuffleAlias = new ConcurrentHashMap[ShuffleBufferId, RapidsBufferAlias]()
+  def registerAlias(bufferId: ShuffleBufferId, priority: Long): Unit = {
+    val alias = new RapidsBufferAlias {
+      override def getSpillPriority: Long = priority
+    }
+    shuffleAlias.put(bufferId, alias)
+    RapidsBufferAliasTracker.track(bufferId, alias)
+  }
+
   /** Frees all buffers that correspond to the specified shuffle. */
   def unregisterShuffle(shuffleId: Int): Unit = {
     // This might be called on a background thread that has not set the device yet.
@@ -89,6 +98,12 @@ class ShuffleBufferCatalog(
         bufferIds.foreach { id =>
           tableMap.remove(id.tableId)
           catalog.removeBuffer(id)
+          val alias = shuffleAlias.remove(id)
+          if (alias == null) {
+            throw new IllegalStateException(
+              s"Attempted to remove a shuffle alias, but couldn't find it for ${id}")
+          }
+          RapidsBufferAliasTracker.stopTracking(id, alias)
         }
       }
       info.blockMap.forEachValue(Long.MaxValue, bufferRemover)

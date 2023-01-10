@@ -948,6 +948,8 @@ class RapidsCachingWriter[K, V](
           }
           bytesWritten += partSize
           sizes(partId) += partSize
+          catalog.registerAlias(
+            bufferId, SpillPriorities.OUTPUT_FOR_SHUFFLE_INITIAL_PRIORITY)
         } else {
           // no device data, tracking only metadata
           val tableMeta = MetaUtils.buildDegenerateTableMeta(batch)

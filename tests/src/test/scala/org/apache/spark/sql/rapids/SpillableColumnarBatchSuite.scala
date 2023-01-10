@@ -37,7 +37,7 @@ class SpillableColumnarBatchSuite extends FunSuite with Arm {
     catalog.registerNewBuffer(mockBuffer)
     assertResult(oldBufferCount + 1)(catalog.numBuffers)
     val spillableBatch = new SpillableColumnarBatchImpl(
-      id, 5, Array[DataType](IntegerType), NoopMetric)
+      id, 5, Array[DataType](IntegerType), -1, NoopMetric)
     spillableBatch.close()
     assertResult(oldBufferCount)(catalog.numBuffers)
   }
