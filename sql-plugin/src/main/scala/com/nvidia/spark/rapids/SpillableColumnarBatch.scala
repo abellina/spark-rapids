@@ -122,8 +122,10 @@ class SpillableColumnarBatchImpl (
    * Set a new spill priority.
    */
   override def setSpillPriority(priority: Long): Unit = {
-    spillPriority = priority
-    RapidsBufferAliasTracker.priorityUpdated(id, this)
+    withRapidsBuffer { _ =>
+      spillPriority = priority
+      RapidsBufferAliasTracker.priorityUpdated(id, this)
+    }
   }
 
   override def withColumnarBatch[T](fn: ColumnarBatch => T): T = {
@@ -138,9 +140,10 @@ class SpillableColumnarBatchImpl (
   override def releaseBatch(): ColumnarBatch = {
     val batch = withRapidsBuffer { rapidsBuffer =>
       GpuSemaphore.acquireIfNecessary(TaskContext.get(), semWait)
-      rapidsBuffer.releaseBatch(sparkTypes)
+      rapidsBuffer.getColumnarBatch(sparkTypes)
     }
-    close() // force a close
+    RapidsBufferAliasTracker.stopTracking(id, this)
+    closed = true
     batch
   }
 
@@ -189,7 +192,7 @@ object RapidsBufferAliasTracker extends Arm with Logging {
     })
   }
 
-  def stopTracking(rapidsBufferId: RapidsBufferId, alias: RapidsBufferAlias): Unit = {
+  def stopTracking(rapidsBufferId: RapidsBufferId, alias: RapidsBufferAlias): Boolean = {
     val newAliases = bufferSpillableCount.compute(rapidsBufferId, (_, aliases) => {
       if (aliases == null) {
         throw new IllegalStateException(
@@ -209,9 +212,11 @@ object RapidsBufferAliasTracker extends Arm with Logging {
       // we can now remove the underlying RapidsBufferId
       logWarning(s"Removing buffer ${rapidsBufferId} as spillable count is now 0")
       RapidsBufferCatalog.removeBuffer(rapidsBufferId)
+      true
     } else {
       logWarning(s"NOT removing buffer ${rapidsBufferId} as " +
-        s"spillable count is now ${newAliases.size()}")
+        s"Unit spillable count is now ${newAliases.size()}")
+      false
     }
   }
 
@@ -368,7 +373,14 @@ object SpillableColumnarBatch extends Arm with Logging {
  */
 class SpillableBuffer (
     id: TempSpillBufferId,
-    semWait: GpuMetric) extends AutoCloseable with Arm {
+    var spillPriority: Long,
+    semWait: GpuMetric)
+  extends RapidsBufferAlias
+    with AutoCloseable
+    with Arm {
+
+  RapidsBufferAliasTracker.track(id, this)
+
   private var closed = false
 
   lazy val sizeInBytes: Long =
@@ -380,9 +392,8 @@ class SpillableBuffer (
    * Set a new spill priority.
    */
   def setSpillPriority(priority: Long): Unit = {
-    withResource(RapidsBufferCatalog.acquireBuffer(id)) { rapidsBuffer =>
-      rapidsBuffer.setSpillPriority(priority)
-    }
+    spillPriority = priority
+    RapidsBufferAliasTracker.priorityUpdated(id, this)
   }
 
   /**
@@ -407,10 +418,12 @@ class SpillableBuffer (
    */
   override def close(): Unit = {
     if (!closed) {
-      RapidsBufferCatalog.removeBuffer(id)
+      RapidsBufferAliasTracker.stopTracking(id, this)
       closed = true
     }
   }
+
+  override def getSpillPriority: Long = spillPriority
 }
 
 object SpillableBuffer extends Arm {
@@ -429,6 +442,6 @@ object SpillableBuffer extends Arm {
     val id = TempSpillBufferId()
     val meta = MetaUtils.getTableMetaNoTable(buffer)
     RapidsBufferCatalog.addBuffer(id, buffer, meta, priority, spillCallback)
-    new SpillableBuffer(id, spillCallback.semaphoreWaitTime)
+    new SpillableBuffer(id, priority, spillCallback.semaphoreWaitTime)
   }
 }
