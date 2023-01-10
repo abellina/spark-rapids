@@ -424,6 +424,15 @@ abstract class RapidsBufferStore(
       res
     }
 
+    override def withBuffer[T](fn: DeviceMemoryBuffer => T): T = {
+      logWarning(s"At withBuffer for ${id}")
+      removeSpillable()
+      val res = withResource(getDeviceMemoryBuffer) { buff =>
+        fn(buff)
+      }
+      res
+    }
+
     protected def columnarBatchFromDeviceBuffer(devBuffer: DeviceMemoryBuffer,
         sparkTypes: Array[DataType]): ColumnarBatch = {
       val bufferMeta = meta.bufferMeta()

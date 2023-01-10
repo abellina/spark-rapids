@@ -366,10 +366,11 @@ trait LazySpillableGatherMap extends LazySpillable with Arm {
 
   /**
    * Get a column view that can be used to gather.
+   *
    * @param startRow the row to start at.
-   * @param numRows the number of rows in the map.
+   * @param numRows  the number of rows in the map.
    */
-  def toColumnView(startRow: Long, numRows: Int): ColumnView
+  def withColumnView[T](startRow: Long, numRows: Int)(cvFn: ColumnView => T): T
 }
 
 object LazySpillableGatherMap {
@@ -396,17 +397,34 @@ class LazySpillableGatherMapImpl(
   private var cached: Option[DeviceMemoryBuffer] = Some(map.releaseBuffer())
   private var spill: Option[SpillableBuffer] = None
 
-  override def toColumnView(startRow: Long, numRows: Int): ColumnView = {
-    ColumnView.fromDeviceBuffer(getBuffer, startRow * 4L, DType.INT32, numRows)
+  private def withCached[T](fn: DeviceMemoryBuffer => T): T = {
+    withResource(cached.get) { buff =>
+      fn(buff)
+    }
   }
 
-  private def getBuffer = {
-    if (cached.isEmpty) {
+  def withColumnView[T](startRow: Long, numRows: Int)(cvFn: ColumnView => T): T = {
+    val rapidsBufferFn = if (cached.isEmpty) {
       withResource(new NvtxRange("get map " + name, NvtxColor.RED)) { _ =>
-        cached = spill.map(_.getDeviceBuffer())
+        (body: DeviceMemoryBuffer => T) => {
+          spill.get.withRapidsBuffer { rapidsBuffer =>
+            rapidsBuffer.withBuffer { buff =>
+              body(buff)
+            }
+          }
+        }
+      }
+    } else {
+      cached.get.incRefCount()
+      withCached[T](_)
+    }
+
+    rapidsBufferFn { buffer =>
+      val cv = ColumnView.fromDeviceBuffer(buffer, startRow * 4L, DType.INT32, numRows)
+      withResource(cv) { _ =>
+        cvFn(cv)
       }
     }
-    cached.get
   }
 
   override def allowSpilling(): Unit = {
@@ -436,10 +454,12 @@ abstract class BaseCrossJoinGatherMap(leftCount: Int, rightCount: Int)
     extends LazySpillableGatherMap {
   override val getRowCount: Long = leftCount.toLong * rightCount.toLong
 
-  override def toColumnView(startRow: Long, numRows: Int): ColumnView = {
+  def withColumnView[T](startRow: Long, numRows: Int)(cvFn: ColumnView => T): T = {
     withResource(GpuScalar.from(startRow, LongType)) { startScalar =>
       withResource(ai.rapids.cudf.ColumnVector.sequence(startScalar, numRows)) { rowNum =>
-        compute(rowNum)
+        withResource(compute(rowNum)) { cv =>
+          cvFn(cv)
+        }
       }
     }
   }
@@ -578,7 +598,7 @@ class JoinGathererImpl(
   override def gatherNext(n: Int): ColumnarBatch = {
     val start = gatheredUpTo
     assert((start + n) <= totalRows)
-    val ret = withResource(gatherMap.toColumnView(start, n)) { gatherView =>
+    val ret = gatherMap.withColumnView(start, n) { gatherView =>
       val (gatheredTable, types) = data.withBatch { batch =>
         withResource(GpuColumnVector.from(batch)) { table =>
           (table.gather(gatherView, boundsCheckPolicy), 
@@ -611,7 +631,7 @@ class JoinGathererImpl(
     }
     // Gather the bit counts so we know what the output table will look like
     val gatheredBitCount = withResource(inputBitCounts) { inputBitCounts =>
-      withResource(gatherMap.toColumnView(gatheredUpTo, n)) { gatherView =>
+      gatherMap.withColumnView(gatheredUpTo, n) { gatherView =>
         // Gather only works on a table so wrap the single column
         val gatheredTab = withResource(new Table(inputBitCounts)) { table =>
           table.gather(gatherView)

@@ -127,6 +127,8 @@ trait RapidsBuffer extends AutoCloseable {
 
   def withColumnarBatch[T](sparkTypes: Array[DataType])(fn: ColumnarBatch => T): T
 
+  def withBuffer[T](fn: DeviceMemoryBuffer => T): T
+
   /**
    * Get the underlying memory buffer. This may be either a HostMemoryBuffer or a DeviceMemoryBuffer
    * depending on where the buffer currently resides.
@@ -260,4 +262,7 @@ sealed class DegenerateRapidsBuffer(
   override def releaseBatch(sparkTypes: Array[DataType]): ColumnarBatch = {
     getColumnarBatch(sparkTypes)
   }
+
+  override def withBuffer[T](fn: DeviceMemoryBuffer => T): T =
+    throw new UnsupportedOperationException("degenerate buffer has no device memory buffer")
 }
