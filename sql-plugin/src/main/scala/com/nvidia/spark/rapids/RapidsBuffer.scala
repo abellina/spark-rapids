@@ -97,7 +97,9 @@ trait RapidsBuffer extends AutoCloseable {
    * @param sparkTypes
    * @return
    */
-  def releaseBatch(sparkTypes: Array[DataType]): ColumnarBatch
+  def releaseBatch(
+    sparkTypes: Array[DataType],
+    handle: RapidsBufferAlias): ColumnarBatch
 
   /** The buffer identifier for this buffer. */
   val id: RapidsBufferId
@@ -259,7 +261,8 @@ sealed class DegenerateRapidsBuffer(
    * @param sparkTypes
    * @return
    */
-  override def releaseBatch(sparkTypes: Array[DataType]): ColumnarBatch = {
+  override def releaseBatch(
+      sparkTypes: Array[DataType], alias: RapidsBufferAlias): ColumnarBatch = {
     getColumnarBatch(sparkTypes)
   }
 

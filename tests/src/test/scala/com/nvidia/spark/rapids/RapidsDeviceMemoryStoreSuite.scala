@@ -149,9 +149,13 @@ class RapidsDeviceMemoryStoreSuite extends FunSuite with Arm with MockitoSugar {
         }
         assertResult(bufferSizes.take(i+1).sum)(store.currentSize)
       }
-      catalog.removeBuffer(MockRapidsBufferId(0))
+      val alias0 = new RapidsBufferAliasImpl(MockRapidsBufferId(0), -1)
+      val alias1 = new RapidsBufferAliasImpl(MockRapidsBufferId(1), -1)
+      RapidsBufferAliasTracker.track(MockRapidsBufferId(0), alias0)
+      RapidsBufferAliasTracker.track(MockRapidsBufferId(1), alias1)
+      catalog.removeBuffer(MockRapidsBufferId(0), alias0)
       assertResult(bufferSizes(1))(store.currentSize)
-      catalog.removeBuffer(MockRapidsBufferId(1))
+      catalog.removeBuffer(MockRapidsBufferId(1), alias1)
       assertResult(0)(store.currentSize)
     }
   }

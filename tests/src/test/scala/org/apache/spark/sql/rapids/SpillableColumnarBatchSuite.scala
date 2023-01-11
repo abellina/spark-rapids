@@ -17,13 +17,11 @@
 package org.apache.spark.sql.rapids
 
 import java.util.UUID
-
 import ai.rapids.cudf.{Cuda, DeviceMemoryBuffer, MemoryBuffer}
-import com.nvidia.spark.rapids.{Arm, NoopMetric, RapidsBuffer, RapidsBufferCatalog, RapidsBufferId, SpillableColumnarBatchImpl, SpillCallback, StorageTier}
+import com.nvidia.spark.rapids.{Arm, NoopMetric, RapidsBuffer, RapidsBufferAlias, RapidsBufferAliasImpl, RapidsBufferAliasTracker, RapidsBufferCatalog, RapidsBufferId, SpillCallback, SpillableColumnarBatchImpl, StorageTier}
 import com.nvidia.spark.rapids.StorageTier.StorageTier
 import com.nvidia.spark.rapids.format.TableMeta
 import org.scalatest.FunSuite
-
 import org.apache.spark.sql.types.{DataType, IntegerType}
 import org.apache.spark.sql.vectorized.ColumnarBatch
 import org.apache.spark.storage.TempLocalBlockId
@@ -31,13 +29,14 @@ import org.apache.spark.storage.TempLocalBlockId
 class SpillableColumnarBatchSuite extends FunSuite with Arm {
   test("close updates catalog") {
     val id = TempSpillBufferId(0, TempLocalBlockId(new UUID(1, 2)))
+    val alias = new RapidsBufferAliasImpl(id, -1)
     val mockBuffer = new MockBuffer(id)
     val catalog = RapidsBufferCatalog.singleton
     val oldBufferCount = catalog.numBuffers
     catalog.registerNewBuffer(mockBuffer)
     assertResult(oldBufferCount + 1)(catalog.numBuffers)
     val spillableBatch = new SpillableColumnarBatchImpl(
-      id, 5, Array[DataType](IntegerType), -1, NoopMetric)
+      alias, 5, Array[DataType](IntegerType), NoopMetric)
     spillableBatch.close()
     assertResult(oldBufferCount)(catalog.numBuffers)
   }
@@ -68,7 +67,8 @@ class SpillableColumnarBatchSuite extends FunSuite with Arm {
      * @param sparkTypes
      * @return
      */
-    override def releaseBatch(sparkTypes: Array[DataType]): ColumnarBatch = null
+    override def releaseBatch(
+      sparkTypes: Array[DataType], alias: RapidsBufferAlias): ColumnarBatch = null
 
     override def withBuffer[T](fn: DeviceMemoryBuffer => T): T = fn(null)
   }

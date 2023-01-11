@@ -219,11 +219,17 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
       }
     }
 
-    override def releaseBatch(sparkTypes: Array[DataType]): ColumnarBatch = {
-      val cb = super.releaseBatch(sparkTypes)
-      logInfo(s"Resetting event handler for ${id} because of releaseBatch. " +
-        s"refCount=${refcount} and refcount=${refcount}")
-      contigBuffer.setEventHandler(null)
+    override def releaseBatch(
+        sparkTypes: Array[DataType],
+        alias: RapidsBufferAlias): ColumnarBatch = {
+      val cb = super.releaseBatch(sparkTypes, alias)
+      if (released) {
+        logWarning(s"Resetting event handler for ${id} because of releaseBatch. " +
+          s"refCount=${refcount} and refcount=${refcount}")
+        contigBuffer.setEventHandler(null)
+      } else {
+        logWarning(s"NOT resetting event handler for ${id} as still aliased")
+      }
       cb
     }
 

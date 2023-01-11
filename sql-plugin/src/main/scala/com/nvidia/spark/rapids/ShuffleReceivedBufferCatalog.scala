@@ -95,9 +95,10 @@ class ShuffleReceivedBufferCatalog(
    * the [[ShuffleReceivedBufferId]] being removed is not being utilized by another thread.
    * @param id buffer identifier
    */
-  def removeBuffer(id: ShuffleReceivedBufferId): Unit = {
+  def removeBuffer(alias: RapidsBufferAlias): Unit = {
+    val id = alias.getId
     tableMap.remove(id.tableId)
-    catalog.removeBuffer(id)
+    catalog.removeBuffer(id, alias)
   }
 }
 

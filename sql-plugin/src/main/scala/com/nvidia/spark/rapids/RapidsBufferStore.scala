@@ -387,19 +387,24 @@ abstract class RapidsBufferStore(
       }
     }
 
-    override def releaseBatch(sparkTypes: Array[DataType]): ColumnarBatch = {
+    override def releaseBatch(
+        sparkTypes: Array[DataType],
+        alias: RapidsBufferAlias): ColumnarBatch = {
       synchronized {
         if (released) {
           throw new IllegalStateException(s"RapidsBuffer ${id} already released")
         }
-        released = true
-        if (cache.isDefined) {
-          val res = cache.get
-          cache = None
-          res
+        val cb = if (cache.isDefined) {
+          cache.get
         } else {
           getColumnarBatch(sparkTypes)
         }
+        if (RapidsBufferAliasTracker.stopTracking(alias.getId, alias)) {
+          // if did remove
+          released = true
+          cache = None
+        }
+        cb
       }
     }
 

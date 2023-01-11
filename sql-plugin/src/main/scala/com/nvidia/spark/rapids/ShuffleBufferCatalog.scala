@@ -78,12 +78,12 @@ class ShuffleBufferCatalog(
   }
 
   var shuffleAlias = new ConcurrentHashMap[ShuffleBufferId, RapidsBufferAlias]()
-  def registerAlias(bufferId: ShuffleBufferId, priority: Long): Unit = {
-    val alias = new RapidsBufferAlias {
-      override def getSpillPriority: Long = priority
-    }
+
+  def registerAlias(bufferId: ShuffleBufferId, priority: Long): RapidsBufferAlias = {
+    val alias = new RapidsBufferAliasImpl(bufferId, priority)
     shuffleAlias.put(bufferId, alias)
     RapidsBufferAliasTracker.track(bufferId, alias)
+    alias
   }
 
   /** Frees all buffers that correspond to the specified shuffle. */
@@ -97,12 +97,12 @@ class ShuffleBufferCatalog(
         // NOTE: Not synchronizing array buffer because this shuffle should be inactive.
         bufferIds.foreach { id =>
           tableMap.remove(id.tableId)
-          catalog.removeBuffer(id)
           val alias = shuffleAlias.remove(id)
           if (alias == null) {
             throw new IllegalStateException(
               s"Attempted to remove a shuffle alias, but couldn't find it for ${id}")
           }
+          catalog.removeBuffer(id, alias)
           RapidsBufferAliasTracker.stopTracking(id, alias)
         }
       }
@@ -233,9 +233,10 @@ class ShuffleBufferCatalog(
    * the [[ShuffleBufferId]] being removed is not being utilized by another thread.
    * @param id buffer identifier
    */
-  def removeBuffer(id: ShuffleBufferId): Unit = {
+  def removeBuffer(alias: RapidsBufferAlias): Unit = {
+    val id = alias.getId
     tableMap.remove(id.tableId)
-    catalog.removeBuffer(id)
+    catalog.removeBuffer(id, alias)
   }
 }
 

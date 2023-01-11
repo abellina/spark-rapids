@@ -172,10 +172,12 @@ class RapidsDiskStoreSuite extends FunSuiteWithTempDir with Arm with MockitoSuga
           withResource(new RapidsDiskStore(mock[RapidsDiskBlockManager], catalog)) { diskStore =>
             hostStore.setSpillStore(diskStore)
             addTableToStore(devStore, bufferId, spillPriority)
+            val alias = new RapidsBufferAliasImpl(bufferId, spillPriority)
+            RapidsBufferAliasTracker.track(bufferId, alias)
             devStore.synchronousSpill(0)
             hostStore.synchronousSpill(0)
             assert(bufferPath.exists)
-            catalog.removeBuffer(bufferId)
+            catalog.removeBuffer(bufferId, alias)
             if (canShareDiskPaths) {
               assert(bufferPath.exists())
             } else {

@@ -895,7 +895,7 @@ class RapidsCachingWriter[K, V](
     metrics: Map[String, SQLMetric]) extends ShuffleWriter[K, V] with Logging {
   private val numParts = handle.dependency.partitioner.numPartitions
   private val sizes = new Array[Long](numParts)
-  private val writtenBufferIds = new ArrayBuffer[ShuffleBufferId](numParts)
+  private val writtenBufferAliases = new ArrayBuffer[RapidsBufferAlias](numParts)
   private val uncompressedMetric: SQLMetric = metrics("dataSize")
 
   override def write(records: Iterator[Product2[K, V]]): Unit = {
@@ -914,7 +914,7 @@ class RapidsCachingWriter[K, V](
         var partSize: Long = 0
         val blockId = ShuffleBlockId(handle.shuffleId, mapId, partId)
         val bufferId = catalog.nextShuffleBufferId(blockId)
-        catalog.registerAlias(
+        val alias = catalog.registerAlias(
           bufferId,
           SpillPriorities.OUTPUT_FOR_SHUFFLE_INITIAL_PRIORITY)
         if (batch.numRows > 0 && batch.numCols > 0) {
@@ -965,7 +965,7 @@ class RapidsCachingWriter[K, V](
             sizes(partId) += 100
           }
         }
-        writtenBufferIds.append(bufferId)
+        writtenBufferAliases.append(alias)
       }
       metricsReporter.incBytesWritten(bytesWritten)
       metricsReporter.incRecordsWritten(recordsWritten)
@@ -978,7 +978,7 @@ class RapidsCachingWriter[K, V](
    * Used to remove shuffle buffers when the writing task detects an error, calling `stop(false)`
    */
   private def cleanStorage(): Unit = {
-    writtenBufferIds.foreach(catalog.removeBuffer)
+    writtenBufferAliases.foreach(catalog.removeBuffer)
   }
 
   override def stop(success: Boolean): Option[MapStatus] = {

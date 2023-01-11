@@ -89,9 +89,13 @@ class RapidsGdsStoreSuite extends FunSuiteWithTempDir with Arm with MockitoSugar
           }
         }
 
-        catalog.removeBuffer(bufferIds(0))
+        val alias0 = new RapidsBufferAliasImpl(bufferIds(0), -1)
+        val alias1 = new RapidsBufferAliasImpl(bufferIds(1), -1)
+        RapidsBufferAliasTracker.track(bufferIds(0), alias0)
+        RapidsBufferAliasTracker.track(bufferIds(1), alias1)
+        catalog.removeBuffer(bufferIds(0), alias0)
         assert(paths(0).exists)
-        catalog.removeBuffer(bufferIds(1))
+        catalog.removeBuffer(bufferIds(1), alias1)
         assert(!paths(0).exists)
       }
     }
@@ -109,6 +113,8 @@ class RapidsGdsStoreSuite extends FunSuiteWithTempDir with Arm with MockitoSugar
         devStore.setSpillStore(gdsStore)
         assertResult(0)(gdsStore.currentSize)
         val bufferSize = addTableToStore(devStore, bufferId, spillPriority)
+        val alias = new RapidsBufferAliasImpl(bufferId, spillPriority)
+        RapidsBufferAliasTracker.track(bufferId, alias)
         devStore.synchronousSpill(0)
         assertResult(bufferSize)(gdsStore.currentSize)
         assert(path.exists)
@@ -123,7 +129,7 @@ class RapidsGdsStoreSuite extends FunSuiteWithTempDir with Arm with MockitoSugar
           assertResult(spillPriority)(buffer.getSpillPriority)
         }
 
-        catalog.removeBuffer(bufferId)
+        catalog.removeBuffer(bufferId, alias)
         if (canShareDiskPaths) {
           assert(path.exists())
         } else {

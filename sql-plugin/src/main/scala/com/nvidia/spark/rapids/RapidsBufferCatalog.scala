@@ -18,15 +18,14 @@ package com.nvidia.spark.rapids
 
 import java.util.concurrent.ConcurrentHashMap
 import java.util.function.BiFunction
-
 import ai.rapids.cudf.{ContiguousTable, DeviceMemoryBuffer, Rmm, Table}
 import com.nvidia.spark.rapids.RapidsPluginImplicits._
 import com.nvidia.spark.rapids.StorageTier.StorageTier
 import com.nvidia.spark.rapids.format.TableMeta
-
 import org.apache.spark.{SparkConf, SparkEnv}
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.rapids.RapidsDiskBlockManager
+import org.apache.spark.sql.types.DataType
 
 /**
  *  Exception thrown when inserting a buffer into the catalog with a duplicate buffer ID
@@ -143,7 +142,7 @@ class RapidsBufferCatalog extends Logging {
   }
 
   /** Remove a buffer ID from the catalog and release the resources of the registered buffers. */
-  def removeBuffer(id: RapidsBufferId): Unit = {
+  def removeBuffer(id: RapidsBufferId, alias: RapidsBufferAlias): Unit = {
     val buffers = bufferMap.remove(id)
     buffers.safeFree()
   }
@@ -306,7 +305,8 @@ object RapidsBufferCatalog extends Logging with Arm {
   def acquireBuffer(id: RapidsBufferId): RapidsBuffer = singleton.acquireBuffer(id)
 
   /** Remove a buffer ID from the catalog and release the resources of the registered buffer. */
-  def removeBuffer(id: RapidsBufferId): Unit = singleton.removeBuffer(id)
+  def removeBuffer(id: RapidsBufferId, alias: RapidsBufferAlias): Unit =
+    singleton.removeBuffer(id, alias)
 
   def getDiskBlockManager(): RapidsDiskBlockManager = diskBlockManager
 }

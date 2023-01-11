@@ -46,7 +46,7 @@ trait RapidsShuffleFetchHandler {
    * @return a boolean that lets the caller know the batch was accepted (true), or
    *         rejected (false), in which case the caller should dispose of the batch.
    */
-  def batchReceived(bufferId: ShuffleReceivedBufferId): Boolean
+  def batchReceived(alias: RapidsBufferAlias): Boolean
 
   /**
    * Called when the transport layer is not able to handle a fetch error for metadata
@@ -336,7 +336,7 @@ class RapidsShuffleClient(
       } else {
         // Degenerate buffer (no device data) so no more data to request.
         // We need to trigger call in iterator, otherwise this batch is never handled.
-        handler.batchReceived(track(null, tableMeta).asInstanceOf[ShuffleReceivedBufferId])
+        handler.batchReceived(track(null, tableMeta))
       }
     }
 
@@ -379,9 +379,9 @@ class RapidsShuffleClient(
 
               // hand buffer off to the catalog
               buffMetas.foreach { consumed: ConsumedBatchFromBounceBuffer =>
-                val bId = track(consumed.contigBuffer, consumed.meta)
-                if (!consumed.handler.batchReceived(bId)) {
-                  catalog.removeBuffer(bId)
+                val alias = track(consumed.contigBuffer, consumed.meta)
+                if (!consumed.handler.batchReceived(alias)) {
+                  catalog.removeBuffer(alias)
                   numBatchesRejected += 1
                 }
                 transport.doneBytesInFlight(consumed.contigBuffer.getLength)
@@ -425,8 +425,10 @@ class RapidsShuffleClient(
    * @return the [[RapidsBufferId]] to be used to look up the buffer from catalog
    */
   private[shuffle] def track(
-      buffer: DeviceMemoryBuffer, meta: TableMeta): ShuffleReceivedBufferId = {
+      buffer: DeviceMemoryBuffer, meta: TableMeta): RapidsBufferAlias = {
     val id: ShuffleReceivedBufferId = catalog.nextShuffleReceivedBufferId()
+    val alias = new RapidsBufferAliasImpl(id, SpillPriorities.INPUT_FROM_SHUFFLE_PRIORITY)
+    RapidsBufferAliasTracker.track(id, alias)
     logDebug(s"Adding buffer id ${id} to catalog")
     if (buffer != null) {
       // add the buffer to the catalog so it is available for spill
@@ -440,7 +442,7 @@ class RapidsShuffleClient(
       // no device data, just tracking metadata
       catalog.registerNewBuffer(new DegenerateRapidsBuffer(id, meta))
     }
-    id
+    alias
   }
 
   override def close(): Unit = {

@@ -19,11 +19,10 @@ package com.nvidia.spark.rapids.shuffle
 import java.util.concurrent.{LinkedBlockingQueue, TimeUnit}
 import scala.collection.mutable
 import ai.rapids.cudf.{NvtxColor, NvtxRange}
-import com.nvidia.spark.rapids.{Arm, GpuSemaphore, NoopMetric, RapidsBuffer, RapidsBufferId, RapidsConf, ShuffleReceivedBufferCatalog, ShuffleReceivedBufferId, SpillableColumnarBatch}
+import com.nvidia.spark.rapids.{Arm, GpuSemaphore, NoopMetric, RapidsBuffer, RapidsBufferAlias, RapidsConf, ShuffleReceivedBufferCatalog, ShuffleReceivedBufferId}
 import org.apache.spark.TaskContext
 import org.apache.spark.internal.Logging
 import org.apache.spark.shuffle.rapids.{RapidsShuffleFetchFailedException, RapidsShuffleTimeoutException}
-import org.apache.spark.sql.rapids.ColumnarBatchProvider
 import org.apache.spark.sql.rapids.{GpuShuffleEnv, ShuffleMetricsUpdater}
 import org.apache.spark.sql.types.DataType
 import org.apache.spark.sql.vectorized.ColumnarBatch
@@ -53,7 +52,7 @@ class RapidsShuffleIterator(
     sparkTypes: Array[DataType],
     catalog: ShuffleReceivedBufferCatalog = GpuShuffleEnv.getReceivedCatalog,
     timeoutSeconds: Long = GpuShuffleEnv.shuffleFetchTimeoutSeconds)
-  extends Iterator[ColumnarBatchProvider]
+  extends Iterator[ColumnarBatch]
     with Logging with Arm {
 
   /**
@@ -66,8 +65,7 @@ class RapidsShuffleIterator(
    * A result for a successful buffer received
    * @param bufferId - the shuffle received buffer id as tracked in the catalog
    */
-  case class BufferReceived(
-      bufferId: ShuffleReceivedBufferId) extends ShuffleClientResult
+  case class BufferReceived(alias: RapidsBufferAlias) extends ShuffleClientResult
 
   /**
    * A result for a failed attempt at receiving block metadata, or corresponding batches.
@@ -220,7 +218,7 @@ class RapidsShuffleIterator(
           def clientDone: Boolean = clientExpectedBatches > 0 &&
             clientExpectedBatches == clientResolvedBatches
 
-          def batchReceived(bufferId: ShuffleReceivedBufferId): Boolean =
+          def batchReceived(alias: RapidsBufferAlias): Boolean = {
             resolvedBatches.synchronized {
               if (taskComplete) {
                 false
@@ -233,7 +231,7 @@ class RapidsShuffleIterator(
                   }
                   totalBatchesResolved = totalBatchesResolved + 1
                   clientResolvedBatches = clientResolvedBatches + 1
-                  resolvedBatches.offer(BufferReceived(bufferId))
+                  resolvedBatches.offer(BufferReceived(alias))
 
                   if (clientDone) {
                     logDebug(s"Task: $taskAttemptId Client $blockManagerId is " +
@@ -248,6 +246,7 @@ class RapidsShuffleIterator(
                 true
               }
             }
+          }
 
           override def transferError(errorMessage: String, throwable: Throwable): Unit = {
             resolvedBatches.synchronized {
@@ -284,8 +283,8 @@ class RapidsShuffleIterator(
       logWarning(s"Iterator for task ${taskAttemptId} closing, " +
           s"but it is not done. Closing ${resolvedBatches.size()} resolved batches!!")
       resolvedBatches.forEach {
-        case BufferReceived(bufferId) =>
-          GpuShuffleEnv.getReceivedCatalog.removeBuffer(bufferId)
+        case BufferReceived(alias) =>
+          GpuShuffleEnv.getReceivedCatalog.removeBuffer(alias)
         case _ =>
       }
       // tell the client to cancel pending requests
@@ -312,10 +311,9 @@ class RapidsShuffleIterator(
     Option(resolvedBatches.poll(timeoutSeconds, TimeUnit.SECONDS))
   }
 
-  override def next(): ColumnarBatchProvider  = {
-    var batchProvider: ColumnarBatchProvider = null
-    //var cb: ColumnarBatch = null
-    //var sb: RapidsBuffer = null
+  override def next(): ColumnarBatch = {
+    var cb: ColumnarBatch = null
+    var sb: RapidsBuffer = null
     val range = new NvtxRange(s"RapidshuffleIterator.next", NvtxColor.RED)
 
     // If N tasks downstream are accumulating memory we run the risk OOM
@@ -348,35 +346,24 @@ class RapidsShuffleIterator(
     result = pollForResult(timeoutSeconds)
     val blockedTime = System.currentTimeMillis() - blockedStart
     result match {
-      case Some(BufferReceived(bufferId)) =>
+      case Some(BufferReceived(alias)) =>
         val nvtxRangeAfterGettingBatch = new NvtxRange("RapidsShuffleIterator.gotBatch",
           NvtxColor.PURPLE)
-        var sb: RapidsBuffer = null
         try {
-          sb = catalog.acquireBuffer(bufferId)
-          // these are receive spillable batches and are used only for this
-          // iterator, hence we can release.
-          val (_numRows, bufferSize) = sb.withColumnarBatch(sparkTypes) { cb =>
-            metricsUpdater.update(blockedTime, 1, sb.size, cb.numRows())
-            (cb.numRows(), sb.size)
-          }
-          batchProvider = new ColumnarBatchProvider {
-            override def getBatch: ColumnarBatch = {
-              sb.releaseBatch(sparkTypes)
-            }
-            override def numRows: Int = _numRows
-            override def sizeInBytes: Long = bufferSize
-          }
+          val id = alias.getId.asInstanceOf[ShuffleReceivedBufferId]
+          sb = catalog.acquireBuffer(id)
+          cb = sb.getColumnarBatch(sparkTypes)
+          metricsUpdater.update(blockedTime, 1, sb.size, cb.numRows())
         } finally {
           nvtxRangeAfterGettingBatch.close()
           range.close()
           if (sb != null) {
             sb.close()
           }
-          catalog.removeBuffer(bufferId)
+          catalog.removeBuffer(alias)
         }
       case Some(
-      TransferError(blockManagerId, shuffleBlockBatchId, mapIndex, errorMessage, throwable)) =>
+        TransferError(blockManagerId, shuffleBlockBatchId, mapIndex, errorMessage, throwable)) =>
         taskContext.foreach(GpuSemaphore.releaseIfNecessary)
         metricsUpdater.update(blockedTime, 0, 0, 0)
         val exp = new RapidsShuffleFetchFailedException(
@@ -399,6 +386,6 @@ class RapidsShuffleIterator(
       case _ =>
         throw new IllegalStateException(s"Invalid result type $result")
     }
-    batchProvider
+    cb
   }
 }
