@@ -16,13 +16,15 @@
 
 package com.nvidia.spark.rapids
 
+import scala.collection.mutable
+
 import ai.rapids.cudf.{ContiguousTable, Cuda, DeviceMemoryBuffer, HostMemoryBuffer, MemoryBuffer, Table}
 import com.nvidia.spark.rapids.StorageTier.StorageTier
 import com.nvidia.spark.rapids.format.TableMeta
+
+import org.apache.spark.sql.rapids.TempSpillBufferId
 import org.apache.spark.sql.types.DataType
 import org.apache.spark.sql.vectorized.ColumnarBatch
-
-import scala.collection.mutable
 
 /**
  * Buffer storage using device memory.
@@ -62,24 +64,35 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
    *                      It should never allocate GPU memory and really just be used for metrics.
    */
   def addTable(
-      id: RapidsBufferId,
       table: Table,
       contigBuffer: DeviceMemoryBuffer,
       tableMeta: TableMeta,
       initialSpillPriority: Long,
-      spillCallback: SpillCallback = RapidsBuffer.defaultSpillCallback): Unit = {
-    freeOnExcept(
-      new RapidsDeviceMemoryBuffer(
-        id,
-        contigBuffer.getLength,
-        tableMeta,
-        Some(table),
-        contigBuffer,
-        initialSpillPriority,
-        spillCallback)) { buffer =>
-      logDebug(s"Adding table for: [id=$id, size=${buffer.size}, " +
-          s"meta_id=${buffer.meta.bufferMeta.id}, meta_size=${buffer.meta.bufferMeta.size}]")
-      addDeviceBuffer(buffer, needsSync = true)
+      spillCallback: SpillCallback = RapidsBuffer.defaultSpillCallback): RapidsBufferHandle  = {
+    contigBuffer.getEventHandler match {
+      case null =>
+        contigBuffer.incRefCount()
+        val id = TempSpillBufferId()
+        freeOnExcept(
+          new RapidsDeviceMemoryBuffer(
+            id,
+            contigBuffer.getLength,
+            tableMeta,
+            Some(table),
+            contigBuffer,
+            initialSpillPriority,
+            spillCallback)) { buffer =>
+          logDebug(s"Adding table for: [id=$id, size=${buffer.size}, " +
+            s"meta_id=${buffer.meta.bufferMeta.id}, meta_size=${buffer.meta.bufferMeta.size}]")
+          addDeviceBuffer(buffer, needsSync = true)
+        }
+      case existing: RapidsBuffer =>
+        // existing case
+        table.close() // we will not use this
+        // TODO: do i need to acquire buffer here?
+        withResource(catalog.acquireBuffer(existing.id)) { rapidsBuffer =>
+          catalog.makeNewHandle(rapidsBuffer.id, initialSpillPriority)
+        }
     }
   }
 
@@ -97,12 +110,37 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
    *                  this device buffer (defaults to true)
    */
   def addContiguousTable(
-      id: RapidsBufferId,
       contigTable: ContiguousTable,
       initialSpillPriority: Long,
       spillCallback: SpillCallback = RapidsBuffer.defaultSpillCallback,
-      needsSync: Boolean = true): Unit = {
+      needsSync: Boolean = true): RapidsBufferHandle = {
     val contigBuffer = contigTable.getBuffer
+    contigBuffer.getEventHandler match {
+      case null =>
+        addContiguousTable(
+          TempSpillBufferId(),
+          contigTable,
+          initialSpillPriority,
+          spillCallback,
+          needsSync)
+      case existing: RapidsBuffer =>
+        // existing case
+        // TODO: do i need to acquire buffer here?
+        withResource(catalog.acquireBuffer(existing.id)) { rapidsBuffer =>
+          catalog.makeNewHandle(rapidsBuffer.id, initialSpillPriority)
+        }
+    }
+  }
+
+  def addContiguousTable(
+      id: RapidsBufferId,
+      contigTable: ContiguousTable,
+      initialSpillPriority: Long,
+      spillCallback: SpillCallback,
+      needsSync: Boolean): RapidsBufferHandle = {
+    val contigBuffer = contigTable.getBuffer
+    require(contigBuffer.getEventHandler == null,
+      "Tried to add a buffer with a pre-existing memory handler!")
     val size = contigBuffer.getLength
     val meta = MetaUtils.buildTableMeta(id.tableId, contigTable)
     contigBuffer.incRefCount()
@@ -116,8 +154,8 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
         initialSpillPriority,
         spillCallback)) { buffer =>
       logDebug(s"Adding table for: [id=$id, size=${buffer.size}, " +
-          s"uncompressed=${buffer.meta.bufferMeta.uncompressedSize}, " +
-          s"meta_id=${buffer.meta.bufferMeta.id}, meta_size=${buffer.meta.bufferMeta.size}]")
+        s"uncompressed=${buffer.meta.bufferMeta.uncompressedSize}, " +
+        s"meta_id=${buffer.meta.bufferMeta.id}, meta_size=${buffer.meta.bufferMeta.size}]")
       addDeviceBuffer(buffer, needsSync)
     }
   }
@@ -134,12 +172,38 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
    *                  this device buffer (defaults to true)
    */
   def addBuffer(
-      id: RapidsBufferId,
       buffer: DeviceMemoryBuffer,
       tableMeta: TableMeta,
       initialSpillPriority: Long,
       spillCallback: SpillCallback = RapidsBuffer.defaultSpillCallback,
-      needsSync: Boolean = true): Unit = {
+      needsSync: Boolean = true): RapidsBufferHandle = {
+    buffer.getEventHandler match {
+      case null =>
+        addBuffer(
+          TempSpillBufferId(),
+          buffer,
+          tableMeta,
+          initialSpillPriority,
+          spillCallback,
+          needsSync)
+      case existing: RapidsBuffer =>
+        // TODO: do i need to acquire buffer here?
+        withResource(catalog.acquireBuffer(existing.id)) { rapidsBuffer =>
+          catalog.makeNewHandle(rapidsBuffer.id, initialSpillPriority)
+        }
+    }
+  }
+
+  def addBuffer(
+      id: RapidsBufferId,
+      buffer: DeviceMemoryBuffer,
+      tableMeta: TableMeta,
+      initialSpillPriority: Long,
+      spillCallback: SpillCallback,
+      needsSync: Boolean): RapidsBufferHandle = {
+    require(buffer.getEventHandler == null,
+      "Tried to add a buffer with a pre-existing memory handler!")
+    buffer.incRefCount()
     freeOnExcept(
       new RapidsDeviceMemoryBuffer(
         id,
@@ -150,9 +214,9 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
         initialSpillPriority,
         spillCallback)) { buff =>
       logDebug(s"Adding receive side table for: [id=$id, size=${buffer.getLength}, " +
-          s"uncompressed=${buff.meta.bufferMeta.uncompressedSize}, " +
-          s"meta_id=${tableMeta.bufferMeta.id}, " +
-          s"meta_size=${tableMeta.bufferMeta.size}]")
+        s"uncompressed=${buff.meta.bufferMeta.uncompressedSize}, " +
+        s"meta_id=${tableMeta.bufferMeta.id}, " +
+        s"meta_size=${tableMeta.bufferMeta.size}]")
       addDeviceBuffer(buff, needsSync)
     }
   }
@@ -161,13 +225,16 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
    * Adds a device buffer to the spill framework, stream synchronizing with the producer
    * stream to ensure that the buffer is fully materialized, and can be safely copied
    * as part of the spill.
+   *
    * @param needsSync true if we should stream synchronize before adding the buffer
    */
-  private def addDeviceBuffer(buffer: RapidsDeviceMemoryBuffer, needsSync: Boolean): Unit = {
+  private def addDeviceBuffer(
+      buffer: RapidsDeviceMemoryBuffer,
+      needsSync: Boolean): RapidsBufferHandle = {
     if (needsSync) {
       Cuda.DEFAULT_STREAM.sync()
     }
-    addBuffer(buffer);
+    addBufferAndGetHandle(buffer);
   }
 
   class RapidsDeviceMemoryBuffer(
@@ -221,8 +288,8 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
 
     override def releaseBatch(
         sparkTypes: Array[DataType],
-        alias: RapidsBufferAlias): ColumnarBatch = {
-      val cb = super.releaseBatch(sparkTypes, alias)
+        handle: RapidsBufferHandle): ColumnarBatch = {
+      val cb = super.releaseBatch(sparkTypes, handle)
       if (released) {
         logWarning(s"Resetting event handler for ${id} because of releaseBatch. " +
           s"refCount=${refcount} and refcount=${refcount}")

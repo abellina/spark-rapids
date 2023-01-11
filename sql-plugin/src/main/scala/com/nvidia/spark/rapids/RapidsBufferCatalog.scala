@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020-2022, NVIDIA CORPORATION.
+ * Copyright (c) 2020-2023, NVIDIA CORPORATION.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,14 +18,15 @@ package com.nvidia.spark.rapids
 
 import java.util.concurrent.ConcurrentHashMap
 import java.util.function.BiFunction
+
 import ai.rapids.cudf.{ContiguousTable, DeviceMemoryBuffer, Rmm, Table}
 import com.nvidia.spark.rapids.RapidsPluginImplicits._
 import com.nvidia.spark.rapids.StorageTier.StorageTier
 import com.nvidia.spark.rapids.format.TableMeta
+
 import org.apache.spark.{SparkConf, SparkEnv}
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.rapids.RapidsDiskBlockManager
-import org.apache.spark.sql.types.DataType
 
 /**
  *  Exception thrown when inserting a buffer into the catalog with a duplicate buffer ID
@@ -33,13 +34,111 @@ import org.apache.spark.sql.types.DataType
  */
 class DuplicateBufferException(s: String) extends RuntimeException(s) {}
 
+trait RapidsBufferHandle {
+  def getId: RapidsBufferId
+
+  def getSpillPriority: Long
+
+  def setSpillPriority(newPriority: Long): Unit
+}
+
+
 /**
  * Catalog for lookup of buffers by ID. The constructor is only visible for testing, generally
  * `RapidsBufferCatalog.singleton` should be used instead.
  */
-class RapidsBufferCatalog extends Logging {
+class RapidsBufferCatalog extends Logging with Arm {
+  def makeNewHandle(
+    id: RapidsBufferId, spillPriority: Long): RapidsBufferHandle = {
+    val handle = new RapidsBufferHandleImpl(id, spillPriority)
+    track(handle)
+    handle
+  }
+
   /** Map of buffer IDs to buffers sorted by storage tier */
   private[this] val bufferMap = new ConcurrentHashMap[RapidsBufferId, Seq[RapidsBuffer]]
+
+  private[this] val bufferHandles =
+    new ConcurrentHashMap[RapidsBufferId, HashedPriorityQueue[RapidsBufferHandle]]()
+
+  class RapidsBufferHandleImpl(id: RapidsBufferId, var priority: Long)
+    extends RapidsBufferHandle with Arm {
+
+    override def getId: RapidsBufferId = id
+
+    override def setSpillPriority(newPriority: Long): Unit = {
+      priority = newPriority
+      priorityUpdated(this)
+    }
+
+    override def getSpillPriority: Long = priority
+  }
+
+  def priorityUpdated(handle: RapidsBufferHandle): Unit = {
+    val id = handle.getId
+    withResource(RapidsBufferCatalog.acquireBuffer(id)) { buffer =>
+      val newHandlePriorities = bufferHandles.compute(id, (_, handleQ) => {
+        if (handleQ == null) {
+          throw new IllegalStateException(
+            s"Attempted to update priority for RapidsBuffer ${id} without a handle")
+        }
+        handleQ.priorityUpdated(handle)
+        handleQ
+      })
+
+      // update the priority of the underlying RapidsBuffer to be the
+      // maximum priority for all aliases associated with it
+      buffer.setSpillPriority(newHandlePriorities.peek().getSpillPriority)
+    }
+  }
+
+  private def comparator(handle1: RapidsBufferHandle, handle2: RapidsBufferHandle): Int = {
+    val prio1 = handle1.getSpillPriority
+    val prio2 = handle2.getSpillPriority
+    if (prio1 == prio2) {
+      0
+    } else if (prio1 > prio2) {
+      1
+    } else {
+      -1
+    }
+  }
+
+  def track(handle: RapidsBufferHandle): Unit = {
+    bufferHandles.compute(handle.getId, (_, h) => {
+      var handles = h
+      if (handles == null) {
+        handles = new HashedPriorityQueue[RapidsBufferHandle](comparator)
+      }
+      handles.offer(handle)
+      handles
+    })
+  }
+
+  def stopTracking(handle: RapidsBufferHandle): Boolean = {
+    val newHandles = bufferHandles.compute(handle.getId, (_, handles) => {
+      if (handles== null) {
+        throw new IllegalStateException(
+          s"${handle.getId} not found and we attempted to remove handles!")
+      }
+
+      handles.remove(handle)
+
+      if (handles.size() == 0) {
+        null // remove since no more aliases exist
+      } else {
+        handles
+      }
+    })
+
+    if (newHandles == null) {
+      // we can now remove the underlying RapidsBufferId
+      true
+    } else {
+      false
+    }
+  }
+
 
   /**
    * Lookup the buffer that corresponds to the specified buffer ID at the highest storage tier,
@@ -60,6 +159,10 @@ class RapidsBufferCatalog extends Logging {
       }
     }
     throw new IllegalStateException(s"Unable to acquire buffer for ID: $id")
+  }
+
+  def acquireBuffer(handle: RapidsBufferHandle): RapidsBuffer = {
+    acquireBuffer(handle.getId)
   }
 
   /**
@@ -123,7 +226,13 @@ class RapidsBufferCatalog extends Logging {
         }
       }
     }
+
     bufferMap.compute(buffer.id, updater)
+  }
+
+  def registerNewBufferAndGetHandle(buffer: RapidsBuffer): RapidsBufferHandle = {
+    registerNewBuffer(buffer)
+    makeNewHandle(buffer.id, buffer.getSpillPriority)
   }
 
   /** Remove a buffer ID from the catalog at the specified storage tier. */
@@ -142,9 +251,33 @@ class RapidsBufferCatalog extends Logging {
   }
 
   /** Remove a buffer ID from the catalog and release the resources of the registered buffers. */
-  def removeBuffer(id: RapidsBufferId, alias: RapidsBufferAlias): Unit = {
-    val buffers = bufferMap.remove(id)
-    buffers.safeFree()
+  def removeBuffer(handle: RapidsBufferHandle): Boolean = {
+    // if this is the last handle, remove the buffer
+    if (stopTracking(handle)) {
+      val buffers = bufferMap.remove(handle.getId)
+      buffers.safeFree()
+      true
+    } else {
+      false
+    }
+  }
+
+  /**
+   * Used by the ShuffleBufferCatalog only
+   */
+  def removeBuffer(id: RapidsBufferId): Boolean = {
+    // if this is the last handle, remove the buffer
+    val handles = bufferHandles.get(id)
+    require(handles.size() == 1,
+      s"Cannot remove a buffer by id ${id} when there are multiple handles")
+    val handle = handles.peek()
+    if (stopTracking(handle)) {
+      val buffers = bufferMap.remove(handle.getId)
+      buffers.safeFree()
+      true
+    } else {
+      false
+    }
   }
 
   /** Return the number of buffers currently in the catalog. */
@@ -256,13 +389,12 @@ object RapidsBufferCatalog extends Logging with Arm {
    *                      It should never allocate GPU memory and really just be used for metrics.
    */
   def addTable(
-      id: RapidsBufferId,
       table: Table,
       contigBuffer: DeviceMemoryBuffer,
       tableMeta: TableMeta,
       initialSpillPriority: Long,
-      spillCallback: SpillCallback = RapidsBuffer.defaultSpillCallback): Unit =
-    deviceStorage.addTable(id, table, contigBuffer, tableMeta, initialSpillPriority, spillCallback)
+      spillCallback: SpillCallback = RapidsBuffer.defaultSpillCallback): RapidsBufferHandle =
+    deviceStorage.addTable(table, contigBuffer, tableMeta, initialSpillPriority, spillCallback)
 
   /**
    * Adds a contiguous table to the device storage, taking ownership of the table.
@@ -273,11 +405,10 @@ object RapidsBufferCatalog extends Logging with Arm {
    *                      It should never allocate GPU memory and really just be used for metrics.
    */
   def addContiguousTable(
-      id: RapidsBufferId,
       contigTable: ContiguousTable,
       initialSpillPriority: Long,
-      spillCallback: SpillCallback = RapidsBuffer.defaultSpillCallback): Unit =
-    deviceStorage.addContiguousTable(id, contigTable, initialSpillPriority, spillCallback)
+      spillCallback: SpillCallback = RapidsBuffer.defaultSpillCallback): RapidsBufferHandle =
+    deviceStorage.addContiguousTable(contigTable, initialSpillPriority, spillCallback)
 
   /**
    * Adds a buffer to the device storage, taking ownership of the buffer.
@@ -289,12 +420,11 @@ object RapidsBufferCatalog extends Logging with Arm {
    *                      It should never allocate GPU memory and really just be used for metrics.
    */
   def addBuffer(
-      id: RapidsBufferId,
       buffer: DeviceMemoryBuffer,
       tableMeta: TableMeta,
       initialSpillPriority: Long,
-      spillCallback: SpillCallback = RapidsBuffer.defaultSpillCallback): Unit =
-    deviceStorage.addBuffer(id, buffer, tableMeta, initialSpillPriority, spillCallback)
+      spillCallback: SpillCallback = RapidsBuffer.defaultSpillCallback): RapidsBufferHandle =
+    deviceStorage.addBuffer(buffer, tableMeta, initialSpillPriority, spillCallback)
 
   /**
    * Lookup the buffer that corresponds to the specified buffer ID and acquire it.
@@ -304,9 +434,12 @@ object RapidsBufferCatalog extends Logging with Arm {
    */
   def acquireBuffer(id: RapidsBufferId): RapidsBuffer = singleton.acquireBuffer(id)
 
+  def acquireBuffer(handle: RapidsBufferHandle): RapidsBuffer =
+    singleton.acquireBuffer(handle.getId)
+
   /** Remove a buffer ID from the catalog and release the resources of the registered buffer. */
-  def removeBuffer(id: RapidsBufferId, alias: RapidsBufferAlias): Unit =
-    singleton.removeBuffer(id, alias)
+  def removeBuffer(handle: RapidsBufferHandle): Unit =
+    singleton.removeBuffer(handle)
 
   def getDiskBlockManager(): RapidsDiskBlockManager = diskBlockManager
 }

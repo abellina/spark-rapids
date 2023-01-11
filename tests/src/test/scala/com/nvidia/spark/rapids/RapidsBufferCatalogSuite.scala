@@ -162,25 +162,26 @@ class RapidsBufferCatalogSuite extends FunSuite with MockitoSugar {
     val catalog = new RapidsBufferCatalog
     val bufferId = MockBufferId(5)
     val buffer = mockBuffer(bufferId)
-    catalog.registerNewBuffer(buffer)
-    val alias = new RapidsBufferAliasImpl(bufferId, -1)
-    RapidsBufferAliasTracker.track(bufferId, alias)
-    catalog.removeBuffer(bufferId, alias)
+    val handle = catalog.registerNewBufferAndGetHandle(buffer)
+    catalog.removeBuffer(handle)
     verify(buffer).free()
   }
 
   test("remove buffer releases buffer resources at all tiers") {
     val catalog = new RapidsBufferCatalog
     val bufferId = MockBufferId(5)
+
     val buffer = mockBuffer(bufferId, tier = DEVICE)
-    catalog.registerNewBuffer(buffer)
-    val alias = new RapidsBufferAliasImpl(bufferId, -1)
-    RapidsBufferAliasTracker.track(bufferId, alias)
+    val handle = catalog.registerNewBufferAndGetHandle(buffer)
+
     val buffer2 = mockBuffer(bufferId, tier = HOST)
     catalog.registerNewBuffer(buffer2)
+
     val buffer3 = mockBuffer(bufferId, tier = DISK)
     catalog.registerNewBuffer(buffer3)
-    catalog.removeBuffer(bufferId, alias)
+
+    catalog.removeBuffer(handle)
+
     verify(buffer).free()
     verify(buffer2).free()
     verify(buffer3).free()

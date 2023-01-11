@@ -19,7 +19,7 @@ package com.nvidia.spark.rapids.shuffle
 import java.util.concurrent.{LinkedBlockingQueue, TimeUnit}
 import scala.collection.mutable
 import ai.rapids.cudf.{NvtxColor, NvtxRange}
-import com.nvidia.spark.rapids.{Arm, GpuSemaphore, NoopMetric, RapidsBuffer, RapidsBufferAlias, RapidsConf, ShuffleReceivedBufferCatalog, ShuffleReceivedBufferId}
+import com.nvidia.spark.rapids.{Arm, GpuSemaphore, NoopMetric, RapidsBuffer, RapidsBufferHandle, RapidsConf, ShuffleReceivedBufferCatalog, ShuffleReceivedBufferId}
 import org.apache.spark.TaskContext
 import org.apache.spark.internal.Logging
 import org.apache.spark.shuffle.rapids.{RapidsShuffleFetchFailedException, RapidsShuffleTimeoutException}
@@ -65,7 +65,7 @@ class RapidsShuffleIterator(
    * A result for a successful buffer received
    * @param bufferId - the shuffle received buffer id as tracked in the catalog
    */
-  case class BufferReceived(alias: RapidsBufferAlias) extends ShuffleClientResult
+  case class BufferReceived(alias: RapidsBufferHandle) extends ShuffleClientResult
 
   /**
    * A result for a failed attempt at receiving block metadata, or corresponding batches.
@@ -218,7 +218,7 @@ class RapidsShuffleIterator(
           def clientDone: Boolean = clientExpectedBatches > 0 &&
             clientExpectedBatches == clientResolvedBatches
 
-          def batchReceived(alias: RapidsBufferAlias): Boolean = {
+          def batchReceived(alias: RapidsBufferHandle): Boolean = {
             resolvedBatches.synchronized {
               if (taskComplete) {
                 false

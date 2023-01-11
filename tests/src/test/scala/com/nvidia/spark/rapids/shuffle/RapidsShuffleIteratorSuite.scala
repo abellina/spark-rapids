@@ -16,7 +16,7 @@
 
 package com.nvidia.spark.rapids.shuffle
 
-import com.nvidia.spark.rapids.{RapidsBuffer, RapidsBufferAlias, RapidsBufferAliasImpl, RapidsBufferAliasTracker, ShuffleReceivedBufferId}
+import com.nvidia.spark.rapids.{RapidsBuffer, RapidsBufferHandle, ShuffleReceivedBufferId}
 import org.mockito.ArgumentCaptor
 import org.mockito.ArgumentMatchers._
 import org.mockito.Mockito._
@@ -194,15 +194,15 @@ class RapidsShuffleIteratorSuite extends RapidsShuffleTestHelper {
     val mockBuffer = mock[MockRapidsBuffer]
 
     val cb = new ColumnarBatch(Array.empty, 10)
-    val alias = mock[RapidsBufferAlias]
-    when(mockBuffer.releaseBatch(Array.empty, alias)).thenReturn(cb)
+    val handle = mock[RapidsBufferHandle]
+    when(mockBuffer.releaseBatch(Array.empty, handle)).thenReturn(cb)
     when(mockCatalog.acquireBuffer(any[ShuffleReceivedBufferId]())).thenReturn(mockBuffer)
     doNothing().when(mockCatalog).removeBuffer(any())
     cl.start()
 
     val handler = ac.getValue.asInstanceOf[RapidsShuffleFetchHandler]
     handler.start(1)
-    handler.batchReceived(alias)
+    handler.batchReceived(handle)
 
     verify(mockTransport, times(0)).cancelPending(handler)
 

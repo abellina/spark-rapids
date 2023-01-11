@@ -277,6 +277,11 @@ abstract class RapidsBufferStore(
     catalog.registerNewBuffer(buffer)
   }
 
+  protected def addBufferAndGetHandle(buffer: RapidsBufferBase): RapidsBufferHandle = synchronized {
+    buffers.add(buffer)
+    catalog.registerNewBufferAndGetHandle(buffer)
+  }
+
   override def close(): Unit = {
     buffers.freeAll()
   }
@@ -389,7 +394,7 @@ abstract class RapidsBufferStore(
 
     override def releaseBatch(
         sparkTypes: Array[DataType],
-        alias: RapidsBufferAlias): ColumnarBatch = {
+        handle: RapidsBufferHandle): ColumnarBatch = {
       synchronized {
         if (released) {
           throw new IllegalStateException(s"RapidsBuffer ${id} already released")
@@ -399,7 +404,7 @@ abstract class RapidsBufferStore(
         } else {
           getColumnarBatch(sparkTypes)
         }
-        if (RapidsBufferAliasTracker.stopTracking(alias.getId, alias)) {
+        if (catalog.removeBuffer(handle)) {
           // if did remove
           released = true
           cache = None

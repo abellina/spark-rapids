@@ -46,7 +46,7 @@ trait RapidsShuffleFetchHandler {
    * @return a boolean that lets the caller know the batch was accepted (true), or
    *         rejected (false), in which case the caller should dispose of the batch.
    */
-  def batchReceived(alias: RapidsBufferAlias): Boolean
+  def batchReceived(alias: RapidsBufferHandle): Boolean
 
   /**
    * Called when the transport layer is not able to handle a fetch error for metadata
@@ -425,24 +425,23 @@ class RapidsShuffleClient(
    * @return the [[RapidsBufferId]] to be used to look up the buffer from catalog
    */
   private[shuffle] def track(
-      buffer: DeviceMemoryBuffer, meta: TableMeta): RapidsBufferAlias = {
+      buffer: DeviceMemoryBuffer, meta: TableMeta): RapidsBufferHandle = {
     val id: ShuffleReceivedBufferId = catalog.nextShuffleReceivedBufferId()
-    val alias = new RapidsBufferAliasImpl(id, SpillPriorities.INPUT_FROM_SHUFFLE_PRIORITY)
-    RapidsBufferAliasTracker.track(id, alias)
     logDebug(s"Adding buffer id ${id} to catalog")
     if (buffer != null) {
       // add the buffer to the catalog so it is available for spill
-      devStorage.addBuffer(id, buffer, meta,
-        SpillPriorities.INPUT_FROM_SHUFFLE_PRIORITY,
-        // set needsSync to false because we already have stream synchronized after
-        // consuming the bounce buffer, so we know these buffers are synchronized
-        // w.r.t. the CPU
-        needsSync = false)
+      withResource(buffer) { _ =>
+        devStorage.addBuffer(buffer, meta,
+          SpillPriorities.INPUT_FROM_SHUFFLE_PRIORITY,
+          // set needsSync to false because we already have stream synchronized after
+          // consuming the bounce buffer, so we know these buffers are synchronized
+          // w.r.t. the CPU
+          needsSync = false)
+      }
     } else {
       // no device data, just tracking metadata
       catalog.registerNewBuffer(new DegenerateRapidsBuffer(id, meta))
     }
-    alias
   }
 
   override def close(): Unit = {

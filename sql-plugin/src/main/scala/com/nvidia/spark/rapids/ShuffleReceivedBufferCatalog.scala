@@ -68,7 +68,8 @@ class ShuffleReceivedBufferCatalog(
    * Register a new buffer with the catalog. An exception will be thrown if an
    * existing buffer was registered with the same buffer ID.
    */
-  def registerNewBuffer(buffer: RapidsBuffer): Unit = catalog.registerNewBuffer(buffer)
+  def registerNewBuffer(buffer: RapidsBuffer): RapidsBufferHandle =
+    catalog.registerNewBufferAndGetHandle(buffer)
 
   /**
    * Lookup the shuffle buffer that corresponds to the specified shuffle buffer ID and acquire it.
@@ -95,10 +96,10 @@ class ShuffleReceivedBufferCatalog(
    * the [[ShuffleReceivedBufferId]] being removed is not being utilized by another thread.
    * @param id buffer identifier
    */
-  def removeBuffer(alias: RapidsBufferAlias): Unit = {
-    val id = alias.getId
+  def removeBuffer(handle: RapidsBufferHandle): Unit = {
+    val id = handle.getId
     tableMap.remove(id.tableId)
-    catalog.removeBuffer(id, alias)
+    catalog.removeBuffer(handle)
   }
 }
 

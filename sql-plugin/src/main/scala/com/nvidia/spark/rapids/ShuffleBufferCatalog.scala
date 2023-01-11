@@ -20,12 +20,9 @@ import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.function.{Consumer, IntUnaryOperator}
-
 import scala.collection.mutable.ArrayBuffer
-
 import ai.rapids.cudf.Cuda
 import com.nvidia.spark.rapids.format.TableMeta
-
 import org.apache.spark.SparkEnv
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.rapids.RapidsDiskBlockManager
@@ -77,15 +74,6 @@ class ShuffleBufferCatalog(
       new ConcurrentHashMap[ShuffleBlockId, ArrayBuffer[ShuffleBufferId]]))
   }
 
-  var shuffleAlias = new ConcurrentHashMap[ShuffleBufferId, RapidsBufferAlias]()
-
-  def registerAlias(bufferId: ShuffleBufferId, priority: Long): RapidsBufferAlias = {
-    val alias = new RapidsBufferAliasImpl(bufferId, priority)
-    shuffleAlias.put(bufferId, alias)
-    RapidsBufferAliasTracker.track(bufferId, alias)
-    alias
-  }
-
   /** Frees all buffers that correspond to the specified shuffle. */
   def unregisterShuffle(shuffleId: Int): Unit = {
     // This might be called on a background thread that has not set the device yet.
@@ -97,13 +85,7 @@ class ShuffleBufferCatalog(
         // NOTE: Not synchronizing array buffer because this shuffle should be inactive.
         bufferIds.foreach { id =>
           tableMap.remove(id.tableId)
-          val alias = shuffleAlias.remove(id)
-          if (alias == null) {
-            throw new IllegalStateException(
-              s"Attempted to remove a shuffle alias, but couldn't find it for ${id}")
-          }
-          catalog.removeBuffer(id, alias)
-          RapidsBufferAliasTracker.stopTracking(id, alias)
+          catalog.removeBuffer(id)
         }
       }
       info.blockMap.forEachValue(Long.MaxValue, bufferRemover)
@@ -189,7 +171,8 @@ class ShuffleBufferCatalog(
    * Register a new buffer with the catalog. An exception will be thrown if an
    * existing buffer was registered with the same buffer ID.
    */
-  def registerNewBuffer(buffer: RapidsBuffer): Unit = catalog.registerNewBuffer(buffer)
+  def registerNewBuffer(buffer: RapidsBuffer): RapidsBufferHandle =
+    catalog.registerNewBufferAndGetHandle(buffer)
 
   /**
    * Update the spill priority of a shuffle buffer that soon will be read locally.
@@ -233,10 +216,10 @@ class ShuffleBufferCatalog(
    * the [[ShuffleBufferId]] being removed is not being utilized by another thread.
    * @param id buffer identifier
    */
-  def removeBuffer(alias: RapidsBufferAlias): Unit = {
-    val id = alias.getId
+  def removeBuffer(handle: RapidsBufferHandle): Unit = {
+    val id = handle.getId
     tableMap.remove(id.tableId)
-    catalog.removeBuffer(id, alias)
+    catalog.removeBuffer(handle)
   }
 }
 

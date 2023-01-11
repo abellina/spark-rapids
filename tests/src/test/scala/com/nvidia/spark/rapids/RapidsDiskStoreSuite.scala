@@ -52,7 +52,7 @@ class RapidsDiskStoreSuite extends FunSuiteWithTempDir with Arm with MockitoSuga
           withResource(new RapidsDiskStore(mock[RapidsDiskBlockManager], catalog)) { diskStore =>
             assertResult(0)(diskStore.currentSize)
             hostStore.setSpillStore(diskStore)
-            val bufferSize = addTableToStore(devStore, bufferId, spillPriority)
+            val (bufferSize, _) = addTableToStore(devStore, bufferId, spillPriority)
             devStore.synchronousSpill(0)
             hostStore.synchronousSpill(0)
             assertResult(0)(hostStore.currentSize)
@@ -171,13 +171,11 @@ class RapidsDiskStoreSuite extends FunSuiteWithTempDir with Arm with MockitoSuga
           devStore.setSpillStore(hostStore)
           withResource(new RapidsDiskStore(mock[RapidsDiskBlockManager], catalog)) { diskStore =>
             hostStore.setSpillStore(diskStore)
-            addTableToStore(devStore, bufferId, spillPriority)
-            val alias = new RapidsBufferAliasImpl(bufferId, spillPriority)
-            RapidsBufferAliasTracker.track(bufferId, alias)
+            val (_, handle) = addTableToStore(devStore, bufferId, spillPriority)
             devStore.synchronousSpill(0)
             hostStore.synchronousSpill(0)
             assert(bufferPath.exists)
-            catalog.removeBuffer(bufferId, alias)
+            catalog.removeBuffer(handle)
             if (canShareDiskPaths) {
               assert(bufferPath.exists())
             } else {
@@ -191,12 +189,13 @@ class RapidsDiskStoreSuite extends FunSuiteWithTempDir with Arm with MockitoSuga
   private def addTableToStore(
       devStore: RapidsDeviceMemoryStore,
       bufferId: RapidsBufferId,
-      spillPriority: Long): Long = {
+      spillPriority: Long): (Long, RapidsBufferHandle) = {
     withResource(buildContiguousTable()) { ct =>
       val bufferSize = ct.getBuffer.getLength
       // store takes ownership of the table
-      devStore.addContiguousTable(bufferId, ct, spillPriority)
-      bufferSize
+      val handle = devStore.addContiguousTable(
+        bufferId, ct, spillPriority, RapidsBuffer.defaultSpillCallback, false)
+      (bufferSize, handle)
     }
   }
 

@@ -64,11 +64,16 @@ class RapidsGdsStoreSuite extends FunSuiteWithTempDir with Arm with MockitoSugar
         devStore.setSpillStore(gdsStore)
         assertResult(0)(gdsStore.currentSize)
 
-        val bufferSizes = bufferIds.map(id => {
-          val size = addTableToStore(devStore, id, spillPriority)
+        val bufferSizes = new Array[Long](bufferIds.length)
+        val bufferHandles = new Array[RapidsBufferHandle](bufferIds.length)
+
+        bufferIds.zipWithIndex.foreach { case(id, ix) =>
+          val (size, handle) = addTableToStore(devStore, id, spillPriority)
           devStore.synchronousSpill(0)
-          size
-        })
+          bufferSizes(ix) = size
+          bufferHandles(ix) = handle
+        }
+
         val totalSize = bufferSizes.sum
         assertResult(totalSize)(gdsStore.currentSize)
 
@@ -89,13 +94,9 @@ class RapidsGdsStoreSuite extends FunSuiteWithTempDir with Arm with MockitoSugar
           }
         }
 
-        val alias0 = new RapidsBufferAliasImpl(bufferIds(0), -1)
-        val alias1 = new RapidsBufferAliasImpl(bufferIds(1), -1)
-        RapidsBufferAliasTracker.track(bufferIds(0), alias0)
-        RapidsBufferAliasTracker.track(bufferIds(1), alias1)
-        catalog.removeBuffer(bufferIds(0), alias0)
+        catalog.removeBuffer(bufferHandles(0))
         assert(paths(0).exists)
-        catalog.removeBuffer(bufferIds(1), alias1)
+        catalog.removeBuffer(bufferHandles(1))
         assert(!paths(0).exists)
       }
     }
@@ -112,9 +113,7 @@ class RapidsGdsStoreSuite extends FunSuiteWithTempDir with Arm with MockitoSugar
         gdsStore =>
         devStore.setSpillStore(gdsStore)
         assertResult(0)(gdsStore.currentSize)
-        val bufferSize = addTableToStore(devStore, bufferId, spillPriority)
-        val alias = new RapidsBufferAliasImpl(bufferId, spillPriority)
-        RapidsBufferAliasTracker.track(bufferId, alias)
+        val (bufferSize, handle) = addTableToStore(devStore, bufferId, spillPriority)
         devStore.synchronousSpill(0)
         assertResult(bufferSize)(gdsStore.currentSize)
         assert(path.exists)
@@ -129,7 +128,7 @@ class RapidsGdsStoreSuite extends FunSuiteWithTempDir with Arm with MockitoSugar
           assertResult(spillPriority)(buffer.getSpillPriority)
         }
 
-        catalog.removeBuffer(bufferId, alias)
+        catalog.removeBuffer(handle)
         if (canShareDiskPaths) {
           assert(path.exists())
         } else {
@@ -142,12 +141,13 @@ class RapidsGdsStoreSuite extends FunSuiteWithTempDir with Arm with MockitoSugar
   private def addTableToStore(
       devStore: RapidsDeviceMemoryStore,
       bufferId: RapidsBufferId,
-      spillPriority: Long): Long = {
+      spillPriority: Long): (Long, RapidsBufferHandle) = {
     withResource(buildContiguousTable()) { ct =>
       val bufferSize = ct.getBuffer.getLength
       // store takes ownership of the table
-      devStore.addContiguousTable(bufferId, ct, spillPriority)
-      bufferSize
+      val handle = devStore.addContiguousTable(bufferId, ct, spillPriority,
+        RapidsBuffer.defaultSpillCallback, false)
+      (bufferSize, handle)
     }
   }
 
