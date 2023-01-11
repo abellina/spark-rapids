@@ -244,7 +244,9 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
         makeSpillable()
       } else if (refCount == 0) {
         logWarning(s"$id: cannot make spillable: refCount == 0")
-      } else  {
+        logWarning(s"$id: resetting event handler to null")
+        contigBuffer.setEventHandler(null)
+      } else {
         logWarning(s"$id: remove spillable: Refcount is ${refCount} numCachedRefs is ${numCachedRefs}")
         removeSpillable()
       }
