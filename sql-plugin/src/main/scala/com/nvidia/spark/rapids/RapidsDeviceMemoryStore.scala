@@ -74,13 +74,40 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
       tableMeta: TableMeta,
       initialSpillPriority: Long,
       spillCallback: SpillCallback = RapidsBuffer.defaultSpillCallback): RapidsBufferHandle = {
+    addTable(
+      TempSpillBufferId(),
+      table,
+      contigBuffer,
+      tableMeta,
+      initialSpillPriority,
+      spillCallback)
+  }
+
+  /**
+   * Adds a contiguous table to the device storage, taking ownership of the table.
+   *
+   * @param id the RapidsBufferId to use for this buffer
+   * @param table cudf table based from the contiguous buffer
+   * @param contigBuffer device memory buffer backing the table
+   * @param tableMeta metadata describing the buffer layout
+   * @param initialSpillPriority starting spill priority value for the buffer
+   * @param spillCallback a callback when the buffer is spilled. This should be very light weight.
+   *                      It should never allocate GPU memory and really just be used for metrics.
+   * @return RapidsBufferHandle handle for this table
+   */
+  def addTable(
+      id: RapidsBufferId,
+      table: Table,
+      contigBuffer: DeviceMemoryBuffer,
+      tableMeta: TableMeta,
+      initialSpillPriority: Long,
+      spillCallback: SpillCallback): RapidsBufferHandle = {
     // We increment this because this rapids device memory has two pointers to the buffer:
     // the actual contig buffer, and the table. When this `RapidsBuffer` releases its resources,
     // it will decrement the ref count for the contig buffer (negating this incRefCount),
     // it will also close the table being passed here, which together brings the ref count
     // to 0.
     contigBuffer.incRefCount()
-    val id = TempSpillBufferId()
     freeOnExcept(
       new RapidsDeviceMemoryBuffer(
         id,
