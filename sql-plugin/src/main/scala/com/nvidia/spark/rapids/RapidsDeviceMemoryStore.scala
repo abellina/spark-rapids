@@ -57,6 +57,10 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
       other.getSpillCallback)
   }
 
+  def getExistingId(buffer: DeviceMemoryBuffer): Option[RapidsBufferId] = {
+    None
+  }
+
   /**
    * Adds a contiguous table to the device storage, taking ownership of the table.
    *
@@ -74,13 +78,19 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
       tableMeta: TableMeta,
       initialSpillPriority: Long,
       spillCallback: SpillCallback = RapidsBuffer.defaultSpillCallback): RapidsBufferHandle = {
-    addTable(
-      TempSpillBufferId(),
-      table,
-      contigBuffer,
-      tableMeta,
-      initialSpillPriority,
-      spillCallback)
+    val existing = getExistingId(contigBuffer)
+    existing.map { id => 
+      table.close()
+      catalog.makeNewHandle(id, initialSpillPriority, spillCallback)
+    }.getOrElse {
+      addTable(
+        TempSpillBufferId(),
+        table,
+        contigBuffer,
+        tableMeta,
+        initialSpillPriority,
+        spillCallback)
+    }
   }
 
   /**
@@ -146,12 +156,18 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
       initialSpillPriority: Long,
       spillCallback: SpillCallback = RapidsBuffer.defaultSpillCallback,
       needsSync: Boolean = true): RapidsBufferHandle = {
-    addContiguousTable(
-      TempSpillBufferId(),
-      contigTable,
-      initialSpillPriority,
-      spillCallback,
-      needsSync)
+    val existing = getExistingId(contigTable.getBuffer)
+    existing.map { id => 
+      contigTable.close()
+      catalog.makeNewHandle(id, initialSpillPriority, spillCallback)
+    }.getOrElse {
+      addContiguousTable(
+        TempSpillBufferId(),
+        contigTable,
+        initialSpillPriority,
+        spillCallback,
+        needsSync)
+    }
   }
 
   /**
@@ -218,13 +234,18 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
       initialSpillPriority: Long,
       spillCallback: SpillCallback = RapidsBuffer.defaultSpillCallback,
       needsSync: Boolean = true): RapidsBufferHandle = {
-    addBuffer(
-      TempSpillBufferId(),
-      buffer,
-      tableMeta,
-      initialSpillPriority,
-      spillCallback,
-      needsSync)
+    val existing = getExistingId(buffer)
+    existing.map { id => 
+      catalog.makeNewHandle(id, initialSpillPriority, spillCallback)
+    }.getOrElse {
+      addBuffer(
+        TempSpillBufferId(),
+        buffer,
+        tableMeta,
+        initialSpillPriority,
+        spillCallback,
+        needsSync)
+    }
   }
 
   /**
