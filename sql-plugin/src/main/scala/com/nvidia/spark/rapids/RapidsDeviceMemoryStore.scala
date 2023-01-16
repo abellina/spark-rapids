@@ -315,6 +315,13 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
       extends RapidsBufferBase(id, size, meta, spillPriority, spillCallback) {
     override val storageTier: StorageTier = StorageTier.DEVICE
 
+    val eventHandler = new MemoryBuffer.EventHandler {
+      override def onClosed(refCount: Int): Unit = {
+      }
+    }
+
+    contigBuffer.setEventHandler(eventHandler)
+
     override protected def releaseResources(): Unit = {
       contigBuffer.close()
       table.foreach(_.close())
