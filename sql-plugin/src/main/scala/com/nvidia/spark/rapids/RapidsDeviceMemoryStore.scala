@@ -31,6 +31,14 @@ import org.apache.spark.sql.vectorized.ColumnarBatch
 class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog.singleton)
     extends RapidsBufferStore(StorageTier.DEVICE, catalog) with Arm {
 
+  def getExistingId(buffer: DeviceMemoryBuffer): Option[RapidsBufferId] = {
+    buffer.getEventHandler match {
+      case memoryBufferEventHandler: MemoryBufferEventHandler =>
+        Some(memoryBufferEventHandler.id)
+      case _ => None
+    }
+  }
+
   override protected def createBuffer(other: RapidsBuffer, memoryBuffer: MemoryBuffer,
       stream: Cuda.Stream): RapidsBufferBase = {
     val deviceBuffer = {
@@ -74,13 +82,47 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
       tableMeta: TableMeta,
       initialSpillPriority: Long,
       spillCallback: SpillCallback = RapidsBuffer.defaultSpillCallback): RapidsBufferHandle = {
+    val prior = getExistingId(contigBuffer)
+    prior.map {
+      table.close() //TODO: should we stump on the device memory buffer optional?
+      catalog.makeNewHandle(_, initialSpillPriority, spillCallback)
+    }.getOrElse {
+      addTable(
+        TempSpillBufferId(),
+        table,
+        contigBuffer,
+        tableMeta,
+        initialSpillPriority,
+        spillCallback)
+    }
+  }
+
+  /**
+   * Adds a contiguous table to the device storage, taking ownership of the table.
+   *
+   * @param table cudf table based from the contiguous buffer
+   * @param contigBuffer device memory buffer backing the table
+   * @param tableMeta metadata describing the buffer layout
+   * @param initialSpillPriority starting spill priority value for the buffer
+   * @param spillCallback a callback when the buffer is spilled. This should be very light weight.
+   *                      It should never allocate GPU memory and really just be used for metrics.
+   * @return RapidsBufferHandle handle for this table
+   */
+  def addTable(
+      id: RapidsBufferId,
+      table: Table,
+      contigBuffer: DeviceMemoryBuffer,
+      tableMeta: TableMeta,
+      initialSpillPriority: Long,
+      spillCallback: SpillCallback): RapidsBufferHandle = {
+    require(contigBuffer.getEventHandler == null,
+      "addBuffer tried to add a DeviceMemoryBuffer but it has an event handler associated with it.")
     // We increment this because this rapids device memory has two pointers to the buffer:
     // the actual contig buffer, and the table. When this `RapidsBuffer` releases its resources,
     // it will decrement the ref count for the contig buffer (negating this incRefCount),
     // it will also close the table being passed here, which together brings the ref count
     // to 0.
     contigBuffer.incRefCount()
-    val id = TempSpillBufferId()
     freeOnExcept(
       new RapidsDeviceMemoryBuffer(
         id,
@@ -96,7 +138,6 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
       catalog.makeNewHandle(id, initialSpillPriority, spillCallback)
     }
   }
-
   /**
    * Adds a contiguous table to the device storage. This does NOT take ownership of the
    * contiguous table, so it is the responsibility of the caller to close it. The refcount of the
@@ -119,12 +160,18 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
       initialSpillPriority: Long,
       spillCallback: SpillCallback = RapidsBuffer.defaultSpillCallback,
       needsSync: Boolean = true): RapidsBufferHandle = {
-    addContiguousTable(
-      TempSpillBufferId(),
-      contigTable,
-      initialSpillPriority,
-      spillCallback,
-      needsSync)
+    val contigBuffer = contigTable.getBuffer
+    val prior = getExistingId(contigBuffer)
+    prior.map {
+      catalog.makeNewHandle(_, initialSpillPriority, spillCallback)
+    }.getOrElse {
+      addContiguousTable(
+        TempSpillBufferId(),
+        contigTable,
+        initialSpillPriority,
+        spillCallback,
+        needsSync)
+    }
   }
 
   /**
@@ -149,6 +196,8 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
       spillCallback: SpillCallback,
       needsSync: Boolean): RapidsBufferHandle = {
     val contigBuffer = contigTable.getBuffer
+    require(contigBuffer.getEventHandler == null,
+      "addBuffer tried to add a DeviceMemoryBuffer but it has an event handler associated with it.")
     val size = contigBuffer.getLength
     val meta = MetaUtils.buildTableMeta(id.tableId, contigTable)
     contigBuffer.incRefCount()
@@ -191,13 +240,18 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
       initialSpillPriority: Long,
       spillCallback: SpillCallback = RapidsBuffer.defaultSpillCallback,
       needsSync: Boolean = true): RapidsBufferHandle = {
-    addBuffer(
-      TempSpillBufferId(),
-      buffer,
-      tableMeta,
-      initialSpillPriority,
-      spillCallback,
-      needsSync)
+    val prior = getExistingId(buffer)
+    prior.map {
+      catalog.makeNewHandle(_, initialSpillPriority, spillCallback)
+    }.getOrElse {
+      addBuffer(
+        TempSpillBufferId(),
+        buffer,
+        tableMeta,
+        initialSpillPriority,
+        spillCallback,
+        needsSync)
+    }
   }
 
   /**
@@ -221,6 +275,9 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
       initialSpillPriority: Long,
       spillCallback: SpillCallback,
       needsSync: Boolean): RapidsBufferHandle = {
+    require(buffer.getEventHandler == null,
+      "addBuffer tried to add a DeviceMemoryBuffer but it has an event handler associated with it.")
+    buffer.setEventHandler(new MemoryBufferEventHandler(id))
     buffer.incRefCount()
     freeOnExcept(
       new RapidsDeviceMemoryBuffer(

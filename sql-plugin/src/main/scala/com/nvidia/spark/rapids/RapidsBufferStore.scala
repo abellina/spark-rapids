@@ -33,6 +33,10 @@ object RapidsBufferStore {
   private val FREE_WAIT_TIMEOUT = 10 * 1000
 }
 
+class MemoryBufferEventHandler(val id: RapidsBufferId) extends MemoryBuffer.EventHandler {
+  override def onClosed(refCount: Int): Unit = {}
+}
+
 /**
  * Base class for all buffer store types.
  *
