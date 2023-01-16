@@ -58,6 +58,13 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
   }
 
   def getExistingId(buffer: DeviceMemoryBuffer): Option[RapidsBufferId] = {
+    val eh = buffer.getEventHandler
+    eh match {
+      case null => 
+        logWarning(s"Buffer with null event handler ${buffer}")
+      case eventHandler: MemoryBuffer.EventHandler => 
+        logWarning(s"Buffer with event handler set!! ${buffer}, $eventHandler")
+    }
     None
   }
 
