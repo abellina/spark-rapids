@@ -61,11 +61,14 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
     val eh = buffer.getEventHandler
     eh match {
       case null => 
-        logWarning(s"Buffer with null event handler ${buffer}")
-      case eventHandler: MemoryBuffer.EventHandler => 
-        logWarning(s"Buffer with event handler set!! ${buffer}, $eventHandler")
+        logWarning(s"Buffer with null event handler ${buffer}. refCount: ${buffer.getRefCount}")
+        None
+      case eventHandler: RapidsMemoryBufferHandler => 
+        logWarning(s"Buffer with event handler set!! ${buffer}, $eventHandler. refCount: ${buffer.getRefCount}")
+        Some(eventHandler.id)
+      case _ => 
+        throw new IllegalStateException("Unknown event handler")
     }
-    None
   }
 
   /**
@@ -88,6 +91,7 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
     val existing = getExistingId(contigBuffer)
     existing.map { id => 
       table.close()
+      logWarning(s"after table.close() contig buffer=$contigBuffer refCount=${contigBuffer.getRefCount}")
       catalog.makeNewHandle(id, initialSpillPriority, spillCallback)
     }.getOrElse {
       addTable(
@@ -165,7 +169,6 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
       needsSync: Boolean = true): RapidsBufferHandle = {
     val existing = getExistingId(contigTable.getBuffer)
     existing.map { id => 
-      contigTable.close()
       catalog.makeNewHandle(id, initialSpillPriority, spillCallback)
     }.getOrElse {
       addContiguousTable(
@@ -311,6 +314,12 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
     addBuffer(buffer)
   }
 
+  class RapidsMemoryBufferHandler(val id: RapidsBufferId) 
+    extends MemoryBuffer.EventHandler {
+    override def onClosed(refCount: Int): Unit = {
+    }
+  }
+
   class RapidsDeviceMemoryBuffer(
       id: RapidsBufferId,
       size: Long,
@@ -322,16 +331,12 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
       extends RapidsBufferBase(id, size, meta, spillPriority, spillCallback) {
     override val storageTier: StorageTier = StorageTier.DEVICE
 
-    val eventHandler = new MemoryBuffer.EventHandler {
-      override def onClosed(refCount: Int): Unit = {
-      }
-    }
-
-    contigBuffer.setEventHandler(eventHandler)
+    contigBuffer.setEventHandler(new RapidsMemoryBufferHandler(id))
 
     override protected def releaseResources(): Unit = {
       contigBuffer.close()
       table.foreach(_.close())
+      contigBuffer.setEventHandler(null)
     }
 
     override def getDeviceMemoryBuffer: DeviceMemoryBuffer = {
