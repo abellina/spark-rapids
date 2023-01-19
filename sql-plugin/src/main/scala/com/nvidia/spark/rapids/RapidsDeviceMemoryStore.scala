@@ -341,12 +341,11 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
       extends RapidsBufferBase(id, size, meta, spillPriority, spillCallback) {
     override val storageTier: StorageTier = StorageTier.DEVICE
 
-    private var eventHandler = new RapidsDeviceMemoryBufferHandler(this)
+    // private var eventHandler = new RapidsDeviceMemoryBufferHandler(this)
 
     //contigBuffer.setEventHandler(eventHandler)
 
     override protected def releaseResources(): Unit = {
-      eventHandler = null
       contigBuffer.setEventHandler(null)
       contigBuffer.close()
       table.foreach(_.close())
