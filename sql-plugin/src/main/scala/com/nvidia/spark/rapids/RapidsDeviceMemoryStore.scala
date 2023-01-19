@@ -323,12 +323,16 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
       logWarning(
         s"onClosed for ${buffer} ${buffer.id} refCount=${refCount} minRefCount=${minRefCount}")
       if (refCount == minRefCount) {
+        logWarning(s"Trying to mark ${buffer.id} as spillable...")
         if (buffer.addReference()) {
           try {
+            logWarning(s"Marking ${buffer.id} as spillable...")
             markSpillable(buffer)
           } finally {
             buffer.close() // remove reference added in addReference
           }
+        } else {
+          logWarning(s"Could not mark ${buffer.id} as spillable...")
         }
       }
     }
@@ -345,6 +349,7 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
       extends RapidsBufferBase(id, size, meta, spillPriority, spillCallback) {
     override val storageTier: StorageTier = StorageTier.DEVICE
 
+    logWarning(s"Setting an event handler for ${id}")
     contigBuffer.setEventHandler(new RapidsDeviceMemoryBufferHandler(this))
 
     def getTable: Option[Table] = table
