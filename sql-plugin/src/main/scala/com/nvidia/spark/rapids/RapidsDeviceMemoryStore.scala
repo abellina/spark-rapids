@@ -63,10 +63,10 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
       case null => 
         logWarning(s"Buffer with null event handler ${buffer}. refCount: ${buffer.getRefCount}")
         None
-      case eventHandler: RapidsMemoryBufferHandler => 
+      case eventHandler: RapidsDeviceMemoryBufferHandler =>
         logWarning(s"Buffer with event handler set!! ${buffer}, $eventHandler. refCount: ${buffer.getRefCount}")
-        Some(eventHandler.id)
-      case _ => 
+        Some(eventHandler.buffer.id)
+      case _ =>
         throw new IllegalStateException("Unknown event handler")
     }
   }
@@ -89,7 +89,7 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
       initialSpillPriority: Long,
       spillCallback: SpillCallback = RapidsBuffer.defaultSpillCallback): RapidsBufferHandle = {
     val existing = getExistingId(contigBuffer)
-    existing.map { id => 
+    existing.map { id =>
       table.close()
       logWarning(s"after table.close() contig buffer=$contigBuffer refCount=${contigBuffer.getRefCount}")
       catalog.makeNewHandle(id, initialSpillPriority, spillCallback)
@@ -168,7 +168,7 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
       spillCallback: SpillCallback = RapidsBuffer.defaultSpillCallback,
       needsSync: Boolean = true): RapidsBufferHandle = {
     val existing = getExistingId(contigTable.getBuffer)
-    existing.map { id => 
+    existing.map { id =>
       catalog.makeNewHandle(id, initialSpillPriority, spillCallback)
     }.getOrElse {
       addContiguousTable(
@@ -245,7 +245,7 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
       spillCallback: SpillCallback = RapidsBuffer.defaultSpillCallback,
       needsSync: Boolean = true): RapidsBufferHandle = {
     val existing = getExistingId(buffer)
-    existing.map { id => 
+    existing.map { id =>
       catalog.makeNewHandle(id, initialSpillPriority, spillCallback)
     }.getOrElse {
       addBuffer(
@@ -314,9 +314,19 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
     addBuffer(buffer)
   }
 
-  class RapidsMemoryBufferHandler(val id: RapidsBufferId) 
+  class RapidsDeviceMemoryBufferHandler(val buffer: RapidsDeviceMemoryBuffer)
     extends MemoryBuffer.EventHandler {
+
     override def onClosed(refCount: Int): Unit = {
+      // if (refCount == 1) {
+      //   if (buffer.addReference()) {
+      //     try {
+      //       markSpillable(buffer)
+      //     } finally {
+      //       buffer.close() // remove reference added in addReference
+      //     }
+      //   }
+      // }
     }
   }
 
@@ -331,15 +341,19 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
       extends RapidsBufferBase(id, size, meta, spillPriority, spillCallback) {
     override val storageTier: StorageTier = StorageTier.DEVICE
 
-    contigBuffer.setEventHandler(new RapidsMemoryBufferHandler(id))
+    private var eventHandler = new RapidsDeviceMemoryBufferHandler(this)
+
+    //contigBuffer.setEventHandler(eventHandler)
 
     override protected def releaseResources(): Unit = {
+      eventHandler = null
+      contigBuffer.setEventHandler(null)
       contigBuffer.close()
       table.foreach(_.close())
-      contigBuffer.setEventHandler(null)
     }
 
     override def getDeviceMemoryBuffer: DeviceMemoryBuffer = {
+      // markUnspillable(this)
       contigBuffer.incRefCount()
       contigBuffer
     }
@@ -347,6 +361,7 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
     override def getMemoryBuffer: MemoryBuffer = getDeviceMemoryBuffer
 
     override def getColumnarBatch(sparkTypes: Array[DataType]): ColumnarBatch = {
+      // markUnspillable(this)
       if (table.isDefined) {
         //REFCOUNT ++ of all columns
         GpuColumnVectorFromBuffer.from(table.get, contigBuffer, meta, sparkTypes)
