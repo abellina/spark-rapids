@@ -317,16 +317,20 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
   class RapidsDeviceMemoryBufferHandler(val buffer: RapidsDeviceMemoryBuffer)
     extends MemoryBuffer.EventHandler {
 
+    val minRefCount = buffer.getTable.map(_.getNumberOfColumns).getOrElse(1)
+
     override def onClosed(refCount: Int): Unit = {
-      // if (refCount == 1) {
-      //   if (buffer.addReference()) {
-      //     try {
-      //       markSpillable(buffer)
-      //     } finally {
-      //       buffer.close() // remove reference added in addReference
-      //     }
-      //   }
-      // }
+      logWarning(
+        s"onClosed for ${buffer} ${buffer.id} refCount=${refCount} minRefCount=${minRefCount}")
+      if (refCount == minRefCount) {
+        if (buffer.addReference()) {
+          try {
+            markSpillable(buffer)
+          } finally {
+            buffer.close() // remove reference added in addReference
+          }
+        }
+      }
     }
   }
 
@@ -341,9 +345,9 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
       extends RapidsBufferBase(id, size, meta, spillPriority, spillCallback) {
     override val storageTier: StorageTier = StorageTier.DEVICE
 
-    // private var eventHandler = new RapidsDeviceMemoryBufferHandler(this)
+    contigBuffer.setEventHandler(new RapidsDeviceMemoryBufferHandler(this))
 
-    //contigBuffer.setEventHandler(eventHandler)
+    def getTable: Option[Table] = table
 
     override protected def releaseResources(): Unit = {
       contigBuffer.setEventHandler(null)
@@ -352,7 +356,7 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
     }
 
     override def getDeviceMemoryBuffer: DeviceMemoryBuffer = {
-      // markUnspillable(this)
+      markUnspillable(this)
       contigBuffer.incRefCount()
       contigBuffer
     }
@@ -360,7 +364,7 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
     override def getMemoryBuffer: MemoryBuffer = getDeviceMemoryBuffer
 
     override def getColumnarBatch(sparkTypes: Array[DataType]): ColumnarBatch = {
-      // markUnspillable(this)
+      markUnspillable(this)
       if (table.isDefined) {
         //REFCOUNT ++ of all columns
         GpuColumnVectorFromBuffer.from(table.get, contigBuffer, meta, sparkTypes)
