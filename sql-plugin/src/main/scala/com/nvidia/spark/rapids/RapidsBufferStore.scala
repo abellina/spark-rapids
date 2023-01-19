@@ -51,7 +51,7 @@ abstract class RapidsBufferStore(
     def markSpillable(buffer: RapidsBufferBase): Unit = synchronized {
       if (spillable.offer(buffer)) {
         totalBytesSpillable += buffer.size
-        logWarning(s"Buffer ${buffer} is now spillable. " +
+        logWarning(s"Buffer ${buffer} ${buffer.id} is now spillable. " +
           s"total=${totalBytesStored} spillable=${totalBytesSpillable}")
       }
     }
@@ -59,7 +59,7 @@ abstract class RapidsBufferStore(
     def markUnspillable(buffer: RapidsBufferBase): Unit = synchronized {
       if (spillable.remove(buffer)) {
         totalBytesSpillable -= buffer.size
-        logWarning(s"Buffer ${buffer} is NOT spillable. " +
+        logWarning(s"Buffer ${buffer} ${buffer.id} is NOT spillable. " +
           s"total=${totalBytesStored}, spillable=${totalBytesSpillable}")
       }
     }
