@@ -222,15 +222,24 @@ abstract class RapidsBufferStore(
     require(targetTotalSize >= 0, s"Negative spill target size: $targetTotalSize")
 
     var totalSpilled: Long = 0
-    if (buffers.getTotalSpillableBytes > targetTotalSize) {
+    def getSpillableAmount(): Long = {
+      this.tier match {
+        case StorageTier.DEVICE =>
+          buffers.getTotalSpillableBytes
+        case _ =>
+          buffers.getTotalBytes
+      }
+    }
+
+    if (getSpillableAmount() > targetTotalSize) {
       val nvtx = new NvtxRange(nvtxSyncSpillName, NvtxColor.ORANGE)
       try {
         logDebug(s"$name store spilling to reduce usage from " +
-          s"${buffers.getTotalBytes} total (${buffers.getTotalSpillableBytes} spillable) " +
+          s"${buffers.getTotalBytes} total (${getSpillableAmount()} spillable) " +
           s"to $targetTotalSize bytes")
         var waited = false
         var exhausted = false
-        while (!exhausted && buffers.getTotalSpillableBytes > targetTotalSize) {
+        while (!exhausted && getSpillableAmount() > targetTotalSize) {
           val amountSpilled = trySpillAndFreeBuffer(stream)
           if (amountSpilled != 0) {
             totalSpilled += amountSpilled
@@ -241,7 +250,7 @@ abstract class RapidsBufferStore(
               logWarning(s"Cannot spill further, waiting for ${pendingFreeBytes.get} " +
                   " bytes of pending buffers to be released")
               memoryFreedMonitor.synchronized {
-                val memNeeded = buffers.getTotalSpillableBytes - targetTotalSize
+                val memNeeded = getSpillableAmount() - targetTotalSize
                 if (memNeeded > 0 && memNeeded <= pendingFreeBytes.get) {
                   // This could be a futile wait if the thread(s) holding the pending buffers open
                   // are here waiting for more memory.
@@ -251,7 +260,7 @@ abstract class RapidsBufferStore(
             } else {
               logWarning("Unable to spill enough to meet request. " +
                 s"Total=${buffers.getTotalBytes} " +
-                s"Spillable=${buffers.getTotalSpillableBytes} " +
+                s"Spillable=${getSpillableAmount()} " +
                 s"Target=$targetTotalSize")
               exhausted = true
             }
