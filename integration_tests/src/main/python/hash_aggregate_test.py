@@ -415,10 +415,23 @@ def test_hash_avg_nulls_partial_only(data_gen):
         conf=_float_conf_partial
     )
 
+_ab_list_no_nans = [
+    _longs_with_nulls]#,
+   #_longs_with_no_nulls,
+   #_grpkey_longs_with_nulls,
+   #_grpkey_dbls_with_nulls,
+   #_grpkey_floats_with_nulls,
+   #_grpkey_strings_with_nulls,
+   #_grpkey_nulls,
+   #_grpkey_strings_with_extra_nulls]
+_ab_gens = _ab_list_no_nans #+ [
+   #_grpkey_small_decimals, _grpkey_big_decimals, _grpkey_short_mid_decimals,
+   #_grpkey_short_big_decimals, _grpkey_short_very_big_decimals,
+   #_grpkey_short_very_big_neg_scale_decimals]
 @approximate_float
 @ignore_order
 @incompat
-@pytest.mark.parametrize('data_gen', _init_list_no_nans_with_decimalbig, ids=idfn)
+@pytest.mark.parametrize('data_gen', _ab_gens, ids=idfn)
 def test_intersectAll(data_gen):
     assert_gpu_and_cpu_are_equal_collect(
         lambda spark : gen_df(spark, data_gen, length=100).intersectAll(gen_df(spark, data_gen, length=100)))

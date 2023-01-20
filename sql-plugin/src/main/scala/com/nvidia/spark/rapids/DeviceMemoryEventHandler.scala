@@ -178,7 +178,7 @@ class DeviceMemoryEventHandler(
   override def onDeallocThreshold(totalAllocated: Long): Unit = {
   }
 
-  private def heapDump(dumpDir: String): Unit = {
+  def heapDump(dumpDir: String): Unit = {
     val dumpPath = getDumpPath(dumpDir)
     logWarning(s"Dumping heap to $dumpPath")
     val server = ManagementFactory.getPlatformMBeanServer

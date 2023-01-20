@@ -161,7 +161,7 @@ object RapidsBufferCatalog extends Logging with Arm {
   private var diskBlockManager: RapidsDiskBlockManager = _
   private var diskStorage: RapidsDiskStore = _
   private var gdsStorage: RapidsGdsStore = _
-  private var memoryEventHandler: DeviceMemoryEventHandler = _
+  var memoryEventHandler: DeviceMemoryEventHandler = _
   private var _shouldUnspill: Boolean = _
 
   private lazy val conf: SparkConf = {

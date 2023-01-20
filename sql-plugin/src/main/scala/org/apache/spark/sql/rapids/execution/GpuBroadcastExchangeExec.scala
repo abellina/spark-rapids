@@ -231,6 +231,7 @@ class SerializeConcatHostBuffersDeserializeBatch(
 
   @scala.annotation.nowarn("msg=method finalize in class Object is deprecated")
   override def finalize(): Unit = {
+    logWarning("At GpuBroadcastExchange finalize")
     super.finalize()
     close()
   }

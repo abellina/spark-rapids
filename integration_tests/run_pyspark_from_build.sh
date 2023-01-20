@@ -14,6 +14,8 @@
 # limitations under the License.
 set -ex
 
+export PYSP_TEST_spark_rapids_sql_explain="ALL"
+
 SCRIPTPATH="$( cd "$(dirname "$0")" >/dev/null 2>&1 ; pwd -P )"
 cd "$SCRIPTPATH"
 
@@ -221,8 +223,8 @@ else
     fi
 
     # Set the Delta log cache size to prevent the driver from caching every Delta log indefinitely
-    export PYSP_TEST_spark_driver_extraJavaOptions="-ea -Duser.timezone=UTC -Ddelta.log.cacheSize=10 $COVERAGE_SUBMIT_FLAGS"
-    export PYSP_TEST_spark_executor_extraJavaOptions='-ea -Duser.timezone=UTC'
+    export PYSP_TEST_spark_driver_extraJavaOptions="-ea -Duser.timezone=UTC -Ddelta.log.cacheSize=10 $COVERAGE_SUBMIT_FLAGS -Dai.rapids.refcount.debug=true1"
+    export PYSP_TEST_spark_executor_extraJavaOptions='-ea -Duser.timezone=UTC -Dai.rapids.refcount.debug=true'
     export PYSP_TEST_spark_ui_showConsoleProgress='false'
     export PYSP_TEST_spark_sql_session_timeZone='UTC'
     export PYSP_TEST_spark_sql_shuffle_partitions='4'
@@ -269,6 +271,8 @@ else
         export PYSP_TEST_spark_master="local[$LOCAL_PARALLEL,$SPARK_TASK_MAXFAILURES]"
       fi
     fi
+    #export PYSP_TEST_spark_rapids_memory_gpu_debug="STDERR"
+    #export PYSP_TEST_spark_master="spark://127.0.0.1:7077"
 
     # If you want to change the amount of GPU memory allocated you have to change it here
     # and where TEST_PARALLEL is calculated
