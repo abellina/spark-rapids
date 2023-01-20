@@ -19,15 +19,15 @@ package com.nvidia.spark.rapids
 import java.util.Comparator
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
-
-import ai.rapids.cudf.{BaseDeviceMemoryBuffer, Cuda, DeviceMemoryBuffer, HostMemoryBuffer, MemoryBuffer, NvtxColor, NvtxRange}
+import ai.rapids.cudf.{BaseDeviceMemoryBuffer, Cuda, DeviceMemoryBuffer, HostMemoryBuffer, MemoryBuffer, NvtxColor, NvtxRange, Rmm}
 import com.nvidia.spark.rapids.RapidsPluginImplicits._
 import com.nvidia.spark.rapids.StorageTier.{DEVICE, StorageTier}
 import com.nvidia.spark.rapids.format.TableMeta
-
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.types.DataType
 import org.apache.spark.sql.vectorized.ColumnarBatch
+
+import java.util
 
 object RapidsBufferStore {
   private val FREE_WAIT_TIMEOUT = 10 * 1000
@@ -49,10 +49,20 @@ abstract class RapidsBufferStore(
   private class BufferTracker {
 
     def markSpillable(buffer: RapidsBufferBase): Unit = synchronized {
-      if (spillable.offer(buffer)) {
-        totalBytesSpillable += buffer.size
-        logWarning(s"Buffer ${buffer} ${buffer.id} is now spillable. " +
-          s"total=${totalBytesStored} spillable=${totalBytesSpillable}")
+      if (spilled.contains(buffer.id)) {
+        logWarning(s"This device buffer ${buffer.id} is already spilled. We will skip")
+      } else {
+        if (buffers.containsKey(buffer.id)) {
+          if (spillable.offer(buffer)) {
+            totalBytesSpillable += buffer.size
+            logWarning(s"Buffer ${buffer} ${buffer.id} is now spillable. " +
+              s"total=${totalBytesStored} spillable=${totalBytesSpillable}")
+          } else {
+            logWarning(s"This device buffer ${buffer.id} was already in the spillable map")
+          }
+        } else {
+          logWarning(s"This device buffer ${buffer.id} is not in the store. We will skip")
+        }
       }
     }
 
@@ -69,18 +79,22 @@ abstract class RapidsBufferStore(
         java.lang.Long.compare(o1.getSpillPriority, o2.getSpillPriority)
     private[this] val buffers = new java.util.HashMap[RapidsBufferId, RapidsBufferBase]
     private[this] val spillable = new HashedPriorityQueue[RapidsBufferBase](comparator)
+    private[this] val spilled = new util.HashSet[RapidsBufferId]()
     private[this] var totalBytesStored: Long = 0L
     private[this] var totalBytesSpillable: Long = 0L
 
     def add(buffer: RapidsBufferBase): Unit = synchronized {
       val old = buffers.put(buffer.id, buffer)
+      spilled.remove(buffer.id) // in case we had spilled it in the past
       if (old != null) {
         throw new DuplicateBufferException(s"duplicate buffer registered: ${buffer.id}")
       }
       totalBytesStored += buffer.size
-      if (spillable.offer(buffer)) {
-        totalBytesSpillable += buffer.size
-      }
+      logWarning(s"ADD buffer ${buffer.id}. size=${buffer.size} " +
+        s"total=${totalBytesStored}, spillable=${totalBytesSpillable}")
+      //if (spillable.offer(buffer)) {
+      //  totalBytesSpillable += buffer.size
+      //}
     }
 
     def remove(id: RapidsBufferId): Unit = synchronized {
@@ -90,6 +104,10 @@ abstract class RapidsBufferStore(
         if (spillable.remove(obj)) {
           totalBytesSpillable -= obj.size
         }
+        logWarning(s"Removed buffer ${id}. Size ${obj.size}. " +
+          s"Total=${totalBytesStored}, Spillable=${totalBytesSpillable}, " +
+          s"RMM=${Rmm.getTotalBytesAllocated}")
+        spilled.remove(id)
       }
     }
 
@@ -98,6 +116,7 @@ abstract class RapidsBufferStore(
         val buffs = buffers.values().toArray(new Array[RapidsBufferBase](0))
         buffers.clear()
         spillable.clear()
+        spilled.clear()
         buffs
       }
       // We need to release the `RapidsBufferStore` lock to prevent a lock order inversion
@@ -109,8 +128,9 @@ abstract class RapidsBufferStore(
     def nextSpillableBuffer(): RapidsBufferBase = synchronized {
       val buffer = spillable.poll()
       if (buffer != null) {
+        spilled.add(buffer.id)
         totalBytesSpillable -= buffer.size
-        logWarning(s"POLL spillable buffer ${buffer}. " +
+        logWarning(s"POLL spillable buffer ${buffer.id}. size=${buffer.size} " +
           s"total=${totalBytesStored}, spillable=${totalBytesSpillable}")
       }
       buffer

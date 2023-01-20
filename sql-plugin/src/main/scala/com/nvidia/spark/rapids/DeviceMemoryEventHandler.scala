@@ -116,51 +116,53 @@ class DeviceMemoryEventHandler(
 
     try {
       withResource(new NvtxRange("onAllocFailure", NvtxColor.RED)) { _ =>
-        val storeSize = store.currentSize
-        val storeSpillableSize = store.currentSpillableSize
+        store.synchronized {
+          val storeSize = store.currentSize
+          val storeSpillableSize = store.currentSpillableSize
 
-        val attemptMsg = if (retryCount > 0) {
-          s"Attempt ${retryCount}. "
-        } else {
-          "First attempt. "
-        }
-
-        val retryState = oomRetryState.get()
-        retryState.resetIfNeeded(retryCount, storeSpillableSize)
-
-        logInfo(s"Device allocation of $allocSize bytes failed, device store has " +
-          s"$storeSize total and $storeSpillableSize spillable bytes. $attemptMsg" +
-          s"Total RMM allocated is ${Rmm.getTotalBytesAllocated} bytes. ")
-        if (storeSpillableSize == 0) {
-          if (retryState.shouldTrySynchronizing(retryCount)) {
-            Cuda.deviceSynchronize()
-            logWarning(s"[RETRY ${retryState.getRetriesSoFar}] " +
-              s"Retrying allocation of $allocSize after a synchronize. " +
-              s"Total RMM allocated is ${Rmm.getTotalBytesAllocated} bytes.")
-            true
+          val attemptMsg = if (retryCount > 0) {
+            s"Attempt ${retryCount}. "
           } else {
-            logWarning(s"Device store exhausted, unable to allocate $allocSize bytes. " +
-              s"Total RMM allocated is ${Rmm.getTotalBytesAllocated} bytes.")
-            synchronized {
-              if (dumpStackTracesOnFailureToHandleOOM) {
-                dumpStackTracesOnFailureToHandleOOM = false
-                GpuSemaphore.dumpActiveStackTracesToLog()
+            "First attempt. "
+          }
+
+          val retryState = oomRetryState.get()
+          retryState.resetIfNeeded(retryCount, storeSpillableSize)
+
+          logInfo(s"Device allocation of $allocSize bytes failed, device store has " +
+            s"$storeSize total and $storeSpillableSize spillable bytes. $attemptMsg" +
+            s"Total RMM allocated is ${Rmm.getTotalBytesAllocated} bytes. ")
+          if (storeSpillableSize == 0) {
+            if (retryState.shouldTrySynchronizing(retryCount)) {
+              Cuda.deviceSynchronize()
+              logWarning(s"[RETRY ${retryState.getRetriesSoFar}] " +
+                s"Retrying allocation of $allocSize after a synchronize. " +
+                s"Total RMM allocated is ${Rmm.getTotalBytesAllocated} bytes.")
+              true
+            } else {
+              logWarning(s"Device store exhausted, unable to allocate $allocSize bytes. " +
+                s"Total RMM allocated is ${Rmm.getTotalBytesAllocated} bytes.")
+              synchronized {
+                if (dumpStackTracesOnFailureToHandleOOM) {
+                  dumpStackTracesOnFailureToHandleOOM = false
+                  GpuSemaphore.dumpActiveStackTracesToLog()
+                }
               }
+              oomDumpDir.foreach(heapDump)
+              false
             }
-            oomDumpDir.foreach(heapDump)
-            false
-          }
-        } else {
-          val targetSize = Math.max(storeSpillableSize - allocSize, 0)
-          logDebug(s"Targeting device store size of $targetSize bytes")
-          val amountSpilled = store.synchronousSpill(targetSize)
-          logInfo(s"Spilled $amountSpilled bytes from the device store")
-          if (isGdsSpillEnabled) {
-            TrampolineUtil.incTaskMetricsDiskBytesSpilled(amountSpilled)
           } else {
-            TrampolineUtil.incTaskMetricsMemoryBytesSpilled(amountSpilled)
+            val targetSize = Math.max(storeSpillableSize - allocSize, 0)
+            logDebug(s"Targeting device store size of $targetSize bytes")
+            val amountSpilled = store.synchronousSpill(targetSize)
+            logInfo(s"Spilled $amountSpilled bytes from the device store")
+            if (isGdsSpillEnabled) {
+              TrampolineUtil.incTaskMetricsDiskBytesSpilled(amountSpilled)
+            } else {
+              TrampolineUtil.incTaskMetricsMemoryBytesSpilled(amountSpilled)
+            }
+            true
           }
-          true
         }
       }
     } catch {

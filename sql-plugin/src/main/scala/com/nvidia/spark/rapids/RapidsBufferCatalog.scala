@@ -55,7 +55,7 @@ trait RapidsBufferHandle extends AutoCloseable {
  * Catalog for lookup of buffers by ID. The constructor is only visible for testing, generally
  * `RapidsBufferCatalog.singleton` should be used instead.
  */
-class RapidsBufferCatalog extends AutoCloseable with Arm {
+class RapidsBufferCatalog extends AutoCloseable with Arm with Logging {
 
   /** Map of buffer IDs to buffers sorted by storage tier */
   private[this] val bufferMap = new ConcurrentHashMap[RapidsBufferId, Seq[RapidsBuffer]]
@@ -330,6 +330,7 @@ class RapidsBufferCatalog extends AutoCloseable with Arm {
   private def removeBuffer(handle: RapidsBufferHandle): Boolean = {
     // if this is the last handle, remove the buffer
     if (stopTrackingHandle(handle)) {
+      logWarning(s"Removing buffer ${handle.id}")
       val buffers = bufferMap.remove(handle.id)
       buffers.safeFree()
       true
@@ -353,7 +354,7 @@ object RapidsBufferCatalog extends Logging with Arm {
   private val MAX_BUFFER_LOOKUP_ATTEMPTS = 100
 
   val singleton = new RapidsBufferCatalog
-  private var deviceStorage: RapidsDeviceMemoryStore = _
+  private var deviceStorage: Option[RapidsDeviceMemoryStore] = _
   private var hostStorage: RapidsHostMemoryStore = _
   private var diskBlockManager: RapidsDiskBlockManager = _
   private var diskStorage: RapidsDiskStore = _
@@ -373,18 +374,18 @@ object RapidsBufferCatalog extends Logging with Arm {
 
   // For testing
   def setDeviceStorage(rdms: RapidsDeviceMemoryStore): Unit = {
-    deviceStorage = rdms
+    deviceStorage = Some(rdms)
   }
 
   def init(rapidsConf: RapidsConf): Unit = {
     // We are going to re-initialize so make sure all of the old things were closed...
     closeImpl()
     assert(memoryEventHandler == null)
-    deviceStorage = new RapidsDeviceMemoryStore()
+    deviceStorage = Some(new RapidsDeviceMemoryStore())
     diskBlockManager = new RapidsDiskBlockManager(conf)
     if (rapidsConf.isGdsSpillEnabled) {
       gdsStorage = new RapidsGdsStore(diskBlockManager, rapidsConf.gdsSpillBatchWriteBufferSize)
-      deviceStorage.setSpillStore(gdsStorage)
+      deviceStorage.foreach(_.setSpillStore(gdsStorage))
     } else {
       val hostSpillStorageSize = if (rapidsConf.hostSpillStorageSize == -1) {
         rapidsConf.pinnedPoolSize + rapidsConf.pageablePoolSize
@@ -393,13 +394,13 @@ object RapidsBufferCatalog extends Logging with Arm {
       }
       hostStorage = new RapidsHostMemoryStore(hostSpillStorageSize, rapidsConf.pageablePoolSize)
       diskStorage = new RapidsDiskStore(diskBlockManager)
-      deviceStorage.setSpillStore(hostStorage)
+      deviceStorage.foreach(_.setSpillStore(hostStorage))
       hostStorage.setSpillStore(diskStorage)
     }
 
     logInfo("Installing GPU memory handler for spill")
     memoryEventHandler = new DeviceMemoryEventHandler(
-      deviceStorage,
+      deviceStorage.get,
       rapidsConf.gpuOomDumpDir,
       rapidsConf.isGdsSpillEnabled,
       rapidsConf.gpuOomMaxRetries)
@@ -413,6 +414,8 @@ object RapidsBufferCatalog extends Logging with Arm {
     closeImpl()
   }
 
+  var closed = false
+
   private def closeImpl(): Unit = {
     singleton.close()
 
@@ -424,8 +427,8 @@ object RapidsBufferCatalog extends Logging with Arm {
     }
 
     if (deviceStorage != null) {
-      deviceStorage.close()
-      deviceStorage = null
+      deviceStorage.foreach(_.close())
+      deviceStorage = None
     }
     if (hostStorage != null) {
       hostStorage.close()
@@ -441,7 +444,7 @@ object RapidsBufferCatalog extends Logging with Arm {
     }
   }
 
-  def getDeviceStorage: RapidsDeviceMemoryStore = deviceStorage
+  def getDeviceStorage: RapidsDeviceMemoryStore = deviceStorage.get
 
   def shouldUnspill: Boolean = _shouldUnspill
 
@@ -461,7 +464,11 @@ object RapidsBufferCatalog extends Logging with Arm {
       tableMeta: TableMeta,
       initialSpillPriority: Long,
       spillCallback: SpillCallback = RapidsBuffer.defaultSpillCallback): RapidsBufferHandle = {
-    deviceStorage.addTable(table, contigBuffer, tableMeta, initialSpillPriority)
+    deviceStorage.map(_.addTable(table, contigBuffer, tableMeta, initialSpillPriority)).getOrElse {
+      throw new IllegalStateException(
+        s"Attempted to add a table ${table} and contigBuffer ${contigBuffer} but " +
+          "the device store is closed")
+    }
   }
 
   /**
@@ -479,7 +486,12 @@ object RapidsBufferCatalog extends Logging with Arm {
       contigTable: ContiguousTable,
       initialSpillPriority: Long,
       spillCallback: SpillCallback = RapidsBuffer.defaultSpillCallback): RapidsBufferHandle = {
-      deviceStorage.addContiguousTable(contigTable, initialSpillPriority, spillCallback)
+    deviceStorage
+      .map(_.addContiguousTable(contigTable, initialSpillPriority, spillCallback)).getOrElse {
+      throw new IllegalStateException(
+        s"Attempted to add a contigTable ${contigTable} and " +
+          s"contigBuffer ${contigTable.getBuffer} but the device store is closed")
+    }
   }
 
   /**
@@ -497,7 +509,11 @@ object RapidsBufferCatalog extends Logging with Arm {
       tableMeta: TableMeta,
       initialSpillPriority: Long,
       spillCallback: SpillCallback = RapidsBuffer.defaultSpillCallback): RapidsBufferHandle = {
-    deviceStorage.addBuffer(buffer, tableMeta, initialSpillPriority, spillCallback)
+    deviceStorage
+      .map(_.addBuffer(buffer, tableMeta, initialSpillPriority, spillCallback)).getOrElse {
+      throw new IllegalStateException(
+        s"Attempted to add a buffer ${buffer} but the device store is closed")
+    }
   }
 
   /**

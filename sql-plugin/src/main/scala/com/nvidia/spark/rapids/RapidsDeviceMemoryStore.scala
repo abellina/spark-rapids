@@ -16,13 +16,14 @@
 
 package com.nvidia.spark.rapids
 
-import ai.rapids.cudf.{ContiguousTable, Cuda, DeviceMemoryBuffer, HostMemoryBuffer, MemoryBuffer, Table}
+import ai.rapids.cudf.{ContiguousTable, Cuda, DeviceMemoryBuffer, HostMemoryBuffer, MemoryBuffer, Rmm, Table}
 import com.nvidia.spark.rapids.StorageTier.StorageTier
 import com.nvidia.spark.rapids.format.TableMeta
-
 import org.apache.spark.sql.rapids.TempSpillBufferId
 import org.apache.spark.sql.types.DataType
 import org.apache.spark.sql.vectorized.ColumnarBatch
+
+import scala.collection.mutable
 
 /**
  * Buffer storage using device memory.
@@ -129,12 +130,13 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
     // it will also close the table being passed here, which together brings the ref count
     // to 0.
     contigBuffer.incRefCount()
+    table.close()
     freeOnExcept(
       new RapidsDeviceMemoryBuffer(
         id,
         contigBuffer.getLength,
         tableMeta,
-        Some(table),
+        None,//Some(table),
         contigBuffer,
         initialSpillPriority,
         spillCallback)) { buffer =>
@@ -314,26 +316,35 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
     addBuffer(buffer)
   }
 
+  def getStackTrace: String = {
+    val sb = new mutable.StringBuilder()
+    Thread.currentThread().getStackTrace.foreach { stackTraceElement =>
+      sb.append("    " + stackTraceElement + "\n")
+    }
+    sb.toString()
+  }
+
   class RapidsDeviceMemoryBufferHandler(val buffer: RapidsDeviceMemoryBuffer)
     extends MemoryBuffer.EventHandler {
-
     val minRefCount = buffer.getTable.map(_.getNumberOfColumns).getOrElse(1)
+    logWarning(s"New event handler for ${buffer.id} buffer has " +
+      s"refCount ${buffer.getUnderlyingRefCount} minRefCount=${minRefCount}, ss=${getStackTrace}")
 
     override def onClosed(refCount: Int): Unit = {
       logWarning(
         s"onClosed for ${buffer} ${buffer.id} refCount=${refCount} minRefCount=${minRefCount}")
       if (refCount == minRefCount) {
         logWarning(s"Trying to mark ${buffer.id} as spillable...")
-        if (buffer.addReference()) {
-          try {
+        //if (buffer.addReference()) {
+        //  try {
             logWarning(s"Marking ${buffer.id} as spillable...")
             markSpillable(buffer)
-          } finally {
-            buffer.close() // remove reference added in addReference
-          }
-        } else {
-          logWarning(s"Could not mark ${buffer.id} as spillable...")
-        }
+        //} finally {
+        //  buffer.close() // remove reference added in addReference
+        // }
+       // } else {
+       //   logWarning(s"Could not mark ${buffer.id} as spillable...")
+       // }
       }
     }
   }
@@ -347,6 +358,8 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
       spillPriority: Long,
       spillCallback: SpillCallback)
       extends RapidsBufferBase(id, size, meta, spillPriority, spillCallback) {
+    def getUnderlyingRefCount = contigBuffer.getRefCount
+
     override val storageTier: StorageTier = StorageTier.DEVICE
 
     logWarning(s"Setting an event handler for ${id}")
@@ -355,12 +368,18 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
     def getTable: Option[Table] = table
 
     override protected def releaseResources(): Unit = {
-      contigBuffer.setEventHandler(null)
+      val before = Rmm.getTotalBytesAllocated
       contigBuffer.close()
       table.foreach(_.close())
+      val after = Rmm.getTotalBytesAllocated
+      contigBuffer.setEventHandler(null)
+      logWarning(s"At releaseResources for ${id}. " +
+        s"Size=${size}, Before RMM=${before} After RMM=${after} Diff=${before - after} " +
+        s"Underlying refCount=${contigBuffer.getRefCount}, ss=\n${getStackTrace}}")
     }
 
     override def getDeviceMemoryBuffer: DeviceMemoryBuffer = {
+      logWarning(s"At getDeviceMemoryBuffer for ${id}")
       markUnspillable(this)
       contigBuffer.incRefCount()
       contigBuffer
@@ -369,6 +388,7 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
     override def getMemoryBuffer: MemoryBuffer = getDeviceMemoryBuffer
 
     override def getColumnarBatch(sparkTypes: Array[DataType]): ColumnarBatch = {
+      logWarning(s"At getColumnarBatch for ${id}. ss=\n${getStackTrace}")
       markUnspillable(this)
       if (table.isDefined) {
         //REFCOUNT ++ of all columns
@@ -377,5 +397,6 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
         columnarBatchFromDeviceBuffer(contigBuffer, sparkTypes)
       }
     }
+
   }
 }

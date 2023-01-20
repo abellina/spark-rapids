@@ -290,21 +290,15 @@ abstract class AbstractGpuCoalesceIterator(
   override def hasNext: Boolean = {
     while (!hasOnDeck && iter.hasNext) {
       val cb = iter.next()
-      try {
-        withResource(new MetricRange(opTime)) { _ =>
-          val numRows = cb.numRows()
-          numInputBatches += 1
-          numInputRows += numRows
-          if (numRows > 0) {
-            saveOnDeck(cb)
-          } else {
-            cleanupInputBatch(cb)
-          }
-        }
-      } catch {
-        case t: Throwable =>
+      withResource(new MetricRange(opTime)) { _ =>
+        val numRows = cb.numRows()
+        numInputBatches += 1
+        numInputRows += numRows
+        if (numRows > 0) {
+          saveOnDeck(cb)
+        } else {
           cleanupInputBatch(cb)
-          throw t
+        }
       }
     }
     hasOnDeck
@@ -444,7 +438,8 @@ abstract class AbstractGpuCoalesceIterator(
                       addBatch(filteredCb)
                     }
                   }
-                case _ => saveOnDeck(cb) // not a single batch requirement
+                case _ =>
+                  saveOnDeck(cb) // not a single batch requirement
               }
             } else if (batchRowLimit > 0 && wouldBeRows > batchRowLimit) {
               saveOnDeck(cb)
@@ -561,9 +556,11 @@ class GpuCoalesceIterator(iter: Iterator[ColumnarBatch],
   override protected def hasOnDeck: Boolean = onDeck.isDefined
 
   override protected def saveOnDeck(batch: ColumnarBatch): Unit = {
+    logWarning(s"Adding ${batch}  to onDeck")
     assert(onDeck.isEmpty)
     onDeck = Some(SpillableColumnarBatch(batch, SpillPriorities.ACTIVE_ON_DECK_PRIORITY,
       spillCallback))
+    logWarning(s"Added ${batch} to onDeck as spillable ${onDeck.get}")
   }
 
   override protected def clearOnDeck(): Unit = {
