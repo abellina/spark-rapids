@@ -58,15 +58,20 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
       other.getSpillCallback)
   }
 
-  def getExistingId(buffer: DeviceMemoryBuffer): Option[RapidsBufferId] = {
+  def getExistingIdAndAcquire(buffer: DeviceMemoryBuffer): Option[RapidsDeviceMemoryBuffer] = {
     val eh = buffer.getEventHandler
     eh match {
-      case null => 
+      case null =>
         logWarning(s"Buffer with null event handler ${buffer}. refCount: ${buffer.getRefCount}")
         None
       case eventHandler: RapidsDeviceMemoryBufferHandler =>
-        logWarning(s"Buffer with event handler set!! ${buffer}, $eventHandler. refCount: ${buffer.getRefCount}")
-        Some(eventHandler.buffer.id)
+        logWarning(s"Buffer with event handler set!! ${buffer}, $eventHandler. " +
+          s"refCount: ${buffer.getRefCount}")
+        if (eventHandler.buffer.addReference()) {
+          Some(eventHandler.buffer)
+        } else {
+          None
+        }
       case _ =>
         throw new IllegalStateException("Unknown event handler")
     }
@@ -89,11 +94,14 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
       tableMeta: TableMeta,
       initialSpillPriority: Long,
       spillCallback: SpillCallback = RapidsBuffer.defaultSpillCallback): RapidsBufferHandle = {
-    val existing = getExistingId(contigBuffer)
-    existing.map { id =>
-      table.close()
-      logWarning(s"after table.close() contig buffer=$contigBuffer refCount=${contigBuffer.getRefCount}")
-      catalog.makeNewHandle(id, initialSpillPriority, spillCallback)
+    val existing = getExistingIdAndAcquire(contigBuffer)
+    existing.map { rapidsBuffer =>
+      withResource(rapidsBuffer) { _ =>
+        val id = rapidsBuffer.id
+        table.close()
+        logWarning(s"after table.close() contig buffer=$contigBuffer refCount=${contigBuffer.getRefCount}")
+        catalog.makeNewHandle(id, initialSpillPriority, spillCallback)
+      }
     }.getOrElse {
       addTable(
         TempSpillBufferId(),
@@ -169,9 +177,12 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
       initialSpillPriority: Long,
       spillCallback: SpillCallback = RapidsBuffer.defaultSpillCallback,
       needsSync: Boolean = true): RapidsBufferHandle = {
-    val existing = getExistingId(contigTable.getBuffer)
-    existing.map { id =>
-      catalog.makeNewHandle(id, initialSpillPriority, spillCallback)
+    val existing = getExistingIdAndAcquire(contigTable.getBuffer)
+    existing.map { rapidsBuffer =>
+      withResource(rapidsBuffer) { _ =>
+        val id = rapidsBuffer.id
+        catalog.makeNewHandle(id, initialSpillPriority, spillCallback)
+      }
     }.getOrElse {
       addContiguousTable(
         TempSpillBufferId(),
@@ -246,9 +257,12 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
       initialSpillPriority: Long,
       spillCallback: SpillCallback = RapidsBuffer.defaultSpillCallback,
       needsSync: Boolean = true): RapidsBufferHandle = {
-    val existing = getExistingId(buffer)
-    existing.map { id =>
-      catalog.makeNewHandle(id, initialSpillPriority, spillCallback)
+    val existing = getExistingIdAndAcquire(buffer)
+    existing.map { rapidsBuffer =>
+      withResource(rapidsBuffer) { _ =>
+        val id = rapidsBuffer.id
+        catalog.makeNewHandle(id, initialSpillPriority, spillCallback)
+      }
     }.getOrElse {
       addBuffer(
         TempSpillBufferId(),

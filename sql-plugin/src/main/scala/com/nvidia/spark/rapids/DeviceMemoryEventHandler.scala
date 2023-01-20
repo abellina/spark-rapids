@@ -116,7 +116,7 @@ class DeviceMemoryEventHandler(
 
     try {
       withResource(new NvtxRange("onAllocFailure", NvtxColor.RED)) { _ =>
-        store.synchronized {
+        synchronized {
           val storeSize = store.currentSize
           val storeSpillableSize = store.currentSpillableSize
 
