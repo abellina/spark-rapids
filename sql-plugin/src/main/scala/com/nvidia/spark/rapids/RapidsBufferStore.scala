@@ -92,9 +92,14 @@ abstract class RapidsBufferStore(
       totalBytesStored += buffer.size
       logWarning(s"ADD buffer ${buffer.id}. size=${buffer.size} " +
         s"total=${totalBytesStored}, spillable=${totalBytesSpillable}")
-      //if (spillable.offer(buffer)) {
-      //  totalBytesSpillable += buffer.size
-      //}
+      tier match {
+        case StorageTier.DEVICE =>
+        case _ => 
+          if (spillable.offer(buffer)) {
+            logWarning(s"Adding to spillable ${buffer.id} size=${buffer.size}")
+            totalBytesSpillable += buffer.size
+          }
+      }
     }
 
     def remove(id: RapidsBufferId): Unit = synchronized {
@@ -223,12 +228,7 @@ abstract class RapidsBufferStore(
 
     var totalSpilled: Long = 0
     def getSpillableAmount(): Long = {
-      this.tier match {
-        case StorageTier.DEVICE =>
-          buffers.getTotalSpillableBytes
-        case _ =>
-          buffers.getTotalBytes
-      }
+      buffers.getTotalSpillableBytes
     }
 
     if (getSpillableAmount() > targetTotalSize) {

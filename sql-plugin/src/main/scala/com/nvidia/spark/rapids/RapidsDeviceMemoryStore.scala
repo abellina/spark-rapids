@@ -342,7 +342,7 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
     extends MemoryBuffer.EventHandler {
     val minRefCount = buffer.getTable.map(_.getNumberOfColumns).getOrElse(1)
     logWarning(s"New event handler for ${buffer.id} buffer has " +
-      s"refCount ${buffer.getUnderlyingRefCount} minRefCount=${minRefCount}, ss=${getStackTrace}")
+      s"refCount ${buffer.getUnderlyingRefCount} minRefCount=${minRefCount}") //", ss=${getStackTrace}")
 
     override def onClosed(refCount: Int): Unit = {
       logWarning(
@@ -389,7 +389,7 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
       contigBuffer.setEventHandler(null)
       logWarning(s"At releaseResources for ${id}. " +
         s"Size=${size}, Before RMM=${before} After RMM=${after} Diff=${before - after} " +
-        s"Underlying refCount=${contigBuffer.getRefCount}, ss=\n${getStackTrace}}")
+        s"Underlying refCount=${contigBuffer.getRefCount}") //", ss=\n${getStackTrace}}")
     }
 
     override def getDeviceMemoryBuffer: DeviceMemoryBuffer = {
@@ -402,7 +402,7 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
     override def getMemoryBuffer: MemoryBuffer = getDeviceMemoryBuffer
 
     override def getColumnarBatch(sparkTypes: Array[DataType]): ColumnarBatch = {
-      logWarning(s"At getColumnarBatch for ${id}. ss=\n${getStackTrace}")
+      logWarning(s"At getColumnarBatch for ${id}") //". ss=\n${getStackTrace}")
       markUnspillable(this)
       if (table.isDefined) {
         //REFCOUNT ++ of all columns
