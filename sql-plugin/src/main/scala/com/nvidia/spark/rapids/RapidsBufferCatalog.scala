@@ -373,8 +373,15 @@ object RapidsBufferCatalog extends Logging with Arm {
   }
 
   // For testing
-  def setDeviceStorage(rdms: RapidsDeviceMemoryStore): Unit = {
+  def setDeviceStorage(rdms: RapidsDeviceMemoryStore): Unit = synchronized {
     deviceStorage = Some(rdms)
+  }
+
+  private def getDeviceStorageOrThrow: RapidsDeviceMemoryStore = synchronized {
+    deviceStorage.getOrElse {
+      throw new IllegalStateException(
+        "Attempted to access the RapidsDeviceMemoryStore, but it is closed.")
+    }
   }
 
   def init(rapidsConf: RapidsConf): Unit = {
@@ -416,7 +423,7 @@ object RapidsBufferCatalog extends Logging with Arm {
 
   var closed = false
 
-  private def closeImpl(): Unit = {
+  private def closeImpl(): Unit = synchronized {
     singleton.close()
 
     if (memoryEventHandler != null) {
@@ -444,7 +451,7 @@ object RapidsBufferCatalog extends Logging with Arm {
     }
   }
 
-  def getDeviceStorage: RapidsDeviceMemoryStore = deviceStorage.get
+  def getDeviceStorage: RapidsDeviceMemoryStore = getDeviceStorageOrThrow
 
   def shouldUnspill: Boolean = _shouldUnspill
 
@@ -464,11 +471,8 @@ object RapidsBufferCatalog extends Logging with Arm {
       tableMeta: TableMeta,
       initialSpillPriority: Long,
       spillCallback: SpillCallback = RapidsBuffer.defaultSpillCallback): RapidsBufferHandle = {
-    deviceStorage.map(_.addTable(table, contigBuffer, tableMeta, initialSpillPriority)).getOrElse {
-      throw new IllegalStateException(
-        s"Attempted to add a table ${table} and contigBuffer ${contigBuffer} but " +
-          "the device store is closed")
-    }
+    getDeviceStorageOrThrow
+      .addTable(table, contigBuffer, tableMeta, initialSpillPriority)
   }
 
   /**
@@ -486,12 +490,8 @@ object RapidsBufferCatalog extends Logging with Arm {
       contigTable: ContiguousTable,
       initialSpillPriority: Long,
       spillCallback: SpillCallback = RapidsBuffer.defaultSpillCallback): RapidsBufferHandle = {
-    deviceStorage
-      .map(_.addContiguousTable(contigTable, initialSpillPriority, spillCallback)).getOrElse {
-      throw new IllegalStateException(
-        s"Attempted to add a contigTable ${contigTable} and " +
-          s"contigBuffer ${contigTable.getBuffer} but the device store is closed")
-    }
+    getDeviceStorageOrThrow
+      .addContiguousTable(contigTable, initialSpillPriority, spillCallback)
   }
 
   /**
@@ -509,11 +509,8 @@ object RapidsBufferCatalog extends Logging with Arm {
       tableMeta: TableMeta,
       initialSpillPriority: Long,
       spillCallback: SpillCallback = RapidsBuffer.defaultSpillCallback): RapidsBufferHandle = {
-    deviceStorage
-      .map(_.addBuffer(buffer, tableMeta, initialSpillPriority, spillCallback)).getOrElse {
-      throw new IllegalStateException(
-        s"Attempted to add a buffer ${buffer} but the device store is closed")
-    }
+    getDeviceStorageOrThrow
+      .addBuffer(buffer, tableMeta, initialSpillPriority, spillCallback)
   }
 
   /**
