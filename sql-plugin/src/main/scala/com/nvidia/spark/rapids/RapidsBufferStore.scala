@@ -49,8 +49,8 @@ abstract class RapidsBufferStore(
   private class BufferTracker {
 
     def markSpillable(buffer: RapidsBufferBase): Unit = synchronized {
-      if (spilled.contains(buffer.id)) {
-        logWarning(s"This device buffer ${buffer.id} is already spilled. We will skip")
+      if (spilling.contains(buffer.id)) {
+        logWarning(s"This device buffer ${buffer.id} is already spilling. We will skip")
       } else {
         if (buffers.containsKey(buffer.id)) {
           if (spillable.offer(buffer)) {
@@ -79,13 +79,15 @@ abstract class RapidsBufferStore(
         java.lang.Long.compare(o1.getSpillPriority, o2.getSpillPriority)
     private[this] val buffers = new java.util.HashMap[RapidsBufferId, RapidsBufferBase]
     private[this] val spillable = new HashedPriorityQueue[RapidsBufferBase](comparator)
-    private[this] val spilled = new util.HashSet[RapidsBufferId]()
+    private[this] val spilling = new util.HashSet[RapidsBufferId]()
     private[this] var totalBytesStored: Long = 0L
     private[this] var totalBytesSpillable: Long = 0L
 
     def add(buffer: RapidsBufferBase): Unit = synchronized {
       val old = buffers.put(buffer.id, buffer)
-      spilled.remove(buffer.id) // in case we had spilled it in the past
+      // it is unlikely that the buffer was in this collection, but removing
+      // anyway. We assume the buffer is safe in this tier, and is not spilling
+      spilling.remove(buffer.id)
       if (old != null) {
         throw new DuplicateBufferException(s"duplicate buffer registered: ${buffer.id}")
       }
@@ -94,15 +96,18 @@ abstract class RapidsBufferStore(
         s"total=${totalBytesStored}, spillable=${totalBytesSpillable}")
       tier match {
         case StorageTier.DEVICE =>
-        case _ => 
+          // noop, device buffers "spillability" is handled via DeviceMemoryBuffer ref counting
+        case _ =>
+          // all other tiers define stored buffers spillable at all times
           if (spillable.offer(buffer)) {
-            logWarning(s"Adding to spillable ${buffer.id} size=${buffer.size}")
             totalBytesSpillable += buffer.size
           }
       }
     }
 
     def remove(id: RapidsBufferId): Unit = synchronized {
+      // when removing a buffer we no longer need to know if it was spilling
+      spilling.remove(id)
       val obj = buffers.remove(id)
       if (obj != null) {
         totalBytesStored -= obj.size
@@ -112,7 +117,6 @@ abstract class RapidsBufferStore(
         logWarning(s"Removed buffer ${id}. Size ${obj.size}. " +
           s"Total=${totalBytesStored}, Spillable=${totalBytesSpillable}, " +
           s"RMM=${Rmm.getTotalBytesAllocated}")
-        spilled.remove(id)
       }
     }
 
@@ -121,7 +125,7 @@ abstract class RapidsBufferStore(
         val buffs = buffers.values().toArray(new Array[RapidsBufferBase](0))
         buffers.clear()
         spillable.clear()
-        spilled.clear()
+        spilling.clear()
         buffs
       }
       // We need to release the `RapidsBufferStore` lock to prevent a lock order inversion
@@ -133,7 +137,8 @@ abstract class RapidsBufferStore(
     def nextSpillableBuffer(): RapidsBufferBase = synchronized {
       val buffer = spillable.poll()
       if (buffer != null) {
-        spilled.add(buffer.id)
+        // mark the id as "spilling" (this buffer is in the middle of a spill operation)
+        spilling.add(buffer.id)
         totalBytesSpillable -= buffer.size
         logWarning(s"POLL spillable buffer ${buffer.id}. size=${buffer.size} " +
           s"total=${totalBytesStored}, spillable=${totalBytesSpillable}")
@@ -154,14 +159,6 @@ abstract class RapidsBufferStore(
   private[this] val pendingFreeBytes = new AtomicLong(0L)
 
   private[this] val buffers = new BufferTracker
-
-  def markSpillable(buffer: RapidsBufferBase): Unit = {
-    buffers.markSpillable(buffer)
-  }
-
-  def markUnspillable(buffer: RapidsBufferBase): Unit = {
-    buffers.markUnspillable(buffer)
-  }
 
   /** Tracks buffers that are waiting on outstanding references to be freed. */
   private[this] val pendingFreeBuffers = new ConcurrentHashMap[RapidsBufferId, RapidsBufferBase]
@@ -207,6 +204,21 @@ abstract class RapidsBufferStore(
       addBuffer(newBuffer)
       newBuffer
     }
+  }
+  protected def markSpillable(buffer: RapidsBufferBase): Unit = {
+    throw new NotImplementedError(s"This store ${this} does not implement markSpillable")
+  }
+
+  protected def markUnspillable(buffer: RapidsBufferBase): Unit = {
+    throw new NotImplementedError(s"This store ${this} does not implement markUnspillable")
+  }
+
+  protected def doMarkSpillable(buffer: RapidsBufferBase): Unit = {
+    buffers.markSpillable(buffer)
+  }
+
+  protected def doMarkUnspillable(buffer: RapidsBufferBase): Unit = {
+    buffers.markUnspillable(buffer)
   }
 
   /**

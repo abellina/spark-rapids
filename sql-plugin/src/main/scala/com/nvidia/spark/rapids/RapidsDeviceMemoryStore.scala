@@ -338,6 +338,14 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
     sb.toString()
   }
 
+  override protected def markSpillable(buffer: RapidsBufferBase): Unit = {
+    doMarkSpillable(buffer)
+  }
+
+  override protected def markUnspillable(buffer: RapidsBufferBase): Unit = {
+    doMarkUnspillable(buffer)
+  }
+
   class RapidsDeviceMemoryBufferHandler(val buffer: RapidsDeviceMemoryBuffer)
     extends MemoryBuffer.EventHandler {
     val minRefCount = buffer.getTable.map(_.getNumberOfColumns).getOrElse(1)
@@ -393,7 +401,6 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
     }
 
     override def getDeviceMemoryBuffer: DeviceMemoryBuffer = {
-      logWarning(s"At getDeviceMemoryBuffer for ${id}")
       markUnspillable(this)
       contigBuffer.incRefCount()
       contigBuffer
@@ -402,7 +409,6 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
     override def getMemoryBuffer: MemoryBuffer = getDeviceMemoryBuffer
 
     override def getColumnarBatch(sparkTypes: Array[DataType]): ColumnarBatch = {
-      logWarning(s"At getColumnarBatch for ${id}") //". ss=\n${getStackTrace}")
       markUnspillable(this)
       if (table.isDefined) {
         //REFCOUNT ++ of all columns
