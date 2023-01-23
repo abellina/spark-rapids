@@ -67,12 +67,11 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
       case eventHandler: RapidsDeviceMemoryBufferHandler =>
         logWarning(s"Buffer with event handler set!! ${buffer}, $eventHandler. " +
           s"refCount: ${buffer.getRefCount}")
-        None
-        //if (eventHandler.buffer.addReference()) {
-        //  Some(eventHandler.buffer)
-        //} else {
-        //  None
-        //}
+        if (eventHandler.buffer.addReference()) {
+          Some(eventHandler.buffer)
+        } else {
+          None
+        }
       case _ =>
         throw new IllegalStateException("Unknown event handler")
     }
@@ -138,21 +137,24 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
     // it will decrement the ref count for the contig buffer (negating this incRefCount),
     // it will also close the table being passed here, which together brings the ref count
     // to 0.
-    // contigBuffer.incRefCount()
-    //table.close()
-    freeOnExcept(
-      new RapidsDeviceMemoryBuffer(
-        id,
-        contigBuffer.getLength,
-        tableMeta,
-        Some(table),
-        contigBuffer,
-        initialSpillPriority,
-        spillCallback)) { buffer =>
-      logDebug(s"Adding table for: [id=$id, size=${buffer.size}, " +
-        s"meta_id=${buffer.meta.bufferMeta.id}, meta_size=${buffer.meta.bufferMeta.size}]")
-      addDeviceBuffer(buffer, needsSync = true)
-      catalog.makeNewHandle(id, initialSpillPriority, spillCallback)
+    contigBuffer.incRefCount()
+    // forces a call to onClose
+    withResource(contigBuffer) { _ =>
+      //table.close()
+      freeOnExcept(
+        new RapidsDeviceMemoryBuffer(
+          id,
+          contigBuffer.getLength,
+          tableMeta,
+          Some(table),
+          contigBuffer,
+          initialSpillPriority,
+          spillCallback)) { buffer =>
+        logDebug(s"Adding table for: [id=$id, size=${buffer.size}, " +
+          s"meta_id=${buffer.meta.bufferMeta.id}, meta_size=${buffer.meta.bufferMeta.size}]")
+        addDeviceBuffer(buffer, needsSync = true)
+        catalog.makeNewHandle(id, initialSpillPriority, spillCallback)
+      }
     }
   }
 
@@ -351,7 +353,7 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
     extends MemoryBuffer.EventHandler {
     val numCols =
       buffer.getTable.map(_.getNumberOfColumns).getOrElse(0)
-    val minRefCount = numCols + 1
+    val minRefCount = Math.max(numCols, 1)
     logWarning(s"New event handler for ${buffer.id} buffer has " +
       s"numCols=$numCols " +
       s"refCount=${buffer.getUnderlyingRefCount} " +
@@ -394,7 +396,7 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
 
     logWarning(s"Setting an event handler for ${id}")
 
-    //contigBuffer.setEventHandler(new RapidsDeviceMemoryBufferHandler(this))
+    contigBuffer.setEventHandler(new RapidsDeviceMemoryBufferHandler(this))
 
     def getTable: Option[Table] = table
 
@@ -425,8 +427,11 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
     override def getColumnarBatch(sparkTypes: Array[DataType]): ColumnarBatch = {
       markUnspillable(this)
       val batch = if (table.isDefined) {
+        logWarning(s"Before returning batch for ${id}, refCount=${contigBuffer.getRefCount}")
         //REFCOUNT ++ of all columns
-        GpuColumnVectorFromBuffer.from(table.get, contigBuffer, meta, sparkTypes)
+        val b = GpuColumnVectorFromBuffer.from(table.get, contigBuffer, meta, sparkTypes)
+        logWarning(s"After returning batch for ${id}, refCount=${contigBuffer.getRefCount}")
+        b
       } else {
         columnarBatchFromDeviceBuffer(contigBuffer, sparkTypes)
       }
