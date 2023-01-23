@@ -354,7 +354,7 @@ object RapidsBufferCatalog extends Logging with Arm {
   private val MAX_BUFFER_LOOKUP_ATTEMPTS = 100
 
   val singleton = new RapidsBufferCatalog
-  private var deviceStorage: Option[RapidsDeviceMemoryStore] = _
+  private var deviceStorage: RapidsDeviceMemoryStore = _
   private var hostStorage: RapidsHostMemoryStore = _
   private var diskBlockManager: RapidsDiskBlockManager = _
   private var diskStorage: RapidsDiskStore = _
@@ -374,25 +374,18 @@ object RapidsBufferCatalog extends Logging with Arm {
 
   // For testing
   def setDeviceStorage(rdms: RapidsDeviceMemoryStore): Unit = synchronized {
-    deviceStorage = Some(rdms)
-  }
-
-  private def getDeviceStorageOrThrow: RapidsDeviceMemoryStore = synchronized {
-    deviceStorage.getOrElse {
-      throw new IllegalStateException(
-        "Attempted to access the RapidsDeviceMemoryStore, but it is closed.")
-    }
+    deviceStorage = rdms
   }
 
   def init(rapidsConf: RapidsConf): Unit = {
     // We are going to re-initialize so make sure all of the old things were closed...
     closeImpl()
     assert(memoryEventHandler == null)
-    deviceStorage = Some(new RapidsDeviceMemoryStore())
+    deviceStorage = new RapidsDeviceMemoryStore()
     diskBlockManager = new RapidsDiskBlockManager(conf)
     if (rapidsConf.isGdsSpillEnabled) {
       gdsStorage = new RapidsGdsStore(diskBlockManager, rapidsConf.gdsSpillBatchWriteBufferSize)
-      deviceStorage.foreach(_.setSpillStore(gdsStorage))
+      deviceStorage.setSpillStore(gdsStorage)
     } else {
       val hostSpillStorageSize = if (rapidsConf.hostSpillStorageSize == -1) {
         rapidsConf.pinnedPoolSize + rapidsConf.pageablePoolSize
@@ -401,13 +394,13 @@ object RapidsBufferCatalog extends Logging with Arm {
       }
       hostStorage = new RapidsHostMemoryStore(hostSpillStorageSize, rapidsConf.pageablePoolSize)
       diskStorage = new RapidsDiskStore(diskBlockManager)
-      deviceStorage.foreach(_.setSpillStore(hostStorage))
+      deviceStorage.setSpillStore(hostStorage)
       hostStorage.setSpillStore(diskStorage)
     }
 
     logInfo("Installing GPU memory handler for spill")
     memoryEventHandler = new DeviceMemoryEventHandler(
-      deviceStorage.get,
+      deviceStorage,
       rapidsConf.gpuOomDumpDir,
       rapidsConf.isGdsSpillEnabled,
       rapidsConf.gpuOomMaxRetries)
@@ -434,8 +427,8 @@ object RapidsBufferCatalog extends Logging with Arm {
     }
 
     if (deviceStorage != null) {
-      deviceStorage.foreach(_.close())
-      deviceStorage = None
+      deviceStorage.close()
+      deviceStorage = null
     }
     if (hostStorage != null) {
       hostStorage.close()
@@ -451,7 +444,7 @@ object RapidsBufferCatalog extends Logging with Arm {
     }
   }
 
-  def getDeviceStorage: RapidsDeviceMemoryStore = getDeviceStorageOrThrow
+  def getDeviceStorage: RapidsDeviceMemoryStore = deviceStorage
 
   def shouldUnspill: Boolean = _shouldUnspill
 
@@ -471,8 +464,7 @@ object RapidsBufferCatalog extends Logging with Arm {
       tableMeta: TableMeta,
       initialSpillPriority: Long,
       spillCallback: SpillCallback = RapidsBuffer.defaultSpillCallback): RapidsBufferHandle = {
-    getDeviceStorageOrThrow
-      .addTable(table, contigBuffer, tableMeta, initialSpillPriority)
+    deviceStorage.addTable(table, contigBuffer, tableMeta, initialSpillPriority)
   }
 
   /**
@@ -490,8 +482,7 @@ object RapidsBufferCatalog extends Logging with Arm {
       contigTable: ContiguousTable,
       initialSpillPriority: Long,
       spillCallback: SpillCallback = RapidsBuffer.defaultSpillCallback): RapidsBufferHandle = {
-    getDeviceStorageOrThrow
-      .addContiguousTable(contigTable, initialSpillPriority, spillCallback)
+    deviceStorage.addContiguousTable(contigTable, initialSpillPriority, spillCallback)
   }
 
   /**
@@ -509,8 +500,7 @@ object RapidsBufferCatalog extends Logging with Arm {
       tableMeta: TableMeta,
       initialSpillPriority: Long,
       spillCallback: SpillCallback = RapidsBuffer.defaultSpillCallback): RapidsBufferHandle = {
-    getDeviceStorageOrThrow
-      .addBuffer(buffer, tableMeta, initialSpillPriority, spillCallback)
+    deviceStorage.addBuffer(buffer, tableMeta, initialSpillPriority, spillCallback)
   }
 
   /**

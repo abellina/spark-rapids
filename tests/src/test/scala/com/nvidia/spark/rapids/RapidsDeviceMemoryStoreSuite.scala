@@ -117,11 +117,12 @@ class RapidsDeviceMemoryStoreSuite extends FunSuite with Arm with MockitoSugar {
       val spillPriority = 3
       val bufferId = MockRapidsBufferId(7)
       val ct = buildContiguousTable()
+      val underlyingBuff = ct.getBuffer
       val buffSize = ct.getBuffer.getLength
-      val handle = withResource(ct) { _ =>
+      withResource(ct) { _ =>
         val meta = MetaUtils.buildTableMeta(bufferId.tableId, ct)
         withResource(ct) { _ =>
-          val handle = store.addBuffer(
+          store.addBuffer(
             bufferId,
             ct.getBuffer,
             meta,
@@ -130,15 +131,16 @@ class RapidsDeviceMemoryStoreSuite extends FunSuite with Arm with MockitoSugar {
             false)
           assertResult(buffSize)(store.currentSize)
           assertResult(0)(store.currentSpillableSize)
-          handle
         }
       }
+
       // after closing the original table, the RapidsBuffer should be spillable
       assertResult(buffSize)(store.currentSize)
       assertResult(buffSize)(store.currentSpillableSize)
-      val leakedBuff = withResource(catalog.acquireBuffer(handle)) { buff =>
-        buff.getDeviceMemoryBuffer
-      }
+      val leakedBuff =
+        withResource(store.getExistingIdAndAcquire(underlyingBuff)) { buff =>
+          buff.get.getDeviceMemoryBuffer
+        }
       assertResult(buffSize)(store.currentSize)
       assertResult(0)(store.currentSpillableSize)
       leakedBuff.close()
