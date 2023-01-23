@@ -95,8 +95,9 @@ abstract class RapidsBufferStore(
       logWarning(s"ADD buffer ${buffer.id}. size=${buffer.size} " +
         s"total=${totalBytesStored}, spillable=${totalBytesSpillable}")
       tier match {
-        case StorageTier.DEVICE =>
-          // noop, device buffers "spillability" is handled via DeviceMemoryBuffer ref counting
+        //TODO: fix
+       //case StorageTier.DEVICE =>
+       //  // noop, device buffers "spillability" is handled via DeviceMemoryBuffer ref counting
         case _ =>
           // all other tiers define stored buffers spillable at all times
           if (spillable.offer(buffer)) {

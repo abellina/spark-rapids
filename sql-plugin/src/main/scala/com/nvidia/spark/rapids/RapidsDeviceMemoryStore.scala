@@ -67,11 +67,12 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
       case eventHandler: RapidsDeviceMemoryBufferHandler =>
         logWarning(s"Buffer with event handler set!! ${buffer}, $eventHandler. " +
           s"refCount: ${buffer.getRefCount}")
-        if (eventHandler.buffer.addReference()) {
-          Some(eventHandler.buffer)
-        } else {
-          None
-        }
+        None
+        //if (eventHandler.buffer.addReference()) {
+        //  Some(eventHandler.buffer)
+        //} else {
+        //  None
+        //}
       case _ =>
         throw new IllegalStateException("Unknown event handler")
     }
@@ -137,7 +138,7 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
     // it will decrement the ref count for the contig buffer (negating this incRefCount),
     // it will also close the table being passed here, which together brings the ref count
     // to 0.
-    contigBuffer.incRefCount()
+    // contigBuffer.incRefCount()
     //table.close()
     freeOnExcept(
       new RapidsDeviceMemoryBuffer(
@@ -348,13 +349,20 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
 
   class RapidsDeviceMemoryBufferHandler(val buffer: RapidsDeviceMemoryBuffer)
     extends MemoryBuffer.EventHandler {
-    val minRefCount = buffer.getTable.map(_.getNumberOfColumns).getOrElse(1)
+    val numCols =
+      buffer.getTable.map(_.getNumberOfColumns).getOrElse(0)
+    val minRefCount = numCols + 1
     logWarning(s"New event handler for ${buffer.id} buffer has " +
-      s"refCount ${buffer.getUnderlyingRefCount} minRefCount=${minRefCount}") //", ss=${getStackTrace}")
+      s"numCols=$numCols " +
+      s"refCount=${buffer.getUnderlyingRefCount} " +
+      s"minRefCount=${minRefCount}") //", ss=${getStackTrace}")
 
     override def onClosed(refCount: Int): Unit = {
       logWarning(
-        s"onClosed for ${buffer} ${buffer.id} refCount=${refCount} minRefCount=${minRefCount}")
+        s"onClosed for ${buffer} ${buffer.id} " +
+          s"numCols=$numCols " +
+          s"refCount=${refCount} " +
+          s"minRefCount=${minRefCount}")
       if (refCount == minRefCount) {
         logWarning(s"Trying to mark ${buffer.id} as spillable...")
         //if (buffer.addReference()) {
@@ -385,13 +393,16 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
     override val storageTier: StorageTier = StorageTier.DEVICE
 
     logWarning(s"Setting an event handler for ${id}")
-    contigBuffer.setEventHandler(new RapidsDeviceMemoryBufferHandler(this))
+
+    //contigBuffer.setEventHandler(new RapidsDeviceMemoryBufferHandler(this))
 
     def getTable: Option[Table] = table
 
     override protected def releaseResources(): Unit = {
       val before = Rmm.getTotalBytesAllocated
-      contigBuffer.close()
+      if (table.isEmpty) {
+        contigBuffer.close()
+      }
       table.foreach(_.close())
       val after = Rmm.getTotalBytesAllocated
       contigBuffer.setEventHandler(null)
@@ -403,6 +414,9 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
     override def getDeviceMemoryBuffer: DeviceMemoryBuffer = {
       markUnspillable(this)
       contigBuffer.incRefCount()
+      logWarning(s"At getDeviceMemoryBuffer for ${id}. " +
+        s"Size=${size} " +
+        s"Underlying refCount=${contigBuffer.getRefCount}") //", ss=\n${getStackTrace}}")
       contigBuffer
     }
 
@@ -410,12 +424,16 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
 
     override def getColumnarBatch(sparkTypes: Array[DataType]): ColumnarBatch = {
       markUnspillable(this)
-      if (table.isDefined) {
+      val batch = if (table.isDefined) {
         //REFCOUNT ++ of all columns
         GpuColumnVectorFromBuffer.from(table.get, contigBuffer, meta, sparkTypes)
       } else {
         columnarBatchFromDeviceBuffer(contigBuffer, sparkTypes)
       }
+      logWarning(s"At getColumnarBatch for ${id}. " +
+        s"Size=${size} " +
+        s"Underlying refCount=${contigBuffer.getRefCount}") //", ss=\n${getStackTrace}}")
+      batch
     }
 
   }
