@@ -138,13 +138,13 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
     // it will also close the table being passed here, which together brings the ref count
     // to 0.
     contigBuffer.incRefCount()
-    table.close()
+    //table.close()
     freeOnExcept(
       new RapidsDeviceMemoryBuffer(
         id,
         contigBuffer.getLength,
         tableMeta,
-        None,//Some(table),
+        Some(table),
         contigBuffer,
         initialSpillPriority,
         spillCallback)) { buffer =>
