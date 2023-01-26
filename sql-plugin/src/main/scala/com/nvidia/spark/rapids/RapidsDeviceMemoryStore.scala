@@ -80,7 +80,45 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
    *         about to be removed).
    */
   def getExistingRapidsBufferAndAcquire(
-      buffer: DeviceMemoryBuffer): Option[RapidsDeviceMemoryBuffer] = {
+      buffer: DeviceMemoryBuffer): Option[RapidsDeviceMemoryHandler] = {
+    var done = false
+    var eventHandler: RapidsDeviceMemoryHandler = null
+    while(!done) {
+      val eh = buffer.getEventHandler
+      val rapidsBuffer = eh match {
+        case null =>
+          None
+        case rapidsBuffer: RapidsDeviceMemoryHandler =>
+          Some(rapidsBuffer)
+        case _ =>
+          throw new IllegalStateException("Unknown event handler")
+      }
+      // lock free so far
+      if (rapidsBuffer.isEmpty) {
+        if (buffer.getEventHandler != null) {
+          // we need to loop back, we now have a handler
+        } else {
+          // we don't have an event handler set, and now we can create one
+          val eventHandler = new RapidsDeviceMemoryHandler
+          buffer.setEventHandler(eventHandler)
+          done = true
+        }
+      } else {
+        if (buffer.getEventHandler == null) {
+          // handler was unset on us
+          done = true
+        } else if (buffer.getEventHandler == rapidsBuffer.get) {
+          // the handler matches what we found
+        } else {
+          // the handler is different? should throw
+
+          require(contigBuffer.setEventHandler(this) == null,
+            "Attempted to associate a device buffer with a memory handler, but it was " +
+              "already associated with one.")
+        }
+      }
+    }
+
     val eh = buffer.getEventHandler
     eh match {
       case null =>
@@ -181,6 +219,8 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
     }
   }
 
+  val deviceBufferToHandle = new ConcurrentHashMap[DeviceMemoryBuffer, RapidsBufferHandle]()
+
   /**
    * Adds a buffer to the device storage. This does NOT take ownership of the
    * buffer, so it is the responsibility of the caller to close it.
@@ -203,7 +243,7 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
       initialSpillPriority: Long,
       spillCallback: SpillCallback = RapidsBuffer.defaultSpillCallback,
       needsSync: Boolean = true): RapidsBufferHandle = {
-    buffer.synchronized {
+    deviceBufferToRapidsBuffer.computeIfAbsent(buffer, _ => {
       val existing = getExistingRapidsBufferAndAcquire(buffer)
       existing.map { rapidsBuffer =>
         withResource(rapidsBuffer) { _ =>
@@ -219,7 +259,7 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
           spillCallback,
           needsSync)
       }
-    }
+    })
   }
 
   /**
@@ -285,22 +325,10 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
     doSetSpillable(buffer, spillable)
   }
 
-  class RapidsDeviceMemoryBuffer(
-      id: RapidsBufferId,
-      size: Long,
-      meta: TableMeta,
-      contigBuffer: DeviceMemoryBuffer,
-      spillPriority: Long,
-      spillCallback: SpillCallback)
-      extends RapidsBufferBase(id, size, meta, spillPriority, spillCallback)
-        with MemoryBuffer.EventHandler {
+  class RapidsDeviceMemoryHandler extends MemoryBuffer.EventHandler {
+    var rapidsBuffer: RapidsDeviceMemoryBuffer = null
 
-    override val storageTier: StorageTier = StorageTier.DEVICE
-
-    require(contigBuffer.setEventHandler(this) == null,
-      "Attempted to associate a device buffer with a memory handler, but it was " +
-        "already associated with one.")
-
+    def setBuffer(rb: RapidsDeviceMemoryBuffer) = rapidsBuffer = rb
     /**
      * Override from the MemoryBuffer.EventHandler interface.
      *
@@ -310,7 +338,7 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
      * @param refCount - contigBuffer's current refCount
      */
     override def onClosed(refCount: Int): Unit = {
-      logDebug(s"onClosed for $id refCount=$refCount")
+      logDebug(s"onClosed for ${rapidsBuffer.id} refCount=$refCount")
 
       // refCount == 1 means only 1 reference exists to `contigBuffer` in the
       // RapidsDeviceMemoryBuffer (we own it)
@@ -320,11 +348,23 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
         // Since we hold the MemoryBuffer lock, `incRefCount` waits for us. The only other
         // call to `setSpillable` is also under this same MemoryBuffer lock (see:
         // `getDeviceMemoryBuffer`)
-        setSpillable(this, true)
+        setSpillable(rapidsBuffer, true)
       }
     }
+  }
 
-    override protected def releaseResources(): Unit = synchronized {
+  class RapidsDeviceMemoryBuffer(
+      id: RapidsBufferId,
+      size: Long,
+      meta: TableMeta,
+      contigBuffer: DeviceMemoryBuffer,
+      spillPriority: Long,
+      spillCallback: SpillCallback)
+      extends RapidsBufferBase(id, size, meta, spillPriority, spillCallback) {
+
+    override val storageTier: StorageTier = StorageTier.DEVICE
+
+    override protected def releaseResources(): Unit = {
       // we need to disassociate this RapidsBuffer from the underlying buffer
       contigBuffer.close()
     }
