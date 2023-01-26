@@ -84,14 +84,9 @@ class SpillableColumnarBatchImpl (
    */
   override def numRows(): Int = rowCount
 
-  private def withRapidsBuffer[T](fn: RapidsBuffer => T): T = {
-    withResource(RapidsBufferCatalog.acquireBuffer(handle)) { rapidsBuffer =>
-      fn(rapidsBuffer)
-    }
-  }
-
   override lazy val sizeInBytes: Long =
-    withRapidsBuffer(_.size)
+    RapidsBufferCatalog.getSizeInBytes(handle)
+
 
   /**
    * Set a new spill priority.
@@ -101,10 +96,7 @@ class SpillableColumnarBatchImpl (
   }
 
   override def getColumnarBatch(): ColumnarBatch = {
-    withRapidsBuffer { rapidsBuffer =>
-      GpuSemaphore.acquireIfNecessary(TaskContext.get(), semWait)
-      rapidsBuffer.getColumnarBatch(sparkTypes)
-    }
+    RapidsBufferCatalog.getColumnarBatch(handle, sparkTypes, semWait)
   }
 
   /**
@@ -160,13 +152,11 @@ object SpillableColumnarBatch extends Arm {
       priority: Long,
       spillCallback: SpillCallback): SpillableColumnarBatch = {
     val handle = RapidsBufferCatalog.addContiguousTable(ct, priority, spillCallback)
-    withResource(RapidsBufferCatalog.acquireBuffer(handle)) { _ =>
-      new SpillableColumnarBatchImpl(
-        handle,
-        ct.getRowCount.toInt,
-        sparkTypes,
-        spillCallback.semaphoreWaitTime)
-    }
+    new SpillableColumnarBatchImpl(
+      handle,
+      ct.getRowCount.toInt,
+      sparkTypes,
+      spillCallback.semaphoreWaitTime)
   }
 
   private[this] def addBatch(
@@ -227,11 +217,8 @@ class SpillableBuffer(
   /**
    * Use the device buffer.
    */
-  def getDeviceBuffer(): DeviceMemoryBuffer = {
-    withResource(RapidsBufferCatalog.acquireBuffer(handle)) { rapidsBuffer =>
-      rapidsBuffer.getDeviceMemoryBuffer
-    }
-  }
+  def getDeviceBuffer(): DeviceMemoryBuffer =
+    RapidsBufferCatalog.getDeviceMemoryBuffer(handle, semWait)
 
   /**
    * Remove the buffer from the cache.

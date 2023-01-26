@@ -20,9 +20,6 @@ import ai.rapids.cudf.{Cuda, DeviceMemoryBuffer, HostMemoryBuffer, MemoryBuffer}
 import com.nvidia.spark.rapids.StorageTier.StorageTier
 import com.nvidia.spark.rapids.format.TableMeta
 
-import org.apache.spark.sql.types.DataType
-import org.apache.spark.sql.vectorized.ColumnarBatch
-
 /**
  * Buffer storage using device memory.
  * @param catalog catalog to register this store
@@ -188,14 +185,6 @@ class RapidsDeviceMemoryStore
     }
 
     override def getMemoryBuffer: MemoryBuffer = getDeviceMemoryBuffer
-
-    override def getColumnarBatch(sparkTypes: Array[DataType]): ColumnarBatch = {
-      // calling `getDeviceMemoryBuffer` guarantees that we have marked this RapidsBuffer
-      // as not spillable and increased its refCount atomically
-      withResource(getDeviceMemoryBuffer) { buff =>
-        columnarBatchFromDeviceBuffer(buff, sparkTypes)
-      }
-    }
 
     /**
      * We overwrite free to make sure we don't have a handler for the underlying

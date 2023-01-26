@@ -198,10 +198,8 @@ class GpuPartitioningSuite extends FunSuite with Arm {
                 val devBuffer = gccv.getTableBuffer
                 val handle = catalog.addBuffer(devBuffer, gccv.getTableMeta, spillPriority)
                 withResource(buildSubBatch(batch, startRow, endRow)) { expectedBatch =>
-                  withResource(catalog.acquireBuffer(handle)) { buffer =>
-                    withResource(buffer.getColumnarBatch(sparkTypes)) { batch =>
-                      compareBatches(expectedBatch, batch)
-                    }
+                  withResource(catalog.getColumnarBatch(handle, sparkTypes)) { partBatch =>
+                    compareBatches(expectedBatch, partBatch)
                   }
                 }
               }

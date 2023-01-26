@@ -18,17 +18,16 @@ package com.nvidia.spark.rapids
 
 import java.io.File
 import java.math.RoundingMode
-
 import ai.rapids.cudf.{ContiguousTable, Cuda, HostColumnVector, HostMemoryBuffer, MemoryBuffer, Table}
 import org.mockito.{ArgumentCaptor, ArgumentMatchers}
 import org.mockito.ArgumentMatchers.any
 import org.mockito.Mockito.{never, spy, times, verify, when}
 import org.scalatest.FunSuite
 import org.scalatest.mockito.MockitoSugar
-
 import org.apache.spark.sql.rapids.RapidsDiskBlockManager
 import org.apache.spark.sql.types.{DataType, DecimalType, DoubleType, IntegerType, LongType, StringType}
 import org.apache.spark.sql.vectorized.ColumnarBatch
+import org.mockito.ArgumentMatchers.any
 
 
 class RapidsHostMemoryStoreSuite extends FunSuite with Arm with MockitoSugar {
@@ -155,7 +154,7 @@ class RapidsHostMemoryStoreSuite extends FunSuite with Arm with MockitoSugar {
             catalog.synchronousSpill(devStore, 0)
             withResource(catalog.acquireBuffer(handle)) { buffer =>
               assertResult(StorageTier.HOST)(buffer.storageTier)
-              withResource(buffer.getColumnarBatch(sparkTypes)) { actualBatch =>
+              withResource(catalog.getColumnarBatch(handle, sparkTypes)) { actualBatch =>
                 TestUtils.compareBatches(expectedBatch, actualBatch)
               }
             }
@@ -207,7 +206,7 @@ class RapidsHostMemoryStoreSuite extends FunSuite with Arm with MockitoSugar {
                 ArgumentMatchers.any[Cuda.Stream])
               withResource(catalog.acquireBuffer(bigHandle)) { buffer =>
                 assertResult(StorageTier.HOST)(buffer.storageTier)
-                withResource(buffer.getColumnarBatch(sparkTypes)) { actualBatch =>
+                withResource(catalog.getColumnarBatch(bigHandle, sparkTypes)) { actualBatch =>
                   TestUtils.compareBatches(expectedBatch, actualBatch)
                 }
               }

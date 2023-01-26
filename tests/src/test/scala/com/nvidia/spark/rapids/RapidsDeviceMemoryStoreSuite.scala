@@ -18,9 +18,7 @@ package com.nvidia.spark.rapids
 
 import java.io.File
 import java.math.RoundingMode
-
 import scala.collection.mutable.ArrayBuffer
-
 import ai.rapids.cudf.{ContiguousTable, Cuda, DeviceMemoryBuffer, HostMemoryBuffer, MemoryBuffer, Table}
 import com.nvidia.spark.rapids.StorageTier.StorageTier
 import com.nvidia.spark.rapids.format.TableMeta
@@ -28,7 +26,6 @@ import org.mockito.ArgumentCaptor
 import org.mockito.Mockito.{spy, verify}
 import org.scalatest.FunSuite
 import org.scalatest.mockito.MockitoSugar
-
 import org.apache.spark.sql.rapids.RapidsDiskBlockManager
 import org.apache.spark.sql.types.{DataType, DecimalType, DoubleType, IntegerType, StringType}
 
@@ -223,10 +220,8 @@ class RapidsDeviceMemoryStoreSuite extends FunSuite with Arm with MockitoSugar {
                 initialSpillPriority = 3,
                 RapidsBuffer.defaultSpillCallback, false)
             }
-            withResource(catalog.acquireBuffer(handle)) { buffer =>
-              withResource(buffer.getColumnarBatch(sparkTypes)) { actualBatch =>
-                TestUtils.compareBatches(expectedBatch, actualBatch)
-              }
+            withResource(catalog.getColumnarBatch(handle, sparkTypes)) { actualBatch =>
+              TestUtils.compareBatches(expectedBatch, actualBatch)
             }
         }
       }

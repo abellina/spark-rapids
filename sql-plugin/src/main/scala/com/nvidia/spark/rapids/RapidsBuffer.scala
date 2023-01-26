@@ -18,13 +18,11 @@ package com.nvidia.spark.rapids
 
 import java.io.File
 
-import ai.rapids.cudf.{Cuda, DeviceMemoryBuffer, MemoryBuffer, Table}
+import ai.rapids.cudf.{Cuda, DeviceMemoryBuffer, MemoryBuffer}
 import com.nvidia.spark.rapids.StorageTier.StorageTier
 import com.nvidia.spark.rapids.format.TableMeta
 
 import org.apache.spark.sql.rapids.RapidsDiskBlockManager
-import org.apache.spark.sql.types.DataType
-import org.apache.spark.sql.vectorized.ColumnarBatch
 
 /**
  * An identifier for a RAPIDS buffer that can be automatically spilled between buffer stores.
@@ -102,25 +100,25 @@ trait RapidsBuffer extends AutoCloseable {
   val storageTier: StorageTier
 
   /**
-   * Get the columnar batch within this buffer. The caller must have
-   * successfully acquired the buffer beforehand.
-   * @param sparkTypes the spark data types the batch should have
-   * @see [[addReference]]
-   * @note It is the responsibility of the caller to close the batch.
-   * @note If the buffer is compressed data then the resulting batch will be built using
-   *       `GpuCompressedColumnVector`, and it is the responsibility of the caller to deal
-   *       with decompressing the data if necessary.
-   */
-  def getColumnarBatch(sparkTypes: Array[DataType]): ColumnarBatch
-
-  /**
-   * Get the underlying memory buffer. This may be either a HostMemoryBuffer or a DeviceMemoryBuffer
-   * depending on where the buffer currently resides.
+   * Materialize the memory buffer from the underlying storage.
+   *
+   * If the buffer resides in device or host memory, only reference count is incremented.
+   * If the buffer resides in secondary storage, a new host or device memory buffer is created,
+   * with the data copied to the new buffer.
    * The caller must have successfully acquired the buffer beforehand.
+   *
    * @see [[addReference]]
    * @note It is the responsibility of the caller to close the buffer.
+   * @note This is an internal API only used by Rapids buffer stores.
    */
   def getMemoryBuffer: MemoryBuffer
+
+  /**
+   * Get a DeviceMemoryBuffer. Only the RapidsDeviceMemoryStore implements this
+   * and all other tiers throw.
+   * @return the DeviceMemoryBuffer
+   */
+  def getDeviceMemoryBuffer: DeviceMemoryBuffer
 
   /**
    * Copy the content of this buffer into the specified memory buffer, starting from the given
@@ -134,15 +132,6 @@ trait RapidsBuffer extends AutoCloseable {
    */
   def copyToMemoryBuffer(
       srcOffset: Long, dst: MemoryBuffer, dstOffset: Long, length: Long, stream: Cuda.Stream)
-
-  /**
-   * Get the device memory buffer from the underlying storage. If the buffer currently resides
-   * outside of device memory, a new DeviceMemoryBuffer is created with the data copied over.
-   * The caller must have successfully acquired the buffer beforehand.
-   * @see [[addReference]]
-   * @note It is the responsibility of the caller to close the buffer.
-   */
-  def getDeviceMemoryBuffer: DeviceMemoryBuffer
 
   /**
    * Try to add a reference to this buffer to acquire it.
@@ -206,21 +195,6 @@ sealed class DegenerateRapidsBuffer(
     override val meta: TableMeta) extends RapidsBuffer with Arm {
   override val size: Long = 0L
   override val storageTier: StorageTier = StorageTier.DEVICE
-
-  override def getColumnarBatch(sparkTypes: Array[DataType]): ColumnarBatch = {
-    val rowCount = meta.rowCount
-    val packedMeta = meta.packedMetaAsByteBuffer()
-    if (packedMeta != null) {
-      withResource(DeviceMemoryBuffer.allocate(0)) { deviceBuffer =>
-        withResource(Table.fromPackedTable(meta.packedMetaAsByteBuffer(), deviceBuffer)) { table =>
-          GpuColumnVectorFromBuffer.from(table, deviceBuffer, meta, sparkTypes)
-        }
-      }
-    } else {
-      // no packed metadata, must be a table with zero columns
-      new ColumnarBatch(Array.empty, rowCount.toInt)
-    }
-  }
 
   override def free(): Unit = {}
 
