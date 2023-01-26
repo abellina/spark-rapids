@@ -17,12 +17,14 @@
 package com.nvidia.spark.rapids
 
 import ai.rapids.cudf.{ContiguousTable, Cuda, DeviceMemoryBuffer, HostMemoryBuffer, MemoryBuffer}
+import alluxio.collections.ConcurrentHashSet
 import com.nvidia.spark.rapids.StorageTier.StorageTier
 import com.nvidia.spark.rapids.format.TableMeta
-
 import org.apache.spark.sql.rapids.TempSpillBufferId
 import org.apache.spark.sql.types.DataType
 import org.apache.spark.sql.vectorized.ColumnarBatch
+
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * Buffer storage using device memory.
@@ -137,6 +139,8 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
     }
   }
 
+  val deviceBufferToId = new ConcurrentHashSet[DeviceMemoryBuffer, RapidsBufferId]()
+
   /**
    * Adds a contiguous table to the device storage. This does NOT take ownership of the
    * contiguous table, so it is the responsibility of the caller to close it. The refcount of the
@@ -160,22 +164,22 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
       spillCallback: SpillCallback = RapidsBuffer.defaultSpillCallback,
       needsSync: Boolean = true): RapidsBufferHandle = {
     val underlyingBuffer = contigTable.getBuffer
-    underlyingBuffer.synchronized {
-      val existing = getExistingRapidsBufferAndAcquire(underlyingBuffer)
-      existing.map { rapidsBuffer =>
-        withResource(rapidsBuffer) { _ =>
-          val id = rapidsBuffer.id
-          catalog.makeNewHandle(id, initialSpillPriority, spillCallback)
-        }
-      }.getOrElse {
+    var handle: RapidsBufferHandle = null
+    deviceBufferToId.computeIfAbsent(underlyingBuffer, (_, existingId) => {
+      var id: RapidsBufferId = existingId
+      if (id == null) {
+        id = TempSpillBufferId()
         addContiguousTable(
-          TempSpillBufferId(),
+          id,
           contigTable,
           initialSpillPriority,
           spillCallback,
           needsSync)
       }
-    }
+      handle = catalog.makeNewHandle(id, initialSpillPriority, spillCallback)
+      id
+    })
+    handle
   }
 
   /**
@@ -198,7 +202,7 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
       contigTable: ContiguousTable,
       initialSpillPriority: Long,
       spillCallback: SpillCallback,
-      needsSync: Boolean): RapidsBufferHandle = {
+      needsSync: Boolean): Unit = {
     val contigBuffer = contigTable.getBuffer
     val size = contigBuffer.getLength
     val meta = MetaUtils.buildTableMeta(id.tableId, contigTable)
@@ -215,11 +219,8 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
         s"uncompressed=${buffer.meta.bufferMeta.uncompressedSize}, " +
         s"meta_id=${buffer.meta.bufferMeta.id}, meta_size=${buffer.meta.bufferMeta.size}]")
       addDeviceBuffer(buffer, needsSync)
-      catalog.makeNewHandle(id, initialSpillPriority, spillCallback)
     }
   }
-
-  val deviceBufferToHandle = new ConcurrentHashMap[DeviceMemoryBuffer, RapidsBufferHandle]()
 
   /**
    * Adds a buffer to the device storage. This does NOT take ownership of the
@@ -243,14 +244,11 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
       initialSpillPriority: Long,
       spillCallback: SpillCallback = RapidsBuffer.defaultSpillCallback,
       needsSync: Boolean = true): RapidsBufferHandle = {
-    deviceBufferToRapidsBuffer.computeIfAbsent(buffer, _ => {
-      val existing = getExistingRapidsBufferAndAcquire(buffer)
-      existing.map { rapidsBuffer =>
-        withResource(rapidsBuffer) { _ =>
-          val id = rapidsBuffer.id
-          catalog.makeNewHandle(id, initialSpillPriority, spillCallback)
-        }
-      }.getOrElse {
+    var handle: RapidsBufferHandle = null
+    deviceBufferToId.computeIfAbsent(buffer, (_, existingId) => {
+      var id: RapidsBufferId = existingId
+      if (id == null) {
+        id = TempSpillBufferId()
         addBuffer(
           TempSpillBufferId(),
           buffer,
@@ -259,7 +257,10 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
           spillCallback,
           needsSync)
       }
+      handle = catalog.makeNewHandle(id, initialSpillPriority, spillCallback)
+      id
     })
+    handle
   }
 
   /**
@@ -282,7 +283,7 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
       tableMeta: TableMeta,
       initialSpillPriority: Long,
       spillCallback: SpillCallback,
-      needsSync: Boolean): RapidsBufferHandle = {
+      needsSync: Boolean): Unit= {
     buffer.incRefCount()
     freeOnExcept(
       new RapidsDeviceMemoryBuffer(
@@ -297,7 +298,6 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
         s"meta_id=${tableMeta.bufferMeta.id}, " +
         s"meta_size=${tableMeta.bufferMeta.size}]")
       addDeviceBuffer(buff, needsSync)
-      catalog.makeNewHandle(id, initialSpillPriority, spillCallback)
     }
   }
 
@@ -325,10 +325,20 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
     doSetSpillable(buffer, spillable)
   }
 
-  class RapidsDeviceMemoryHandler extends MemoryBuffer.EventHandler {
-    var rapidsBuffer: RapidsDeviceMemoryBuffer = null
+  class RapidsDeviceMemoryBuffer(
+      id: RapidsBufferId,
+      size: Long,
+      meta: TableMeta,
+      contigBuffer: DeviceMemoryBuffer,
+      spillPriority: Long,
+      spillCallback: SpillCallback)
+      extends RapidsBufferBase(id, size, meta, spillPriority, spillCallback)
+        with MemoryBuffer.EventHandler {
 
-    def setBuffer(rb: RapidsDeviceMemoryBuffer) = rapidsBuffer = rb
+    contigBuffer.setEventHandler(this)
+
+    override val storageTier: StorageTier = StorageTier.DEVICE
+
     /**
      * Override from the MemoryBuffer.EventHandler interface.
      *
@@ -338,9 +348,16 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
      * @param refCount - contigBuffer's current refCount
      */
     override def onClosed(refCount: Int): Unit = {
-      logDebug(s"onClosed for ${rapidsBuffer.id} refCount=$refCount")
+      logDebug(s"onClosed for $id refCount=$refCount")
 
-      // refCount == 1 means only 1 reference exists to `contigBuffer` in the
+      // refCount == 1 means o  class RapidsDeviceMemoryHandler extends MemoryBuffer.EventHandler {
+    var rapidsBuffer: RapidsDeviceMemoryBuffer = null
+
+    def setBuffer(rb: RapidsDeviceMemoryBuffer) = rapidsBuffer = rb
+
+  }
+
+nly 1 reference exists to `contigBuffer` in the
       // RapidsDeviceMemoryBuffer (we own it)
       if (refCount == 1) {
         // setSpillable is being called here as an extension of `MemoryBuffer.close()`
@@ -348,21 +365,9 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
         // Since we hold the MemoryBuffer lock, `incRefCount` waits for us. The only other
         // call to `setSpillable` is also under this same MemoryBuffer lock (see:
         // `getDeviceMemoryBuffer`)
-        setSpillable(rapidsBuffer, true)
+        setSpillable(this, true)
       }
     }
-  }
-
-  class RapidsDeviceMemoryBuffer(
-      id: RapidsBufferId,
-      size: Long,
-      meta: TableMeta,
-      contigBuffer: DeviceMemoryBuffer,
-      spillPriority: Long,
-      spillCallback: SpillCallback)
-      extends RapidsBufferBase(id, size, meta, spillPriority, spillCallback) {
-
-    override val storageTier: StorageTier = StorageTier.DEVICE
 
     override protected def releaseResources(): Unit = {
       // we need to disassociate this RapidsBuffer from the underlying buffer
@@ -375,7 +380,10 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
      */
     override protected def setInvalid(): Unit = synchronized {
       super.setInvalid()
-      contigBuffer.setEventHandler(null)
+      deviceBufferToId.compute(contigBuffer, (_, _) => {
+        contigBuffer.setEventHandler(null)
+        null
+      })
     }
 
     /**
