@@ -19,16 +19,17 @@ package com.nvidia.spark.rapids
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.function.BiFunction
-
-import ai.rapids.cudf.{ContiguousTable, Cuda, DeviceMemoryBuffer, MemoryBuffer, NvtxColor, NvtxRange, Rmm}
+import ai.rapids.cudf.{ContiguousTable, Cuda, DeviceMemoryBuffer, HostMemoryBuffer, MemoryBuffer, NvtxColor, NvtxRange, Rmm, Table}
 import com.nvidia.spark.rapids.RapidsPluginImplicits._
 import com.nvidia.spark.rapids.StorageTier.StorageTier
 import com.nvidia.spark.rapids.format.TableMeta
-
 import org.apache.spark.{SparkConf, SparkEnv}
+import org.apache.spark.TaskContext
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.rapids.{RapidsDiskBlockManager, TempSpillBufferId}
 import org.apache.spark.sql.rapids.execution.TrampolineUtil
+import org.apache.spark.sql.types.DataType
+import org.apache.spark.sql.vectorized.ColumnarBatch
 
 /**
  *  Exception thrown when inserting a buffer into the catalog with a duplicate buffer ID
@@ -372,7 +373,7 @@ class RapidsBufferCatalog(
       initialSpillPriority: Long,
       spillCallback: SpillCallback,
       needsSync: Boolean): RapidsBufferHandle = synchronized {
-    logWarning(s"Adding buffer ${id} to ${deviceStorage}")
+    logDebug(s"Adding buffer ${id} to ${deviceStorage}")
     val rapidsBuffer = deviceStorage.addBuffer(
       id,
       buffer,
@@ -526,10 +527,9 @@ class RapidsBufferCatalog(
       targetTotalSize: Long,
       stream: Cuda.Stream): Option[Long] = {
     require(targetTotalSize >= 0, s"Negative spill target size: $targetTotalSize")
-    logWarning(s"Trying to spill ${targetTotalSize}. " +
-      s"From store ${store.name}. " +
+    logWarning(s"Targeting a ${store.name} size of ${targetTotalSize}. " +
       s"Current total ${store.currentSize}. " +
-      s"Current spillable ${store.currentSpillableSize}")
+      s"Current spillable ${store.currentSpillableSize}.")
 
     // we try to spill in this thread. If another thread is also spilling, we let that
     // thread win and we return letting RMM retry the alloc
@@ -613,7 +613,7 @@ class RapidsBufferCatalog(
       stream: Cuda.Stream): Unit = synchronized {
     if (buffer.addReference()) {
       withResource(buffer) { _ =>
-        logWarning(s"Spilling $buffer ${buffer.id} to ${spillStore.name}")
+        logDebug(s"Spilling $buffer ${buffer.id} to ${spillStore.name}. ")
         val bufferHasSpilled = isBufferSpilled(buffer.id, buffer.storageTier)
         if (!bufferHasSpilled) {
           val spillCallback = buffer.getSpillCallback
@@ -669,24 +669,124 @@ class RapidsBufferCatalog(
     }
   }
 
+  def getDeviceMemoryBuffer(handle: RapidsBufferHandle): DeviceMemoryBuffer = {
+    val id = handle.id
+    if (RapidsBufferCatalog.shouldUnspill) {
+      withResource(acquireBuffer(id)) { buffer =>
+        buffer.storageTier match {
+          case StorageTier.DEVICE =>
+            return buffer.getDeviceMemoryBuffer
+          case _ =>
+            try {
+              logDebug(s"Unspilling $id to DEVICE")
+              val deviceMemoryBuffer = unspillAndGetDeviceMemoryBuffer(
+                buffer,
+                buffer.getMemoryBuffer,
+                Cuda.DEFAULT_STREAM)
+              return deviceMemoryBuffer
+            } catch {
+              case _: DuplicateBufferException =>
+                logDebug(s"Lost device buffer registration race for buffer $id, retrying...")
+            }
+        }
+      }
+      throw new IllegalStateException(s"Unable to get device memory buffer for ID: $id")
+    } else {
+      withResource(acquireBuffer(id)) { buffer =>
+        buffer.getMemoryBuffer match {
+          case h: HostMemoryBuffer =>
+            withResource(h) { _ =>
+              closeOnExcept(DeviceMemoryBuffer.allocate(h.getLength)) { deviceBuffer =>
+                logDebug(s"copying from host $h to device $deviceBuffer")
+                deviceBuffer.copyFromHostBuffer(h)
+                deviceBuffer
+              }
+            }
+          case d: DeviceMemoryBuffer => d
+          case b => throw new IllegalStateException(s"Unrecognized buffer: $b")
+        }
+      }
+    }
+  }
+
+  private def columnarBatchFromDeviceBuffer(
+      devBuffer: DeviceMemoryBuffer,
+      meta: TableMeta,
+      sparkTypes: Array[DataType]): ColumnarBatch = {
+    val bufferMeta = meta.bufferMeta()
+    if (bufferMeta == null || bufferMeta.codecBufferDescrsLength == 0) {
+      MetaUtils.getBatchFromMeta(devBuffer, meta, sparkTypes)
+    } else {
+      GpuCompressedColumnVector.from(devBuffer, meta)
+    }
+  }
+
+  /**
+   * Get the columnar batch for `handle`.
+   *
+   * @param handle RapidsBufferHandle that points to this RapidsBuffer
+   * @param sparkTypes the spark data types the batch should have
+   * @note It is the responsibility of the caller to close the batch.
+   * @note If the buffer is compressed data then the resulting batch will be built using
+   *       `GpuCompressedColumnVector`, and it is the responsibility of the caller to deal
+   *       with decompressing the data if necessary.
+   */
+  def getColumnarBatch(
+      handle: RapidsBufferHandle,
+      sparkTypes: Array[DataType]): ColumnarBatch = {
+    // NOTE: Cannot hold a lock on this buffer here because memory is being
+    // allocated. Allocations can trigger synchronous spills which can
+    // deadlock if another thread holds the device store lock and is trying
+    // to spill to this store.
+    // NOTE: if meta is handled separately, in the catalog, we wouldn't
+    // have to acquire the buffer to get it.
+    val (meta, isDegenerate) =
+      withResource(acquireBuffer(handle)) { rapidsBuffer =>
+        (rapidsBuffer.meta, rapidsBuffer.isInstanceOf[DegenerateRapidsBuffer])
+      }
+    if (!isDegenerate) {
+      withResource(getDeviceMemoryBuffer(handle)) { deviceBuffer =>
+        columnarBatchFromDeviceBuffer(
+          deviceBuffer,
+          meta,
+          sparkTypes)
+      }
+    } else {
+      val rowCount = meta.rowCount
+      val packedMeta = meta.packedMetaAsByteBuffer()
+      if (packedMeta != null) {
+        withResource(DeviceMemoryBuffer.allocate(0)) { deviceBuffer =>
+          val tbl = Table.fromPackedTable(meta.packedMetaAsByteBuffer(), deviceBuffer)
+          withResource(tbl) { _ =>
+            GpuColumnVectorFromBuffer.from(tbl, deviceBuffer, meta, sparkTypes)
+          }
+        }
+      } else {
+        // no packed metadata, must be a table with zero columns
+        new ColumnarBatch(Array.empty, rowCount.toInt)
+      }
+    }
+  }
+
   /**
    * Copies `buffer` to the `deviceStorage` store, registering a new `RapidsBuffer` in
-   * the process
+   * the process and obtaining the `DeviceMemoryBuffer` reference.
+   * It is the responsibility of the caller to close the `DeviceMemoryBuffer`
    * @param buffer - buffer to copy
    * @param memoryBuffer - cuDF MemoryBuffer to copy from
    * @param stream - Cuda.Stream to synchronize on
    * @return - The `RapidsBuffer` instance that was added to the device store.
    */
-  def unspillBufferToDeviceStore(
+  private def unspillAndGetDeviceMemoryBuffer(
     buffer: RapidsBuffer,
     memoryBuffer: MemoryBuffer,
-    stream: Cuda.Stream): RapidsBuffer = synchronized {
+    stream: Cuda.Stream): DeviceMemoryBuffer = synchronized {
     val newBuffer = deviceStorage.copyBuffer(
       buffer,
       memoryBuffer,
       stream).get // device store always copies
     registerNewBuffer(newBuffer)
-    newBuffer
+    newBuffer.getDeviceMemoryBuffer
   }
 
   /**
@@ -696,6 +796,13 @@ class RapidsBufferCatalog(
   def removeBufferTier(id: RapidsBufferId, tier: StorageTier): Unit = synchronized {
     val updater = new BiFunction[RapidsBufferId, Seq[RapidsBuffer], Seq[RapidsBuffer]] {
       override def apply(key: RapidsBufferId, value: Seq[RapidsBuffer]): Seq[RapidsBuffer] = {
+        val bufferAtTier = value.filter(_.storageTier == tier)
+        if (bufferAtTier.nonEmpty) {
+          require(bufferAtTier.size == 1,
+            s"Multiple buffers at the same tier found for $id!")
+          // since we are removing it from this tier, we can call free on it.
+          bufferAtTier.head.safeFree()
+        }
         val updated = value.filter(_.storageTier != tier)
         if (updated.isEmpty) {
           null
@@ -889,8 +996,34 @@ object RapidsBufferCatalog extends Logging with Arm {
    * @param handle buffer handle
    * @return buffer that has been acquired
    */
-  def acquireBuffer(handle: RapidsBufferHandle): RapidsBuffer =
+  private def acquireBuffer(handle: RapidsBufferHandle): RapidsBuffer =
     singleton.acquireBuffer(handle)
+
+  /**
+   * Get the device memory buffer from the underlying storage. If the buffer currently resides
+   * outside of device memory, a new DeviceMemoryBuffer is created with the data copied over.
+   * @note It is the responsibility of the caller to close the buffer.
+   */
+  def getDeviceMemoryBuffer(
+      handle: RapidsBufferHandle,
+      semWait: GpuMetric): DeviceMemoryBuffer = {
+    GpuSemaphore.acquireIfNecessary(TaskContext.get(), semWait)
+    singleton.getDeviceMemoryBuffer(handle)
+  }
+
+  def getColumnarBatch(
+      handle: RapidsBufferHandle,
+      sparkTypes: Array[DataType],
+      semWait: GpuMetric): ColumnarBatch = {
+    GpuSemaphore.acquireIfNecessary(TaskContext.get(), semWait)
+    singleton.getColumnarBatch(handle, sparkTypes)
+  }
+
+  def getSizeInBytes(handle: RapidsBufferHandle): Long = {
+    withResource(RapidsBufferCatalog.acquireBuffer(handle)) { rapidsBuffer =>
+      rapidsBuffer.size
+    }
+  }
 
   def getDiskBlockManager(): RapidsDiskBlockManager = diskBlockManager
 }

@@ -26,8 +26,6 @@ import org.scalatest.FunSuite
 import org.scalatest.mockito.MockitoSugar
 
 import org.apache.spark.sql.rapids.RapidsDiskBlockManager
-import org.apache.spark.sql.types.DataType
-import org.apache.spark.sql.vectorized.ColumnarBatch
 
 class RapidsBufferCatalogSuite extends FunSuite with MockitoSugar with Arm {
   test("lookup unknown buffer") {
@@ -327,7 +325,6 @@ class RapidsBufferCatalogSuite extends FunSuite with MockitoSugar with Arm {
       override val size: Long = 0
       override val meta: TableMeta = tableMeta
       override val storageTier: StorageTier = tier
-      override def getColumnarBatch(sparkTypes: Array[DataType]): ColumnarBatch = null
       override def getMemoryBuffer: MemoryBuffer = null
       override def copyToMemoryBuffer(
         srcOffset: Long,

@@ -16,7 +16,7 @@
 
 package com.nvidia.spark.rapids.shuffle
 
-import com.nvidia.spark.rapids.{RapidsBuffer, RapidsBufferHandle}
+import com.nvidia.spark.rapids.RapidsBufferHandle
 import org.mockito.ArgumentCaptor
 import org.mockito.ArgumentMatchers._
 import org.mockito.Mockito._
@@ -181,12 +181,9 @@ class RapidsShuffleIteratorSuite extends RapidsShuffleTestHelper {
     val ac = ArgumentCaptor.forClass(classOf[RapidsShuffleFetchHandler])
     when(mockTransport.makeClient(any())).thenReturn(client)
     doNothing().when(client).doFetch(any(), ac.capture())
-    val mockBuffer = mock[RapidsBuffer]
-
     val cb = new ColumnarBatch(Array.empty, 10)
     val handle = mock[RapidsBufferHandle]
-    when(mockBuffer.getColumnarBatch(Array.empty)).thenReturn(cb)
-    when(mockCatalog.acquireBuffer(any[RapidsBufferHandle]())).thenReturn(mockBuffer)
+    when(mockCatalog.getColumnarBatch(any(), any())).thenReturn(cb)
     doNothing().when(mockCatalog).removeBuffer(any())
     cl.start()
 
@@ -199,7 +196,6 @@ class RapidsShuffleIteratorSuite extends RapidsShuffleTestHelper {
     assert(cl.hasNext)
     assertResult(cb)(cl.next())
     assertResult(1)(testMetricsUpdater.totalRemoteBlocksFetched)
-    assertResult(mockBuffer.size)(testMetricsUpdater.totalRemoteBytesRead)
     assertResult(10)(testMetricsUpdater.totalRowsFetched)
   }
 }

@@ -21,7 +21,7 @@ import java.util.concurrent.{LinkedBlockingQueue, TimeUnit}
 import scala.collection.mutable
 
 import ai.rapids.cudf.{NvtxColor, NvtxRange}
-import com.nvidia.spark.rapids.{Arm, GpuSemaphore, NoopMetric, RapidsBuffer, RapidsBufferHandle, RapidsConf, ShuffleReceivedBufferCatalog}
+import com.nvidia.spark.rapids.{Arm, GpuColumnVector, GpuSemaphore, NoopMetric, RapidsBufferHandle, RapidsConf, ShuffleReceivedBufferCatalog}
 
 import org.apache.spark.TaskContext
 import org.apache.spark.internal.Logging
@@ -316,7 +316,6 @@ class RapidsShuffleIterator(
 
   override def next(): ColumnarBatch = {
     var cb: ColumnarBatch = null
-    var sb: RapidsBuffer = null
     val range = new NvtxRange(s"RapidshuffleIterator.next", NvtxColor.RED)
 
     // If N tasks downstream are accumulating memory we run the risk OOM
@@ -353,15 +352,15 @@ class RapidsShuffleIterator(
         val nvtxRangeAfterGettingBatch = new NvtxRange("RapidsShuffleIterator.gotBatch",
           NvtxColor.PURPLE)
         try {
-          sb = catalog.acquireBuffer(handle)
-          cb = sb.getColumnarBatch(sparkTypes)
-          metricsUpdater.update(blockedTime, 1, sb.size, cb.numRows())
+          cb = catalog.getColumnarBatch(handle, sparkTypes)
+          metricsUpdater.update(
+            blockedTime,
+            1,
+            GpuColumnVector.getTotalDeviceMemoryUsed(cb),
+            cb.numRows())
         } finally {
           nvtxRangeAfterGettingBatch.close()
           range.close()
-          if (sb != null) {
-            sb.close()
-          }
           catalog.removeBuffer(handle)
         }
       case Some(
