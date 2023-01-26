@@ -382,7 +382,6 @@ abstract class RapidsBufferStore(
         buffer.close()
       }
       catalog.removeBufferTier(buffer.id, buffer.storageTier)
-      buffer.free()
     }
   }
 
@@ -520,15 +519,6 @@ abstract class RapidsBufferStore(
     }
 
     /**
-     *  setInvalid updates the buffer that it is no longer tracked by the store, and that
-     *  it is either about to be removed, or about to be placed in the pending map for
-     *  later cleanup, once all references are closed.
-     */
-    protected def setInvalid(): Unit = synchronized {
-      isValid = false
-    }
-
-    /**
      * Mark the buffer as freed and no longer valid. This is called by the store when removing a
      * buffer (it is no longer tracked).
      *
@@ -537,7 +527,7 @@ abstract class RapidsBufferStore(
      */
     override def free(): Unit = synchronized {
       if (isValid) {
-        setInvalid()
+        isValid = false
         buffers.remove(id)
         if (refcount == 0) {
           freeBuffer()
