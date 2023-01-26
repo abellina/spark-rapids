@@ -96,7 +96,7 @@ class RapidsDiskStoreSuite extends FunSuiteWithTempDir with Arm with MockitoSuga
               assert(!handle.id.getDiskPath(null).exists())
               val expectedTable = withResource(catalog.acquireBuffer(handle)) { buffer =>
                 assertResult(StorageTier.DEVICE)(buffer.storageTier)
-                withResource(buffer.getColumnarBatch(sparkTypes)) { beforeSpill =>
+                withResource(catalog.getColumnarBatch(handle, sparkTypes)) { beforeSpill  =>
                   withResource(GpuColumnVector.from(beforeSpill)) { table =>
                     table.contiguousSplit()(0)
                   }
@@ -109,7 +109,7 @@ class RapidsDiskStoreSuite extends FunSuiteWithTempDir with Arm with MockitoSuga
                   catalog.synchronousSpill(hostStore, 0)
                   withResource(catalog.acquireBuffer(handle)) { buffer =>
                     assertResult(StorageTier.DISK)(buffer.storageTier)
-                    withResource(buffer.getColumnarBatch(sparkTypes)) { actualBatch =>
+                    withResource(catalog.getColumnarBatch(handle, sparkTypes)) { actualBatch =>
                       TestUtils.compareBatches(expectedBatch, actualBatch)
                     }
                   }

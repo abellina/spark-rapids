@@ -25,7 +25,6 @@ import com.nvidia.spark.rapids.format.TableMeta
 import org.scalatest.FunSuite
 
 import org.apache.spark.sql.types.{DataType, IntegerType}
-import org.apache.spark.sql.vectorized.ColumnarBatch
 import org.apache.spark.storage.TempLocalBlockId
 
 class SpillableColumnarBatchSuite extends FunSuite with Arm {
@@ -60,9 +59,6 @@ class SpillableColumnarBatchSuite extends FunSuite with Arm {
     override def getSpillPriority: Long = 0
     override def setSpillPriority(priority: Long): Unit = {}
     override def close(): Unit = {}
-    override def getColumnarBatch(
-      sparkTypes: Array[DataType]): ColumnarBatch = null
-
     override val getSpillCallback: SpillCallback = RapidsBuffer.defaultSpillCallback
     override def setSpillCallback(spillCallback: SpillCallback): Unit = {}
   }

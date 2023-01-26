@@ -65,8 +65,6 @@ class RapidsGdsStore(
       spillCallback: SpillCallback)
       extends RapidsBufferBase(id, size, meta, spillPriority, spillCallback) {
     override val storageTier: StorageTier = StorageTier.GDS
-
-    override def getMemoryBuffer: MemoryBuffer = getDeviceMemoryBuffer
   }
 
   class RapidsGdsSingleShotBuffer(
@@ -74,7 +72,7 @@ class RapidsGdsStore(
       spillPriority: Long, spillCallback: SpillCallback)
       extends RapidsGdsBuffer(id, size, meta, spillPriority, spillCallback) {
 
-    override def materializeMemoryBuffer: MemoryBuffer = {
+    override def getMemoryBuffer: MemoryBuffer = {
       closeOnExcept(DeviceMemoryBuffer.allocate(size)) { buffer =>
         CuFile.readFileToDeviceBuffer(buffer, path, fileOffset)
         logDebug(s"Created device buffer for $path $fileOffset:$size via GDS")
@@ -227,7 +225,7 @@ class RapidsGdsStore(
         var isPending: Boolean = true)
         extends RapidsGdsBuffer(id, size, meta, spillPriority, spillCallback) {
 
-      override def materializeMemoryBuffer: MemoryBuffer = this.synchronized {
+      override def getMemoryBuffer: MemoryBuffer = this.synchronized {
         closeOnExcept(DeviceMemoryBuffer.allocate(size)) { buffer =>
           if (isPending) {
             copyToBuffer(buffer, fileOffset, size, Cuda.DEFAULT_STREAM)

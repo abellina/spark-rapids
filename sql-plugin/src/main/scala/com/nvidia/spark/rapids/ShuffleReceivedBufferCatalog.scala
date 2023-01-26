@@ -26,6 +26,7 @@ import com.nvidia.spark.rapids.format.TableMeta
 
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.rapids.RapidsDiskBlockManager
+import org.apache.spark.sql.types.DataType
 
 /** Identifier for a shuffle buffer that holds the data for a table on the read side */
 
@@ -41,8 +42,6 @@ case class ShuffleReceivedBufferId(
 /** Catalog for lookup of shuffle buffers by block ID */
 class ShuffleReceivedBufferCatalog(
     catalog: RapidsBufferCatalog) extends Arm with Logging {
-
-  private val deviceStore = RapidsBufferCatalog.getDeviceStorage
 
   /** Mapping of table ID to shuffle buffer ID */
   private[this] val tableMap = new ConcurrentHashMap[Int, ShuffleReceivedBufferId]
@@ -130,6 +129,10 @@ class ShuffleReceivedBufferCatalog(
     val id = handle.id
     tableMap.remove(id.tableId)
     handle.close()
+  }
+
+  def getColumnarBatch(handle: RapidsBufferHandle, sparkTypes: Array[DataType]) = {
+    catalog.getColumnarBatch(handle, sparkTypes)
   }
 }
 
