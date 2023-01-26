@@ -274,7 +274,7 @@ abstract class RapidsBufferStore(
 
         while (!exhausted && !shouldRetry && buffers.getTotalSpillableBytes > targetTotalSize) {
           val mySpillCount = spillCount.incrementAndGet()
-          val maybeAmountSpilled = synchronized {
+          val maybeAmountSpilled = spillLock.synchronized {
             if (spillCount.get() == mySpillCount) {
               Some(trySpillAndFreeBuffer(stream))
             } else {
@@ -348,7 +348,9 @@ abstract class RapidsBufferStore(
     buffers.freeAll()
   }
 
-  private def trySpillAndFreeBuffer(stream: Cuda.Stream): Long = synchronized {
+  val spillLock = new Object()
+
+  private def trySpillAndFreeBuffer(stream: Cuda.Stream): Long = {
     val bufferToSpill = buffers.nextSpillableBuffer()
     if (bufferToSpill != null) {
       spillAndFreeBuffer(bufferToSpill, stream)
@@ -362,26 +364,17 @@ abstract class RapidsBufferStore(
     if (spillStore == null) {
       throw new OutOfMemoryError("Requested to spill without a spill store")
     }
-    // If we fail to get a reference then this buffer has since been freed and probably best
-    // to return back to the outer loop to see if enough has been freed.
-    if (buffer.addReference()) {
-      try {
-        if (catalog.isBufferSpilled(buffer.id, buffer.storageTier)) {
-          logDebug(s"Skipping spilling $buffer ${buffer.id} to ${spillStore.name} as it is " +
-            s"already stored in multiple tiers total mem=${buffers.getTotalBytes} " +
-            s"(${buffers.getTotalSpillableBytes} spillable)")
-          catalog.removeBufferTier(buffer.id, buffer.storageTier)
-        } else {
-          logDebug(s"Spilling $buffer ${buffer.id} to ${spillStore.name} " +
-              s"total mem=${buffers.getTotalBytes} (${buffers.getTotalSpillableBytes} spillable)")
-          val spillCallback = buffer.getSpillCallback
-          spillCallback(buffer.storageTier, spillStore.tier, buffer.size)
-          spillStore.copyBuffer(buffer, buffer.getMemoryBuffer, stream)
-        }
-      } finally {
-        buffer.close()
-      }
-      catalog.removeBufferTier(buffer.id, buffer.storageTier)
+    catalog.copyAndRemoveFromTier(buffer) {
+      case None =>
+        logDebug(s"Skipping spilling $buffer ${buffer.id} to ${spillStore.name} as it is " +
+          s"already stored in multiple tiers total mem=${buffers.getTotalBytes} " +
+          s"(${buffers.getTotalSpillableBytes} spillable)")
+      case _ =>
+        logDebug(s"Spilling $buffer ${buffer.id} to ${spillStore.name} " +
+          s"total mem=${buffers.getTotalBytes} (${buffers.getTotalSpillableBytes} spillable)")
+        val spillCallback = buffer.getSpillCallback
+        spillCallback(buffer.storageTier, spillStore.tier, buffer.size)
+        spillStore.copyBuffer(buffer, buffer.getMemoryBuffer, stream)
     }
   }
 

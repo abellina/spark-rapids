@@ -18,11 +18,12 @@ package com.nvidia.spark.rapids
 
 import java.util.concurrent.ConcurrentHashMap
 import java.util.function.BiFunction
-import ai.rapids.cudf.{ContiguousTable, DeviceMemoryBuffer, MemoryBuffer, Rmm}
-import com.nvidia.spark.rapids.RapidsBufferCatalog.{conf, deviceStorage}
+
+import ai.rapids.cudf.{ContiguousTable, DeviceMemoryBuffer, Rmm}
 import com.nvidia.spark.rapids.RapidsPluginImplicits._
 import com.nvidia.spark.rapids.StorageTier.StorageTier
 import com.nvidia.spark.rapids.format.TableMeta
+
 import org.apache.spark.{SparkConf, SparkEnv}
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.rapids.{RapidsDiskBlockManager, TempSpillBufferId}
@@ -288,7 +289,9 @@ class RapidsBufferCatalog extends AutoCloseable with Arm with Logging {
           spillCallback,
           needsSync)
       case Some(rapidsBuffer) =>
-        makeNewHandle(rapidsBuffer.id, initialSpillPriority, spillCallback)
+        withResource(rapidsBuffer) { _ =>
+          makeNewHandle(rapidsBuffer.id, initialSpillPriority, spillCallback)
+        }
     }
   }
 
@@ -313,7 +316,7 @@ class RapidsBufferCatalog extends AutoCloseable with Arm with Logging {
       initialSpillPriority: Long,
       spillCallback: SpillCallback,
       needsSync: Boolean): RapidsBufferHandle = synchronized {
-    deviceStorage.addContiguousTable(
+    RapidsBufferCatalog.deviceStorage.addContiguousTable(
       id,
       contigTable,
       initialSpillPriority,
@@ -356,7 +359,9 @@ class RapidsBufferCatalog extends AutoCloseable with Arm with Logging {
           spillCallback,
           needsSync)
       case Some(rapidsBuffer) =>
-        makeNewHandle(rapidsBuffer.id, initialSpillPriority, spillCallback)
+        withResource(rapidsBuffer) { _ =>
+          makeNewHandle(rapidsBuffer.id, initialSpillPriority, spillCallback)
+        }
     }
   }
 
@@ -381,7 +386,7 @@ class RapidsBufferCatalog extends AutoCloseable with Arm with Logging {
       initialSpillPriority: Long,
       spillCallback: SpillCallback,
       needsSync: Boolean): RapidsBufferHandle = synchronized {
-    deviceStorage.addBuffer(
+    RapidsBufferCatalog.deviceStorage.addBuffer(
       id,
       buffer,
       tableMeta,
@@ -458,7 +463,7 @@ class RapidsBufferCatalog extends AutoCloseable with Arm with Logging {
    * @param tier storage tier to check
    * @return true if the buffer is stored in multiple tiers
    */
-  def isBufferSpilled(id: RapidsBufferId, tier: StorageTier): Boolean = {
+  private def isBufferSpilled(id: RapidsBufferId, tier: StorageTier): Boolean = {
     val buffers = bufferMap.get(id)
     buffers != null && buffers.exists(_.storageTier > tier)
   }
@@ -496,8 +501,27 @@ class RapidsBufferCatalog extends AutoCloseable with Arm with Logging {
     bufferMap.compute(buffer.id, updater)
   }
 
+  def copyAndRemoveFromTier(buffer: RapidsBuffer)
+                           (copyFn: Option[RapidsBuffer] => Unit): Unit = synchronized {
+    // If we fail to get a reference then this buffer has since been freed and probably best
+    // to return back to the outer loop to see if enough has been freed.
+    if (buffer.addReference()) {
+      withResource(buffer) { _ =>
+        val removed = isBufferSpilled(buffer.id, buffer.storageTier)
+        val startingTier = buffer.storageTier
+        if (!removed) {
+          copyFn(Some(buffer))
+        } else {
+          copyFn(None)
+        }
+        val endingTier = buffer.storageTier
+        removeBufferTier(buffer.id, startingTier)
+      }
+    }
+  }
+
   /** Remove a buffer ID from the catalog at the specified storage tier. */
-  def removeBufferTier(id: RapidsBufferId, tier: StorageTier): Unit = synchronized {
+  private def removeBufferTier(id: RapidsBufferId, tier: StorageTier): Unit = synchronized {
     val updater = new BiFunction[RapidsBufferId, Seq[RapidsBuffer], Seq[RapidsBuffer]] {
       override def apply(key: RapidsBufferId, value: Seq[RapidsBuffer]): Seq[RapidsBuffer] = {
         val bufferAtTier = value.filter(_.storageTier == tier)

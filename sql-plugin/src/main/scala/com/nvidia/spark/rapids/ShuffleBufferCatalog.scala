@@ -80,7 +80,7 @@ class ShuffleBufferCatalog(
    *                      It should never allocate GPU memory and really just be used for metrics.
    * @param needsSync whether the spill framework should stream synchronize while adding
    *                  this device buffer (defaults to true)
-   * @return RapidsBufferId identifying this table
+   * @return RapidsBufferHandle identifying this table
    */
   def addContiguousTable(
       blockId: ShuffleBlockId,

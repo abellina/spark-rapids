@@ -185,8 +185,6 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
      * @param refCount - contigBuffer's current refCount
      */
     override def onClosed(refCount: Int): Unit = {
-      logDebug(s"onClosed for $id refCount=$refCount")
-
       // refCount == 1 means only 1 reference exists to `contigBuffer` in the
       // RapidsDeviceMemoryBuffer (we own it)
       if (refCount == 1) {
@@ -201,6 +199,7 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
 
     override protected def releaseResources(): Unit = synchronized {
       // we need to disassociate this RapidsBuffer from the underlying buffer
+      contigBuffer.setEventHandler(null)
       contigBuffer.close()
     }
 
