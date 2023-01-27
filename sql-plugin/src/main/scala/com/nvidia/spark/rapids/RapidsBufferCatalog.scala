@@ -26,6 +26,8 @@ import org.apache.spark.{SparkConf, SparkEnv}
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.rapids.{RapidsDiskBlockManager, TempSpillBufferId}
 
+import java.util.concurrent.atomic.AtomicInteger
+
 /**
  *  Exception thrown when inserting a buffer into the catalog with a duplicate buffer ID
  *  and storage tier combination.
@@ -54,6 +56,7 @@ trait RapidsBufferHandle extends AutoCloseable {
  * `RapidsBufferCatalog.singleton` should be used instead.
  */
 class RapidsBufferCatalog extends AutoCloseable with Arm with Logging {
+
   def registerDegenerateBuffer(
       bufferId: RapidsBufferId,
       meta: TableMeta,
@@ -498,6 +501,29 @@ class RapidsBufferCatalog extends AutoCloseable with Arm with Logging {
     }
 
     bufferMap.compute(buffer.id, updater)
+  }
+
+  private[this] val spillCount = new AtomicInteger(0)
+
+  def trySpillAndFreeBuffer(store: RapidsBufferStore, stream: Cuda.Stream): Option[Long] = {
+    val mySpillCount = spillCount.incrementAndGet()
+    synchronized {
+      if (spillCount.get() == mySpillCount) {
+        val nextSpillable = store.nextSpillable()
+        if (nextSpillable == null) {
+          Some(0)
+        } else {
+          val spillStore = store.spillStore
+          if (spillStore == null) {
+            throw new OutOfMemoryError("Requested to spill without a spill store")
+          }
+          spillBufferToStore(nextSpillable, spillStore, stream)
+          Some(nextSpillable.size)
+        }
+      } else {
+        None
+      }
+    }
   }
 
   def spillBufferToStore(

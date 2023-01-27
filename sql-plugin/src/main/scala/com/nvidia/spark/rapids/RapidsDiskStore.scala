@@ -62,8 +62,7 @@ class RapidsDiskStore(
         incoming.size,
         incoming.meta,
         incoming.getSpillPriority,
-        incoming.getSpillCallback,
-        deviceStorage)
+        incoming.getSpillCallback)
     }
   }
 
@@ -95,10 +94,9 @@ class RapidsDiskStore(
       size: Long,
       meta: TableMeta,
       spillPriority: Long,
-      spillCallback: SpillCallback,
-      deviceStorage: RapidsDeviceMemoryStore)
+      spillCallback: SpillCallback)
       extends RapidsBufferBase(
-        id, size, meta, spillPriority, spillCallback, deviceStorage = deviceStorage) {
+        id, size, meta, spillPriority, spillCallback) {
     private[this] var hostBuffer: Option[HostMemoryBuffer] = None
 
     override val storageTier: StorageTier = StorageTier.DISK

@@ -172,11 +172,9 @@ abstract class RapidsBufferStore(
   protected[this] val memoryFreedMonitor = new Object
 
   /** A store that can be used for spilling. */
-  private[this] var spillStore: RapidsBufferStore = _
+  var spillStore: RapidsBufferStore = _
 
   private[this] val nvtxSyncSpillName: String = name + " sync spill"
-
-  private[this] val spillCount = new AtomicLong(0L)
 
   /** Return the current byte total of buffers in this store. */
   def currentSize: Long = buffers.getTotalBytes
@@ -273,15 +271,7 @@ abstract class RapidsBufferStore(
         var exhausted = false
 
         while (!exhausted && !shouldRetry && buffers.getTotalSpillableBytes > targetTotalSize) {
-          val mySpillCount = spillCount.incrementAndGet()
-          val maybeAmountSpilled = spillLock.synchronized {
-            if (spillCount.get() == mySpillCount) {
-              Some(trySpillAndFreeBuffer(stream))
-            } else {
-              None
-            }
-          }
-          maybeAmountSpilled match {
+          catalog.trySpillAndFreeBuffer(this, stream) match {
             case None =>
               // another thread won and spilled before this thread did. Lets retry the original
               // allocation again
@@ -348,23 +338,8 @@ abstract class RapidsBufferStore(
     buffers.freeAll()
   }
 
-  val spillLock = new Object()
-
-  private def trySpillAndFreeBuffer(stream: Cuda.Stream): Long = {
-    val bufferToSpill = buffers.nextSpillableBuffer()
-    if (bufferToSpill != null) {
-      spillAndFreeBuffer(bufferToSpill, stream)
-      bufferToSpill.size
-    } else {
-      0
-    }
-  }
-
-  private def spillAndFreeBuffer(buffer: RapidsBufferBase, stream: Cuda.Stream): Unit = {
-    if (spillStore == null) {
-      throw new OutOfMemoryError("Requested to spill without a spill store")
-    }
-    catalog.spillBufferToStore(buffer, spillStore, stream)
+  def nextSpillable(): RapidsBuffer = {
+    buffers.nextSpillableBuffer()
   }
 
   /** Base class for all buffers in this store. */
@@ -374,8 +349,7 @@ abstract class RapidsBufferStore(
       override val meta: TableMeta,
       initialSpillPriority: Long,
       initialSpillCallback: SpillCallback,
-      catalog: RapidsBufferCatalog = RapidsBufferCatalog.singleton,
-      deviceStorage: RapidsDeviceMemoryStore = RapidsBufferCatalog.getDeviceStorage)
+      catalog: RapidsBufferCatalog = RapidsBufferCatalog.singleton)
       extends RapidsBuffer with Arm {
     private val MAX_UNSPILL_ATTEMPTS = 100
     private[this] var isValid = true
@@ -454,9 +428,9 @@ abstract class RapidsBufferStore(
               try {
                 logDebug(s"Unspilling $this $id to $DEVICE")
                 val newBuffer = catalog.unspillBufferToDeviceStore(
-                  this,
-                  materializeMemoryBuffer,
-                  Cuda.DEFAULT_STREAM)
+                    this,
+                    materializeMemoryBuffer,
+                    Cuda.DEFAULT_STREAM)
                 if (newBuffer.addReference()) {
                   withResource(newBuffer) { _ =>
                     return newBuffer.getDeviceMemoryBuffer

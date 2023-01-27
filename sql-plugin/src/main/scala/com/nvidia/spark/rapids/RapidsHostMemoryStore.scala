@@ -103,8 +103,7 @@ class RapidsHostMemoryStore(
         applyPriorityOffset(other.getSpillPriority, allocationMode.spillPriorityOffset),
         hostBuffer,
         allocationMode,
-        other.getSpillCallback,
-        deviceStorage)
+        other.getSpillCallback)
     }
   }
 
@@ -122,10 +121,9 @@ class RapidsHostMemoryStore(
       spillPriority: Long,
       buffer: HostMemoryBuffer,
       allocationMode: AllocationMode,
-      spillCallback: SpillCallback,
-      deviceStorage: RapidsDeviceMemoryStore)
+      spillCallback: SpillCallback)
       extends RapidsBufferBase(
-        id, size, meta, spillPriority, spillCallback, deviceStorage = deviceStorage) {
+        id, size, meta, spillPriority, spillCallback) {
     override val storageTier: StorageTier = StorageTier.HOST
 
     override def getMemoryBuffer: MemoryBuffer = {
