@@ -331,7 +331,6 @@ abstract class RapidsBufferStore(
   /** Update bookkeeping for a new buffer */
   protected def addBuffer(buffer: RapidsBufferBase): Unit = synchronized {
     buffers.add(buffer)
-    catalog.registerNewBuffer(buffer)
   }
 
   override def close(): Unit = {

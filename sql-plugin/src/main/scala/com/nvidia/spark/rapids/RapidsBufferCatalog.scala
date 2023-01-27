@@ -57,16 +57,6 @@ trait RapidsBufferHandle extends AutoCloseable {
  */
 class RapidsBufferCatalog extends AutoCloseable with Arm with Logging {
 
-  def registerDegenerateBuffer(
-      bufferId: RapidsBufferId,
-      meta: TableMeta,
-      spillCallback: SpillCallback): RapidsBufferHandle = {
-    val buffer = new DegenerateRapidsBuffer(bufferId, meta)
-    registerNewBuffer(buffer)
-    // TODO: what should the degenerate spill priority be..
-    makeNewHandle(buffer.id, buffer.getSpillPriority, spillCallback)
-  }
-
   /** Map of buffer IDs to buffers sorted by storage tier */
   private[this] val bufferMap = new ConcurrentHashMap[RapidsBufferId, Seq[RapidsBuffer]]
 
@@ -212,6 +202,16 @@ class RapidsBufferCatalog extends AutoCloseable with Arm with Logging {
     }
   }
 
+  def registerDegenerateBuffer(
+      bufferId: RapidsBufferId,
+      meta: TableMeta,
+      spillCallback: SpillCallback): RapidsBufferHandle = {
+    val buffer = new DegenerateRapidsBuffer(bufferId, meta)
+    registerNewBuffer(buffer)
+    // TODO: what should the degenerate spill priority be..
+    makeNewHandle(buffer.id, buffer.getSpillPriority, spillCallback)
+  }
+
   /**
    * Given a `DeviceMemoryBuffer` find out if a `MemoryBuffer.EventHandler` is associated
    * with it. If so, make sure that it is an instance of `RapidsDeviceMemoryBuffer`.
@@ -232,7 +232,7 @@ class RapidsBufferCatalog extends AutoCloseable with Arm with Logging {
    *           brand new to the store, or the `RapidsDeviceMemoryBuffer` is invalid and
    *           about to be removed).
    */
-  def getExistingRapidsBufferAndAcquire(
+  private def getExistingRapidsBufferAndAcquire(
       buffer: DeviceMemoryBuffer): Option[RapidsBuffer] = {
     val eh = buffer.getEventHandler
     eh match {
@@ -258,6 +258,45 @@ class RapidsBufferCatalog extends AutoCloseable with Arm with Logging {
     }
   }
 
+  /**
+   * Adds a buffer to the device storage. This does NOT take ownership of the
+   * buffer, so it is the responsibility of the caller to close it.
+   *
+   * This version of `addBuffer` creates a `TempSpillBufferId` to use to refer to
+   * this buffer.
+   *
+   * @param buffer buffer that will be owned by the store
+   * @param tableMeta metadata describing the buffer layout
+   * @param initialSpillPriority starting spill priority value for the buffer
+   * @param spillCallback a callback when the buffer is spilled. This should be very light weight.
+   *                      It should never allocate GPU memory and really just be used for metrics.
+   * @param needsSync whether the spill framework should stream synchronize while adding
+   *                  this device buffer (defaults to true)
+   * @return RapidsBufferHandle handle for this buffer
+   */
+  def addBuffer(
+      buffer: DeviceMemoryBuffer,
+      tableMeta: TableMeta,
+      initialSpillPriority: Long,
+      spillCallback: SpillCallback = RapidsBuffer.defaultSpillCallback,
+      needsSync: Boolean = true): RapidsBufferHandle = synchronized {
+    // first time we see `buffer`
+    val existing = getExistingRapidsBufferAndAcquire(buffer)
+    existing match {
+      case None =>
+        addBuffer(
+          TempSpillBufferId(),
+          buffer,
+          tableMeta,
+          initialSpillPriority,
+          spillCallback,
+          needsSync)
+      case Some(rapidsBuffer) =>
+        withResource(rapidsBuffer) { _ =>
+          makeNewHandle(rapidsBuffer.id, initialSpillPriority, spillCallback)
+        }
+    }
+  }
   /**
    * Adds a contiguous table to the device storage. This does NOT take ownership of the
    * contiguous table, so it is the responsibility of the caller to close it. The refcount of the
@@ -317,54 +356,13 @@ class RapidsBufferCatalog extends AutoCloseable with Arm with Logging {
       initialSpillPriority: Long,
       spillCallback: SpillCallback,
       needsSync: Boolean): RapidsBufferHandle = synchronized {
-    RapidsBufferCatalog.deviceStorage.addBuffer(
+    addBuffer(
       id,
       contigTable.getBuffer,
       MetaUtils.buildTableMeta(id.tableId, contigTable),
       initialSpillPriority,
       spillCallback,
       needsSync)
-    makeNewHandle(id, initialSpillPriority, spillCallback)
-  }
-
-  /**
-   * Adds a buffer to the device storage. This does NOT take ownership of the
-   * buffer, so it is the responsibility of the caller to close it.
-   *
-   * This version of `addBuffer` creates a `TempSpillBufferId` to use to refer to
-   * this buffer.
-   *
-   * @param buffer buffer that will be owned by the store
-   * @param tableMeta metadata describing the buffer layout
-   * @param initialSpillPriority starting spill priority value for the buffer
-   * @param spillCallback a callback when the buffer is spilled. This should be very light weight.
-   *                      It should never allocate GPU memory and really just be used for metrics.
-   * @param needsSync whether the spill framework should stream synchronize while adding
-   *                  this device buffer (defaults to true)
-   * @return RapidsBufferHandle handle for this buffer
-   */
-  def addBuffer(
-      buffer: DeviceMemoryBuffer,
-      tableMeta: TableMeta,
-      initialSpillPriority: Long,
-      spillCallback: SpillCallback = RapidsBuffer.defaultSpillCallback,
-      needsSync: Boolean = true): RapidsBufferHandle = synchronized {
-    // first time we see `buffer`
-    val existing = getExistingRapidsBufferAndAcquire(buffer)
-    existing match {
-      case None =>
-        addBuffer(
-          TempSpillBufferId(),
-          buffer,
-          tableMeta,
-          initialSpillPriority,
-          spillCallback,
-          needsSync)
-      case Some(rapidsBuffer) =>
-        withResource(rapidsBuffer) { _ =>
-          makeNewHandle(rapidsBuffer.id, initialSpillPriority, spillCallback)
-        }
-    }
   }
 
   /**
@@ -398,6 +396,7 @@ class RapidsBufferCatalog extends AutoCloseable with Arm with Logging {
     makeNewHandle(id, initialSpillPriority, spillCallback)
   }
 
+
   /**
    * Called by the catalog when a handle is first added to the catalog, or to refresh
    * the priority of the underlying buffer if a handle's priority changed.
@@ -424,7 +423,7 @@ class RapidsBufferCatalog extends AutoCloseable with Arm with Logging {
     acquireBuffer(handle.id)
   }
 
-  def acquireBuffer(id: RapidsBufferId): RapidsBuffer = {
+  private def acquireBuffer(id: RapidsBufferId): RapidsBuffer = {
     (0 until RapidsBufferCatalog.MAX_BUFFER_LOOKUP_ATTEMPTS).foreach { _ =>
       val buffers = bufferMap.get(id)
       if (buffers == null || buffers.isEmpty) {
@@ -483,7 +482,7 @@ class RapidsBufferCatalog extends AutoCloseable with Arm with Logging {
    * Register a new buffer with the catalog. An exception will be thrown if an
    * existing buffer was registered with the same buffer ID and storage tier.
    */
-  def registerNewBuffer(buffer: RapidsBuffer): Unit = {
+  private def registerNewBuffer(buffer: RapidsBuffer): Unit = {
     val updater = new BiFunction[RapidsBufferId, Seq[RapidsBuffer], Seq[RapidsBuffer]] {
       override def apply(key: RapidsBufferId, value: Seq[RapidsBuffer]): Seq[RapidsBuffer] = {
         if (value == null) {
@@ -526,7 +525,7 @@ class RapidsBufferCatalog extends AutoCloseable with Arm with Logging {
     }
   }
 
-  def spillBufferToStore(
+  private def spillBufferToStore(
       buffer: RapidsBuffer,
       spillStore: RapidsBufferStore,
       stream: Cuda.Stream): Unit = synchronized {
@@ -534,14 +533,14 @@ class RapidsBufferCatalog extends AutoCloseable with Arm with Logging {
       withResource(buffer) { _ =>
         logDebug(s"Spilling $buffer ${buffer.id} to ${spillStore.name} ")
         val removed = isBufferSpilled(buffer.id, buffer.storageTier)
-        val startingTier = buffer.storageTier
         if (!removed) {
           val spillCallback = buffer.getSpillCallback
           spillCallback(buffer.storageTier, spillStore.tier, buffer.size)
-          spillStore.copyBuffer(buffer, buffer.getMemoryBuffer, stream)
+          val newBuffer =
+            spillStore.copyBuffer(buffer, buffer.getMemoryBuffer, stream)
+          registerNewBuffer(newBuffer)
         }
-        val endingTier = buffer.storageTier
-        removeBufferTier(buffer.id, startingTier)
+        removeBufferTier(buffer.id, buffer.storageTier)
       }
     } else {
       logDebug(s"Skipping spilling $buffer ${buffer.id} to ${spillStore.name} as it is " +
@@ -553,10 +552,12 @@ class RapidsBufferCatalog extends AutoCloseable with Arm with Logging {
     buffer: RapidsBuffer,
     memoryBuffer: MemoryBuffer,
     stream: Cuda.Stream): RapidsBuffer = synchronized {
-    RapidsBufferCatalog.deviceStorage.copyBuffer(
+    val newBuffer = RapidsBufferCatalog.deviceStorage.copyBuffer(
       buffer,
       memoryBuffer,
       stream)
+    registerNewBuffer(newBuffer)
+    newBuffer
   }
 
   /** Remove a buffer ID from the catalog at the specified storage tier. */
