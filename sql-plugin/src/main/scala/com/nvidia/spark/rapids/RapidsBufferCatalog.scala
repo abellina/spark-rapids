@@ -18,12 +18,10 @@ package com.nvidia.spark.rapids
 
 import java.util.concurrent.ConcurrentHashMap
 import java.util.function.BiFunction
-
-import ai.rapids.cudf.{ContiguousTable, DeviceMemoryBuffer, Rmm}
+import ai.rapids.cudf.{ContiguousTable, Cuda, DeviceMemoryBuffer, MemoryBuffer, Rmm}
 import com.nvidia.spark.rapids.RapidsPluginImplicits._
 import com.nvidia.spark.rapids.StorageTier.StorageTier
 import com.nvidia.spark.rapids.format.TableMeta
-
 import org.apache.spark.{SparkConf, SparkEnv}
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.rapids.{RapidsDiskBlockManager, TempSpillBufferId}
@@ -316,9 +314,10 @@ class RapidsBufferCatalog extends AutoCloseable with Arm with Logging {
       initialSpillPriority: Long,
       spillCallback: SpillCallback,
       needsSync: Boolean): RapidsBufferHandle = synchronized {
-    RapidsBufferCatalog.deviceStorage.addContiguousTable(
+    RapidsBufferCatalog.deviceStorage.addBuffer(
       id,
-      contigTable,
+      contigTable.getBuffer,
+      MetaUtils.buildTableMeta(id.tableId, contigTable),
       initialSpillPriority,
       spillCallback,
       needsSync)
@@ -501,23 +500,37 @@ class RapidsBufferCatalog extends AutoCloseable with Arm with Logging {
     bufferMap.compute(buffer.id, updater)
   }
 
-  def copyAndRemoveFromTier(buffer: RapidsBuffer)
-                           (copyFn: Option[RapidsBuffer] => Unit): Unit = synchronized {
-    // If we fail to get a reference then this buffer has since been freed and probably best
-    // to return back to the outer loop to see if enough has been freed.
+  def spillBufferToStore(
+      buffer: RapidsBuffer,
+      spillStore: RapidsBufferStore,
+      stream: Cuda.Stream): Unit = synchronized {
     if (buffer.addReference()) {
       withResource(buffer) { _ =>
+        logDebug(s"Spilling $buffer ${buffer.id} to ${spillStore.name} ")
         val removed = isBufferSpilled(buffer.id, buffer.storageTier)
         val startingTier = buffer.storageTier
         if (!removed) {
-          copyFn(Some(buffer))
-        } else {
-          copyFn(None)
+          val spillCallback = buffer.getSpillCallback
+          spillCallback(buffer.storageTier, spillStore.tier, buffer.size)
+          spillStore.copyBuffer(buffer, buffer.getMemoryBuffer, stream)
         }
         val endingTier = buffer.storageTier
         removeBufferTier(buffer.id, startingTier)
       }
+    } else {
+      logDebug(s"Skipping spilling $buffer ${buffer.id} to ${spillStore.name} as it is " +
+        s"already stored in multiple tiers")
     }
+  }
+
+  def unspillBufferToDeviceStore(
+    buffer: RapidsBuffer,
+    memoryBuffer: MemoryBuffer,
+    stream: Cuda.Stream): RapidsBuffer = synchronized {
+    RapidsBufferCatalog.deviceStorage.copyBuffer(
+      buffer,
+      memoryBuffer,
+      stream)
   }
 
   /** Remove a buffer ID from the catalog at the specified storage tier. */

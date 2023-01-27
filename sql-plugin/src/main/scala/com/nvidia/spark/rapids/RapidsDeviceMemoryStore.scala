@@ -16,7 +16,7 @@
 
 package com.nvidia.spark.rapids
 
-import ai.rapids.cudf.{ContiguousTable, Cuda, DeviceMemoryBuffer, HostMemoryBuffer, MemoryBuffer}
+import ai.rapids.cudf.{Cuda, DeviceMemoryBuffer, HostMemoryBuffer, MemoryBuffer}
 import com.nvidia.spark.rapids.StorageTier.StorageTier
 import com.nvidia.spark.rapids.format.TableMeta
 
@@ -59,49 +59,11 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
   }
 
   /**
-   * Adds a contiguous table to the device storage. This does NOT take ownership of the
-   * contiguous table, so it is the responsibility of the caller to close it. The refcount of the
-   * underlying device buffer will be incremented so the contiguous table can be closed before
-   * this buffer is destroyed.
-   *
-   * @param id the RapidsBufferId to use for this buffer
-   * @param contigTable contiguous table to track in storage
-   * @param initialSpillPriority starting spill priority value for the buffer
-   * @param spillCallback a callback when the buffer is spilled. This should be very light weight.
-   *                      It should never allocate GPU memory and really just be used for metrics.
-   * @param needsSync whether the spill framework should stream synchronize while adding
-   *                             this device buffer (defaults to true)
-   * @return RapidsBufferHandle handle for this table
-   */
-  def addContiguousTable(
-      id: RapidsBufferId,
-      contigTable: ContiguousTable,
-      initialSpillPriority: Long,
-      spillCallback: SpillCallback,
-      needsSync: Boolean): RapidsBufferId = {
-    val contigBuffer = contigTable.getBuffer
-    val size = contigBuffer.getLength
-    val meta = MetaUtils.buildTableMeta(id.tableId, contigTable)
-    contigBuffer.incRefCount()
-    freeOnExcept(
-      new RapidsDeviceMemoryBuffer(
-        id,
-        size,
-        meta,
-        contigBuffer,
-        initialSpillPriority,
-        spillCallback)) { buffer =>
-      logDebug(s"Adding table for: [id=$id, size=${buffer.size}, " +
-        s"uncompressed=${buffer.meta.bufferMeta.uncompressedSize}, " +
-        s"meta_id=${buffer.meta.bufferMeta.id}, meta_size=${buffer.meta.bufferMeta.size}]")
-      addDeviceBuffer(buffer, needsSync)
-      id
-    }
-  }
-
-  /**
    * Adds a buffer to the device storage. This does NOT take ownership of the
    * buffer, so it is the responsibility of the caller to close it.
+   *
+   * This function is called only from the RapidsBufferCatalog, under the
+   * catalog lock.
    *
    * @param id the RapidsBufferId to use for this buffer
    * @param buffer buffer that will be owned by the store
@@ -111,7 +73,6 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
    *                      It should never allocate GPU memory and really just be used for metrics.
    * @param needsSync whether the spill framework should stream synchronize while adding
    *                  this device buffer (defaults to true)
-   * @return RapidsBufferHandle handle for this RapidsBuffer
    */
   def addBuffer(
       id: RapidsBufferId,
@@ -119,7 +80,7 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
       tableMeta: TableMeta,
       initialSpillPriority: Long,
       spillCallback: SpillCallback,
-      needsSync: Boolean): RapidsBufferId = {
+      needsSync: Boolean): Unit = {
     buffer.incRefCount()
     freeOnExcept(
       new RapidsDeviceMemoryBuffer(
@@ -134,7 +95,6 @@ class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog
         s"meta_id=${tableMeta.bufferMeta.id}, " +
         s"meta_size=${tableMeta.bufferMeta.size}]")
       addDeviceBuffer(buff, needsSync)
-      id
     }
   }
 

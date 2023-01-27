@@ -364,18 +364,7 @@ abstract class RapidsBufferStore(
     if (spillStore == null) {
       throw new OutOfMemoryError("Requested to spill without a spill store")
     }
-    catalog.copyAndRemoveFromTier(buffer) {
-      case None =>
-        logDebug(s"Skipping spilling $buffer ${buffer.id} to ${spillStore.name} as it is " +
-          s"already stored in multiple tiers total mem=${buffers.getTotalBytes} " +
-          s"(${buffers.getTotalSpillableBytes} spillable)")
-      case _ =>
-        logDebug(s"Spilling $buffer ${buffer.id} to ${spillStore.name} " +
-          s"total mem=${buffers.getTotalBytes} (${buffers.getTotalSpillableBytes} spillable)")
-        val spillCallback = buffer.getSpillCallback
-        spillCallback(buffer.storageTier, spillStore.tier, buffer.size)
-        spillStore.copyBuffer(buffer, buffer.getMemoryBuffer, stream)
-    }
+    catalog.spillBufferToStore(buffer, spillStore, stream)
   }
 
   /** Base class for all buffers in this store. */
@@ -464,8 +453,10 @@ abstract class RapidsBufferStore(
             case _ =>
               try {
                 logDebug(s"Unspilling $this $id to $DEVICE")
-                val newBuffer = deviceStorage.copyBuffer(
-                  this, materializeMemoryBuffer, Cuda.DEFAULT_STREAM)
+                val newBuffer = catalog.unspillBufferToDeviceStore(
+                  this,
+                  materializeMemoryBuffer,
+                  Cuda.DEFAULT_STREAM)
                 if (newBuffer.addReference()) {
                   withResource(newBuffer) { _ =>
                     return newBuffer.getDeviceMemoryBuffer
