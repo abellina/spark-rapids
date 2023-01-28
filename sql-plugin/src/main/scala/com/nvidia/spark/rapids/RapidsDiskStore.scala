@@ -27,11 +27,8 @@ import com.nvidia.spark.rapids.format.TableMeta
 import org.apache.spark.sql.rapids.RapidsDiskBlockManager
 
 /** A buffer store using files on the local disks. */
-class RapidsDiskStore(
-    diskBlockManager: RapidsDiskBlockManager,
-    catalog: RapidsBufferCatalog = RapidsBufferCatalog.singleton,
-    deviceStorage: RapidsDeviceMemoryStore = RapidsBufferCatalog.getDeviceStorage)
-    extends RapidsBufferStore(StorageTier.DISK, catalog) {
+class RapidsDiskStore(diskBlockManager: RapidsDiskBlockManager)
+    extends RapidsBufferStore(StorageTier.DISK) {
   private[this] val sharedBufferFiles = new ConcurrentHashMap[RapidsBufferId, File]
 
   override protected def createBuffer(incoming: RapidsBuffer, incomingBuffer: MemoryBuffer,

@@ -302,8 +302,7 @@ class RapidsDeviceMemoryStoreSuite extends FunSuite with Arm with MockitoSugar {
       throw new UnsupportedOperationException
   }
 
-  class MockSpillStore(catalog: RapidsBufferCatalog)
-      extends RapidsBufferStore(StorageTier.HOST, catalog) with Arm {
+  class MockSpillStore extends RapidsBufferStore(StorageTier.HOST) with Arm {
     val spilledBuffers = new ArrayBuffer[RapidsBufferId]
 
     override protected def createBuffer(

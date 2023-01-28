@@ -27,8 +27,8 @@ import org.apache.spark.sql.vectorized.ColumnarBatch
  * Buffer storage using device memory.
  * @param catalog catalog to register this store
  */
-class RapidsDeviceMemoryStore(catalog: RapidsBufferCatalog = RapidsBufferCatalog.singleton)
-    extends RapidsBufferStore(StorageTier.DEVICE, catalog) with Arm {
+class RapidsDeviceMemoryStore
+  extends RapidsBufferStore(StorageTier.DEVICE) with Arm {
 
   // The RapidsDeviceMemoryStore handles spillability via ref counting
   override protected def spillableOnAdd: Boolean = false

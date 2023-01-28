@@ -22,7 +22,7 @@ import java.util.concurrent.atomic.AtomicLong
 
 import scala.collection.mutable
 
-import ai.rapids.cudf.{BaseDeviceMemoryBuffer, Cuda, DeviceMemoryBuffer, HostMemoryBuffer, MemoryBuffer, NvtxColor, NvtxRange}
+import ai.rapids.cudf.{BaseDeviceMemoryBuffer, Cuda, DeviceMemoryBuffer, HostMemoryBuffer, MemoryBuffer}
 import com.nvidia.spark.rapids.RapidsPluginImplicits._
 import com.nvidia.spark.rapids.StorageTier.{DEVICE, StorageTier}
 import com.nvidia.spark.rapids.format.TableMeta
@@ -41,9 +41,7 @@ object RapidsBufferStore {
  * @param tier storage tier of this store
  * @param catalog catalog to register this store
  */
-abstract class RapidsBufferStore(
-    val tier: StorageTier,
-    catalog: RapidsBufferCatalog = RapidsBufferCatalog.singleton)
+abstract class RapidsBufferStore(val tier: StorageTier)
     extends AutoCloseable with Logging with Arm {
 
   val name: String = tier.toString
@@ -161,6 +159,26 @@ abstract class RapidsBufferStore(
     def getTotalSpillableBytes: Long = synchronized { totalBytesSpillable }
   }
 
+  def hasPendingFreeBytes: Boolean = pendingFreeBytes.get() > 0
+
+  def getTotalBytes: Long = buffers.getTotalBytes
+
+  def getTotalSpillableBytes: Long = buffers.getTotalSpillableBytes
+
+  def waitForPending(targetTotalSize: Long): Unit = {
+    logWarning(s"Cannot spill further, waiting for ${pendingFreeBytes.get} " +
+      " bytes of pending buffers to be released")
+    memoryFreedMonitor.synchronized {
+      val memNeeded = buffers.getTotalSpillableBytes - targetTotalSize
+      if (memNeeded > 0 && memNeeded <= pendingFreeBytes.get) {
+        // This could be a futile wait if the thread(s) holding the pending buffers
+        // open are here waiting for more memory.
+        memoryFreedMonitor.wait(RapidsBufferStore.FREE_WAIT_TIMEOUT)
+      }
+    }
+  }
+
+
   private[this] val pendingFreeBytes = new AtomicLong(0L)
 
   private[this] val buffers = new BufferTracker
@@ -223,93 +241,6 @@ abstract class RapidsBufferStore(
 
   protected def setSpillable(buffer: RapidsBufferBase, isSpillable: Boolean): Unit = {
     throw new NotImplementedError(s"This store ${this} does not implement setSpillable")
-  }
-
-  /**
-   * Free memory in this store by spilling buffers to the spill store synchronously.
-   *
-   * @param targetTotalSize maximum total size of this store after spilling completes
-   * @return optionally number of bytes that were spilled, or None if this called
-   *         made no attempt to spill due to a detected spill race
-   */
-  def synchronousSpill(targetTotalSize: Long): Option[Long] =
-    synchronousSpill(targetTotalSize, Cuda.DEFAULT_STREAM)
-
-  /**
-   * Free memory in this store by spilling buffers to the spill store synchronously.
-   * @param targetTotalSize maximum total size of this store after spilling completes
-   * @param stream CUDA stream to use or null for default stream
-   * @return optionally number of bytes that were spilled, or None if this called
-   *         made no attempt to spill due to a detected spill race
-   */
-  def synchronousSpill(targetTotalSize: Long, stream: Cuda.Stream): Option[Long] = {
-    require(targetTotalSize >= 0, s"Negative spill target size: $targetTotalSize")
-
-    var shouldRetry = false
-    var totalSpilled: Long = 0
-
-    if (buffers.getTotalSpillableBytes > targetTotalSize) {
-      withResource(new NvtxRange(nvtxSyncSpillName, NvtxColor.ORANGE)) { _ =>
-        logDebug(s"$name store spilling to reduce usage from " +
-          s"${buffers.getTotalBytes} total (${buffers.getTotalSpillableBytes} spillable) " +
-          s"to $targetTotalSize bytes")
-
-        def waitForPending(): Unit = {
-          logWarning(s"Cannot spill further, waiting for ${pendingFreeBytes.get} " +
-            " bytes of pending buffers to be released")
-          memoryFreedMonitor.synchronized {
-            val memNeeded = buffers.getTotalSpillableBytes - targetTotalSize
-            if (memNeeded > 0 && memNeeded <= pendingFreeBytes.get) {
-              // This could be a futile wait if the thread(s) holding the pending buffers
-              // open are here waiting for more memory.
-              memoryFreedMonitor.wait(RapidsBufferStore.FREE_WAIT_TIMEOUT)
-            }
-          }
-        }
-
-        var waited = false
-        var exhausted = false
-
-        while (!exhausted && !shouldRetry && buffers.getTotalSpillableBytes > targetTotalSize) {
-          catalog.trySpillAndFreeBuffer(this, stream) match {
-            case None =>
-              // another thread won and spilled before this thread did. Lets retry the original
-              // allocation again
-              shouldRetry = true
-            case Some(amountSpilled) =>
-              if (amountSpilled != 0) {
-                totalSpilled += amountSpilled
-                waited = false
-              } else {
-                // we didn't spill in this iteration, and we'll try to wait a bit to see if
-                // other threads finish up their work and release pointers to the released
-                // buffer
-                if (!waited && pendingFreeBytes.get > 0) {
-                  waited = true
-                  waitForPending()
-                } else {
-                  exhausted = true
-                  logWarning("Unable to spill enough to meet request. " +
-                    s"Total=${buffers.getTotalBytes} " +
-                    s"Spillable=${buffers.getTotalSpillableBytes} " +
-                    s"Target=$targetTotalSize")
-                }
-              }
-          }
-        }
-        logDebug(s"$this spill complete")
-      }
-    }
-
-    if (totalSpilled > 0) {
-      Some(totalSpilled)
-    } else if (shouldRetry) {
-      // if we are going to retry, and didn't spill, returning None prevents extra
-      // logs where we say we spilled 0 bytes from X store
-      None
-    } else {
-      Some(0)
-    }
   }
 
   /**

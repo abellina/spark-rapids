@@ -18,7 +18,7 @@ package com.nvidia.spark.rapids
 
 import java.util.concurrent.ConcurrentHashMap
 import java.util.function.BiFunction
-import ai.rapids.cudf.{ContiguousTable, Cuda, DeviceMemoryBuffer, MemoryBuffer, Rmm}
+import ai.rapids.cudf.{ContiguousTable, Cuda, DeviceMemoryBuffer, MemoryBuffer, NvtxColor, NvtxRange, Rmm}
 import com.nvidia.spark.rapids.RapidsPluginImplicits._
 import com.nvidia.spark.rapids.StorageTier.StorageTier
 import com.nvidia.spark.rapids.format.TableMeta
@@ -504,6 +504,83 @@ class RapidsBufferCatalog extends AutoCloseable with Arm with Logging {
 
   private[this] val spillCount = new AtomicInteger(0)
 
+  /**
+   * Free memory in this store by spilling buffers to the spill store synchronously.
+   *
+   * @param targetTotalSize maximum total size of this store after spilling completes
+   * @return optionally number of bytes that were spilled, or None if this called
+   *         made no attempt to spill due to a detected spill race
+   */
+  def synchronousSpill(store: RapidsBufferStore, targetTotalSize: Long): Option[Long] =
+    synchronousSpill(store, targetTotalSize, Cuda.DEFAULT_STREAM)
+
+  /**
+   * Free memory in this store by spilling buffers to the spill store synchronously.
+   * @param targetTotalSize maximum total size of this store after spilling completes
+   * @param stream CUDA stream to use or null for default stream
+   * @return optionally number of bytes that were spilled, or None if this called
+   *         made no attempt to spill due to a detected spill race
+   */
+  def synchronousSpill(
+      store: RapidsBufferStore,
+      targetTotalSize: Long,
+      stream: Cuda.Stream): Option[Long] = {
+    require(targetTotalSize >= 0, s"Negative spill target size: $targetTotalSize")
+
+    var shouldRetry = false
+    var totalSpilled: Long = 0
+
+    if (store.getTotalSpillableBytes > targetTotalSize) {
+      withResource(new NvtxRange(s"synchronousSpill ${store.name}", NvtxColor.ORANGE)) { _ =>
+        logDebug(s"${store.name} store spilling to reduce usage from " +
+          s"${store.getTotalBytes} total (${store.getTotalSpillableBytes} spillable) " +
+          s"to $targetTotalSize bytes")
+
+        var waited = false
+        var exhausted = false
+
+        while (!exhausted && !shouldRetry && store.getTotalSpillableBytes > targetTotalSize) {
+          trySpillAndFreeBuffer(store, stream) match {
+            case None =>
+              // another thread won and spilled before this thread did. Lets retry the original
+              // allocation again
+              shouldRetry = true
+            case Some(amountSpilled) =>
+              if (amountSpilled != 0) {
+                totalSpilled += amountSpilled
+                waited = false
+              } else {
+                // we didn't spill in this iteration, and we'll try to wait a bit to see if
+                // other threads finish up their work and release pointers to the released
+                // buffer
+                if (!waited && store.hasPendingFreeBytes) {
+                  waited = true
+                  store.waitForPending(targetTotalSize)
+                } else {
+                  exhausted = true
+                  logWarning("Unable to spill enough to meet request. " +
+                    s"Total=${store.getTotalBytes} " +
+                    s"Spillable=${store.getTotalSpillableBytes} " +
+                    s"Target=$targetTotalSize")
+                }
+              }
+          }
+        }
+        logDebug(s"$this spill complete")
+      }
+    }
+
+    if (totalSpilled > 0) {
+      Some(totalSpilled)
+    } else if (shouldRetry) {
+      // if we are going to retry, and didn't spill, returning None prevents extra
+      // logs where we say we spilled 0 bytes from X store
+      None
+    } else {
+      Some(0)
+    }
+  }
+
   def trySpillAndFreeBuffer(store: RapidsBufferStore, stream: Cuda.Stream): Option[Long] = {
     val mySpillCount = spillCount.incrementAndGet()
     synchronized {
@@ -611,6 +688,7 @@ class RapidsBufferCatalog extends AutoCloseable with Arm with Logging {
 }
 
 object RapidsBufferCatalog extends Logging with Arm {
+
   private val MAX_BUFFER_LOOKUP_ATTEMPTS = 100
 
   val singleton = new RapidsBufferCatalog
@@ -750,6 +828,10 @@ object RapidsBufferCatalog extends Logging with Arm {
    */
   def acquireBuffer(handle: RapidsBufferHandle): RapidsBuffer =
     singleton.acquireBuffer(handle)
+
+  def synchronousSpill(store: RapidsDeviceMemoryStore, targetSize: Long): Option[Long] = {
+    singleton.synchronousSpill(store, targetSize)
+  }
 
   def getDiskBlockManager(): RapidsDiskBlockManager = diskBlockManager
 }

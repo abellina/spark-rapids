@@ -32,9 +32,8 @@ import org.apache.spark.sql.rapids.execution.TrampolineUtil
 class RapidsHostMemoryStore(
     maxSize: Long,
     pageableMemoryPoolSize: Long,
-    catalog: RapidsBufferCatalog = RapidsBufferCatalog.singleton,
-    deviceStorage: RapidsDeviceMemoryStore = RapidsBufferCatalog.getDeviceStorage)
-    extends RapidsBufferStore(StorageTier.HOST, catalog) {
+    catalog: RapidsBufferCatalog = RapidsBufferCatalog.singleton)
+    extends RapidsBufferStore(StorageTier.HOST) {
   private[this] val pool = HostMemoryBuffer.allocate(pageableMemoryPoolSize, false)
   private[this] val addressAllocator = new AddressSpaceAllocator(pageableMemoryPoolSize)
   private[this] var haveLoggedMaxExceeded = false
@@ -47,7 +46,7 @@ class RapidsHostMemoryStore(
   // Returns an allocated host buffer and its allocation mode
   private def allocateHostBuffer(size: Long): (HostMemoryBuffer, AllocationMode) = {
     // spill to keep within the targeted size
-    val maybeAmountSpilled = synchronousSpill(math.max(maxSize - size, 0))
+    val maybeAmountSpilled = catalog.synchronousSpill(this, math.max(maxSize - size, 0))
     maybeAmountSpilled.foreach { amountSpilled =>
       if (amountSpilled != 0) {
         logInfo(s"Spilled $amountSpilled bytes from the host memory store")
@@ -76,7 +75,7 @@ class RapidsHostMemoryStore(
         buffer = pool.slice(allocation.get, size)
       } else {
         val targetSize = math.max(currentSize - size, 0)
-        synchronousSpill(targetSize)
+        catalog.synchronousSpill(this, targetSize)
       }
     }
     (buffer, Pooled)
