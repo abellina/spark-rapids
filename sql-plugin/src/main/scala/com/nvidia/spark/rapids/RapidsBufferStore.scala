@@ -159,6 +159,8 @@ abstract class RapidsBufferStore(val tier: StorageTier)
     def getTotalSpillableBytes: Long = synchronized { totalBytesSpillable }
   }
 
+  def getMaxSize: Option[Long] = None
+
   def hasPendingFreeBytes: Boolean = pendingFreeBytes.get() > 0
 
   def getTotalBytes: Long = buffers.getTotalBytes
@@ -191,8 +193,6 @@ abstract class RapidsBufferStore(val tier: StorageTier)
 
   /** A store that can be used for spilling. */
   var spillStore: RapidsBufferStore = _
-
-  private[this] val nvtxSyncSpillName: String = name + " sync spill"
 
   /** Return the current byte total of buffers in this store. */
   def currentSize: Long = buffers.getTotalBytes
@@ -229,9 +229,14 @@ abstract class RapidsBufferStore(val tier: StorageTier)
    */
   def copyBuffer(buffer: RapidsBuffer, memoryBuffer: MemoryBuffer, stream: Cuda.Stream)
   : RapidsBufferBase = {
-    freeOnExcept(createBuffer(buffer, memoryBuffer, stream)) { newBuffer =>
-      addBuffer(newBuffer)
-      newBuffer
+    val newBuffer = createBuffer(buffer, memoryBuffer, stream)
+    if (newBuffer == null) {
+      null
+    } else {
+      freeOnExcept(newBuffer) { _ =>
+        addBuffer(newBuffer)
+        newBuffer
+      }
     }
   }
 
@@ -452,6 +457,5 @@ abstract class RapidsBufferStore(val tier: StorageTier)
     }
 
     override def toString: String = s"$name buffer size=$size"
-
   }
 }

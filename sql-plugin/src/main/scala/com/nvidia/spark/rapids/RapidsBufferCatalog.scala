@@ -24,6 +24,7 @@ import com.nvidia.spark.rapids.StorageTier.StorageTier
 import com.nvidia.spark.rapids.format.TableMeta
 import org.apache.spark.{SparkConf, SparkEnv}
 import org.apache.spark.internal.Logging
+import org.apache.spark.sql.rapids.execution.TrampolineUtil
 import org.apache.spark.sql.rapids.{RapidsDiskBlockManager, TempSpillBufferId}
 
 import java.util.concurrent.atomic.AtomicInteger
@@ -531,7 +532,7 @@ class RapidsBufferCatalog extends AutoCloseable with Arm with Logging {
     var totalSpilled: Long = 0
 
     if (store.getTotalSpillableBytes > targetTotalSize) {
-      withResource(new NvtxRange(s"synchronousSpill ${store.name}", NvtxColor.ORANGE)) { _ =>
+      withResource(new NvtxRange(s"${store.name} sync spill", NvtxColor.ORANGE)) { _ =>
         logDebug(s"${store.name} store spilling to reduce usage from " +
           s"${store.getTotalBytes} total (${store.getTotalSpillableBytes} spillable) " +
           s"to $targetTotalSize bytes")
@@ -613,15 +614,35 @@ class RapidsBufferCatalog extends AutoCloseable with Arm with Logging {
         if (!removed) {
           val spillCallback = buffer.getSpillCallback
           spillCallback(buffer.storageTier, spillStore.tier, buffer.size)
-          val newBuffer =
-            spillStore.copyBuffer(buffer, buffer.getMemoryBuffer, stream)
-          registerNewBuffer(newBuffer)
+          // about to create a new buffer in spillStore
+          val spillStoreMaxSize = spillStore.getMaxSize
+          if (spillStoreMaxSize.isDefined) {
+            val maybeAmountSpilled =
+              synchronousSpill(spillStore, math.max(spillStoreMaxSize.get - buffer.size, 0))
+            // TODO: need to put this next part in some function that can switch on tier
+            maybeAmountSpilled.foreach { amountSpilled =>
+              if (amountSpilled != 0) {
+                logInfo(s"Spilled $amountSpilled bytes from the ${spillStore.name} store")
+                TrampolineUtil.incTaskMetricsDiskBytesSpilled(amountSpilled)
+              }
+            }
+            var newBuffer: spillStore.RapidsBufferBase = null
+            while (newBuffer == null) {
+              newBuffer = spillStore.copyBuffer(buffer, buffer.getMemoryBuffer, stream)
+              // TODO: we want this behavior only for the host store I think
+              // not the disk
+              if (newBuffer == null) {
+                synchronousSpill(spillStore, math.max(spillStore.currentSize - buffer.size, 0))
+              }
+            }
+            registerNewBuffer(newBuffer)
+          }
+          removeBufferTier(buffer.id, buffer.storageTier)
+        } else {
+          logDebug(s"Skipping spilling $buffer ${buffer.id} to ${spillStore.name} as it is " +
+            s"already stored in multiple tiers")
         }
-        removeBufferTier(buffer.id, buffer.storageTier)
       }
-    } else {
-      logDebug(s"Skipping spilling $buffer ${buffer.id} to ${spillStore.name} as it is " +
-        s"already stored in multiple tiers")
     }
   }
 
@@ -835,3 +856,4 @@ object RapidsBufferCatalog extends Logging with Arm {
 
   def getDiskBlockManager(): RapidsDiskBlockManager = diskBlockManager
 }
+
