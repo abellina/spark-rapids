@@ -19,6 +19,7 @@ package com.nvidia.spark.rapids
 import java.io.File
 import java.math.RoundingMode
 import ai.rapids.cudf.{ContiguousTable, Cuda, HostColumnVector, HostMemoryBuffer, MemoryBuffer, Table}
+import com.nvidia.spark.rapids.spill.RapidsBufferStore
 import org.mockito.{ArgumentCaptor, ArgumentMatchers}
 import org.mockito.ArgumentMatchers.any
 import org.mockito.Mockito.{never, spy, times, verify, when}

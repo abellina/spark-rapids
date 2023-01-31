@@ -22,6 +22,7 @@ import scala.collection.mutable.ArrayBuffer
 import ai.rapids.cudf.{ContiguousTable, Cuda, DeviceMemoryBuffer, HostMemoryBuffer, MemoryBuffer, Table}
 import com.nvidia.spark.rapids.StorageTier.StorageTier
 import com.nvidia.spark.rapids.format.TableMeta
+import com.nvidia.spark.rapids.spill.RapidsBufferStore
 import org.mockito.ArgumentCaptor
 import org.mockito.Mockito.{spy, verify}
 import org.scalatest.FunSuite

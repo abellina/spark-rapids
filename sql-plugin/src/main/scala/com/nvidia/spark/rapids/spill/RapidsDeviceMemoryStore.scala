@@ -14,11 +14,12 @@
  * limitations under the License.
  */
 
-package com.nvidia.spark.rapids
+package com.nvidia.spark.rapids.spill
 
 import ai.rapids.cudf.{Cuda, DeviceMemoryBuffer, HostMemoryBuffer, MemoryBuffer}
-import com.nvidia.spark.rapids.StorageTier.StorageTier
+import com.nvidia.spark.rapids.Arm
 import com.nvidia.spark.rapids.format.TableMeta
+import com.nvidia.spark.rapids.spill.StorageTier.StorageTier
 
 /**
  * Buffer storage using device memory.

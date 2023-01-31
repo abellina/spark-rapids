@@ -21,6 +21,7 @@ import java.lang.management.ManagementFactory
 import java.util.concurrent.atomic.AtomicLong
 
 import ai.rapids.cudf.{Cuda, NvtxColor, NvtxRange, Rmm, RmmEventHandler}
+import com.nvidia.spark.rapids.spill.{RapidsBufferCatalog, RapidsDeviceMemoryStore}
 import com.sun.management.HotSpotDiagnosticMXBean
 
 import org.apache.spark.internal.Logging

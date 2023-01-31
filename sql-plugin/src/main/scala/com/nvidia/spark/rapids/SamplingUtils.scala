@@ -101,8 +101,7 @@ object SamplingUtils extends Arm {
           if (runningCb == null) {
             runningCb = SpillableColumnarBatch(
               GpuColumnVector.from(selected, GpuColumnVector.extractTypes(cb)),
-              SpillPriorities.ACTIVE_ON_DECK_PRIORITY,
-              RapidsBuffer.defaultSpillCallback)
+              SpillPriorities.ACTIVE_ON_DECK_PRIORITY)
           } else {
             val concat = withResource(runningCb) { spb =>
               runningCb = null
@@ -115,8 +114,7 @@ object SamplingUtils extends Arm {
             withResource(concat) { concat =>
               runningCb = SpillableColumnarBatch(
                 GpuColumnVector.from(concat, GpuColumnVector.extractTypes(cb)),
-                SpillPriorities.ACTIVE_ON_DECK_PRIORITY,
-                RapidsBuffer.defaultSpillCallback)
+                SpillPriorities.ACTIVE_ON_DECK_PRIORITY)
             }
           }
         }
@@ -191,8 +189,7 @@ object SamplingUtils extends Arm {
             rowsSaved = selected.getRowCount
             runningCb = SpillableColumnarBatch(
               GpuColumnVector.from(selected, GpuColumnVector.extractTypes(cb)),
-              SpillPriorities.ACTIVE_ON_DECK_PRIORITY,
-              RapidsBuffer.defaultSpillCallback)
+              SpillPriorities.ACTIVE_ON_DECK_PRIORITY)
           } else {
             withResource(runningCb) { spb =>
               runningCb = null
@@ -209,8 +206,7 @@ object SamplingUtils extends Arm {
                   rowsSaved = concat.getRowCount
                   runningCb = SpillableColumnarBatch(
                     GpuColumnVector.from(concat, GpuColumnVector.extractTypes(cb)),
-                    SpillPriorities.ACTIVE_ON_DECK_PRIORITY,
-                    RapidsBuffer.defaultSpillCallback)
+                    SpillPriorities.ACTIVE_ON_DECK_PRIORITY)
                 }
               }
             }

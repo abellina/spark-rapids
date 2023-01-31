@@ -20,6 +20,8 @@ import scala.collection.{mutable, SeqLike}
 import scala.collection.generic.CanBuildFrom
 import scala.reflect.ClassTag
 
+import com.nvidia.spark.rapids.spill.RapidsBuffer
+
 import org.apache.spark.sql.catalyst.expressions.Expression
 import org.apache.spark.sql.vectorized.ColumnarBatch
 

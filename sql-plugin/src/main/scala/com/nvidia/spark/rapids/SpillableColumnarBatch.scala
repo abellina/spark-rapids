@@ -17,7 +17,7 @@
 package com.nvidia.spark.rapids
 
 import ai.rapids.cudf.{ContiguousTable, DeviceMemoryBuffer}
-
+import com.nvidia.spark.rapids.spill.{RapidsBufferCatalog, RapidsBufferHandle}
 import org.apache.spark.TaskContext
 import org.apache.spark.sql.types.DataType
 import org.apache.spark.sql.vectorized.ColumnarBatch
@@ -120,7 +120,7 @@ object SpillableColumnarBatch extends Arm {
    */
   def apply(batch: ColumnarBatch,
       priority: Long,
-      spillCallback: SpillCallback): SpillableColumnarBatch = {
+      spillCallback: SpillCallback = RapidsBuffer.defaultSpillCallback): SpillableColumnarBatch = {
     val numRows = batch.numRows()
     if (batch.numCols() <= 0) {
       // We consumed it
@@ -150,7 +150,7 @@ object SpillableColumnarBatch extends Arm {
       ct: ContiguousTable,
       sparkTypes: Array[DataType],
       priority: Long,
-      spillCallback: SpillCallback): SpillableColumnarBatch = {
+      spillCallback: SpillCallback = RapidsBuffer.defaultSpillCallback): SpillableColumnarBatch = {
     val handle = RapidsBufferCatalog.addContiguousTable(ct, priority, spillCallback)
     new SpillableColumnarBatchImpl(
       handle,

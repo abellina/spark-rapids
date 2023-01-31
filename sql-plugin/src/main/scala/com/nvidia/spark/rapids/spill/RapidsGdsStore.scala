@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-package com.nvidia.spark.rapids
+package com.nvidia.spark.rapids.spill
 
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
@@ -23,9 +23,10 @@ import java.util.function.BiFunction
 import scala.collection.mutable.ArrayBuffer
 
 import ai.rapids.cudf._
+import com.nvidia.spark.rapids.Arm
 import com.nvidia.spark.rapids.RapidsPluginImplicits._
-import com.nvidia.spark.rapids.StorageTier.StorageTier
 import com.nvidia.spark.rapids.format.TableMeta
+import com.nvidia.spark.rapids.spill.StorageTier.StorageTier
 
 import org.apache.spark.sql.rapids.{RapidsDiskBlockManager, TempSpillBufferId}
 

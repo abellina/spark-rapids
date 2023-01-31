@@ -14,13 +14,14 @@
  * limitations under the License.
  */
 
-package com.nvidia.spark.rapids
+package com.nvidia.spark.rapids.spill
 
 import java.io.File
 
 import ai.rapids.cudf.{Cuda, DeviceMemoryBuffer, MemoryBuffer}
-import com.nvidia.spark.rapids.StorageTier.StorageTier
+import com.nvidia.spark.rapids.{Arm, GpuMetric, NoopMetric}
 import com.nvidia.spark.rapids.format.TableMeta
+import com.nvidia.spark.rapids.spill.StorageTier.StorageTier
 
 import org.apache.spark.sql.rapids.RapidsDiskBlockManager
 

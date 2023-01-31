@@ -704,8 +704,6 @@ class GpuDynamicPartitionDataConcurrentWriter(
 
   private val outDataTypes = description.dataColumns.map(_.dataType).toArray
 
-  val spillCallback = RapidsBuffer.defaultSpillCallback
-
   val partitionFlushSize = if (description.concurrentWriterPartitionFlushSize <= 0) {
     // if the property is equal or less than 0, use default value of parquet or orc
     val extension = description.outputWriterFactory
@@ -920,7 +918,7 @@ class GpuDynamicPartitionDataConcurrentWriter(
                 val currWriterStatus = concurrentWriters(partitionStr)
                 // create SpillableColumnarBatch to take the owner of `outputCb`
                 currWriterStatus.tableCaches += SpillableColumnarBatch(
-                  outputCb, SpillPriorities.ACTIVE_ON_DECK_PRIORITY, spillCallback)
+                  outputCb, SpillPriorities.ACTIVE_ON_DECK_PRIORITY)
                 currWriterStatus.deviceBytes += GpuColumnVector.getTotalDeviceMemoryUsed(outputCb)
               }
             }

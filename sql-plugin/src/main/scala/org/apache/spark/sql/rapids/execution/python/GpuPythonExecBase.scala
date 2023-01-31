@@ -18,6 +18,7 @@ package org.apache.spark.sql.rapids.execution.python
 
 import com.nvidia.spark.rapids._
 import com.nvidia.spark.rapids.GpuMetric._
+import com.nvidia.spark.rapids.spill.SpillCallback
 
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.catalyst.InternalRow

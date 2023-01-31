@@ -14,15 +14,16 @@
  * limitations under the License.
  */
 
-package com.nvidia.spark.rapids
+package com.nvidia.spark.rapids.spill
 
 import java.io.{File, FileOutputStream}
 import java.nio.channels.FileChannel.MapMode
 import java.util.concurrent.ConcurrentHashMap
 
 import ai.rapids.cudf.{Cuda, HostMemoryBuffer, MemoryBuffer}
-import com.nvidia.spark.rapids.StorageTier.StorageTier
+import com.nvidia.spark.rapids.HostByteBufferIterator
 import com.nvidia.spark.rapids.format.TableMeta
+import com.nvidia.spark.rapids.spill.StorageTier.StorageTier
 
 import org.apache.spark.sql.rapids.RapidsDiskBlockManager
 
