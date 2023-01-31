@@ -14,15 +14,15 @@
  * limitations under the License.
  */
 
-package com.nvidia.spark.rapids
+package com.nvidia.spark.rapids.spill
 
 import java.util.concurrent.ConcurrentHashMap
 import java.util.function.BiFunction
 
 import ai.rapids.cudf.{ContiguousTable, Cuda, DeviceMemoryBuffer, HostMemoryBuffer, MemoryBuffer, NvtxColor, NvtxRange, Rmm, Table}
 import com.nvidia.spark.rapids.RapidsBufferCatalog.getExistingRapidsBufferAndAcquire
+import com.nvidia.spark.rapids.{Arm, DeviceMemoryEventHandler, GpuColumnVectorFromBuffer, GpuCompressedColumnVector, GpuMetric, GpuSemaphore, MetaUtils, RapidsConf}
 import com.nvidia.spark.rapids.RapidsPluginImplicits._
-import com.nvidia.spark.rapids.StorageTier.StorageTier
 import com.nvidia.spark.rapids.format.TableMeta
 
 import org.apache.spark.{SparkConf, SparkEnv}

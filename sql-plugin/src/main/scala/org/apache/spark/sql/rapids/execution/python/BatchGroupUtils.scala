@@ -21,6 +21,7 @@ import scala.collection.mutable
 import ai.rapids.cudf
 import com.nvidia.spark.rapids._
 import com.nvidia.spark.rapids.RapidsPluginImplicits._
+import com.nvidia.spark.rapids.spill.SpillCallback
 
 import org.apache.spark.TaskContext
 import org.apache.spark.sql.catalyst.expressions._
@@ -28,7 +29,6 @@ import org.apache.spark.sql.catalyst.expressions.codegen.GenerateOrdering
 import org.apache.spark.sql.execution.SparkPlan
 import org.apache.spark.sql.types.StructType
 import org.apache.spark.sql.vectorized.ColumnarBatch
-
 
 /**
  * A helper class to pack the group related items for the Python input.

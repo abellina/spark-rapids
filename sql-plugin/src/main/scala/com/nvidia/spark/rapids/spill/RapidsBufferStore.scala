@@ -14,16 +14,17 @@
  * limitations under the License.
  */
 
-package com.nvidia.spark.rapids
+package com.nvidia.spark.rapids.spill
 
 import java.util.Comparator
 
 import scala.collection.mutable
 
 import ai.rapids.cudf.{BaseDeviceMemoryBuffer, Cuda, DeviceMemoryBuffer, HostMemoryBuffer, MemoryBuffer}
+import com.nvidia.spark.rapids.{Arm, HashedPriorityQueue}
 import com.nvidia.spark.rapids.RapidsPluginImplicits._
-import com.nvidia.spark.rapids.StorageTier.StorageTier
 import com.nvidia.spark.rapids.format.TableMeta
+import com.nvidia.spark.rapids.spill.StorageTier.StorageTier
 
 import org.apache.spark.internal.Logging
 

@@ -20,9 +20,8 @@ import java.io.File
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.function.IntUnaryOperator
-
 import com.nvidia.spark.rapids.RapidsBufferId
-
+import com.nvidia.spark.rapids.spill.RapidsBufferId
 import org.apache.spark.storage.TempLocalBlockId
 
 object TempSpillBufferId {

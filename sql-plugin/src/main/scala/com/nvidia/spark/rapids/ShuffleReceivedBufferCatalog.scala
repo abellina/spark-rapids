@@ -104,7 +104,7 @@ class ShuffleReceivedBufferCatalog(
    */
   def addDegenerateRapidsBuffer(
       meta: TableMeta,
-      spillCallback: SpillCallback): RapidsBufferHandle = {
+      spillCallback: SpillCallback = RapidsBuffer.defaultSpillCallback): RapidsBufferHandle = {
     val bufferId = nextShuffleReceivedBufferId()
     catalog.registerDegenerateBuffer(bufferId, meta, spillCallback)
   }
