@@ -16,8 +16,9 @@
 
 package com.nvidia.spark.rapids
 
-import ai.rapids.cudf.{ColumnVector, ColumnView, DeviceMemoryBuffer, DType, GatherMap, NvtxColor, NvtxRange, OrderByArg, OutOfBoundsPolicy, Scalar, Table}
-
+import ai.rapids.cudf.{ColumnVector, ColumnView, DType, DeviceMemoryBuffer, GatherMap, NvtxColor, NvtxRange, OrderByArg, OutOfBoundsPolicy, Scalar, Table}
+import com.nvidia.spark.rapids
+import com.nvidia.spark.rapids.spill.{SpillCallback, SpillPriorities}
 import org.apache.spark.sql.types._
 import org.apache.spark.sql.vectorized.ColumnarBatch
 
@@ -292,7 +293,7 @@ class LazySpillableColumnarBatchImpl(
     if (spill.isEmpty && cached.isDefined) {
       withResource(new NvtxRange("spill batch " + name, NvtxColor.RED)) { _ =>
         // First time we need to allow for spilling
-        spill = Some(SpillableColumnarBatch(cached.get,
+        spill = Some(rapids.SpillableColumnarBatch(cached.get,
           SpillPriorities.ACTIVE_ON_DECK_PRIORITY,
           spillCallback))
         // Putting data in a SpillableColumnarBatch takes ownership of it.
@@ -368,7 +369,7 @@ class LazySpillableGatherMapImpl(
     if (spill.isEmpty && cached.isDefined) {
       withResource(new NvtxRange("spill map " + name, NvtxColor.RED)) { _ =>
         // First time we need to allow for spilling
-        spill = Some(SpillableBuffer(cached.get,
+        spill = Some(rapids.SpillableBuffer(cached.get,
           SpillPriorities.ACTIVE_ON_DECK_PRIORITY,
           spillCallback))
         // Putting data in a SpillableBuffer takes ownership of it.

@@ -17,9 +17,9 @@
 package com.nvidia.spark.rapids
 
 import scala.collection.mutable
-
 import ai.rapids.cudf.{ColumnVector, NvtxColor, Table}
-
+import com.nvidia.spark.rapids
+import com.nvidia.spark.rapids.spill.{SpillCallback, SpillPriorities}
 import org.apache.spark.TaskContext
 import org.apache.spark.sql.catalyst.expressions.{Attribute, SortOrder}
 import org.apache.spark.sql.types.DataType
@@ -176,7 +176,7 @@ class GpuKeyBatchingIterator(
               peakDevMemory.set(Math.max(peakDevMemory.value, cbSize))
               // Everything is for a single key, so save it away and try the next batch...
               pending +=
-                  SpillableColumnarBatch(GpuColumnVector.incRefCounts(cb),
+                  rapids.SpillableColumnarBatch(GpuColumnVector.incRefCounts(cb),
                     SpillPriorities.ACTIVE_ON_DECK_PRIORITY, spillCallback)
               pendingSize += cbSize
             } else {
@@ -189,7 +189,7 @@ class GpuKeyBatchingIterator(
                   val savedSize = tables(1).getBuffer.getLength
                   peak += savedSize
                   pending +=
-                      SpillableColumnarBatch(tables(1), types,
+                      rapids.SpillableColumnarBatch(tables(1), types,
                         SpillPriorities.ACTIVE_ON_DECK_PRIORITY, spillCallback)
                   pendingSize += savedSize
                   numOutputRows += ret.numRows()

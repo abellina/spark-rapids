@@ -14,15 +14,19 @@
  * limitations under the License.
  */
 
-package com.nvidia.spark.rapids
+package com.nvidia.spark.rapids.spill
 
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.function.{Consumer, IntUnaryOperator}
+
 import scala.collection.mutable.ArrayBuffer
+
 import ai.rapids.cudf.{ContiguousTable, Cuda, DeviceMemoryBuffer}
+import com.nvidia.spark.rapids.{Arm, GpuDeviceManager}
 import com.nvidia.spark.rapids.format.TableMeta
+
 import org.apache.spark.SparkEnv
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.rapids.RapidsDiskBlockManager

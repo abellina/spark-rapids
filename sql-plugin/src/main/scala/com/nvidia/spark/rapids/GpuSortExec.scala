@@ -23,8 +23,9 @@ import scala.collection.mutable.{ArrayBuffer, ArrayStack}
 import ai.rapids.cudf.{ColumnVector, ContiguousTable, NvtxColor, NvtxRange, Table}
 import com.nvidia.spark.rapids.GpuMetric._
 import com.nvidia.spark.rapids.shims.ShimUnaryExecNode
-
+import com.nvidia.spark.rapids.spill.{SpillCallback, SpillPriorities}
 import org.apache.spark.TaskContext
+
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.expressions.{Attribute, SortOrder, UnsafeProjection, UnsafeRow}

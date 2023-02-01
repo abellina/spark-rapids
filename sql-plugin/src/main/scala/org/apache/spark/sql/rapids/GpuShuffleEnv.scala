@@ -17,9 +17,8 @@
 package org.apache.spark.sql.rapids
 
 import java.util.Locale
-
 import com.nvidia.spark.rapids._
-
+import com.nvidia.spark.rapids.spill.{RapidsBufferCatalog, ShuffleBufferCatalog, ShuffleReceivedBufferCatalog}
 import org.apache.spark.SparkEnv
 import org.apache.spark.internal.Logging
 
