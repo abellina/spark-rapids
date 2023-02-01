@@ -688,6 +688,7 @@ class RapidsBufferCatalog(
           sparkTypes)
       }
     } else {
+      // degenerate
       val rowCount = meta.rowCount
       val packedMeta = meta.packedMetaAsByteBuffer()
       if (packedMeta != null) {
