@@ -17,11 +17,11 @@
 package com.nvidia.spark.rapids
 
 import scala.collection.mutable.ArrayBuffer
-
 import ai.rapids.cudf.{Cuda, NvtxColor, Table}
+import com.nvidia.spark.rapids
 import com.nvidia.spark.rapids.RapidsPluginImplicits._
 import com.nvidia.spark.rapids.shims.{ShimExpression, ShimUnaryExecNode}
-
+import com.nvidia.spark.rapids.spill.{SpillCallback, SpillPriorities}
 import org.apache.spark.TaskContext
 import org.apache.spark.internal.Logging
 import org.apache.spark.rdd.RDD
@@ -528,7 +528,7 @@ class GpuCoalesceIterator(iter: Iterator[ColumnarBatch],
   }
 
   override def addBatchToConcat(batch: ColumnarBatch): Unit =
-    batches.append(SpillableColumnarBatch(batch, SpillPriorities.ACTIVE_BATCHING_PRIORITY,
+    batches.append(rapids.SpillableColumnarBatch(batch, SpillPriorities.ACTIVE_BATCHING_PRIORITY,
       spillCallback))
 
   protected def popAll(): Array[ColumnarBatch] = {
@@ -560,7 +560,7 @@ class GpuCoalesceIterator(iter: Iterator[ColumnarBatch],
     closeOnExcept(batch) { _ =>
       assert(onDeck.isEmpty)
     }
-    onDeck = Some(SpillableColumnarBatch(batch, SpillPriorities.ACTIVE_ON_DECK_PRIORITY,
+    onDeck = Some(rapids.SpillableColumnarBatch(batch, SpillPriorities.ACTIVE_ON_DECK_PRIORITY,
       spillCallback))
   }
 

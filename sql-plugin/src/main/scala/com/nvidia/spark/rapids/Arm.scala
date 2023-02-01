@@ -16,8 +16,8 @@
 package com.nvidia.spark.rapids
 
 import scala.collection.mutable.ArrayBuffer
-
 import com.nvidia.spark.rapids.RapidsPluginImplicits._
+import com.nvidia.spark.rapids.spill.RapidsBuffer
 
 /** Implementation of the automatic-resource-management pattern */
 trait Arm {

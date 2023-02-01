@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-package com.nvidia.spark.rapids
+package com.nvidia.spark.rapids.spill
 
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
@@ -23,6 +23,7 @@ import java.util.function.IntUnaryOperator
 
 import ai.rapids.cudf.DeviceMemoryBuffer
 import com.nvidia.spark.rapids.format.TableMeta
+import com.nvidia.spark.rapids.Arm
 
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.rapids.RapidsDiskBlockManager
