@@ -53,8 +53,6 @@ class ShuffleBufferCatalog(
     catalog: RapidsBufferCatalog,
     diskBlockManager: RapidsDiskBlockManager) extends Arm with Logging {
 
-  private val deviceStore = RapidsBufferCatalog.getDeviceStorage
-
   private val bufferIdToHandle = new ConcurrentHashMap[RapidsBufferId, RapidsBufferHandle]()
 
   private def trackCachedHandle(

@@ -28,6 +28,8 @@ import org.apache.spark.storage.{BlockId, TempLocalBlockId}
 class RapidsDiskBlockManager(conf: SparkConf) {
   private[this] val blockManager = new ShimDiskBlockManager(conf, true)
 
+  def getFile(blockId: BlockId): File = blockManager.getFile(blockId)
+
   def getFile(uuid: UUID): File = blockManager.getFile(TempLocalBlockId(uuid))
 
   def getFile(file: String): File = blockManager.getFile(file)
