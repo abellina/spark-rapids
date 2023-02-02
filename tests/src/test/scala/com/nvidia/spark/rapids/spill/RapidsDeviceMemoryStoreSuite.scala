@@ -14,19 +14,22 @@
  * limitations under the License.
  */
 
-package com.nvidia.spark.rapids
+package com.nvidia.spark.rapids.spill
 
 import java.io.File
 import java.math.RoundingMode
+
 import scala.collection.mutable.ArrayBuffer
+
 import ai.rapids.cudf.{ContiguousTable, Cuda, DeviceMemoryBuffer, HostMemoryBuffer, MemoryBuffer, Table}
-import com.nvidia.spark.rapids.StorageTier.StorageTier
+import com.nvidia.spark.rapids.{Arm, GpuColumnVector, MetaUtils, TestUtils}
 import com.nvidia.spark.rapids.format.TableMeta
-import com.nvidia.spark.rapids.spill.RapidsBufferStore
+import com.nvidia.spark.rapids.spill.StorageTier.StorageTier
 import org.mockito.ArgumentCaptor
 import org.mockito.Mockito.{spy, verify}
 import org.scalatest.FunSuite
 import org.scalatest.mockito.MockitoSugar
+
 import org.apache.spark.sql.rapids.RapidsDiskBlockManager
 import org.apache.spark.sql.types.{DataType, DecimalType, DoubleType, IntegerType, StringType}
 
@@ -269,7 +272,7 @@ class RapidsDeviceMemoryStoreSuite extends FunSuite with Arm with MockitoSugar {
     val bufferSizes = new Array[Long](spillPriorities.length)
     withResource(new RapidsDeviceMemoryStore) { store =>
       val catalog = new RapidsBufferCatalog(store)
-      store.setSpillStore(spillStore)
+      catalog.setSpillStorage(store, spillStore)
       spillPriorities.indices.foreach { i =>
         withResource(buildContiguousTable()) { ct =>
           bufferSizes(i) = ct.getBuffer.getLength
@@ -313,7 +316,7 @@ class RapidsDeviceMemoryStoreSuite extends FunSuite with Arm with MockitoSugar {
   class MockSpillStore extends RapidsBufferStore(StorageTier.HOST) with Arm {
     val spilledBuffers = new ArrayBuffer[RapidsBufferId]
 
-    override protected def createBuffer(
+    override protected def tryCreateBuffer(
         b: RapidsBuffer,
         m: MemoryBuffer,
         s: Cuda.Stream): RapidsBufferBase = {
@@ -332,9 +335,9 @@ class RapidsDeviceMemoryStoreSuite extends FunSuite with Arm with MockitoSugar {
       override def getMemoryBuffer: MemoryBuffer =
         throw new UnsupportedOperationException
 
-      override def getSpillCallback: SpillCallback = RapidsBuffer.defaultSpillCallback
+      override def getSpillCallback: SpillMetricsCallback  = RapidsBuffer.defaultSpillCallback
 
-      override def setSpillCallback(spillCallback: SpillCallback): Unit = {}
+      override def setSpillCallback(spillCallback: SpillMetricsCallback): Unit = {}
     }
   }
 }

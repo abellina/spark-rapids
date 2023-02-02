@@ -20,9 +20,10 @@ import java.io.File
 import java.math.RoundingMode
 
 import ai.rapids.cudf.{ColumnVector, Cuda, DType, Table}
+import com.nvidia.spark.rapids.spill.RapidsBufferCatalog
 import org.scalatest.FunSuite
-
 import org.apache.spark.SparkConf
+
 import org.apache.spark.sql.rapids.{GpuShuffleEnv, RapidsDiskBlockManager}
 import org.apache.spark.sql.rapids.execution.TrampolineUtil
 import org.apache.spark.sql.types.{DecimalType, DoubleType, IntegerType, StringType}
@@ -209,9 +210,4 @@ class GpuPartitioningSuite extends FunSuite with Arm {
       }
     }
   }
-}
-
-case class MockRapidsBufferId(tableId: Int) extends RapidsBufferId {
-  override def getDiskPath(diskBlockManager: RapidsDiskBlockManager): File =
-    throw new UnsupportedOperationException
 }

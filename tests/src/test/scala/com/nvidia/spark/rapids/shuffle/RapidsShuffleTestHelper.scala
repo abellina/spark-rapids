@@ -22,8 +22,9 @@ import java.util.concurrent.Executor
 import scala.collection.mutable.ArrayBuffer
 
 import ai.rapids.cudf.{ColumnVector, ContiguousTable, DeviceMemoryBuffer, HostMemoryBuffer}
-import com.nvidia.spark.rapids.{Arm, GpuColumnVector, MetaUtils, RapidsBufferHandle, RapidsConf, RapidsDeviceMemoryStore, ShuffleMetadata, ShuffleReceivedBufferCatalog}
+import com.nvidia.spark.rapids.{Arm, GpuColumnVector, MetaUtils, RapidsConf, ShuffleMetadata}
 import com.nvidia.spark.rapids.format.TableMeta
+import com.nvidia.spark.rapids.spill.{RapidsBufferHandle, ShuffleReceivedBufferCatalog}
 import org.mockito.ArgumentCaptor
 import org.mockito.ArgumentMatchers.any
 import org.mockito.Mockito.{spy, when}
@@ -61,7 +62,6 @@ class RapidsShuffleTestHelper extends FunSuite
   var mockCopyExecutor: Executor = _
   var mockBssExecutor: Executor = _
   var mockHandler: RapidsShuffleFetchHandler = _
-  var mockStorage: RapidsDeviceMemoryStore = _
   var mockCatalog: ShuffleReceivedBufferCatalog = _
   var mockConf: RapidsConf = _
   var testMetricsUpdater: TestShuffleMetricsUpdater = _
