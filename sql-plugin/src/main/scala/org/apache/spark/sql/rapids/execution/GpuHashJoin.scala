@@ -19,7 +19,7 @@ import ai.rapids.cudf.{ColumnView, DType, GatherMap, GroupByAggregation, NullEqu
 import ai.rapids.cudf.ast.CompiledExpression
 import com.nvidia.spark.rapids._
 import com.nvidia.spark.rapids.RapidsPluginImplicits.AutoCloseableProducingSeq
-import com.nvidia.spark.rapids.spill.SpillCallback
+import com.nvidia.spark.rapids.spill.SpillMetricsCallback
 import org.apache.spark.sql.catalyst.expressions.{Attribute, AttributeReference, Expression, NamedExpression}
 import org.apache.spark.sql.catalyst.plans.{Cross, ExistenceJoin, FullOuter, Inner, InnerLike, JoinType, LeftAnti, LeftExistence, LeftOuter, LeftSemi, RightOuter}
 import org.apache.spark.sql.execution.SparkPlan
@@ -237,7 +237,7 @@ abstract class BaseHashJoinIterator(
     targetSize: Long,
     joinType: JoinType,
     buildSide: GpuBuildSide,
-    spillCallback: SpillCallback,
+    spillCallback: SpillMetricsCallback,
     opTime: GpuMetric,
     joinTime: GpuMetric)
     extends SplittableJoinIterator(
@@ -396,7 +396,7 @@ class HashJoinIterator(
     val joinType: JoinType,
     val buildSide: GpuBuildSide,
     val compareNullsEqual: Boolean, // This is a workaround to how cudf support joins for structs
-    private val spillCallback: SpillCallback,
+    private val spillCallback: SpillMetricsCallback,
     opTime: GpuMetric,
     private val joinTime: GpuMetric)
     extends BaseHashJoinIterator(
@@ -450,7 +450,7 @@ class ConditionalHashJoinIterator(
     joinType: JoinType,
     buildSide: GpuBuildSide,
     compareNullsEqual: Boolean, // This is a workaround to how cudf support joins for structs
-    spillCallback: SpillCallback,
+    spillCallback: SpillMetricsCallback,
     opTime: GpuMetric,
     joinTime: GpuMetric)
     extends BaseHashJoinIterator(
@@ -526,7 +526,7 @@ class HashFullJoinIterator(
     targetSize: Long,
     buildSide: GpuBuildSide,
     compareNullsEqual: Boolean, // This is a workaround to how cudf support joins for structs
-    spillCallback: SpillCallback,
+    spillCallback: SpillMetricsCallback,
     opTime: GpuMetric,
     joinTime: GpuMetric)
     extends BaseHashJoinIterator(
@@ -927,7 +927,7 @@ trait GpuHashJoin extends GpuExec {
       builtBatch: ColumnarBatch,
       stream: Iterator[ColumnarBatch],
       targetSize: Long,
-      spillCallback: SpillCallback,
+      spillCallback: SpillMetricsCallback,
       numOutputRows: GpuMetric,
       joinOutputRows: GpuMetric,
       numOutputBatches: GpuMetric,

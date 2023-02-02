@@ -16,7 +16,7 @@
 
 package org.apache.spark.sql.rapids.shims
 
-import com.nvidia.spark.rapids.ShuffleBufferCatalog
+import com.nvidia.spark.rapids.spill.ShuffleBufferCatalog
 
 import org.apache.spark.network.buffer.ManagedBuffer
 import org.apache.spark.network.shuffle.MergedBlockMeta

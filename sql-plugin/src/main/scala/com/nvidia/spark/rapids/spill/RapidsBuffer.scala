@@ -57,7 +57,7 @@ object StorageTier extends Enumeration {
   val GDS: StorageTier = Value(3, "GPUDirect Storage")
 }
 
-abstract class SpillCallback extends Serializable {
+abstract class SpillMetricsCallback extends Serializable {
 
   /**
    * Callback type for when a batch is spilled from one storage tier to another. This is
@@ -79,7 +79,7 @@ object RapidsBuffer {
   /**
    * A default NOOP callback for when a buffer is spilled
    */
-  val defaultSpillCallback: SpillCallback = new SpillCallback {
+  val defaultSpillCallback: SpillMetricsCallback = new SpillMetricsCallback {
     override def apply(from: StorageTier, to: StorageTier, amount: Long): Unit = ()
 
     override def semaphoreWaitTime: GpuMetric = NoopMetric
@@ -163,7 +163,7 @@ trait RapidsBuffer extends AutoCloseable {
    * Gets the spill metrics callback currently associated with this buffer.
    * @return the current callback
    */
-  def getSpillCallback: SpillCallback
+  def getSpillCallback: SpillMetricsCallback
 
   /**
    * Set the spill priority for this buffer. Lower values are higher priority
@@ -179,7 +179,7 @@ trait RapidsBuffer extends AutoCloseable {
    * @note should only be called from the buffer catalog
    * @param spillCallback the new callback
    */
-  def setSpillCallback(spillCallback: SpillCallback): Unit
+  def setSpillCallback(spillCallback: SpillMetricsCallback): Unit
 }
 
 /**
@@ -213,11 +213,11 @@ sealed class DegenerateRapidsBuffer(
 
   override def getSpillPriority: Long = Long.MaxValue
 
-  override val getSpillCallback: SpillCallback = RapidsBuffer.defaultSpillCallback
+  override val getSpillCallback: SpillMetricsCallback = RapidsBuffer.defaultSpillCallback
 
   override def setSpillPriority(priority: Long): Unit = {}
 
-  override def setSpillCallback(callback: SpillCallback): Unit = {}
+  override def setSpillCallback(callback: SpillMetricsCallback): Unit = {}
 
   override def close(): Unit = {}
 }

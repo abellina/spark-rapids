@@ -254,7 +254,7 @@ abstract class RapidsBufferStore(val tier: StorageTier)
       override val size: Long,
       override val meta: TableMeta,
       initialSpillPriority: Long,
-      initialSpillCallback: SpillCallback)
+      initialSpillCallback: SpillMetricsCallback)
       extends RapidsBuffer with Arm {
     private val MAX_UNSPILL_ATTEMPTS = 100
 
@@ -263,7 +263,7 @@ abstract class RapidsBufferStore(val tier: StorageTier)
     protected[this] var refcount = 0
 
     private[this] var spillPriority: Long = initialSpillPriority
-    private[this] var spillCallback: SpillCallback = initialSpillCallback
+    private[this] var spillCallback: SpillMetricsCallback = initialSpillCallback
 
     /** Release the underlying resources for this buffer. */
     protected def releaseResources(): Unit
@@ -336,9 +336,9 @@ abstract class RapidsBufferStore(val tier: StorageTier)
       spillPriority = priority
     }
 
-    override def getSpillCallback: SpillCallback = spillCallback
+    override def getSpillCallback: SpillMetricsCallback = spillCallback
 
-    override def setSpillCallback(callback: SpillCallback): Unit = {
+    override def setSpillCallback(callback: SpillMetricsCallback): Unit = {
       spillCallback = callback
     }
 

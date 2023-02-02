@@ -88,7 +88,7 @@ class ShuffleBufferCatalog(
       blockId: ShuffleBlockId,
       contigTable: ContiguousTable,
       initialSpillPriority: Long,
-      defaultSpillCallback: SpillCallback,
+      defaultSpillCallback: SpillMetricsCallback,
       needsSync: Boolean): RapidsBufferHandle = {
     val bufferId = nextShuffleBufferId(blockId)
     withResource(contigTable) { _ =>
@@ -119,7 +119,7 @@ class ShuffleBufferCatalog(
       buffer: DeviceMemoryBuffer,
       tableMeta: TableMeta,
       initialSpillPriority: Long,
-      defaultSpillCallback: SpillCallback,
+      defaultSpillCallback: SpillMetricsCallback,
       needsSync: Boolean): RapidsBufferHandle = {
     val bufferId = nextShuffleBufferId(blockId)
     // update the table metadata for the buffer ID generated above
@@ -145,7 +145,7 @@ class ShuffleBufferCatalog(
   def addDegenerateRapidsBuffer(
       blockId: ShuffleBlockId,
       meta: TableMeta,
-      spillCallback: SpillCallback): RapidsBufferHandle = {
+      spillCallback: SpillMetricsCallback): RapidsBufferHandle = {
     val bufferId = nextShuffleBufferId(blockId)
     val handle = catalog.registerDegenerateBuffer(bufferId, meta, spillCallback)
     trackCachedHandle(bufferId, handle)

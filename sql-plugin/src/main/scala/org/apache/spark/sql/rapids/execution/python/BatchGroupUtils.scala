@@ -21,9 +21,9 @@ import scala.collection.mutable
 import ai.rapids.cudf
 import com.nvidia.spark.rapids._
 import com.nvidia.spark.rapids.RapidsPluginImplicits._
-import com.nvidia.spark.rapids.spill.SpillCallback
-
+import com.nvidia.spark.rapids.spill.{SpillMetricsCallback, SpillPriorities}
 import org.apache.spark.TaskContext
+
 import org.apache.spark.sql.catalyst.expressions._
 import org.apache.spark.sql.catalyst.expressions.codegen.GenerateOrdering
 import org.apache.spark.sql.execution.SparkPlan
@@ -164,7 +164,7 @@ private[python] object BatchGroupUtils extends Arm {
       groupingOffsetsInDedup: Seq[Int],
       inputRows: GpuMetric,
       inputBatches: GpuMetric,
-      spillCallback: SpillCallback): Iterator[ColumnarBatch] = {
+      spillCallback: SpillMetricsCallback): Iterator[ColumnarBatch] = {
     val dedupRefs = GpuBindReferences.bindReferences(dedupAttrs, inputAttrs)
     val dedupIter = inputIter.map { batch =>
       // Close the original input batches.
@@ -262,7 +262,7 @@ private[python] class BatchGroupedIterator private(
     input: Iterator[ColumnarBatch],
     inputAttributes: Seq[Attribute],
     groupingIndices: Seq[Int],
-    spillCallback: SpillCallback) extends Iterator[ColumnarBatch] with Arm {
+    spillCallback: SpillMetricsCallback) extends Iterator[ColumnarBatch] with Arm {
 
   private val batchesQueue: mutable.Queue[SpillableColumnarBatch] = mutable.Queue.empty
 
@@ -329,7 +329,7 @@ private[python] object BatchGroupedIterator extends Arm {
   def apply(wrapped: Iterator[ColumnarBatch],
             inputAttributes: Seq[Attribute],
             groupingIndices: Seq[Int],
-            spillCallback: SpillCallback): Iterator[ColumnarBatch] = {
+            spillCallback: SpillMetricsCallback): Iterator[ColumnarBatch] = {
     if (wrapped.hasNext) {
       new BatchGroupedIterator(wrapped, inputAttributes, groupingIndices, spillCallback)
     } else {

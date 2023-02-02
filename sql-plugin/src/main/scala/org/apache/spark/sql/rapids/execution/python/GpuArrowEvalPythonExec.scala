@@ -26,7 +26,7 @@ import com.nvidia.spark.rapids._
 import com.nvidia.spark.rapids.RapidsPluginImplicits._
 import com.nvidia.spark.rapids.python.PythonWorkerSemaphore
 import com.nvidia.spark.rapids.shims.ShimUnaryExecNode
-import com.nvidia.spark.rapids.spill.{SpillCallback, SpillPriorities}
+import com.nvidia.spark.rapids.spill.{SpillMetricsCallback, SpillPriorities}
 import org.apache.spark.TaskContext
 import org.apache.spark.api.python._
 import org.apache.spark.rdd.RDD
@@ -50,7 +50,7 @@ class RebatchingRoundoffIterator(
     targetRoundoff: Int,
     inputRows: GpuMetric,
     inputBatches: GpuMetric,
-    spillCallback: SpillCallback)
+    spillCallback: SpillMetricsCallback)
     extends Iterator[ColumnarBatch] with Arm {
   var pending: Option[SpillableColumnarBatch] = None
 
@@ -180,7 +180,7 @@ class BatchQueue extends AutoCloseable with Arm {
     mutable.Queue[SpillableColumnarBatch]()
   private var isSet = false
 
-  def add(batch: ColumnarBatch, spillCallback: SpillCallback): Unit = synchronized {
+  def add(batch: ColumnarBatch, spillCallback: SpillMetricsCallback): Unit = synchronized {
     queue.enqueue(SpillableColumnarBatch(batch, SpillPriorities.ACTIVE_ON_DECK_PRIORITY,
       spillCallback))
     if (!isSet) {

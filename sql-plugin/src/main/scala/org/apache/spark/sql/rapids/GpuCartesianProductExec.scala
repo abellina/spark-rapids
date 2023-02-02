@@ -21,11 +21,12 @@ import java.io.{IOException, ObjectInputStream, ObjectOutputStream}
 import scala.collection.mutable
 
 import ai.rapids.cudf.{JCudfSerialization, NvtxColor, NvtxRange}
-import com.nvidia.spark.rapids.{Arm, GpuBindReferences, GpuBuildLeft, GpuColumnVector, GpuExec, GpuExpression, GpuMetric, GpuSemaphore, LazySpillableColumnarBatch, MetricsLevel, NoopMetric, SpillCallback}
+import com.nvidia.spark.rapids.{Arm, GpuBindReferences, GpuBuildLeft, GpuColumnVector, GpuExec, GpuExpression, GpuMetric, GpuSemaphore, LazySpillableColumnarBatch, MetricsLevel, NoopMetric}
 import com.nvidia.spark.rapids.RapidsPluginImplicits._
 import com.nvidia.spark.rapids.shims.ShimBinaryExecNode
-
+import com.nvidia.spark.rapids.spill.SpillMetricsCallback
 import org.apache.spark.{Dependency, NarrowDependency, Partition, SparkContext, TaskContext}
+
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.expressions.{Attribute, Expression}
@@ -117,7 +118,7 @@ class GpuCartesianRDD(
     boundCondition: Option[GpuExpression],
     numFirstTableColumns: Int,
     streamAttributes: Seq[Attribute],
-    spillCallback: SpillCallback,
+    spillCallback: SpillMetricsCallback,
     targetSize: Long,
     opTime: GpuMetric,
     joinTime: GpuMetric,

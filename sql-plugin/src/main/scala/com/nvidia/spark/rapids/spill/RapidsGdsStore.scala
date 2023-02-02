@@ -62,14 +62,14 @@ class RapidsGdsStore(
       override val size: Long,
       override val meta: TableMeta,
       spillPriority: Long,
-      spillCallback: SpillCallback)
+      spillCallback: SpillMetricsCallback)
       extends RapidsBufferBase(id, size, meta, spillPriority, spillCallback) {
     override val storageTier: StorageTier = StorageTier.GDS
   }
 
   class RapidsGdsSingleShotBuffer(
       id: RapidsBufferId, path: File, fileOffset: Long, size: Long, meta: TableMeta,
-      spillPriority: Long, spillCallback: SpillCallback)
+      spillPriority: Long, spillCallback: SpillMetricsCallback)
       extends RapidsGdsBuffer(id, size, meta, spillPriority, spillCallback) {
 
     override def getMemoryBuffer: MemoryBuffer = {
@@ -221,7 +221,7 @@ class RapidsGdsStore(
         size: Long,
         meta: TableMeta,
         spillPriority: Long,
-        spillCallback: SpillCallback,
+        spillCallback: SpillMetricsCallback,
         var isPending: Boolean = true)
         extends RapidsGdsBuffer(id, size, meta, spillPriority, spillCallback) {
 

@@ -30,9 +30,9 @@ import com.nvidia.spark.rapids._
 import com.nvidia.spark.rapids.GpuMetric._
 import com.nvidia.spark.rapids.RapidsPluginImplicits._
 import com.nvidia.spark.rapids.shims.{ShimBroadcastExchangeLike, ShimUnaryExecNode, SparkShimImpl}
-import com.nvidia.spark.rapids.spill.SpillPriorities
-
+import com.nvidia.spark.rapids.spill.{RapidsBuffer, SpillPriorities}
 import org.apache.spark.SparkException
+
 import org.apache.spark.broadcast.Broadcast
 import org.apache.spark.internal.Logging
 import org.apache.spark.launcher.SparkLauncher
@@ -118,8 +118,10 @@ class SerializeConcatHostBuffersDeserializeBatch(
       withResource(new NvtxRange("broadcast manifest batch", NvtxColor.PURPLE)) { _ =>
         try {
           val res = if (headers.isEmpty) {
-            SpillableColumnarBatch(GpuColumnVector.emptyBatchFromTypes(dataTypes),
-            SpillPriorities.ACTIVE_BATCHING_PRIORITY)
+            SpillableColumnarBatch(
+              GpuColumnVector.emptyBatchFromTypes(dataTypes),
+                SpillPriorities.ACTIVE_BATCHING_PRIORITY,
+                  RapidsBuffer.defaultSpillCallback)
           } else {
             withResource(JCudfSerialization.readTableFrom(headers.head, buffers.head)) {
               tableInfo =>
@@ -127,10 +129,12 @@ class SerializeConcatHostBuffersDeserializeBatch(
                 if (table == null) {
                   val numRows = tableInfo.getNumRows
                   SpillableColumnarBatch(new ColumnarBatch(Array.empty[ColumnVector], numRows),
-                    SpillPriorities.ACTIVE_BATCHING_PRIORITY)
+                    SpillPriorities.ACTIVE_BATCHING_PRIORITY,
+                    RapidsBuffer.defaultSpillCallback)
                 } else {
                   SpillableColumnarBatch(table, dataTypes,
-                    SpillPriorities.ACTIVE_BATCHING_PRIORITY)
+                    SpillPriorities.ACTIVE_BATCHING_PRIORITY,
+                      RapidsBuffer.defaultSpillCallback)
                 }
             }
           }

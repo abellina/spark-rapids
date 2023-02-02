@@ -23,6 +23,7 @@ import scala.collection.mutable.ArrayBuffer
 import ai.rapids.cudf.{DeviceMemoryBuffer, NvtxColor, NvtxRange}
 import com.nvidia.spark.rapids._
 import com.nvidia.spark.rapids.format.{MetadataResponse, TableMeta, TransferState}
+import com.nvidia.spark.rapids.spill.{RapidsBufferHandle, ShuffleReceivedBufferCatalog, SpillPriorities}
 
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.rapids.GpuShuffleEnv

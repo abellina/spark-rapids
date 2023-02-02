@@ -27,8 +27,9 @@ import scala.util.Random
 import scala.util.hashing.MurmurHash3
 
 import ai.rapids.cudf.{ColumnVector, Table}
-
+import com.nvidia.spark.rapids.spill.{RapidsBuffer, SpillPriorities}
 import org.apache.spark.TaskContext
+
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.vectorized.ColumnarBatch
 
@@ -101,7 +102,8 @@ object SamplingUtils extends Arm {
           if (runningCb == null) {
             runningCb = SpillableColumnarBatch(
               GpuColumnVector.from(selected, GpuColumnVector.extractTypes(cb)),
-              SpillPriorities.ACTIVE_ON_DECK_PRIORITY)
+                SpillPriorities.ACTIVE_ON_DECK_PRIORITY,
+                  RapidsBuffer.defaultSpillCallback)
           } else {
             val concat = withResource(runningCb) { spb =>
               runningCb = null
@@ -114,7 +116,8 @@ object SamplingUtils extends Arm {
             withResource(concat) { concat =>
               runningCb = SpillableColumnarBatch(
                 GpuColumnVector.from(concat, GpuColumnVector.extractTypes(cb)),
-                SpillPriorities.ACTIVE_ON_DECK_PRIORITY)
+                  SpillPriorities.ACTIVE_ON_DECK_PRIORITY,
+                    RapidsBuffer.defaultSpillCallback)
             }
           }
         }
@@ -189,7 +192,8 @@ object SamplingUtils extends Arm {
             rowsSaved = selected.getRowCount
             runningCb = SpillableColumnarBatch(
               GpuColumnVector.from(selected, GpuColumnVector.extractTypes(cb)),
-              SpillPriorities.ACTIVE_ON_DECK_PRIORITY)
+                SpillPriorities.ACTIVE_ON_DECK_PRIORITY,
+                  RapidsBuffer.defaultSpillCallback)
           } else {
             withResource(runningCb) { spb =>
               runningCb = null
@@ -206,7 +210,8 @@ object SamplingUtils extends Arm {
                   rowsSaved = concat.getRowCount
                   runningCb = SpillableColumnarBatch(
                     GpuColumnVector.from(concat, GpuColumnVector.extractTypes(cb)),
-                    SpillPriorities.ACTIVE_ON_DECK_PRIORITY)
+                      SpillPriorities.ACTIVE_ON_DECK_PRIORITY,
+                        RapidsBuffer.defaultSpillCallback)
                 }
               }
             }

@@ -21,8 +21,9 @@ import scala.collection.mutable.ArrayBuffer
 import ai.rapids.cudf.{NvtxColor, NvtxRange}
 import com.nvidia.spark.rapids._
 import com.nvidia.spark.rapids.shuffle.{RapidsShuffleIterator, RapidsShuffleTransport}
-
+import com.nvidia.spark.rapids.spill.{RapidsBufferHandle, ShuffleBufferCatalog}
 import org.apache.spark.{InterruptibleIterator, TaskContext}
+
 import org.apache.spark.internal.Logging
 import org.apache.spark.shuffle.{ShuffleReader, ShuffleReadMetricsReporter}
 import org.apache.spark.sql.types.DataType

@@ -17,7 +17,7 @@
 package com.nvidia.spark.rapids
 
 import ai.rapids.cudf.{ContiguousTable, DeviceMemoryBuffer}
-import com.nvidia.spark.rapids.spill.{RapidsBuffer, RapidsBufferCatalog, RapidsBufferHandle, SpillCallback}
+import com.nvidia.spark.rapids.spill.{RapidsBuffer, RapidsBufferCatalog, RapidsBufferHandle, SpillMetricsCallback}
 import org.apache.spark.TaskContext
 import org.apache.spark.sql.types.DataType
 import org.apache.spark.sql.vectorized.ColumnarBatch
@@ -120,7 +120,7 @@ object SpillableColumnarBatch extends Arm {
    */
   def apply(batch: ColumnarBatch,
       priority: Long,
-      spillCallback: SpillCallback = RapidsBuffer.defaultSpillCallback): SpillableColumnarBatch = {
+      spillCallback: SpillMetricsCallback): SpillableColumnarBatch = {
     val numRows = batch.numRows()
     if (batch.numCols() <= 0) {
       // We consumed it
@@ -150,7 +150,7 @@ object SpillableColumnarBatch extends Arm {
       ct: ContiguousTable,
       sparkTypes: Array[DataType],
       priority: Long,
-      spillCallback: SpillCallback = RapidsBuffer.defaultSpillCallback): SpillableColumnarBatch = {
+      spillCallback: SpillMetricsCallback): SpillableColumnarBatch = {
     val handle = RapidsBufferCatalog.addContiguousTable(ct, priority, spillCallback)
     new SpillableColumnarBatchImpl(
       handle,
@@ -162,7 +162,7 @@ object SpillableColumnarBatch extends Arm {
   private[this] def addBatch(
       batch: ColumnarBatch,
       initialSpillPriority: Long,
-      spillCallback: SpillCallback): RapidsBufferHandle = {
+      spillCallback: SpillMetricsCallback): RapidsBufferHandle = {
     withResource(batch) { batch =>
       val numColumns = batch.numCols()
       if (GpuCompressedColumnVector.isBatchCompressed(batch)) {
@@ -240,7 +240,7 @@ object SpillableBuffer extends Arm {
    */
   def apply(buffer: DeviceMemoryBuffer,
       priority: Long,
-      spillCallback: SpillCallback): SpillableBuffer = {
+      spillCallback: SpillMetricsCallback): SpillableBuffer = {
     val meta = MetaUtils.getTableMetaNoTable(buffer)
     val handle = withResource(buffer) { _ => 
       RapidsBufferCatalog.addBuffer(buffer, meta, priority, spillCallback)

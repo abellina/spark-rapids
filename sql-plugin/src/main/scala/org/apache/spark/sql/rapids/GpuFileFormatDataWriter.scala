@@ -23,9 +23,8 @@ import ai.rapids.cudf.{ColumnVector, ContiguousTable, OrderByArg, Table}
 import com.nvidia.spark.TimingUtils
 import com.nvidia.spark.rapids._
 import com.nvidia.spark.rapids.RapidsPluginImplicits._
-import com.nvidia.spark.rapids.StorageTier.StorageTier
-import com.nvidia.spark.rapids.spill.{SpillCallback, SpillPriorities}
 import com.nvidia.spark.rapids.spill.StorageTier.StorageTier
+import com.nvidia.spark.rapids.spill.{RapidsBuffer, SpillMetricsCallback, SpillPriorities}
 import org.apache.hadoop.fs.Path
 import org.apache.hadoop.mapreduce.TaskAttemptContext
 import org.apache.spark.TaskContext
@@ -797,7 +796,7 @@ class GpuDynamicPartitionDataConcurrentWriter(
     val opTime = NoopMetric
     val outputBatch = NoopMetric
     val outputRows = NoopMetric
-    val spillCallback = new SpillCallback {
+    val spillCallback = new SpillMetricsCallback {
       override def apply(from: StorageTier, to: StorageTier, amount: Long): Unit = {
       }
 
@@ -919,8 +918,10 @@ class GpuDynamicPartitionDataConcurrentWriter(
                 // convert to spillable cache and add to the pending cache
                 val currWriterStatus = concurrentWriters(partitionStr)
                 // create SpillableColumnarBatch to take the owner of `outputCb`
-                currWriterStatus.tableCaches += SpillableColumnarBatch(
-                  outputCb, SpillPriorities.ACTIVE_ON_DECK_PRIORITY)
+                currWriterStatus.tableCaches +=
+                    SpillableColumnarBatch(
+                      outputCb, SpillPriorities.ACTIVE_ON_DECK_PRIORITY,
+                        RapidsBuffer.defaultSpillCallback)
                 currWriterStatus.deviceBytes += GpuColumnVector.getTotalDeviceMemoryUsed(outputCb)
               }
             }

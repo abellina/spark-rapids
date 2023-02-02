@@ -18,9 +18,9 @@ package com.nvidia.spark.rapids
 
 import ai.rapids.cudf.{GatherMap, NvtxColor, OutOfBoundsPolicy}
 import com.nvidia.spark.rapids.RapidsPluginImplicits._
-import com.nvidia.spark.rapids.spill.SpillCallback
-
+import com.nvidia.spark.rapids.spill.{SpillMetricsCallback, SpillPriorities}
 import org.apache.spark.TaskContext
+
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.catalyst.expressions.Attribute
 import org.apache.spark.sql.catalyst.plans.{InnerLike, JoinType, LeftOuter, RightOuter}
@@ -169,7 +169,7 @@ abstract class SplittableJoinIterator(
     streamAttributes: Seq[Attribute],
     builtBatch: LazySpillableColumnarBatch,
     targetSize: Long,
-    spillCallback: SpillCallback,
+    spillCallback: SpillMetricsCallback,
     opTime: GpuMetric,
     joinTime: GpuMetric)
     extends AbstractGpuJoinIterator(

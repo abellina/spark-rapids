@@ -19,7 +19,7 @@ package com.nvidia.spark.rapids
 import ai.rapids.cudf.NvtxColor
 import com.nvidia.spark.RebaseHelper.withResource
 import com.nvidia.spark.rapids.shims.SparkShimImpl
-import com.nvidia.spark.rapids.spill.SpillCallback
+import com.nvidia.spark.rapids.spill.SpillMetricsCallback
 import com.nvidia.spark.rapids.spill.StorageTier._
 
 import org.apache.spark.internal.Logging
@@ -128,12 +128,12 @@ object GpuMetric extends Logging {
   object MODERATE_LEVEL extends MetricsLevel(1)
   object ESSENTIAL_LEVEL extends MetricsLevel(2)
 
-  def makeSpillCallback(allMetrics: Map[String, GpuMetric]): SpillCallback = {
+  def makeSpillCallback(allMetrics: Map[String, GpuMetric]): SpillMetricsCallback = {
     val spillAmount = allMetrics(SPILL_AMOUNT)
     val disk = allMetrics(SPILL_AMOUNT_DISK)
     val host = allMetrics(SPILL_AMOUNT_HOST)
     val sem = allMetrics(SEMAPHORE_WAIT_TIME)
-    new SpillCallback {
+    new SpillMetricsCallback {
       override def apply(from: StorageTier, to: StorageTier, amount: Long): Unit = {
         from match {
           case DEVICE =>

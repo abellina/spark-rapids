@@ -94,7 +94,7 @@ class RapidsDiskStore(diskBlockManager: RapidsDiskBlockManager)
       size: Long,
       meta: TableMeta,
       spillPriority: Long,
-      spillCallback: SpillCallback)
+      spillCallback: SpillMetricsCallback)
       extends RapidsBufferBase(
         id, size, meta, spillPriority, spillCallback) {
     private[this] var hostBuffer: Option[HostMemoryBuffer] = None

@@ -21,9 +21,10 @@ import java.util.concurrent.{LinkedBlockingQueue, TimeUnit}
 import scala.collection.mutable
 
 import ai.rapids.cudf.{NvtxColor, NvtxRange}
-import com.nvidia.spark.rapids.{Arm, GpuColumnVector, GpuSemaphore, NoopMetric, RapidsBufferHandle, RapidsConf, ShuffleReceivedBufferCatalog}
-
+import com.nvidia.spark.rapids.{Arm, GpuColumnVector, GpuSemaphore, NoopMetric, RapidsConf}
+import com.nvidia.spark.rapids.spill.{RapidsBufferHandle, ShuffleReceivedBufferCatalog}
 import org.apache.spark.TaskContext
+
 import org.apache.spark.internal.Logging
 import org.apache.spark.shuffle.rapids.{RapidsShuffleFetchFailedException, RapidsShuffleTimeoutException}
 import org.apache.spark.sql.rapids.{GpuShuffleEnv, ShuffleMetricsUpdater}

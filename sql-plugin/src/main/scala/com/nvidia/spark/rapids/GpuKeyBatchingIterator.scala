@@ -19,7 +19,7 @@ package com.nvidia.spark.rapids
 import scala.collection.mutable
 import ai.rapids.cudf.{ColumnVector, NvtxColor, Table}
 import com.nvidia.spark.rapids
-import com.nvidia.spark.rapids.spill.{SpillCallback, SpillPriorities}
+import com.nvidia.spark.rapids.spill.{SpillMetricsCallback, SpillPriorities}
 import org.apache.spark.TaskContext
 import org.apache.spark.sql.catalyst.expressions.{Attribute, SortOrder}
 import org.apache.spark.sql.types.DataType
@@ -43,7 +43,7 @@ class GpuKeyBatchingIterator(
     concatTime: GpuMetric,
     opTime: GpuMetric,
     peakDevMemory: GpuMetric,
-    spillCallback: SpillCallback)
+    spillCallback: SpillMetricsCallback)
     extends Iterator[ColumnarBatch] with Arm {
   private val pending = mutable.Queue[SpillableColumnarBatch]()
   private var pendingSize: Long = 0
@@ -224,7 +224,7 @@ object GpuKeyBatchingIterator {
       concatTime: GpuMetric,
       opTime: GpuMetric,
       peakDevMemory: GpuMetric,
-      spillCallback: SpillCallback): Iterator[ColumnarBatch] => GpuKeyBatchingIterator = {
+      spillCallback: SpillMetricsCallback): Iterator[ColumnarBatch] => GpuKeyBatchingIterator = {
     val sorter = new GpuSorter(unboundOrderSpec, schema)
     val types = schema.map(_.dataType)
     def makeIter(iter: Iterator[ColumnarBatch]): GpuKeyBatchingIterator = {
