@@ -45,7 +45,7 @@ class DuplicateBufferException(s: String) extends RuntimeException(s) {}
  * via the `RapidsBufferCatalog` api.
  */
 trait RapidsBufferHandle extends AutoCloseable {
-  val id: RapidsBufferId
+  private[spill] val id: RapidsBufferId
 
   /**
    * Sets the spill priority for this handle and updates the maximum priority
