@@ -87,7 +87,6 @@ class SpillableColumnarBatchImpl (
   override lazy val sizeInBytes: Long =
     RapidsBufferCatalog.getSizeInBytes(handle)
 
-
   /**
    * Set a new spill priority.
    */

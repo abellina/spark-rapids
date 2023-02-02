@@ -19,6 +19,8 @@ package com.nvidia.spark.rapids.spill
 import java.util.concurrent.ConcurrentHashMap
 import java.util.function.BiFunction
 
+import scala.collection.mutable
+
 import ai.rapids.cudf.{ContiguousTable, Cuda, DeviceMemoryBuffer, HostMemoryBuffer, MemoryBuffer, NvtxColor, NvtxRange, Rmm, Table}
 import com.nvidia.spark.rapids.RapidsBufferCatalog.getExistingRapidsBufferAndAcquire
 import com.nvidia.spark.rapids.{Arm, DeviceMemoryEventHandler, GpuColumnVectorFromBuffer, GpuCompressedColumnVector, GpuMetric, GpuSemaphore, MetaUtils, RapidsConf}
@@ -27,6 +29,7 @@ import com.nvidia.spark.rapids.format.TableMeta
 
 import org.apache.spark.{SparkConf, SparkEnv}
 import org.apache.spark.TaskContext
+
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.rapids.RapidsDiskBlockManager
 import org.apache.spark.sql.rapids.execution.TrampolineUtil
@@ -780,6 +783,18 @@ class RapidsBufferCatalog(
     }
     bufferIdToHandles.clear()
   }
+
+  val spillStores = mutable.HashMap[RapidsBufferStore, RapidsBufferStore]()
+
+  def setSpillStorage(src: RapidsBufferStore, dst: RapidsBufferStore) = {
+    if (spillStores.contains(src)) {
+      throw new IllegalStateException(
+        s"Cannot set spill storage for $src since it is already setup to spill to " +
+        s"${spillStores.get(src)}")
+    }
+    spillStores.put(src, dst)
+  }
+
 }
 
 object RapidsBufferCatalog extends Logging with Arm {
@@ -819,15 +834,16 @@ object RapidsBufferCatalog extends Logging with Arm {
     deviceStorage = rdms
   }
 
-  def init(rapidsConf: RapidsConf): Unit = {
+  def init(rapidsConf: RapidsConf): Unit = synchronized {
     // We are going to re-initialize so make sure all of the old things were closed...
     closeImpl()
     assert(memoryEventHandler == null)
     deviceStorage = new RapidsDeviceMemoryStore()
+    _singleton = new RapidsBufferCatalog(deviceStorage)
     diskBlockManager = new RapidsDiskBlockManager(conf)
     if (rapidsConf.isGdsSpillEnabled) {
       gdsStorage = new RapidsGdsStore(diskBlockManager, rapidsConf.gdsSpillBatchWriteBufferSize)
-      deviceStorage.setSpillStore(gdsStorage)
+      _singleton.setSpillStorage(deviceStorage, gdsStorage)
     } else {
       val hostSpillStorageSize = if (rapidsConf.hostSpillStorageSize == -1) {
         rapidsConf.pinnedPoolSize + rapidsConf.pageablePoolSize
@@ -836,8 +852,8 @@ object RapidsBufferCatalog extends Logging with Arm {
       }
       hostStorage = new RapidsHostMemoryStore(hostSpillStorageSize, rapidsConf.pageablePoolSize)
       diskStorage = new RapidsDiskStore(diskBlockManager)
-      deviceStorage.setSpillStore(hostStorage)
-      hostStorage.setSpillStore(diskStorage)
+      _singleton.setSpillStorage(deviceStorage, hostStorage)
+      _singleton.setSpillStorage(hostStorage, diskStorage)
     }
 
     logInfo("Installing GPU memory handler for spill")
@@ -906,7 +922,7 @@ object RapidsBufferCatalog extends Logging with Arm {
   def addContiguousTable(
       contigTable: ContiguousTable,
       initialSpillPriority: Long,
-      spillCallback: SpillMetricsCallback = RapidsBuffer.defaultSpillCallback): RapidsBufferHandle = {
+      spillCallback: SpillMetricsCallback): RapidsBufferHandle = {
     singleton.addContiguousTable(contigTable, initialSpillPriority, spillCallback)
   }
 
@@ -924,7 +940,7 @@ object RapidsBufferCatalog extends Logging with Arm {
       buffer: DeviceMemoryBuffer,
       tableMeta: TableMeta,
       initialSpillPriority: Long,
-      spillCallback: SpillMetricsCallback = RapidsBuffer.defaultSpillCallback): RapidsBufferHandle = {
+      spillCallback: SpillMetricsCallback): RapidsBufferHandle = {
     singleton.addBuffer(buffer, tableMeta, initialSpillPriority, spillCallback)
   }
 

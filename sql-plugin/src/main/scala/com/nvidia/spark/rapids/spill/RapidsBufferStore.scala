@@ -162,9 +162,6 @@ private[spill] abstract class RapidsBufferStore(val tier: StorageTier)
 
   private[this] val buffers = new BufferTracker
 
-  /** A store that can be used for spilling. */
-  var spillStore: RapidsBufferStore = _
-
   /** Return the current byte total of buffers in this store. */
   def currentSize: Long = buffers.getTotalBytes
 
@@ -175,16 +172,6 @@ private[spill] abstract class RapidsBufferStore(val tier: StorageTier)
    * to false, otherwise `BufferTracker` treats buffers as always spillable.
    */
   protected def spillableOnAdd: Boolean = true
-
-  /**
-   * Specify another store that can be used when this store needs to spill.
-   * @note Only one spill store can be registered. This will throw if a
-   * spill store has already been registered.
-   */
-  def setSpillStore(store: RapidsBufferStore): Unit = {
-    require(spillStore == null, "spill store already registered")
-    spillStore = store
-  }
 
   /**
    * Adds an existing buffer from another store to this store. The buffer must already
