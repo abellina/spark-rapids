@@ -37,7 +37,7 @@ private[spill] class RapidsGdsStore(
     extends RapidsBufferStore(StorageTier.GDS) with Arm {
   private[this] val batchSpiller = new BatchSpiller()
 
-  override protected def createBuffer(other: RapidsBuffer, otherBuffer: MemoryBuffer,
+  override protected def tryCreateBuffer(srcBuffer: RapidsBuffer, otherBuffer: MemoryBuffer,
       stream: Cuda.Stream): Option[RapidsBufferBase] = {
     withResource(otherBuffer) { _ =>
       val deviceBuffer = otherBuffer match {
@@ -45,9 +45,9 @@ private[spill] class RapidsGdsStore(
         case _ => throw new IllegalStateException("copying from buffer without device memory")
       }
       val res = if (deviceBuffer.getLength < batchWriteBufferSize) {
-        batchSpiller.spill(other, deviceBuffer)
+        batchSpiller.spill(srcBuffer, deviceBuffer)
       } else {
-        singleShotSpill(other, deviceBuffer)
+        singleShotSpill(srcBuffer, deviceBuffer)
       }
       Some(res)
     }

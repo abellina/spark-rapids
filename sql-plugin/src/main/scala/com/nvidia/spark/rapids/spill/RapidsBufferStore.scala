@@ -206,7 +206,7 @@ private[spill] abstract class RapidsBufferStore(val tier: StorageTier)
       buffer: RapidsBuffer,
       memoryBuffer: MemoryBuffer,
       stream: Cuda.Stream): Option[RapidsBufferBase] = {
-    createBuffer(buffer, memoryBuffer, stream) match {
+    tryCreateBuffer(buffer, memoryBuffer, stream) match {
       case None =>
         None
       case Some(newBuffer) =>
@@ -232,16 +232,16 @@ private[spill] abstract class RapidsBufferStore(val tier: StorageTier)
    *
    * @note DO NOT close the buffer unless adding a reference!
    * @note `createBuffer` impls should synchronize against `stream` before returning, if needed.
-   * @param buffer data from another store
+   * @param srcBuffer data from another store
    * @param memoryBuffer memory buffer obtained from the specified Rapids buffer. The ownership
    *                     for `memoryBuffer` is transferred to this store. The store may close
    *                     `memoryBuffer` if necessary.
    * @param stream CUDA stream to use or null
    * @return optionally, the new buffer that was created. None if the store was unable
-   *         to allocate it (did not have enough room for the stores that support a storage limit)
+   *         to create the buffer.
    */
-  protected def createBuffer(
-     buffer: RapidsBuffer,
+  protected def tryCreateBuffer(
+     srcBuffer: RapidsBuffer,
      memoryBuffer: MemoryBuffer,
      stream: Cuda.Stream): Option[RapidsBufferBase]
 

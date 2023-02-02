@@ -31,8 +31,8 @@ private[spill] class RapidsDeviceMemoryStore
   // The RapidsDeviceMemoryStore handles spillability via ref counting
   override protected def spillableOnAdd: Boolean = false
 
-  override protected def createBuffer(
-      other: RapidsBuffer,
+  override protected def tryCreateBuffer(
+      srcBuffer: RapidsBuffer,
       memoryBuffer: MemoryBuffer,
       stream: Cuda.Stream): Option[RapidsBufferBase] = {
     val deviceBuffer = {
@@ -40,7 +40,7 @@ private[spill] class RapidsDeviceMemoryStore
         case d: DeviceMemoryBuffer => d
         case h: HostMemoryBuffer =>
           withResource(h) { _ =>
-            closeOnExcept(DeviceMemoryBuffer.allocate(other.size)) { deviceBuffer =>
+            closeOnExcept(DeviceMemoryBuffer.allocate(srcBuffer.size)) { deviceBuffer =>
               logDebug(s"copying from host $h to device $deviceBuffer")
               deviceBuffer.copyFromHostBuffer(h, stream)
               deviceBuffer
@@ -50,12 +50,12 @@ private[spill] class RapidsDeviceMemoryStore
       }
     }
     Some(new RapidsDeviceMemoryBuffer(
-      other.id,
-      other.size,
-      other.meta,
+      srcBuffer.id,
+      srcBuffer.size,
+      srcBuffer.meta,
       deviceBuffer,
-      other.getSpillPriority,
-      other.getSpillCallback))
+      srcBuffer.getSpillPriority,
+      srcBuffer.getSpillCallback))
   }
 
   /**

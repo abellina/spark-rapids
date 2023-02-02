@@ -66,10 +66,10 @@ private[spill] class RapidsHostMemoryStore(
     None
   }
 
-  override protected def createBuffer(other: RapidsBuffer, otherBuffer: MemoryBuffer,
+  override protected def tryCreateBuffer(srcBuffer: RapidsBuffer, otherBuffer: MemoryBuffer,
       stream: Cuda.Stream): Option[RapidsBufferBase] = {
     withResource(otherBuffer) { _ =>
-      val hostAllocResult = allocateHostBuffer(other.size)
+      val hostAllocResult = allocateHostBuffer(srcBuffer.size)
       hostAllocResult match {
         case None => None
         case Some((hostBuffer, allocationMode)) =>
@@ -86,13 +86,13 @@ private[spill] class RapidsHostMemoryStore(
               throw e
           }
           Some(new RapidsHostMemoryBuffer(
-            other.id,
-            other.size,
-            other.meta,
-            applyPriorityOffset(other.getSpillPriority, allocationMode.spillPriorityOffset),
+            srcBuffer.id,
+            srcBuffer.size,
+            srcBuffer.meta,
+            applyPriorityOffset(srcBuffer.getSpillPriority, allocationMode.spillPriorityOffset),
             hostBuffer,
             allocationMode,
-            other.getSpillCallback))
+            srcBuffer.getSpillCallback))
       }
     }
   }

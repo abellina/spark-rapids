@@ -577,7 +577,7 @@ class RapidsBufferCatalog(
             } else {
               rmmShouldRetryAlloc = true
             }
-          }
+          } // release catalog lock
           if (!rmmShouldRetryAlloc && !spilled) {
             // we didn't spill in this iteration, and we'll try to wait a bit to see if
             // other threads finish up their work and release pointers to the released
