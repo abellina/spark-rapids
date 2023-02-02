@@ -80,7 +80,7 @@ class RapidsDeviceMemoryStore
       buffer: DeviceMemoryBuffer,
       tableMeta: TableMeta,
       initialSpillPriority: Long,
-      spillCallback: SpillCallback,
+      spillCallback: SpillMetricsCallback,
       needsSync: Boolean): RapidsBuffer = {
     buffer.incRefCount()
     val rapidsBuffer = new RapidsDeviceMemoryBuffer(
@@ -130,7 +130,7 @@ class RapidsDeviceMemoryStore
       meta: TableMeta,
       contigBuffer: DeviceMemoryBuffer,
       spillPriority: Long,
-      spillCallback: SpillCallback)
+      spillCallback: SpillMetricsCallback)
       extends RapidsBufferBase(id, size, meta, spillPriority, spillCallback)
         with MemoryBuffer.EventHandler {
 

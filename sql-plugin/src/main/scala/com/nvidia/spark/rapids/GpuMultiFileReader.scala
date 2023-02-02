@@ -29,13 +29,14 @@ import scala.language.implicitConversions
 import ai.rapids.cudf.{ColumnVector, HostMemoryBuffer, NvtxColor, NvtxRange, Table}
 import com.nvidia.spark.rapids.GpuMetric.{makeSpillCallback, BUFFER_TIME, FILTER_TIME, PEAK_DEVICE_MEMORY, SEMAPHORE_WAIT_TIME}
 import com.nvidia.spark.rapids.RapidsPluginImplicits.AutoCloseableProducingSeq
+import com.nvidia.spark.rapids.spill.SpillMetricsCallback
 import org.apache.commons.io.IOUtils
 import org.apache.hadoop.conf.Configuration
 import org.apache.hadoop.fs.{FileSystem, Path}
 import org.apache.parquet.hadoop.metadata.BlockMetaData
 import org.apache.parquet.schema.MessageType
-
 import org.apache.spark.TaskContext
+
 import org.apache.spark.broadcast.Broadcast
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.catalyst.InternalRow
@@ -370,7 +371,7 @@ abstract class FilePartitionReaderBase(conf: Configuration, execMetrics: Map[Str
   protected var isDone: Boolean = false
   protected var maxDeviceMemory: Long = 0
   protected var batchIter: Iterator[ColumnarBatch] = EmptyGpuColumnarBatchIterator
-  protected lazy val spillCallback: SpillCallback = makeSpillCallback(execMetrics)
+  protected lazy val spillCallback: SpillMetricsCallback = makeSpillCallback(execMetrics)
 
   override def get(): ColumnarBatch = {
     batchIter.next()

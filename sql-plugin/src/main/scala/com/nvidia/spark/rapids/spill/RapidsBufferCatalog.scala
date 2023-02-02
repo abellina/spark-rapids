@@ -76,7 +76,7 @@ class RapidsBufferCatalog(
   class RapidsBufferHandleImpl(
       override val id: RapidsBufferId,
       var priority: Long,
-      spillCallback: SpillCallback)
+      spillCallback: SpillMetricsCallback)
     extends RapidsBufferHandle {
 
     private var closed = false
@@ -104,7 +104,7 @@ class RapidsBufferCatalog(
      *
      * @return the spill callback associated with this handle
      */
-    def getSpillCallback: SpillCallback = spillCallback
+    def getSpillCallback: SpillMetricsCallback = spillCallback
 
     override def close(): Unit = synchronized {
       // since the handle is stored in the catalog in addition to being
@@ -134,7 +134,7 @@ class RapidsBufferCatalog(
   def makeNewHandle(
       id: RapidsBufferId,
       spillPriority: Long,
-      spillCallback: SpillCallback): RapidsBufferHandle = {
+      spillCallback: SpillMetricsCallback): RapidsBufferHandle = {
     val handle = new RapidsBufferHandleImpl(id, spillPriority, spillCallback)
     trackNewHandle(handle)
     handle
@@ -265,7 +265,7 @@ class RapidsBufferCatalog(
       buffer: DeviceMemoryBuffer,
       tableMeta: TableMeta,
       initialSpillPriority: Long,
-      spillCallback: SpillCallback = RapidsBuffer.defaultSpillCallback,
+      spillCallback: SpillMetricsCallback = RapidsBuffer.defaultSpillCallback,
       needsSync: Boolean = true): RapidsBufferHandle = synchronized {
     // first time we see `buffer`
     val existing = getExistingRapidsBufferAndAcquire(buffer)
@@ -305,7 +305,7 @@ class RapidsBufferCatalog(
   def addContiguousTable(
       contigTable: ContiguousTable,
       initialSpillPriority: Long,
-      spillCallback: SpillCallback = RapidsBuffer.defaultSpillCallback,
+      spillCallback: SpillMetricsCallback = RapidsBuffer.defaultSpillCallback,
       needsSync: Boolean = true): RapidsBufferHandle = synchronized {
     val existing = getExistingRapidsBufferAndAcquire(contigTable.getBuffer)
     existing match {
@@ -342,7 +342,7 @@ class RapidsBufferCatalog(
       id: RapidsBufferId,
       contigTable: ContiguousTable,
       initialSpillPriority: Long,
-      spillCallback: SpillCallback,
+      spillCallback: SpillMetricsCallback,
       needsSync: Boolean): RapidsBufferHandle = synchronized {
     addBuffer(
       id,
@@ -372,7 +372,7 @@ class RapidsBufferCatalog(
       buffer: DeviceMemoryBuffer,
       tableMeta: TableMeta,
       initialSpillPriority: Long,
-      spillCallback: SpillCallback,
+      spillCallback: SpillMetricsCallback,
       needsSync: Boolean): RapidsBufferHandle = synchronized {
     logDebug(s"Adding buffer ${id} to ${deviceStorage}")
     val rapidsBuffer = deviceStorage.addBuffer(
@@ -393,7 +393,7 @@ class RapidsBufferCatalog(
   def registerDegenerateBuffer(
       bufferId: RapidsBufferId,
       meta: TableMeta,
-      spillCallback: SpillCallback): RapidsBufferHandle = synchronized {
+      spillCallback: SpillMetricsCallback): RapidsBufferHandle = synchronized {
     val buffer = new DegenerateRapidsBuffer(bufferId, meta)
     registerNewBuffer(buffer)
     makeNewHandle(buffer.id, buffer.getSpillPriority, spillCallback)
@@ -963,7 +963,7 @@ object RapidsBufferCatalog extends Logging with Arm {
   def addContiguousTable(
       contigTable: ContiguousTable,
       initialSpillPriority: Long,
-      spillCallback: SpillCallback = RapidsBuffer.defaultSpillCallback): RapidsBufferHandle = {
+      spillCallback: SpillMetricsCallback = RapidsBuffer.defaultSpillCallback): RapidsBufferHandle = {
     singleton.addContiguousTable(contigTable, initialSpillPriority, spillCallback)
   }
 
@@ -981,7 +981,7 @@ object RapidsBufferCatalog extends Logging with Arm {
       buffer: DeviceMemoryBuffer,
       tableMeta: TableMeta,
       initialSpillPriority: Long,
-      spillCallback: SpillCallback = RapidsBuffer.defaultSpillCallback): RapidsBufferHandle = {
+      spillCallback: SpillMetricsCallback = RapidsBuffer.defaultSpillCallback): RapidsBufferHandle = {
     singleton.addBuffer(buffer, tableMeta, initialSpillPriority, spillCallback)
   }
 

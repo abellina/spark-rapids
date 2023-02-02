@@ -19,8 +19,9 @@ package com.nvidia.spark.rapids
 import ai.rapids.cudf.{NvtxColor, NvtxRange}
 import ai.rapids.cudf.JCudfSerialization.HostConcatResult
 import com.nvidia.spark.rapids.shims.{GpuHashPartitioning, ShimBinaryExecNode}
-
+import com.nvidia.spark.rapids.spill.SpillMetricsCallback
 import org.apache.spark.TaskContext
+
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.expressions.{Attribute, Expression}
@@ -226,7 +227,7 @@ object GpuShuffledHashJoinExec extends Arm {
       buildOutput: Seq[Attribute],
       buildIter: Iterator[ColumnarBatch],
       streamIter: Iterator[ColumnarBatch],
-      spillCallback: SpillCallback,
+      spillCallback: SpillMetricsCallback,
       coalesceMetricsMap: Map[String, GpuMetric]): (ColumnarBatch, Iterator[ColumnarBatch]) = {
     val semWait = coalesceMetricsMap(GpuMetric.SEMAPHORE_WAIT_TIME)
     val buildTime = coalesceMetricsMap(GpuMetric.BUILD_TIME)
@@ -302,7 +303,7 @@ object GpuShuffledHashJoinExec extends Arm {
       buildGoal: CoalesceSizeGoal,
       iterWithPrior: Iterator[HostConcatResult],
       buildOutput: Seq[Attribute],
-      spillCallback: SpillCallback,
+      spillCallback: SpillMetricsCallback,
       coalesceMetricsMap: Map[String, GpuMetric]): ColumnarBatch = {
     // In the fallback case we build the same iterator chain that the Spark plan
     // would have produced:

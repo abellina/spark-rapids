@@ -79,7 +79,7 @@ class ShuffleReceivedBufferCatalog(
       buffer: DeviceMemoryBuffer,
       tableMeta: TableMeta,
       initialSpillPriority: Long,
-      defaultSpillCallback: SpillCallback = RapidsBuffer.defaultSpillCallback,
+      defaultSpillCallback: SpillMetricsCallback = RapidsBuffer.defaultSpillCallback,
       needsSync: Boolean): RapidsBufferHandle = {
     val bufferId = nextShuffleReceivedBufferId()
     tableMeta.bufferMeta.mutateId(bufferId.tableId)
@@ -105,7 +105,7 @@ class ShuffleReceivedBufferCatalog(
    */
   def addDegenerateRapidsBuffer(
       meta: TableMeta,
-      spillCallback: SpillCallback = RapidsBuffer.defaultSpillCallback): RapidsBufferHandle = {
+      spillCallback: SpillMetricsCallback = RapidsBuffer.defaultSpillCallback): RapidsBufferHandle = {
     val bufferId = nextShuffleReceivedBufferId()
     catalog.registerDegenerateBuffer(bufferId, meta, spillCallback)
   }

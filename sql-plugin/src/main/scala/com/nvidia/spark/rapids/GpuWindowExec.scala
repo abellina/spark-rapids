@@ -24,8 +24,9 @@ import scala.collection.mutable.ArrayBuffer
 import ai.rapids.cudf
 import ai.rapids.cudf.{AggregationOverWindow, DType, GroupByOptions, GroupByScanAggregation, NullPolicy, NvtxColor, ReplacePolicy, ReplacePolicyWithColumn, Scalar, ScanAggregation, ScanType, Table, WindowOptions}
 import com.nvidia.spark.rapids.shims.{GpuWindowUtil, ShimUnaryExecNode}
-
+import com.nvidia.spark.rapids.spill.{SpillMetricsCallback, SpillPriorities}
 import org.apache.spark.TaskContext
+
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.expressions.{Ascending, Attribute, AttributeReference, AttributeSeq, AttributeSet, CurrentRow, Expression, FrameType, NamedExpression, RangeFrame, RowFrame, SortOrder, UnboundedFollowing, UnboundedPreceding}
@@ -1599,7 +1600,7 @@ class GpuCachedDoublePassWindowIterator(
     numOutputBatches: GpuMetric,
     numOutputRows: GpuMetric,
     opTime: GpuMetric,
-    spillCallback: SpillCallback) extends Iterator[ColumnarBatch] with BasicWindowCalc {
+    spillCallback: SpillMetricsCallback) extends Iterator[ColumnarBatch] with BasicWindowCalc {
   import GpuBatchedWindowIterator._
   TaskContext.get().addTaskCompletionListener[Unit](_ => close())
 
@@ -1716,8 +1717,9 @@ class GpuCachedDoublePassWindowIterator(
     }
 
   def saveBatchForPostProcessing(batch: ColumnarBatch): Unit = {
-    firstPassProcessed += SpillableColumnarBatch(batch, SpillPriorities.ACTIVE_ON_DECK_PRIORITY,
-      spillCallback)
+    firstPassProcessed +=
+        SpillableColumnarBatch(
+          batch, SpillPriorities.ACTIVE_ON_DECK_PRIORITY, spillCallback)
   }
 
   def saveBatchForPostProcessing(basic: Array[cudf.ColumnVector]): Unit = {

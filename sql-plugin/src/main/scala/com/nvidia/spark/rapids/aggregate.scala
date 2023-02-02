@@ -25,7 +25,7 @@ import ai.rapids.cudf.{NvtxColor, NvtxRange}
 import com.nvidia.spark.rapids.GpuMetric._
 import com.nvidia.spark.rapids.RapidsPluginImplicits._
 import com.nvidia.spark.rapids.shims.{AggregationTagging, ShimUnaryExecNode}
-import com.nvidia.spark.rapids.spill.SpillCallback
+import com.nvidia.spark.rapids.spill.SpillMetricsCallback
 import org.apache.spark.TaskContext
 
 import org.apache.spark.internal.Logging
@@ -131,7 +131,7 @@ case class GpuHashAggregateMetrics(
     concatTime: GpuMetric,
     sortTime: GpuMetric,
     semWaitTime: GpuMetric,
-    spillCallback: SpillCallback)
+    spillCallback: SpillMetricsCallback)
 
 /** Utility class to convey information on the aggregation modes being used */
 case class AggregateModeInfo(

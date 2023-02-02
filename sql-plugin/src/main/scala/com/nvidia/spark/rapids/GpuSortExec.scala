@@ -23,7 +23,7 @@ import scala.collection.mutable.{ArrayBuffer, ArrayStack}
 import ai.rapids.cudf.{ColumnVector, ContiguousTable, NvtxColor, NvtxRange, Table}
 import com.nvidia.spark.rapids.GpuMetric._
 import com.nvidia.spark.rapids.shims.ShimUnaryExecNode
-import com.nvidia.spark.rapids.spill.{SpillCallback, SpillPriorities}
+import com.nvidia.spark.rapids.spill.{SpillMetricsCallback, SpillPriorities}
 import org.apache.spark.TaskContext
 
 import org.apache.spark.rdd.RDD
@@ -254,7 +254,7 @@ case class GpuOutOfCoreSortIterator(
     outputBatches: GpuMetric,
     outputRows: GpuMetric,
     peakDevMemory: GpuMetric,
-    spillCallback: SpillCallback) extends Iterator[ColumnarBatch]
+    spillCallback: SpillMetricsCallback) extends Iterator[ColumnarBatch]
     with Arm with AutoCloseable {
 
   // There are so many places where we might hit a new peak that it gets kind of complex

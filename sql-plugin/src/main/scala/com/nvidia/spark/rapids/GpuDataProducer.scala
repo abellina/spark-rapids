@@ -19,6 +19,7 @@ package com.nvidia.spark.rapids
 import scala.collection.mutable
 
 import ai.rapids.cudf.Table
+import com.nvidia.spark.rapids.spill.{SpillMetricsCallback, SpillPriorities}
 
 import org.apache.spark.sql.types.DataType
 import org.apache.spark.sql.vectorized.ColumnarBatch
@@ -146,7 +147,7 @@ class CachedGpuBatchIterator private(pending: mutable.Queue[SpillableColumnarBat
 object CachedGpuBatchIterator extends Arm {
   private[this] def makeSpillableAndClose(table: Table,
       dataTypes: Array[DataType],
-      spillCallback: SpillCallback): SpillableColumnarBatch = {
+      spillCallback: SpillMetricsCallback): SpillableColumnarBatch = {
     withResource(table) { _ =>
       SpillableColumnarBatch(GpuColumnVector.from(table, dataTypes),
         SpillPriorities.ACTIVE_ON_DECK_PRIORITY,
@@ -156,7 +157,7 @@ object CachedGpuBatchIterator extends Arm {
 
   def apply(producer: GpuDataProducer[Table],
       dataTypes: Array[DataType],
-      spillCallback: SpillCallback): GpuColumnarBatchIterator = {
+      spillCallback: SpillMetricsCallback): GpuColumnarBatchIterator = {
     withResource(producer) { _ =>
       if (producer.hasNext) {
         // Special case for the first one.

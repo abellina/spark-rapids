@@ -20,7 +20,7 @@ import ai.rapids.cudf.{ast, GatherMap, NvtxColor, OutOfBoundsPolicy, Table}
 import ai.rapids.cudf.ast.CompiledExpression
 import com.nvidia.spark.rapids._
 import com.nvidia.spark.rapids.shims.ShimBinaryExecNode
-import com.nvidia.spark.rapids.spill.SpillCallback
+import com.nvidia.spark.rapids.spill.SpillMetricsCallback
 import org.apache.spark.TaskContext
 
 import org.apache.spark.broadcast.Broadcast
@@ -202,7 +202,7 @@ class ConditionalNestedLoopJoinIterator(
     streamAttributes: Seq[Attribute],
     targetSize: Long,
     condition: ast.CompiledExpression,
-    spillCallback: SpillCallback,
+    spillCallback: SpillMetricsCallback,
     opTime: GpuMetric,
     joinTime: GpuMetric)
     extends SplittableJoinIterator(
@@ -315,7 +315,7 @@ object GpuBroadcastNestedLoopJoinExec extends Arm {
       streamAttributes: Seq[Attribute],
       targetSize: Long,
       boundCondition: Option[GpuExpression],
-      spillCallback: SpillCallback,
+      spillCallback: SpillMetricsCallback,
       numOutputRows: GpuMetric,
       joinOutputRows: GpuMetric,
       numOutputBatches: GpuMetric,

@@ -18,7 +18,7 @@ package com.nvidia.spark.rapids
 
 import ai.rapids.cudf.{ColumnVector, ColumnView, DType, DeviceMemoryBuffer, GatherMap, NvtxColor, NvtxRange, OrderByArg, OutOfBoundsPolicy, Scalar, Table}
 import com.nvidia.spark.rapids
-import com.nvidia.spark.rapids.spill.{SpillCallback, SpillPriorities}
+import com.nvidia.spark.rapids.spill.{SpillMetricsCallback, SpillPriorities}
 import org.apache.spark.sql.types._
 import org.apache.spark.sql.vectorized.ColumnarBatch
 
@@ -214,7 +214,7 @@ trait LazySpillableColumnarBatch extends LazySpillable {
 
 object LazySpillableColumnarBatch {
   def apply(cb: ColumnarBatch,
-      spillCallback: SpillCallback,
+      spillCallback: SpillMetricsCallback,
       name: String): LazySpillableColumnarBatch =
     new LazySpillableColumnarBatchImpl(cb, spillCallback, name)
 
@@ -262,7 +262,7 @@ case class AllowSpillOnlyLazySpillableColumnarBatchImpl(wrapped: LazySpillableCo
  */
 class LazySpillableColumnarBatchImpl(
     cb: ColumnarBatch,
-    spillCallback: SpillCallback,
+    spillCallback: SpillMetricsCallback,
     name: String) extends LazySpillableColumnarBatch with Arm {
 
   private var cached: Option[ColumnarBatch] = Some(GpuColumnVector.incRefCounts(cb))
@@ -329,7 +329,7 @@ trait LazySpillableGatherMap extends LazySpillable with Arm {
 }
 
 object LazySpillableGatherMap {
-  def apply(map: GatherMap, spillCallback: SpillCallback, name: String): LazySpillableGatherMap =
+  def apply(map: GatherMap, spillCallback: SpillMetricsCallback, name: String): LazySpillableGatherMap =
     new LazySpillableGatherMapImpl(map, spillCallback, name)
 
   def leftCross(leftCount: Int, rightCount: Int): LazySpillableGatherMap =
@@ -344,7 +344,7 @@ object LazySpillableGatherMap {
  */
 class LazySpillableGatherMapImpl(
     map: GatherMap,
-    spillCallback: SpillCallback,
+    spillCallback: SpillMetricsCallback,
     name: String) extends LazySpillableGatherMap {
 
   override val getRowCount: Long = map.getRowCount

@@ -22,8 +22,9 @@ import scala.collection.mutable.ArrayBuffer
 import scala.util.control.NonFatal
 
 import ai.rapids.cudf._
-
+import com.nvidia.spark.rapids.spill.RapidsBufferCatalog
 import org.apache.spark.{SparkEnv, TaskContext}
+
 import org.apache.spark.internal.Logging
 import org.apache.spark.resource.ResourceInformation
 import org.apache.spark.sql.rapids.GpuShuffleEnv

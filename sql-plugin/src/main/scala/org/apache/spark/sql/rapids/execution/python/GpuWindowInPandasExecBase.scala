@@ -24,7 +24,7 @@ import com.nvidia.spark.rapids._
 import com.nvidia.spark.rapids.RapidsPluginImplicits._
 import com.nvidia.spark.rapids.python.PythonWorkerSemaphore
 import com.nvidia.spark.rapids.shims.ShimUnaryExecNode
-import com.nvidia.spark.rapids.spill.{SpillCallback, SpillPriorities}
+import com.nvidia.spark.rapids.spill.{SpillMetricsCallback, SpillPriorities}
 import org.apache.spark.TaskContext
 import org.apache.spark.api.python.{ChainedPythonFunctions, PythonEvalType}
 import org.apache.spark.rdd.RDD
@@ -86,7 +86,7 @@ class GroupingIterator(
     partitionSpec: Seq[Expression],
     inputRows: GpuMetric,
     inputBatches: GpuMetric,
-    spillCallback: SpillCallback) extends Iterator[ColumnarBatch] with Arm {
+    spillCallback: SpillMetricsCallback) extends Iterator[ColumnarBatch] with Arm {
 
   // Currently do it in a somewhat ugly way. In the future cuDF will provide a dedicated API.
   // Current solution assumes one group data exists in only one batch, so just split the

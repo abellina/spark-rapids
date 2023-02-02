@@ -22,6 +22,7 @@ import ai.rapids.cudf.{NvtxColor, Table}
 import com.nvidia.spark.rapids.GpuMetric._
 import com.nvidia.spark.rapids.RapidsPluginImplicits._
 import com.nvidia.spark.rapids.shims.ShimUnaryExecNode
+import com.nvidia.spark.rapids.spill.{SpillMetricsCallback, SpillPriorities}
 
 import org.apache.spark.rapids.shims.GpuShuffleExchangeExec
 import org.apache.spark.rdd.RDD
@@ -236,7 +237,7 @@ object GpuTopN extends Arm {
       inputRows: GpuMetric,
       outputBatches: GpuMetric,
       outputRows: GpuMetric,
-      spillCallback: SpillCallback): Iterator[ColumnarBatch] =
+      spillCallback: SpillMetricsCallback): Iterator[ColumnarBatch] =
     new Iterator[ColumnarBatch]() {
       override def hasNext: Boolean = iter.hasNext
 
@@ -272,8 +273,8 @@ object GpuTopN extends Arm {
               }
             }
             pending =
-                Some(SpillableColumnarBatch(runningResult, SpillPriorities.ACTIVE_ON_DECK_PRIORITY,
-                  spillCallback))
+              Some(SpillableColumnarBatch(runningResult, SpillPriorities.ACTIVE_ON_DECK_PRIORITY,
+                spillCallback))
           }
         }
         val ret = pending.get.getColumnarBatch()

@@ -19,9 +19,10 @@ package com.nvidia.spark.rapids.shuffle
 import java.io.IOException
 
 import ai.rapids.cudf.{Cuda, MemoryBuffer}
-import com.nvidia.spark.rapids.{Arm, RapidsBuffer, ShuffleMetadata, StorageTier}
+import com.nvidia.spark.rapids.{Arm, ShuffleMetadata}
 import com.nvidia.spark.rapids.RapidsPluginImplicits._
 import com.nvidia.spark.rapids.format.{BufferMeta, BufferTransferRequest}
+import com.nvidia.spark.rapids.spill.{RapidsBuffer, StorageTier}
 
 import org.apache.spark.internal.Logging
 import org.apache.spark.shuffle.rapids.RapidsShuffleSendPrepareException
