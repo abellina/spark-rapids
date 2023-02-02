@@ -27,7 +27,7 @@ import com.nvidia.spark.rapids.spill.StorageTier.StorageTier
 import org.apache.spark.{SparkConf, SparkEnv}
 import org.apache.spark.TaskContext
 import org.apache.spark.internal.Logging
-import org.apache.spark.sql.rapids.{RapidsDiskBlockManager, TempSpillBufferId}
+import org.apache.spark.sql.rapids.RapidsDiskBlockManager
 import org.apache.spark.sql.rapids.execution.TrampolineUtil
 import org.apache.spark.sql.types.DataType
 import org.apache.spark.sql.vectorized.ColumnarBatch

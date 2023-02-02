@@ -17,16 +17,18 @@
 package org.apache.spark.sql.rapids
 
 import java.io.File
+import java.util.UUID
 
 import org.apache.spark.SparkConf
+
 import org.apache.spark.rapids.shims.storage.ShimDiskBlockManager
-import org.apache.spark.storage.BlockId
+import org.apache.spark.storage.{BlockId, TempLocalBlockId}
 
 /** Maps logical blocks to local disk locations. */
 class RapidsDiskBlockManager(conf: SparkConf) {
   private[this] val blockManager = new ShimDiskBlockManager(conf, true)
 
-  def getFile(blockId: BlockId): File = blockManager.getFile(blockId)
+  def getFile(uuid: UUID): File = blockManager.getFile(TempLocalBlockId(uuid))
 
   def getFile(file: String): File = blockManager.getFile(file)
 }
