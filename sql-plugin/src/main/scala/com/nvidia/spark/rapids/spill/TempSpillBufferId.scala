@@ -14,18 +14,16 @@
  * limitations under the License.
  */
 
-package org.apache.spark.sql.rapids
+package com.nvidia.spark.rapids.spill
 
 import java.io.File
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.function.IntUnaryOperator
 
-import com.nvidia.spark.rapids.spill.RapidsBufferId
+import org.apache.spark.sql.rapids.RapidsDiskBlockManager
 
-import org.apache.spark.storage.TempLocalBlockId
-
-object TempSpillBufferId {
+private[spill] object TempSpillBufferId {
   private val MAX_TABLE_ID = Integer.MAX_VALUE
   private val TABLE_ID_UPDATER = new IntUnaryOperator {
     override def applyAsInt(i: Int): Int = if (i < MAX_TABLE_ID) i + 1 else 0
@@ -36,15 +34,14 @@ object TempSpillBufferId {
 
   def apply(): TempSpillBufferId = {
     val tableId = tableIdCounter.getAndUpdate(TABLE_ID_UPDATER)
-    val tempBlockId = TempLocalBlockId(UUID.randomUUID())
-    new TempSpillBufferId(tableId, tempBlockId)
+    new TempSpillBufferId(tableId, UUID.randomUUID())
   }
 }
 
-case class TempSpillBufferId private(
+private[spill] case class TempSpillBufferId private(
     override val tableId: Int,
-    bufferId: TempLocalBlockId) extends RapidsBufferId {
+    bufferUUID: UUID) extends RapidsBufferId {
 
   override def getDiskPath(diskBlockManager: RapidsDiskBlockManager): File =
-    diskBlockManager.getFile(bufferId)
+    diskBlockManager.getFile(bufferUUID)
 }

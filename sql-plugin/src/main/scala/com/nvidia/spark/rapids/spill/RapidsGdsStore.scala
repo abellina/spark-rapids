@@ -28,7 +28,7 @@ import com.nvidia.spark.rapids.RapidsPluginImplicits._
 import com.nvidia.spark.rapids.format.TableMeta
 import com.nvidia.spark.rapids.spill.StorageTier.StorageTier
 
-import org.apache.spark.sql.rapids.{RapidsDiskBlockManager, TempSpillBufferId}
+import org.apache.spark.sql.rapids.RapidsDiskBlockManager
 
 /** A buffer store using GPUDirect Storage (GDS). */
 private[spill] class RapidsGdsStore(
