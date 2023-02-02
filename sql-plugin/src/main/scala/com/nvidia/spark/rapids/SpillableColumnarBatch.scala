@@ -17,7 +17,7 @@
 package com.nvidia.spark.rapids
 
 import ai.rapids.cudf.{ContiguousTable, DeviceMemoryBuffer}
-import com.nvidia.spark.rapids.spill.{RapidsBuffer, RapidsBufferCatalog, RapidsBufferHandle, SpillMetricsCallback}
+import com.nvidia.spark.rapids.spill.{RapidsBufferCatalog, RapidsBufferHandle, SpillMetricsCallback}
 import org.apache.spark.TaskContext
 import org.apache.spark.sql.types.DataType
 import org.apache.spark.sql.vectorized.ColumnarBatch

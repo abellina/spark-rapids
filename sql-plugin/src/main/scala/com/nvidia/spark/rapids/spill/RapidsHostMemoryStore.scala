@@ -27,7 +27,7 @@ import com.nvidia.spark.rapids.spill.StorageTier.StorageTier
  * @param maxSize maximum size in bytes for all buffers in this store
  * @param pageableMemoryPoolSize maximum size in bytes for the internal pageable memory pool
  */
-class RapidsHostMemoryStore(
+private[spill] class RapidsHostMemoryStore(
     maxSize: Long,
     pageableMemoryPoolSize: Long)
     extends RapidsBufferStore(StorageTier.HOST) {
