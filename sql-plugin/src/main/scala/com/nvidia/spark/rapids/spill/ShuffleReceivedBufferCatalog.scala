@@ -31,7 +31,7 @@ import org.apache.spark.sql.types.DataType
 
 /** Identifier for a shuffle buffer that holds the data for a table on the read side */
 
-case class ShuffleReceivedBufferId(
+private[spill] case class ShuffleReceivedBufferId(
     override val tableId: Int) extends RapidsBufferId {
   override val canShareDiskPaths: Boolean = false
 
