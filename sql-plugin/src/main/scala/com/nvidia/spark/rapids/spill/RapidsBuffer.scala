@@ -30,7 +30,7 @@ import org.apache.spark.sql.rapids.RapidsDiskBlockManager
  * NOTE: Derived classes MUST implement proper hashCode and equals methods, as these objects are
  *       used as keys in hash maps. Scala case classes are recommended.
  */
-trait RapidsBufferId {
+private[spill] trait RapidsBufferId {
   val tableId: Int
 
   /**

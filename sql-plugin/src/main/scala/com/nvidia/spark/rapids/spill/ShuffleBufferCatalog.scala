@@ -35,7 +35,7 @@ import org.apache.spark.sql.types.DataType
 import org.apache.spark.storage.ShuffleBlockId
 
 /** Identifier for a shuffle buffer that holds the data for a table */
-case class ShuffleBufferId(
+private[spill] case class ShuffleBufferId(
     blockId: ShuffleBlockId,
     override val tableId: Int) extends RapidsBufferId {
   val shuffleId: Int = blockId.shuffleId
