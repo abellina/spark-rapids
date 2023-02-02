@@ -14,22 +14,22 @@
  * limitations under the License.
  */
 
-package com.nvidia.spark.rapids
+package com.nvidia.spark.rapids.spill
 
 import java.io.File
 import java.math.RoundingMode
+
 import ai.rapids.cudf.{ContiguousTable, Cuda, HostColumnVector, HostMemoryBuffer, MemoryBuffer, Table}
-import com.nvidia.spark.rapids.spill.RapidsBufferStore
+import com.nvidia.spark.rapids.{Arm, GpuColumnVector, TestUtils}
 import org.mockito.{ArgumentCaptor, ArgumentMatchers}
 import org.mockito.ArgumentMatchers.any
 import org.mockito.Mockito.{never, spy, times, verify, when}
 import org.scalatest.FunSuite
 import org.scalatest.mockito.MockitoSugar
+
 import org.apache.spark.sql.rapids.RapidsDiskBlockManager
 import org.apache.spark.sql.types.{DataType, DecimalType, DoubleType, IntegerType, LongType, StringType}
 import org.apache.spark.sql.vectorized.ColumnarBatch
-import org.mockito.ArgumentMatchers.any
-
 
 class RapidsHostMemoryStoreSuite extends FunSuite with Arm with MockitoSugar {
   private def buildContiguousTable(): ContiguousTable = {
@@ -63,7 +63,7 @@ class RapidsHostMemoryStoreSuite extends FunSuite with Arm with MockitoSugar {
         hostStore =>
           assertResult(0)(hostStore.currentSize)
           assertResult(hostStoreMaxSize)(hostStore.numBytesFree)
-          devStore.setSpillStore(hostStore)
+          catalog.setSpillStorage(devStore, hostStore)
 
           val (bufferSize, handle) = withResource(buildContiguousTable()) { ct =>
             val len = ct.getBuffer.getLength
@@ -99,7 +99,7 @@ class RapidsHostMemoryStoreSuite extends FunSuite with Arm with MockitoSugar {
       val catalog = new RapidsBufferCatalog(devStore)
       withResource(new RapidsHostMemoryStore(hostStoreMaxSize, hostStoreMaxSize)) {
         hostStore =>
-          devStore.setSpillStore(hostStore)
+          catalog.setSpillStorage(devStore, hostStore)
           var expectedBuffer: HostMemoryBuffer = null
           val handle = withResource(buildContiguousTable()) { ct =>
             expectedBuffer = HostMemoryBuffer.allocate(ct.getBuffer.getLength)
@@ -133,7 +133,7 @@ class RapidsHostMemoryStoreSuite extends FunSuite with Arm with MockitoSugar {
       val catalog = new RapidsBufferCatalog(devStore)
       withResource(new RapidsHostMemoryStore(hostStoreMaxSize, hostStoreMaxSize)) {
         hostStore =>
-          devStore.setSpillStore(hostStore)
+          catalog.setSpillStorage(devStore, hostStore)
           var expectedBatch: ColumnarBatch = null
           val handle = withResource(buildContiguousTable()) { ct =>
             // make a copy of the table so we can compare it later to the
@@ -175,8 +175,8 @@ class RapidsHostMemoryStoreSuite extends FunSuite with Arm with MockitoSugar {
       when(mockStore.copyBuffer(any(), any(), any())).thenAnswer(_ => Some(mockBuff))
       when(mockStore.tier) thenReturn (StorageTier.DISK)
       withResource(new RapidsHostMemoryStore(hostStoreMaxSize, hostStoreMaxSize)) { hostStore =>
-        devStore.setSpillStore(hostStore)
-        hostStore.setSpillStore(mockStore)
+        catalog.setSpillStorage(devStore, hostStore)
+        catalog.setSpillStorage(hostStore, mockStore)
         var bigHandle: RapidsBufferHandle = null
         var bigTable = buildContiguousTable(1024 * 1024)
         var smallTable = buildContiguousTable(1)

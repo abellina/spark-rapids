@@ -17,6 +17,7 @@
 package com.nvidia.spark.rapids
 
 import ai.rapids.cudf.Table
+import com.nvidia.spark.rapids.spill.RapidsBufferCatalog
 import org.apache.commons.lang3.SerializationUtils
 import org.scalatest.{BeforeAndAfterAll, FunSuite}
 

@@ -16,6 +16,7 @@
 
 package com.nvidia.spark.rapids
 
+import com.nvidia.spark.rapids.spill.{RapidsBufferCatalog, ShuffleBufferCatalog}
 import org.scalatest.FunSuite
 import org.scalatest.mockito.MockitoSugar
 

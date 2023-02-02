@@ -19,12 +19,13 @@ package com.nvidia.spark.rapids
 import java.io.{ByteArrayInputStream, ByteArrayOutputStream, DataInputStream}
 
 import ai.rapids.cudf.{ColumnVector, HostMemoryBuffer, JCudfSerialization, Table}
+import com.nvidia.spark.rapids.spill.SpillMetricsCallback
 import org.mockito.ArgumentMatchers._
 import org.mockito.Mockito._
 import org.scalatest.FunSuite
 import org.scalatest.mockito.MockitoSugar
-
 import org.apache.spark.SparkConf
+
 import org.apache.spark.sql.catalyst.expressions.AttributeReference
 import org.apache.spark.sql.types.IntegerType
 import org.apache.spark.sql.vectorized.ColumnarBatch
@@ -44,7 +45,7 @@ class GpuShuffledHashJoinExecSuite extends FunSuite with Arm with MockitoSugar {
         Seq.empty,
         mockBuildIter,
         mockStreamIter,
-        mock[SpillCallback],
+        mock[SpillMetricsCallback],
         metricMap)
       withResource(builtBatch) { _ =>
         // we ge an empty batch with no columns or rows
@@ -77,7 +78,7 @@ class GpuShuffledHashJoinExecSuite extends FunSuite with Arm with MockitoSugar {
             Seq.empty,
             buildIter,
             mockStreamIter,
-            mock[SpillCallback],
+            mock[SpillMetricsCallback],
             metricMap)
           withResource(builtBatch) { _ =>
             assertResult(builtBatch.numCols())(0)
@@ -110,7 +111,7 @@ class GpuShuffledHashJoinExecSuite extends FunSuite with Arm with MockitoSugar {
         Seq.empty,
         buildIter,
         mockStreamIter,
-        mock[SpillCallback],
+        mock[SpillMetricsCallback],
         metricMap)
       withResource(builtBatch) { _ =>
         assertResult(builtBatch.numCols())(1)
@@ -137,7 +138,7 @@ class GpuShuffledHashJoinExecSuite extends FunSuite with Arm with MockitoSugar {
           Seq.empty,
           buildIter,
           mockStreamIter,
-          mock[SpillCallback],
+          mock[SpillMetricsCallback],
           metricMap)
         withResource(builtBatch) { _ =>
           assertResult(builtBatch.numCols())(1)
@@ -191,7 +192,7 @@ class GpuShuffledHashJoinExecSuite extends FunSuite with Arm with MockitoSugar {
           attrs,
           buildIter,
           mockStreamIter,
-          mock[SpillCallback],
+          mock[SpillMetricsCallback],
           metricMap)
         withResource(builtBatch) { _ =>
           verify(mockBufferedStreamIterator, times(1)).hasNext
@@ -225,7 +226,7 @@ class GpuShuffledHashJoinExecSuite extends FunSuite with Arm with MockitoSugar {
               attrs,
               buildIter,
               mockStreamIter,
-              mock[SpillCallback],
+              mock[SpillMetricsCallback],
               metricMap)
             withResource(builtBatch) { _ =>
               verify(mockBufferedStreamIterator, times(1)).hasNext
@@ -263,7 +264,7 @@ class GpuShuffledHashJoinExecSuite extends FunSuite with Arm with MockitoSugar {
                 attrs,
                 buildIter,
                 mockStreamIter,
-                mock[SpillCallback],
+                mock[SpillMetricsCallback],
                 metricMap)
               withResource(builtBatch) { _ =>
                 verify(mockBufferedStreamIterator, times(0)).hasNext
@@ -302,7 +303,7 @@ class GpuShuffledHashJoinExecSuite extends FunSuite with Arm with MockitoSugar {
                 attrs,
                 buildIter,
                 mockStreamIter,
-                mock[SpillCallback],
+                mock[SpillMetricsCallback],
                 metricMap)
               withResource(builtBatch) { _ =>
                 verify(mockBufferedStreamIterator, times(1)).hasNext

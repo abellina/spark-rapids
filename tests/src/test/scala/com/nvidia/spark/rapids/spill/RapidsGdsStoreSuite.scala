@@ -14,11 +14,12 @@
  * limitations under the License.
  */
 
-package com.nvidia.spark.rapids
+package com.nvidia.spark.rapids.spill
 
 import java.io.File
 
 import ai.rapids.cudf.{ContiguousTable, CuFile, Table}
+import com.nvidia.spark.rapids.{Arm, FunSuiteWithTempDir}
 import org.mockito.ArgumentMatchers
 import org.mockito.ArgumentMatchers.any
 import org.mockito.Mockito.{spy, times, verify, when}
@@ -62,8 +63,7 @@ class RapidsGdsStoreSuite extends FunSuiteWithTempDir with Arm with MockitoSugar
      val catalog = spy(new RapidsBufferCatalog(devStore))
      withResource(new RapidsGdsStore(
        diskBlockManager, batchWriteBufferSize)) { gdsStore =>
-
-       devStore.setSpillStore(gdsStore)
+       catalog.setSpillStorage(devStore, gdsStore)
        assertResult(0)(gdsStore.currentSize)
 
        val bufferSizes = new Array[Long](bufferIds.length)
@@ -113,7 +113,7 @@ class RapidsGdsStoreSuite extends FunSuiteWithTempDir with Arm with MockitoSugar
       val catalog = spy(new RapidsBufferCatalog(devStore))
       withResource(new RapidsGdsStore(mock[RapidsDiskBlockManager], 4096)) {
         gdsStore =>
-        devStore.setSpillStore(gdsStore)
+        catalog.setSpillStorage(devStore, gdsStore)
         assertResult(0)(gdsStore.currentSize)
         val (bufferSize, handle) = addTableToCatalog(catalog, bufferId, spillPriority)
         catalog.synchronousSpill(devStore, 0)
