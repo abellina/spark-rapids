@@ -47,7 +47,7 @@ private[spill] class RapidsGdsStore(
       if (deviceBuffer.getLength < batchWriteBufferSize) {
         batchSpiller.spill(other, deviceBuffer)
       } else {
-        singleShotSpill(other, deviceBuffer)
+        singleShotSpill(srcBuffer, deviceBuffer)
       }
     }
   }

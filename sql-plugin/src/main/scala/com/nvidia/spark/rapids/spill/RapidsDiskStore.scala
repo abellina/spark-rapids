@@ -32,8 +32,8 @@ private[spill] class RapidsDiskStore(diskBlockManager: RapidsDiskBlockManager)
     extends RapidsBufferStore(StorageTier.DISK) {
   private[this] val sharedBufferFiles = new ConcurrentHashMap[RapidsBufferId, File]
 
-  override protected def createBuffer(
-      incoming: RapidsBuffer,
+  override protected def tryCreateBuffer(
+      srcBuffer: RapidsBuffer,
       incomingBuffer: MemoryBuffer,
       stream: Cuda.Stream): RapidsBufferBase = {
     withResource(incomingBuffer) { _ =>
@@ -41,7 +41,7 @@ private[spill] class RapidsDiskStore(diskBlockManager: RapidsDiskBlockManager)
         case h: HostMemoryBuffer => h
         case _ => throw new UnsupportedOperationException("buffer without host memory")
       }
-      val id = incoming.id
+      val id = srcBuffer.id
       val path = if (id.canShareDiskPaths) {
         sharedBufferFiles.computeIfAbsent(id, _ => id.getDiskPath(diskBlockManager))
       } else {
