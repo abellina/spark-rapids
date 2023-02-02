@@ -31,7 +31,7 @@ import com.nvidia.spark.rapids.spill.StorageTier.StorageTier
 import org.apache.spark.sql.rapids.{RapidsDiskBlockManager, TempSpillBufferId}
 
 /** A buffer store using GPUDirect Storage (GDS). */
-class RapidsGdsStore(
+private[spill] class RapidsGdsStore(
     diskBlockManager: RapidsDiskBlockManager,
     batchWriteBufferSize: Long)
     extends RapidsBufferStore(StorageTier.GDS) with Arm {

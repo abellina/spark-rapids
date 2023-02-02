@@ -40,7 +40,7 @@ object RapidsBufferStore {
  * @param tier storage tier of this store
  * @param catalog catalog to register this store
  */
-abstract class RapidsBufferStore(val tier: StorageTier)
+private[spill] abstract class RapidsBufferStore(val tier: StorageTier)
     extends AutoCloseable with Logging with Arm {
 
   val name: String = tier.toString

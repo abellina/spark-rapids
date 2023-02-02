@@ -20,7 +20,7 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.function.BiFunction
 import ai.rapids.cudf.{ContiguousTable, Cuda, DeviceMemoryBuffer, HostMemoryBuffer, MemoryBuffer, NvtxColor, NvtxRange, Rmm, Table}
-import com.nvidia.spark.rapids.{Arm, DeviceMemoryEventHandler, GpuColumnVectorFromBuffer, GpuCompressedColumnVector, GpuMetric, GpuSemaphore, MetaUtils, RapidsConf}
+import com.nvidia.spark.rapids.{Arm, GpuColumnVectorFromBuffer, GpuCompressedColumnVector, GpuMetric, GpuSemaphore, MetaUtils, RapidsConf}
 import com.nvidia.spark.rapids.RapidsPluginImplicits._
 import com.nvidia.spark.rapids.format.TableMeta
 import com.nvidia.spark.rapids.spill.StorageTier.StorageTier

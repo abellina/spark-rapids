@@ -28,7 +28,7 @@ import com.nvidia.spark.rapids.spill.StorageTier.StorageTier
 import org.apache.spark.sql.rapids.RapidsDiskBlockManager
 
 /** A buffer store using files on the local disks. */
-class RapidsDiskStore(diskBlockManager: RapidsDiskBlockManager)
+private[spill] class RapidsDiskStore(diskBlockManager: RapidsDiskBlockManager)
     extends RapidsBufferStore(StorageTier.DISK) {
   private[this] val sharedBufferFiles = new ConcurrentHashMap[RapidsBufferId, File]
 

@@ -14,14 +14,14 @@
  * limitations under the License.
  */
 
-package com.nvidia.spark.rapids
+package com.nvidia.spark.rapids.spill
 
 import java.io.File
 import java.lang.management.ManagementFactory
 import java.util.concurrent.atomic.AtomicLong
 
 import ai.rapids.cudf.{Cuda, NvtxColor, NvtxRange, Rmm, RmmEventHandler}
-import com.nvidia.spark.rapids.spill.{RapidsBufferCatalog, RapidsDeviceMemoryStore}
+import com.nvidia.spark.rapids.{Arm, GpuSemaphore}
 import com.sun.management.HotSpotDiagnosticMXBean
 
 import org.apache.spark.internal.Logging
