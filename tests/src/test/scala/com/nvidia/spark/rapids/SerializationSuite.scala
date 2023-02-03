@@ -17,9 +17,10 @@
 package com.nvidia.spark.rapids
 
 import ai.rapids.cudf.Table
-import com.nvidia.spark.rapids.spill.RapidsBufferCatalog
+import com.nvidia.spark.rapids.spill.{RapidsBufferCatalog, RapidsDeviceMemoryStore}
 import org.apache.commons.lang3.SerializationUtils
 import org.scalatest.{BeforeAndAfterAll, FunSuite}
+import org.scalatest.mockito.MockitoSugar
 
 import org.apache.spark.sql.catalyst.expressions.AttributeReference
 import org.apache.spark.sql.rapids.execution.{SerializeBatchDeserializeHostBuffer, SerializeConcatHostBuffersDeserializeBatch}
@@ -27,10 +28,10 @@ import org.apache.spark.sql.types.{DoubleType, IntegerType, StringType}
 import org.apache.spark.sql.vectorized.ColumnarBatch
 
 class SerializationSuite extends FunSuite
-  with BeforeAndAfterAll with Arm {
+  with BeforeAndAfterAll with Arm with MockitoSugar{
 
   override def beforeAll(): Unit = {
-    RapidsBufferCatalog.setDeviceStorage(new RapidsDeviceMemoryStore())
+    RapidsBufferCatalog.setDeviceStorage(mock[RapidsDeviceMemoryStore])
   }
 
   private def buildBatch(): ColumnarBatch = {

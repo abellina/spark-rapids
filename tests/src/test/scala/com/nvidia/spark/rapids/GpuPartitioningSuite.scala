@@ -16,11 +16,10 @@
 
 package com.nvidia.spark.rapids
 
-import java.io.File
 import java.math.RoundingMode
 
 import ai.rapids.cudf.{ColumnVector, Cuda, DType, Table}
-import com.nvidia.spark.rapids.spill.RapidsBufferCatalog
+import com.nvidia.spark.rapids.spill.{RapidsBufferCatalog, RapidsDeviceMemoryStore}
 import org.scalatest.FunSuite
 import org.apache.spark.SparkConf
 

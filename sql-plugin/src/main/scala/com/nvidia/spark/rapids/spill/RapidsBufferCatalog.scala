@@ -132,10 +132,10 @@ class RapidsBufferCatalog(
    * @param id the `RapidsBufferId` that this handle refers to
    * @param spillPriority the spill priority specified on creation of the handle
    * @param spillCallback this handle's spill callback
-   * @note public for testing
+   * @note private[spill] for testing
    * @return a new instance of `RapidsBufferHandle`
    */
-  def makeNewHandle(
+  private[spill] def makeNewHandle(
       id: RapidsBufferId,
       spillPriority: Long,
       spillCallback: SpillMetricsCallback): RapidsBufferHandle = {
@@ -352,8 +352,7 @@ class RapidsBufferCatalog(
       initialSpillPriority,
       spillCallback,
       needsSync)
-    registerNewBuffer(rapidsBuffer)
-    makeNewHandle(id, initialSpillPriority, spillCallback)
+    registerNewBuffer(rapidsBuffer, initialSpillPriority, spillCallback)
   }
 
   /**
@@ -365,8 +364,7 @@ class RapidsBufferCatalog(
       meta: TableMeta,
       spillCallback: SpillMetricsCallback): RapidsBufferHandle = synchronized {
     val buffer = new DegenerateRapidsBuffer(bufferId, meta)
-    registerNewBuffer(buffer)
-    makeNewHandle(buffer.id, buffer.getSpillPriority, spillCallback)
+    registerNewBuffer(buffer, buffer.getSpillPriority, spillCallback)
   }
 
   /**
@@ -452,9 +450,9 @@ class RapidsBufferCatalog(
   /**
    * Register a new buffer with the catalog. An exception will be thrown if an
    * existing buffer was registered with the same buffer ID and storage tier.
-   * @note public for testing
+   * @note private[spill] for testing
    */
-  def registerNewBuffer(buffer: RapidsBuffer): Unit = {
+  private[spill] def registerBuffer(buffer: RapidsBuffer): Unit = {
     val updater = new BiFunction[RapidsBufferId, Seq[RapidsBuffer], Seq[RapidsBuffer]] {
       override def apply(key: RapidsBufferId, value: Seq[RapidsBuffer]): Seq[RapidsBuffer] = {
         if (value == null) {
@@ -472,6 +470,14 @@ class RapidsBufferCatalog(
     }
 
     bufferMap.compute(buffer.id, updater)
+  }
+
+  def registerNewBuffer(
+      buffer: RapidsBuffer,
+      initialSpillPriority: Long,
+      spillCallback: SpillMetricsCallback): RapidsBufferHandle = {
+    registerBuffer(buffer)
+    makeNewHandle(buffer.id, initialSpillPriority, spillCallback)
   }
 
   /**
