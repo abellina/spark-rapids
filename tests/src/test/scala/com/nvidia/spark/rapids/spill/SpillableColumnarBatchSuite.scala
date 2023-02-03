@@ -30,8 +30,7 @@ class SpillableColumnarBatchSuite extends FunSuite with Arm with MockitoSugar {
     when(mockBuffer.id).thenReturn(mockId)
     val catalog = new RapidsBufferCatalog(mock[RapidsDeviceMemoryStore])
     val oldBufferCount = catalog.numBuffers
-    val handle = catalog.registerNewBuffer(
-      mockBuffer, -1, RapidsBuffer.defaultSpillCallback)
+    val handle = catalog.registerNewBuffer(mockBuffer)
     assertResult(oldBufferCount + 1)(catalog.numBuffers)
     val spillableBatch = new SpillableColumnarBatchImpl(
       handle,

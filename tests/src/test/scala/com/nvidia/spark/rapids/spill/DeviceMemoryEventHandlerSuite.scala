@@ -16,12 +16,16 @@
 
 package com.nvidia.spark.rapids.spill
 
+import com.nvidia.spark.rapids.GpuSemaphore
 import org.mockito.ArgumentMatchers.any
 import org.mockito.Mockito.when
-import org.scalatest.FunSuite
+import org.scalatest.{BeforeAndAfterAll, FunSuite}
 import org.scalatest.mockito.MockitoSugar
 
-class DeviceMemoryEventHandlerSuite extends FunSuite with MockitoSugar {
+class DeviceMemoryEventHandlerSuite extends FunSuite with MockitoSugar with BeforeAndAfterAll {
+  override def afterAll(): Unit = {
+    GpuSemaphore.shutdown()
+  }
 
   test("a failed allocation should be retried if we spilled enough") {
     val mockCatalog = mock[RapidsBufferCatalog]

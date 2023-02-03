@@ -951,11 +951,7 @@ class RapidsCachingWriter[K, V](
         } else {
           // no device data, tracking only metadata
           val tableMeta = MetaUtils.buildDegenerateTableMeta(batch)
-          val handle =
-            catalog.addDegenerateRapidsBuffer(
-              blockId,
-              tableMeta,
-              RapidsBuffer.defaultSpillCallback)
+          val handle = catalog.addDegenerateRapidsBuffer(blockId, tableMeta)
 
           // The size of the data is really only used to tell if the data should be shuffled or not
           // a 0 indicates that we should not shuffle anything.  This is here for the special case
