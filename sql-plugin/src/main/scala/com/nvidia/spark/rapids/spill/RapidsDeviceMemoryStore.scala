@@ -25,7 +25,7 @@ import com.nvidia.spark.rapids.spill.StorageTier.StorageTier
  * Buffer storage using device memory.
  * @param catalog catalog to register this store
  */
-private[spill] class RapidsDeviceMemoryStore
+class RapidsDeviceMemoryStore
   extends RapidsBufferStore(StorageTier.DEVICE) with Arm {
 
   // The RapidsDeviceMemoryStore handles spillability via ref counting
@@ -75,7 +75,7 @@ private[spill] class RapidsDeviceMemoryStore
    *                  this device buffer (defaults to true)
    * @return the RapidsBuffer instance that was added.
    */
-  def addBuffer(
+  private[spill] def addBuffer(
       id: RapidsBufferId,
       buffer: DeviceMemoryBuffer,
       tableMeta: TableMeta,
@@ -124,7 +124,7 @@ private[spill] class RapidsDeviceMemoryStore
     doSetSpillable(buffer, spillable)
   }
 
-  class RapidsDeviceMemoryBuffer(
+  private class RapidsDeviceMemoryBuffer(
       id: RapidsBufferId,
       size: Long,
       meta: TableMeta,

@@ -52,18 +52,17 @@ class RapidsBufferCatalogSuite extends FunSuite with MockitoSugar with Arm {
     val catalog = new RapidsBufferCatalog
     val bufferId = MockBufferId(5)
     val buffer = mockBuffer(bufferId)
-    catalog.registerNewBuffer(buffer)
+    catalog.registerNewBuffer(buffer, -1, RapidsBuffer.defaultSpillCallback)
     val buffer2 = mockBuffer(bufferId)
-    assertThrows[DuplicateBufferException](catalog.registerNewBuffer(buffer2))
+    assertThrows[DuplicateBufferException](
+      catalog.registerNewBuffer(buffer2, -1, RapidsBuffer.defaultSpillCallback))
   }
 
   test("a second handle prevents buffer to be removed") {
     val catalog = new RapidsBufferCatalog
     val bufferId = MockBufferId(5)
     val buffer = mockBuffer(bufferId)
-    catalog.registerNewBuffer(buffer)
-    val handle1 =
-      catalog.makeNewHandle(bufferId, -1, RapidsBuffer.defaultSpillCallback)
+    val handle1 = catalog.registerNewBuffer(buffer, -1, RapidsBuffer.defaultSpillCallback)
     val handle2 =
       catalog.makeNewHandle(bufferId, -1, RapidsBuffer.defaultSpillCallback)
 
@@ -84,9 +83,7 @@ class RapidsBufferCatalogSuite extends FunSuite with MockitoSugar with Arm {
     val catalog = new RapidsBufferCatalog
     val bufferId = MockBufferId(5)
     val buffer = mockBuffer(bufferId, initialPriority = -1)
-    catalog.registerNewBuffer(buffer)
-    val handle1 =
-      catalog.makeNewHandle(bufferId, -1, RapidsBuffer.defaultSpillCallback)
+    val handle1 = catalog.registerNewBuffer(buffer, -1, RapidsBuffer.defaultSpillCallback)
     withResource(catalog.acquireBuffer(handle1)) { buff =>
       assertResult(-1)(buff.getSpillPriority)
     }
@@ -123,9 +120,7 @@ class RapidsBufferCatalogSuite extends FunSuite with MockitoSugar with Arm {
     val catalog = new RapidsBufferCatalog
     val bufferId = MockBufferId(5)
     val buffer = mockBuffer(bufferId, initialPriority = -1)
-    catalog.registerNewBuffer(buffer)
-    val handle1 =
-      catalog.makeNewHandle(bufferId, -1, null)
+    val handle1 = catalog.registerNewBuffer(buffer, -1, null)
     withResource(catalog.acquireBuffer(handle1)) { buff =>
       assertResult(null)(buff.getSpillCallback)
     }
@@ -167,12 +162,11 @@ class RapidsBufferCatalogSuite extends FunSuite with MockitoSugar with Arm {
     val catalog = new RapidsBufferCatalog
     val bufferId = MockBufferId(5)
     val buffer = mockBuffer(bufferId, tier = StorageTier.DEVICE)
-    catalog.registerNewBuffer(buffer)
-    val handle = catalog.makeNewHandle(bufferId, 0, RapidsBuffer.defaultSpillCallback)
+    val handle = catalog.registerNewBuffer(buffer, 0, RapidsBuffer.defaultSpillCallback)
     val buffer2 = mockBuffer(bufferId, tier = StorageTier.HOST)
-    catalog.registerNewBuffer(buffer2)
+    catalog.registerBuffer(buffer2)
     val buffer3 = mockBuffer(bufferId, tier = StorageTier.DISK)
-    catalog.registerNewBuffer(buffer3)
+    catalog.registerBuffer(buffer3)
     val acquired = catalog.acquireBuffer(handle)
     assertResult(5)(acquired.id.tableId)
     assertResult(buffer)(acquired)
@@ -185,8 +179,7 @@ class RapidsBufferCatalogSuite extends FunSuite with MockitoSugar with Arm {
     val catalog = new RapidsBufferCatalog
     val bufferId = MockBufferId(5)
     val buffer = mockBuffer(bufferId)
-    catalog.registerNewBuffer(buffer)
-    val handle = catalog.makeNewHandle(bufferId, 0, RapidsBuffer.defaultSpillCallback)
+    val handle = catalog.registerNewBuffer(buffer, 0, RapidsBuffer.defaultSpillCallback)
     val acquired = catalog.acquireBuffer(handle)
     assertResult(5)(acquired.id.tableId)
     assertResult(buffer)(acquired)
@@ -199,8 +192,7 @@ class RapidsBufferCatalogSuite extends FunSuite with MockitoSugar with Arm {
     val catalog = new RapidsBufferCatalog
     val bufferId = MockBufferId(5)
     val buffer = mockBuffer(bufferId, acquireAttempts = 9)
-    catalog.registerNewBuffer(buffer)
-    val handle = catalog.makeNewHandle(bufferId, 0, RapidsBuffer.defaultSpillCallback)
+    val handle = catalog.registerNewBuffer(buffer, 0, RapidsBuffer.defaultSpillCallback)
     val acquired = catalog.acquireBuffer(handle)
     assertResult(5)(acquired.id.tableId)
     assertResult(buffer)(acquired)
@@ -213,9 +205,9 @@ class RapidsBufferCatalogSuite extends FunSuite with MockitoSugar with Arm {
     val catalog = new RapidsBufferCatalog
     val bufferId = MockBufferId(5)
     val buffer = mockBuffer(bufferId, tier = StorageTier.DEVICE)
-    catalog.registerNewBuffer(buffer)
+    catalog.registerBuffer(buffer)
     val buffer2 = mockBuffer(bufferId, tier = StorageTier.HOST)
-    catalog.registerNewBuffer(buffer2)
+    catalog.registerBuffer(buffer2)
     val acquired = catalog.acquireBuffer(MockBufferId(5), StorageTier.HOST).get
     assertResult(5)(acquired.id.tableId)
     assertResult(buffer2)(acquired)
@@ -226,7 +218,7 @@ class RapidsBufferCatalogSuite extends FunSuite with MockitoSugar with Arm {
     val catalog = new RapidsBufferCatalog
     val bufferId = MockBufferId(5)
     val buffer = mockBuffer(bufferId, tier = StorageTier.HOST)
-    catalog.registerNewBuffer(buffer)
+    catalog.registerBuffer(buffer)
     assert(catalog.acquireBuffer(MockBufferId(5), StorageTier.DEVICE).isEmpty)
     assert(catalog.acquireBuffer(MockBufferId(5), StorageTier.DISK).isEmpty)
   }
@@ -236,7 +228,7 @@ class RapidsBufferCatalogSuite extends FunSuite with MockitoSugar with Arm {
     val bufferId = MockBufferId(5)
     val expectedMeta = new TableMeta
     val buffer = mockBuffer(bufferId, tableMeta = expectedMeta)
-    catalog.registerNewBuffer(buffer)
+    catalog.registerBuffer(buffer)
     val meta = catalog.getBufferMeta(bufferId)
     assertResult(expectedMeta)(meta)
   }
@@ -245,11 +237,11 @@ class RapidsBufferCatalogSuite extends FunSuite with MockitoSugar with Arm {
     val catalog = new RapidsBufferCatalog
     val bufferId = MockBufferId(5)
     val buffer = mockBuffer(bufferId, tier = StorageTier.DEVICE)
-    catalog.registerNewBuffer(buffer)
+    catalog.registerBuffer(buffer)
     val buffer2 = mockBuffer(bufferId, tier = StorageTier.HOST)
-    catalog.registerNewBuffer(buffer2)
+    catalog.registerBuffer(buffer2)
     val buffer3 = mockBuffer(bufferId, tier = StorageTier.DISK)
-    catalog.registerNewBuffer(buffer3)
+    catalog.registerBuffer(buffer3)
     assert(catalog.isBufferSpilled(bufferId, StorageTier.DEVICE))
     assert(catalog.isBufferSpilled(bufferId, StorageTier.HOST))
     assert(!catalog.isBufferSpilled(bufferId, StorageTier.DISK))
@@ -259,11 +251,11 @@ class RapidsBufferCatalogSuite extends FunSuite with MockitoSugar with Arm {
     val catalog = new RapidsBufferCatalog
     val bufferId = MockBufferId(5)
     val buffer = mockBuffer(bufferId, tier = StorageTier.DEVICE)
-    catalog.registerNewBuffer(buffer)
+    catalog.registerBuffer(buffer)
     val buffer2 = mockBuffer(bufferId, tier = StorageTier.HOST)
-    catalog.registerNewBuffer(buffer2)
+    catalog.registerBuffer(buffer2)
     val buffer3 = mockBuffer(bufferId, tier = StorageTier.DISK)
-    catalog.registerNewBuffer(buffer3)
+    catalog.registerBuffer(buffer3)
     catalog.removeBufferTier(bufferId, StorageTier.DEVICE)
     catalog.removeBufferTier(bufferId, StorageTier.DISK)
     assert(catalog.acquireBuffer(MockBufferId(5), StorageTier.DEVICE).isEmpty)
@@ -275,7 +267,7 @@ class RapidsBufferCatalogSuite extends FunSuite with MockitoSugar with Arm {
     val catalog = new RapidsBufferCatalog
     val bufferId = MockBufferId(5)
     val buffer = mockBuffer(bufferId, tier = StorageTier.DEVICE)
-    catalog.registerNewBuffer(buffer)
+    catalog.registerBuffer(buffer)
     catalog.removeBufferTier(bufferId, StorageTier.HOST)
     catalog.removeBufferTier(bufferId, StorageTier.DISK)
     assert(catalog.acquireBuffer(MockBufferId(5), StorageTier.DEVICE).isDefined)
@@ -287,7 +279,7 @@ class RapidsBufferCatalogSuite extends FunSuite with MockitoSugar with Arm {
     val catalog = new RapidsBufferCatalog
     val bufferId = MockBufferId(5)
     val buffer = mockBuffer(bufferId)
-    catalog.registerNewBuffer(buffer)
+    catalog.registerBuffer(buffer)
     val handle = catalog.makeNewHandle(
       bufferId, -1, RapidsBuffer.defaultSpillCallback)
     handle.close()
@@ -298,16 +290,16 @@ class RapidsBufferCatalogSuite extends FunSuite with MockitoSugar with Arm {
     val catalog = new RapidsBufferCatalog
     val bufferId = MockBufferId(5)
     val buffer = mockBuffer(bufferId, tier = StorageTier.DEVICE)
-    catalog.registerNewBuffer(buffer)
+    catalog.registerBuffer(buffer)
     val handle = catalog.makeNewHandle(
       bufferId, -1, RapidsBuffer.defaultSpillCallback)
 
     // these next registrations don't get their own handle. This is an internal
     // operation from the store where it has spilled to host and disk the RapidsBuffer
     val buffer2 = mockBuffer(bufferId, tier = StorageTier.HOST)
-    catalog.registerNewBuffer(buffer2)
+    catalog.registerBuffer(buffer2)
     val buffer3 = mockBuffer(bufferId, tier = StorageTier.DISK)
-    catalog.registerNewBuffer(buffer3)
+    catalog.registerBuffer(buffer3)
 
     // removing the original handle removes all buffers from all tiers.
     handle.close()
