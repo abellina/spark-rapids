@@ -142,10 +142,9 @@ class ShuffleBufferCatalog(
    */
   def addDegenerateRapidsBuffer(
       blockId: ShuffleBlockId,
-      meta: TableMeta,
-      spillCallback: SpillMetricsCallback): RapidsBufferHandle = {
+      meta: TableMeta): RapidsBufferHandle = {
     val bufferId = nextShuffleBufferId(blockId)
-    val handle = catalog.registerDegenerateBuffer(bufferId, meta, spillCallback)
+    val handle = catalog.registerDegenerateBuffer(bufferId, meta)
     trackCachedHandle(bufferId, handle)
     handle
   }

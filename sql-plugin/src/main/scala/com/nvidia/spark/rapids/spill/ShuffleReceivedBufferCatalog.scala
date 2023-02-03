@@ -103,11 +103,9 @@ class ShuffleReceivedBufferCatalog(
    *                      It should never allocate GPU memory and really just be used for metrics.
    * @return RapidsBufferHandle associated with this buffer
    */
-  def addDegenerateRapidsBuffer(
-      meta: TableMeta,
-      spillCallback: SpillMetricsCallback = RapidsBuffer.defaultSpillCallback): RapidsBufferHandle = {
+  def addDegenerateRapidsBuffer(meta: TableMeta): RapidsBufferHandle = {
     val bufferId = nextShuffleReceivedBufferId()
-    catalog.registerDegenerateBuffer(bufferId, meta, spillCallback)
+    catalog.registerDegenerateBuffer(bufferId, meta)
   }
 
   /**

@@ -386,7 +386,7 @@ class RapidsBufferCatalog(
       initialSpillPriority,
       spillCallback,
       needsSync)
-    registerNewBuffer(rapidsBuffer, initialSpillPriority, spillCallback)
+    registerNewBuffer(rapidsBuffer)
   }
 
   /**
@@ -395,10 +395,9 @@ class RapidsBufferCatalog(
    */
   def registerDegenerateBuffer(
       bufferId: RapidsBufferId,
-      meta: TableMeta,
-      spillCallback: SpillMetricsCallback): RapidsBufferHandle = synchronized {
+      meta: TableMeta): RapidsBufferHandle = synchronized {
     val buffer = new DegenerateRapidsBuffer(bufferId, meta)
-    registerNewBuffer(buffer, buffer.getSpillPriority, spillCallback)
+    registerNewBuffer(buffer)
   }
 
   /**
@@ -508,12 +507,9 @@ class RapidsBufferCatalog(
     bufferMap.compute(buffer.id, updater)
   }
 
-  def registerNewBuffer(
-      buffer: RapidsBuffer,
-      initialSpillPriority: Long,
-      spillCallback: SpillMetricsCallback): RapidsBufferHandle = {
+  def registerNewBuffer(buffer: RapidsBuffer): RapidsBufferHandle = {
     registerBuffer(buffer)
-    makeNewHandle(buffer.id, initialSpillPriority, spillCallback)
+    makeNewHandle(buffer.id, buffer.getSpillPriority, buffer.getSpillCallback)
   }
 
   /**
