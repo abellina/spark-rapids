@@ -349,8 +349,36 @@ abstract class BaseHashJoinIterator(
 
   private def countGroups(keys: ColumnarBatch): Table = {
     withResource(GpuColumnVector.from(keys)) { keysTable =>
-      keysTable.groupBy(0 until keysTable.getNumberOfColumns: _*)
+      if (keysTable.getRowCount.toInt == keysTable.getRowCount) {
+        logInfo(s"keysTable.getRowCount=${keysTable.getRowCount}. " +
+            s"Splitting at ${keysTable.getRowCount/2}")
+        var cts = keysTable.contiguousSplit((keysTable.getRowCount / 2).toInt)
+        logInfo(s"Got ${cts.length} splits. " +
+            s"Input tables have ${cts.map(_.getTable.getNumberOfColumns).mkString(",")} cols." +
+            s"Input tables have ${cts.map(_.getTable.getRowCount).mkString(",")} rows.")
+
+        val (g1, g2) = {
+          // consumes t1, and t2 progressively
+          (withResource(cts(0))(_.getTable.groupBy(0 until keysTable.getNumberOfColumns: _*)
+              .aggregate(GroupByAggregation.count(NullPolicy.INCLUDE).onColumn(0))),
+           withResource(cts(1))(_.getTable.groupBy(0 until keysTable.getNumberOfColumns: _*)
+               .aggregate(GroupByAggregation.count(NullPolicy.INCLUDE).onColumn(0))))
+        }
+
+        logInfo(
+            s"Counted tables have ${Seq(g1,g2).map(_.getNumberOfColumns).mkString(",")} cols." +
+            s"Counted tables have ${Seq(g1,g2).map(_.getRowCount).mkString(",")} rows.")
+
+        val toSum = withResource(Seq(g1, g2)) { _ => Table.concatenate(g1, g2) }
+        withResource(toSum) { _ =>
+          toSum.groupBy(0 until keysTable.getNumberOfColumns: _*)
+              .aggregate(GroupByAggregation.sum()
+                  .onColumn(keysTable.getNumberOfColumns))
+        }
+      } else {
+        keysTable.groupBy(0 until keysTable.getNumberOfColumns: _*)
           .aggregate(GroupByAggregation.count(NullPolicy.INCLUDE).onColumn(0))
+      }
     }
   }
 
