@@ -32,7 +32,7 @@ private[spill] class RapidsDiskStore(diskBlockManager: RapidsDiskBlockManager)
     extends RapidsBufferStore(StorageTier.DISK) {
   private[this] val sharedBufferFiles = new ConcurrentHashMap[RapidsBufferId, File]
 
-  override protected def tryCreateBuffer(
+  override protected def createBuffer(
       srcBuffer: RapidsBuffer,
       incomingBuffer: MemoryBuffer,
       stream: Cuda.Stream): RapidsBufferBase = {
@@ -55,14 +55,14 @@ private[spill] class RapidsDiskStore(diskBlockManager: RapidsDiskBlockManager)
       } else {
         copyBufferToPath(hostBuffer, path, append = false)
       }
-      logDebug(s"Spilled to $path $fileOffset:${incoming.size}")
+      logDebug(s"Spilled to $path $fileOffset:${srcBuffer.size}")
       new RapidsDiskBuffer(
         id,
         fileOffset,
-        incoming.size,
-        incoming.meta,
-        incoming.getSpillPriority,
-        incoming.getSpillCallback)
+        srcBuffer.size,
+        srcBuffer.meta,
+        srcBuffer.getSpillPriority,
+        srcBuffer.getSpillCallback)
     }
   }
 

@@ -17,11 +17,12 @@
 package com.nvidia.spark.rapids
 
 import scala.collection.mutable.ArrayBuffer
+
 import ai.rapids.cudf.{Cuda, NvtxColor, Table}
-import com.nvidia.spark.rapids
 import com.nvidia.spark.rapids.RapidsPluginImplicits._
 import com.nvidia.spark.rapids.shims.{ShimExpression, ShimUnaryExecNode}
 import com.nvidia.spark.rapids.spill.{SpillMetricsCallback, SpillPriorities}
+
 import org.apache.spark.TaskContext
 import org.apache.spark.internal.Logging
 import org.apache.spark.rdd.RDD

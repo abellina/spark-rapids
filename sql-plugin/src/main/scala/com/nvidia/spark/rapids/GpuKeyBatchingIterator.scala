@@ -17,9 +17,10 @@
 package com.nvidia.spark.rapids
 
 import scala.collection.mutable
+
 import ai.rapids.cudf.{ColumnVector, NvtxColor, Table}
-import com.nvidia.spark.rapids
 import com.nvidia.spark.rapids.spill.{SpillMetricsCallback, SpillPriorities}
+
 import org.apache.spark.TaskContext
 import org.apache.spark.sql.catalyst.expressions.{Attribute, SortOrder}
 import org.apache.spark.sql.types.DataType

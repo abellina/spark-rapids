@@ -31,7 +31,11 @@ class SerializationSuite extends FunSuite
   with BeforeAndAfterAll with Arm with MockitoSugar{
 
   override def beforeAll(): Unit = {
-    RapidsBufferCatalog.setDeviceStorage(mock[RapidsDeviceMemoryStore])
+    RapidsBufferCatalog.initForTests(mock[RapidsDeviceMemoryStore])
+  }
+
+  override def afterAll(): Unit = {
+    RapidsBufferCatalog.close()
   }
 
   private def buildBatch(): ColumnarBatch = {

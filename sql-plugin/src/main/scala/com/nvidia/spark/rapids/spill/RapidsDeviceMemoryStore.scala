@@ -31,7 +31,7 @@ class RapidsDeviceMemoryStore
   // The RapidsDeviceMemoryStore handles spillability via ref counting
   override protected def spillableOnAdd: Boolean = false
 
-  override protected def tryCreateBuffer(
+  override protected def createBuffer(
       srcBuffer: RapidsBuffer,
       memoryBuffer: MemoryBuffer,
       stream: Cuda.Stream): RapidsBufferBase = {
@@ -50,12 +50,12 @@ class RapidsDeviceMemoryStore
       }
     }
     new RapidsDeviceMemoryBuffer(
-      other.id,
-      other.size,
-      other.meta,
+      srcBuffer.id,
+      srcBuffer.size,
+      srcBuffer.meta,
       deviceBuffer,
-      other.getSpillPriority,
-      other.getSpillCallback)
+      srcBuffer.getSpillPriority,
+      srcBuffer.getSpillCallback)
   }
 
   /**

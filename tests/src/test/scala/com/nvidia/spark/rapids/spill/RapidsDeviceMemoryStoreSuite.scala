@@ -316,7 +316,7 @@ class RapidsDeviceMemoryStoreSuite extends FunSuite with Arm with MockitoSugar {
   class MockSpillStore extends RapidsBufferStore(StorageTier.HOST) with Arm {
     val spilledBuffers = new ArrayBuffer[RapidsBufferId]
 
-    override protected def tryCreateBuffer(
+    override protected def createBuffer(
         b: RapidsBuffer,
         m: MemoryBuffer,
         s: Cuda.Stream): RapidsBufferBase = {

@@ -19,8 +19,9 @@ package com.nvidia.spark.rapids.spill
 import java.io.File
 
 import ai.rapids.cudf.{Cuda, DeviceMemoryBuffer, MemoryBuffer}
-import com.nvidia.spark.rapids.{Arm, GpuMetric}
+import com.nvidia.spark.rapids.{Arm, GpuMetric, MetaUtils}
 import com.nvidia.spark.rapids.format.TableMeta
+import com.nvidia.spark.rapids.spill.StorageTier.StorageTier
 import org.mockito.ArgumentMatchers.any
 import org.mockito.Mockito._
 import org.scalatest.FunSuite
@@ -251,9 +252,10 @@ class RapidsBufferCatalogSuite extends FunSuite with MockitoSugar with Arm {
     val deviceStore = spy(new RapidsDeviceMemoryStore)
     val mockStore = mock[RapidsBufferStore]
     val hostStore = new RapidsHostMemoryStore(10000, 1000)
-    deviceStore.setSpillStore(hostStore)
-    hostStore.setSpillStore(mockStore)
+
     val catalog = new RapidsBufferCatalog(deviceStore)
+    catalog.setSpillStorage(deviceStore, hostStore)
+    catalog.setSpillStorage(hostStore, mockStore)
     val handle = withResource(DeviceMemoryBuffer.allocate(1024)) { buff =>
       val meta = MetaUtils.getTableMetaNoTable(buff)
       catalog.addBuffer(
@@ -263,14 +265,14 @@ class RapidsBufferCatalogSuite extends FunSuite with MockitoSugar with Arm {
       catalog.synchronousSpill(deviceStore, 0)
       val acquiredHostBuffer = catalog.acquireBuffer(handle)
       withResource(acquiredHostBuffer) { _ =>
-        assertResult(HOST)(acquiredHostBuffer.storageTier)
+        assertResult(StorageTier.HOST)(acquiredHostBuffer.storageTier)
         val unspilled =
           catalog.unspillBufferToDeviceStore(
             acquiredHostBuffer,
             acquiredHostBuffer.getMemoryBuffer,
             Cuda.DEFAULT_STREAM)
         withResource(unspilled) { _ =>
-          assertResult(DEVICE)(unspilled.storageTier)
+          assertResult(StorageTier.DEVICE)(unspilled.storageTier)
         }
         val unspilledSame = catalog.unspillBufferToDeviceStore(
           acquiredHostBuffer,

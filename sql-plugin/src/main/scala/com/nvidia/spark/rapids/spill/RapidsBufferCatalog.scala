@@ -22,14 +22,13 @@ import java.util.function.BiFunction
 import scala.collection.mutable
 
 import ai.rapids.cudf.{ContiguousTable, Cuda, DeviceMemoryBuffer, HostMemoryBuffer, MemoryBuffer, NvtxColor, NvtxRange, Rmm, Table}
-import com.nvidia.spark.rapids.RapidsBufferCatalog.getExistingRapidsBufferAndAcquire
-import com.nvidia.spark.rapids.{Arm, DeviceMemoryEventHandler, GpuColumnVectorFromBuffer, GpuCompressedColumnVector, GpuMetric, GpuSemaphore, MetaUtils, RapidsConf}
+import com.nvidia.spark.rapids.{Arm, GpuColumnVectorFromBuffer, GpuCompressedColumnVector, GpuMetric, GpuSemaphore, MetaUtils, RapidsConf}
 import com.nvidia.spark.rapids.RapidsPluginImplicits._
 import com.nvidia.spark.rapids.format.TableMeta
+import com.nvidia.spark.rapids.spill.RapidsBufferCatalog.getExistingRapidsBufferAndAcquire
+import com.nvidia.spark.rapids.spill.StorageTier.StorageTier
 
-import org.apache.spark.{SparkConf, SparkEnv}
-import org.apache.spark.TaskContext
-
+import org.apache.spark.{SparkConf, SparkEnv, TaskContext}
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.rapids.RapidsDiskBlockManager
 import org.apache.spark.sql.rapids.execution.TrampolineUtil
@@ -488,10 +487,9 @@ class RapidsBufferCatalog(
       store: RapidsBufferStore,
       targetTotalSize: Long,
       stream: Cuda.Stream = Cuda.DEFAULT_STREAM): Option[Long] = {
-    val spillStore = store.spillStore
-    if (spillStore == null) {
-      throw new OutOfMemoryError("Requested to spill without a spill store")
-    }
+    val spillStore = spillStores.getOrElse(store,
+      throw new OutOfMemoryError("Requested to spill without a spill store"))
+
     require(targetTotalSize >= 0, s"Negative spill target size: $targetTotalSize")
     logWarning(s"Targeting a ${store.name} size of $targetTotalSize. " +
       s"Current total ${store.currentSize}. " +
@@ -613,18 +611,20 @@ class RapidsBufferCatalog(
   def getDeviceMemoryBuffer(handle: RapidsBufferHandle): DeviceMemoryBuffer = {
     val id = handle.id
     if (RapidsBufferCatalog.shouldUnspill) {
-      withResource(acquireBuffer(id)) { buffer =>
+      withResource(acquireBuffer(handle)) { buffer =>
         buffer.storageTier match {
           case StorageTier.DEVICE =>
             return buffer.getDeviceMemoryBuffer
           case _ =>
             try {
               logDebug(s"Unspilling $id to DEVICE")
-              val deviceMemoryBuffer = unspillAndGetDeviceMemoryBuffer(
+              val buff = unspillBufferToDeviceStore(
                 buffer,
                 buffer.getMemoryBuffer,
                 Cuda.DEFAULT_STREAM)
-              return deviceMemoryBuffer
+              withResource(buff) { _ =>
+                buff.getDeviceMemoryBuffer
+              }
             } catch {
               case _: DuplicateBufferException =>
                 logDebug(s"Lost device buffer registration race for buffer $id, retrying...")
@@ -633,7 +633,7 @@ class RapidsBufferCatalog(
       }
       throw new IllegalStateException(s"Unable to get device memory buffer for ID: $id")
     } else {
-      withResource(acquireBuffer(id)) { buffer =>
+      withResource(acquireBuffer(handle)) { buffer =>
         buffer.getMemoryBuffer match {
           case h: HostMemoryBuffer =>
             withResource(h) { _ =>
@@ -712,17 +712,18 @@ class RapidsBufferCatalog(
 
   /**
    * Copies `buffer` to the `deviceStorage` store, registering a new `RapidsBuffer` in
-   * the process and obtaining the `DeviceMemoryBuffer` reference.
-   * It is the responsibility of the caller to close the `DeviceMemoryBuffer`
+   * the process.
+   * It is the responsibility of the caller to close the `RapidsBuffer`
    * @param buffer - buffer to copy
    * @param memoryBuffer - cuDF MemoryBuffer to copy from
    * @param stream - Cuda.Stream to synchronize on
    * @return - The `RapidsBuffer` instance that was added to the device store.
+   * @note package private for testing
    */
-  private def unspillAndGetDeviceMemoryBuffer(
+  private[spill] def unspillBufferToDeviceStore(
     buffer: RapidsBuffer,
     memoryBuffer: MemoryBuffer,
-    stream: Cuda.Stream): RapidsBuffer = synchronized {
+    stream: Cuda.Stream): RapidsBuffer = {
     // try to acquire the buffer, if it's already in the store
     // do not create a new one, else add a reference
     acquireBuffer(buffer.id, StorageTier.DEVICE) match {
@@ -831,11 +832,6 @@ object RapidsBufferCatalog extends Logging with Arm {
     }
   }
 
-  // For testing
-  def setDeviceStorage(rdms: RapidsDeviceMemoryStore): Unit = {
-    deviceStorage = rdms
-  }
-
   def init(rapidsConf: RapidsConf): Unit = synchronized {
     // We are going to re-initialize so make sure all of the old things were closed...
     closeImpl()
@@ -868,6 +864,11 @@ object RapidsBufferCatalog extends Logging with Arm {
     Rmm.setEventHandler(memoryEventHandler)
 
     _shouldUnspill = rapidsConf.isUnspillEnabled
+  }
+
+  def initForTests(devStore: RapidsDeviceMemoryStore): Unit= synchronized {
+    deviceStorage = devStore
+    _singleton = new RapidsBufferCatalog(deviceStorage)
   }
 
   def close(): Unit = {

@@ -217,7 +217,7 @@ private[spill] abstract class RapidsBufferStore(val tier: StorageTier)
    * @param stream CUDA stream to use or null
    * @return the new buffer that was created.
    */
-  protected def tryCreateBuffer(
+  protected def createBuffer(
      srcBuffer: RapidsBuffer,
      memoryBuffer: MemoryBuffer,
      stream: Cuda.Stream): RapidsBufferBase
