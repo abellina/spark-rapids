@@ -560,7 +560,7 @@ class GpuCoalesceIterator(iter: Iterator[ColumnarBatch],
     closeOnExcept(batch) { _ =>
       assert(onDeck.isEmpty)
     }
-    onDeck = Some(rapids.SpillableColumnarBatch(batch, SpillPriorities.ACTIVE_ON_DECK_PRIORITY,
+    onDeck = Some(SpillableColumnarBatch(batch, SpillPriorities.ACTIVE_ON_DECK_PRIORITY,
       spillCallback))
   }
 

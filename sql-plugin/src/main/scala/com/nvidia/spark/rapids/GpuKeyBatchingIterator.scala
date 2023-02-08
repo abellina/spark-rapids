@@ -176,7 +176,7 @@ class GpuKeyBatchingIterator(
               peakDevMemory.set(Math.max(peakDevMemory.value, cbSize))
               // Everything is for a single key, so save it away and try the next batch...
               pending +=
-                  rapids.SpillableColumnarBatch(GpuColumnVector.incRefCounts(cb),
+                  SpillableColumnarBatch(GpuColumnVector.incRefCounts(cb),
                     SpillPriorities.ACTIVE_ON_DECK_PRIORITY, spillCallback)
               pendingSize += cbSize
             } else {
@@ -189,7 +189,7 @@ class GpuKeyBatchingIterator(
                   val savedSize = tables(1).getBuffer.getLength
                   peak += savedSize
                   pending +=
-                      rapids.SpillableColumnarBatch(tables(1), types,
+                      SpillableColumnarBatch(tables(1), types,
                         SpillPriorities.ACTIVE_ON_DECK_PRIORITY, spillCallback)
                   pendingSize += savedSize
                   numOutputRows += ret.numRows()

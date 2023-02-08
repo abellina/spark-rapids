@@ -293,7 +293,7 @@ class LazySpillableColumnarBatchImpl(
     if (spill.isEmpty && cached.isDefined) {
       withResource(new NvtxRange("spill batch " + name, NvtxColor.RED)) { _ =>
         // First time we need to allow for spilling
-        spill = Some(rapids.SpillableColumnarBatch(cached.get,
+        spill = Some(SpillableColumnarBatch(cached.get,
           SpillPriorities.ACTIVE_ON_DECK_PRIORITY,
           spillCallback))
         // Putting data in a SpillableColumnarBatch takes ownership of it.
@@ -369,7 +369,7 @@ class LazySpillableGatherMapImpl(
     if (spill.isEmpty && cached.isDefined) {
       withResource(new NvtxRange("spill map " + name, NvtxColor.RED)) { _ =>
         // First time we need to allow for spilling
-        spill = Some(rapids.SpillableBuffer(cached.get,
+        spill = Some(SpillableBuffer(cached.get,
           SpillPriorities.ACTIVE_ON_DECK_PRIORITY,
           spillCallback))
         // Putting data in a SpillableBuffer takes ownership of it.
