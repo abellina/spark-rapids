@@ -22,6 +22,7 @@ import scala.collection.mutable
 
 import ai.rapids.cudf.{HostBufferConsumer, HostMemoryBuffer, NvtxColor, NvtxRange, Table, TableWriter}
 import com.nvidia.spark.rapids.RapidsPluginImplicits._
+import com.nvidia.spark.rapids.RmmRapidsRetryIterator.{splitSpillableInHalfByRows, withRetrySingle}
 import org.apache.hadoop.fs.{FSDataOutputStream, Path}
 import org.apache.hadoop.mapreduce.TaskAttemptContext
 
@@ -97,16 +98,21 @@ abstract class ColumnarOutputWriter(context: TaskAttemptContext,
   def writeAndClose(
       batch: ColumnarBatch,
       statsTrackers: Seq[ColumnarWriteTaskStatsTracker]): Unit = {
-    var needToCloseBatch = true
-    try {
+    // make batch spillable
+    val spillable =
+      SpillableColumnarBatch(
+        batch,
+        SpillPriorities.ACTIVE_ON_DECK_PRIORITY,
+        RapidsBuffer.defaultSpillCallback)
+
+    withRetrySingle(spillable, splitSpillableInHalfByRows) { attempt =>
       val writeStartTimestamp = System.nanoTime
-      val writeRange = new NvtxRange("File write", NvtxColor.YELLOW)
-      val gpuTime = try {
-        needToCloseBatch = false
-        writeBatch(batch)
-      } finally {
-        writeRange.close()
-      }
+      val gpuTime =
+        withResource(new NvtxRange("File write", NvtxColor.YELLOW)) { _ =>
+          withResource(attempt.getColumnarBatch()) { attemptCb =>
+            writeBatch(attemptCb)
+          }
+        }
 
       // Update statistics
       val writeTime = System.nanoTime - writeStartTimestamp - gpuTime
@@ -115,10 +121,6 @@ abstract class ColumnarOutputWriter(context: TaskAttemptContext,
           gpuTracker.addWriteTime(writeTime)
           gpuTracker.addGpuTime(gpuTime)
         case _ =>
-      }
-    } finally {
-      if (needToCloseBatch) {
-        batch.close()
       }
     }
   }
@@ -140,29 +142,19 @@ abstract class ColumnarOutputWriter(context: TaskAttemptContext,
    * @return time in ns taken to write the batch
    */
   private[this] def writeBatch(batch: ColumnarBatch): Long = {
-    var needToCloseBatch = true
-    try {
-      val startTimestamp = System.nanoTime
-      withResource(new NvtxRange(s"GPU $rangeName write", NvtxColor.BLUE)) { _ =>
-        withResource(GpuColumnVector.from(batch)) { table =>
-          scanTableBeforeWrite(table)
-          anythingWritten = true
-          tableWriter.write(table)
-        }
-      }
-
-      // Batch is no longer needed, write process from here does not use GPU.
-      batch.close()
-      needToCloseBatch = false
-      GpuSemaphore.releaseIfNecessary(TaskContext.get)
-      val gpuTime = System.nanoTime - startTimestamp
-      writeBufferedData()
-      gpuTime
-    } finally {
-      if (needToCloseBatch) {
-        batch.close()
+    val startTimestamp = System.nanoTime
+    withResource(new NvtxRange(s"GPU $rangeName write", NvtxColor.BLUE)) { _ =>
+      withResource(GpuColumnVector.from(batch)) { table =>
+        anythingWritten = true
+        tableWriter.write(table)
       }
     }
+
+    // Batch is no longer needed, write process from here does not use GPU.
+    GpuSemaphore.releaseIfNecessary(TaskContext.get)
+    val gpuTime = System.nanoTime - startTimestamp
+    writeBufferedData() // TODO: move this outside of `writeBatch` or move `withRetrySink` in here
+    gpuTime
   }
 
   /**

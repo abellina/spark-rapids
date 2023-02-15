@@ -75,6 +75,31 @@ object RmmRapidsRetryIterator extends Arm {
   }
 
   /**
+   * withRetrySingle for T. This helper calls a function `fn` with the single input `T`,
+   * and it can retry the work in `fn` and optionally split `input` into smaller chunks.
+   * The result is a single item of type K.
+   *
+   * This function will close the elements of `input` as `fn` is successfully
+   * invoked. If the iterator `input` is not empty, in the event of an unhandled
+   * exception, it is closed entirely by `withRetry`.
+   *
+   * @param input a single item T
+   * @param splitPolicy a function that can split an item of type T into a Seq[T]. The split
+   *                    function must close the item passed to it.
+   * @param fn the work to perform. Takes T and produces an output K
+   * @tparam T element type that must be AutoCloseable
+   * @tparam K `fn` result type
+   * @return an iterator of K
+   */
+  def withRetrySingle[T <: AutoCloseable, K](
+      input: T,
+      splitPolicy: T => Seq[T])
+      (fn: T => K): K = {
+    drainSingleWithVerification(
+      new RmmRapidsRetryAutoCloseableIterator(Seq(input).iterator, fn, splitPolicy))
+  }
+
+  /**
    * withRetryNoSplit for T. This helper calls a function `fn` with the `input`, and it will
    * retry the call to `fn` if needed. This does not split the
    * input into multiple chunks. The result is a single item of type K.
