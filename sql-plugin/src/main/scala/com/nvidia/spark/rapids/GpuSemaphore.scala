@@ -97,6 +97,12 @@ object GpuSemaphore {
     }
   }
 
+  def throwIfNotAcquired(): Unit = synchronized {
+    if (instance != null) {
+      instance.throwIfNotAcquired()
+    }
+  }
+
   private val MAX_PERMITS = 1000
 
   private def computeNumPermits(conf: SQLConf): Int = {
@@ -119,6 +125,17 @@ private final class GpuSemaphore() extends Logging with Arm {
   // Map to track which tasks have acquired the semaphore.
   case class TaskInfo(count: MutableInt, thread: Thread, numPermits: Int)
   private val activeTasks = new ConcurrentHashMap[Long, TaskInfo]
+
+  def throwIfNotAcquired(): Unit = {
+    val attemptId = TaskContext.get().taskAttemptId()
+    val refs = activeTasks.get(attemptId)
+    if (refs == null) {
+      throw new IllegalStateException(s"I haven't heard of task ${attemptId}")
+    }
+    if (refs.count.getValue == 0) {
+      throw new IllegalStateException(s"task ${attemptId} doesn't have the semaphore")
+    }
+  }
 
   def acquireIfNecessary(context: TaskContext, waitMetric: GpuMetric): Unit = {
     withResource(new NvtxWithMetrics("Acquire GPU", NvtxColor.RED, waitMetric)) { _ =>

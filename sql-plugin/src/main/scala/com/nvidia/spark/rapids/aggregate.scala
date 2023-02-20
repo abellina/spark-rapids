@@ -239,7 +239,9 @@ class GpuHashAggregateIterator(
       if (cbIter.hasNext) {
         aggregateInputBatches()
         tryMergeAggregatedBatches()
+        GpuSemaphore.throwIfNotAcquired()
       }
+
 
       if (aggregatedBatches.size() > 1) {
         // Unable to merge to a single output, so must fall back to a sort-based approach.
