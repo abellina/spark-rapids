@@ -332,6 +332,10 @@ object GpuHashAggregateIterator extends Arm with Logging {
             case (cudfAgg, ord) => cudfAgg.groupByAggregate.onColumn(ord)
           }
 
+          logInfo(s"Aggregating preprocessed ${preProcessedTbl}. " +
+              s"Grouping ordinals are ${groupingOrdinals}. " +
+              s"cudfAggfs: ${cudfAggregates}, aggOrdinals: ${aggOrdinals}")
+
           // perform the aggregate
           val aggTbl = preProcessedTbl
               .groupBy(groupOptions, groupingOrdinals:_*)
@@ -366,34 +370,51 @@ object GpuHashAggregateIterator extends Arm with Logging {
       // The merge we are trying to do is all or nothing. We materialize the whole
       // sequence of spillables, and need all spillables for this operation to complete.
       val resultsSeq = results.toSeq
+      if (resultsSeq.size == 1) {
+        // we already have a single batch return it
+        logInfo(s"Single batch at merge, " +
+            s"with types: ${resultsSeq.head.dataTypes.mkString("Array(", ", ", ")")}")
+        resultsSeq.head
+      } else {
+        // TODO: does this collection of batches easily merge? I don't think so, especially
+        //   if they were post processed already.
+        val dataTypes = resultsSeq.head.dataTypes
+        logInfo(s"About to merge ${resultsSeq.size} spillables. " +
+            s"Types in spillables are=${dataTypes}")
 
-      // withRetrySingle guarantees resultsSeq is closed on error, and expects
-      // a function that returns 1 item
-      val spillableConcatenated = withRetryNoSplit(resultsSeq) { cbs =>
-        val tbls = cbs.safeMap { sb =>
-          withResource(sb.getColumnarBatch()) { cb =>
-            GpuColumnVector.from(cb)
+        // withRetrySingle guarantees resultsSeq is closed on error, and expects
+        // a function that returns 1 item
+        val spillableConcatenated = withRetryNoSplit(resultsSeq) { cbs =>
+          val tbls = cbs.safeMap { sb =>
+            withResource(sb.getColumnarBatch()) { cb =>
+              GpuColumnVector.from(cb)
+            }
           }
-        }
 
-        withResource(tbls) { _ =>
-          withResource(GpuColumnVector.from(
-            cudf.Table.concatenate(tbls: _*), resultsSeq.head.dataTypes)) { concatCb =>
+          val singleTable = if (tbls.length == 1) {
+            tbls.head
+          } else {
+            withResource(tbls) { _ =>
+              cudf.Table.concatenate(tbls: _*)
+            }
+          }
+
+          withResource(GpuColumnVector.from(singleTable, resultsSeq.head.dataTypes)) { concatCb =>
             SpillableColumnarBatch(
               concatCb,
               SpillPriorities.ACTIVE_ON_DECK_PRIORITY,
               RapidsBuffer.defaultSpillCallback)
           }
         }
-      }
 
-      withRetryNoSplit(spillableConcatenated) { sc =>
-        withResource(sc.getColumnarBatch()) { cb =>
-          val mergeAggregated = mergeHelper.aggregate(cb)
-          SpillableColumnarBatch(mergeAggregated,
-            SpillPriorities.ACTIVE_BATCHING_PRIORITY,
-            // TODO: need to figure out how to pick the right callback
-            RapidsBuffer.defaultSpillCallback)
+        withRetryNoSplit(spillableConcatenated) { sc =>
+          withResource(sc.getColumnarBatch()) { cb =>
+            val mergeAggregated = mergeHelper.aggregate(cb)
+            SpillableColumnarBatch(mergeAggregated,
+              SpillPriorities.ACTIVE_BATCHING_PRIORITY,
+              // TODO: need to figure out how to pick the right callback
+              RapidsBuffer.defaultSpillCallback)
+          }
         }
       }
     }
