@@ -97,6 +97,12 @@ object GpuSemaphore {
     }
   }
 
+  def throwIfNotAcquired(): Unit = synchronized {
+    if (instance != null) {
+      instance.throwIfNotAcquired()
+    }
+  }
+
   private val MAX_PERMITS = 1000
 
   private def computeNumPermits(conf: SQLConf): Int = {
@@ -117,8 +123,24 @@ private final class GpuSemaphore() extends Logging with Arm {
   private val semaphore = new Semaphore(MAX_PERMITS)
 
   // Map to track which tasks have acquired the semaphore.
-  case class TaskInfo(count: MutableInt, thread: Thread, numPermits: Int)
+  case class TaskInfo(
+      count: MutableInt,
+      thread: Thread,
+      numPermits: Int,
+      var lastRelease: String)
   private val activeTasks = new ConcurrentHashMap[Long, TaskInfo]
+
+  def throwIfNotAcquired(): Unit = {
+    val attemptId = TaskContext.get().taskAttemptId()
+    val refs = activeTasks.get(attemptId)
+    if (refs == null) {
+      throw new IllegalStateException(s"I haven't heard of task ${attemptId}")
+    }
+    if (refs.count.getValue == 0) {
+      throw new IllegalStateException(
+        s"task ${attemptId} doesn't have the semaphore. Its last release was ${refs.lastRelease}")
+    }
+  }
 
   def acquireIfNecessary(context: TaskContext, waitMetric: GpuMetric): Unit = {
     withResource(new NvtxWithMetrics("Acquire GPU", NvtxColor.RED, waitMetric)) { _ =>
@@ -138,7 +160,7 @@ private final class GpuSemaphore() extends Logging with Arm {
           // first time this task has been seen
           activeTasks.put(
             taskAttemptId,
-            TaskInfo(new MutableInt(1), Thread.currentThread(), permits))
+            TaskInfo(new MutableInt(1), Thread.currentThread(), permits, "not released"))
           context.addTaskCompletionListener[Unit](completeTask)
         }
         GpuDeviceManager.initializeFromTask()
@@ -154,6 +176,11 @@ private final class GpuSemaphore() extends Logging with Arm {
       if (refs != null && refs.count.getValue > 0) {
         if (refs.count.decrementAndGet() == 0) {
           logDebug(s"Task $taskAttemptId releasing GPU with ${refs.numPermits} permits")
+          val sb = StringBuilder.newBuilder
+          Thread.currentThread().getStackTrace.foreach { stackTraceElement =>
+            sb.append("    " + stackTraceElement + "\n")
+          }
+          refs.lastRelease = sb.toString
           semaphore.release(refs.numPermits)
         }
       }

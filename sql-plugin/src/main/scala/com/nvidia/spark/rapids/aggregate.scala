@@ -425,6 +425,7 @@ object GpuHashAggregateIterator extends Arm with Logging {
       metrics: GpuHashAggregateMetrics,
       inputBatch: ColumnarBatch,
       helper: AggHelper): SpillableColumnarBatch = {
+    GpuSemaphore.throwIfNotAcquired()
     val computeAggTime = metrics.computeAggTime
     val opTime = metrics.opTime
     withResource(new NvtxWithMetrics("computeAggregate", NvtxColor.CYAN, computeAggTime,
@@ -571,6 +572,7 @@ class GpuHashAggregateIterator(
       if (cbIter.hasNext) {
         aggregateInputBatches()
         tryMergeAggregatedBatches()
+        GpuSemaphore.throwIfNotAcquired()
       }
 
       if (aggregatedBatches.size() > 1) {

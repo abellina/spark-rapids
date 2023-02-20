@@ -46,6 +46,7 @@ object GpuBroadcastHelper extends Arm {
           broadcastBatch.batch.getColumnarBatch()
         }
       case v if SparkShimImpl.isEmptyRelation(v) =>
+        // need to acquire semaphore?
         GpuColumnVector.emptyBatch(broadcastSchema)
       case t =>
         throw new IllegalStateException(s"Invalid broadcast batch received $t")
