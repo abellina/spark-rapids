@@ -171,6 +171,7 @@ case class GpuProjectExec(
     }
     val rdd = child.executeColumnar()
     rdd.map { cb =>
+      GpuSemaphore.throwIfNotAcquired()
       numOutputBatches += 1
       numOutputRows += cb.numRows()
       if (useTieredProject) {

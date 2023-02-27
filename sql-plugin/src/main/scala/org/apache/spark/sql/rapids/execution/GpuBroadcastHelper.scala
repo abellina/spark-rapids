@@ -21,10 +21,11 @@ import com.nvidia.spark.rapids.{Arm, GpuColumnVector}
 import com.nvidia.spark.rapids.shims.SparkShimImpl
 
 import org.apache.spark.broadcast.Broadcast
+import org.apache.spark.internal.Logging
 import org.apache.spark.sql.types.StructType
 import org.apache.spark.sql.vectorized.ColumnarBatch
 
-object GpuBroadcastHelper extends Arm {
+object GpuBroadcastHelper extends Arm with Logging {
   /**
    * Given a broadcast relation get a ColumnarBatch that can be used on the GPU.
    *
@@ -47,6 +48,7 @@ object GpuBroadcastHelper extends Arm {
         }
       case v if SparkShimImpl.isEmptyRelation(v) =>
         // need to acquire semaphore?
+        logWarning("At getBroadcastBatch, emptyBatch")
         GpuColumnVector.emptyBatch(broadcastSchema)
       case t =>
         throw new IllegalStateException(s"Invalid broadcast batch received $t")
