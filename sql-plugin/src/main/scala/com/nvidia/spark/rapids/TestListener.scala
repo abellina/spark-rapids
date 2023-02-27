@@ -6,7 +6,7 @@ import org.apache.spark.scheduler.{SparkListener, SparkListenerJobStart, SparkLi
 case class Stats(sum: Long, min: Long, max: Long, count: Long) {
   override def toString: String = {
     val avg = sum.toDouble/count
-    s"$count, $min, $avg, $max"
+    s"[$count, $min, $avg, $max]"
   }
 }
 
@@ -15,6 +15,7 @@ object TestListener {
     Int, scala.collection.mutable.HashMap[String, Stats]]()
 
   def reset(): Unit = {
+    println(s"resetting map that had ${theMap.keySet.size} jobs")
     theMap.clear()
   }
 
@@ -43,7 +44,7 @@ object TestListener {
     }
   }
 
-  override def toString: String = {
+  def getSummary(): String = {
     val stats = combine()
     if (stats.isEmpty) {
       "{}"
@@ -56,9 +57,9 @@ object TestListener {
       while (keys.hasNext) {
         val k = keys.next()
         if (iteratedOnce) {
-          metricsFormated.append(",\n")
+          metricsFormated.append(",")
         }
-        metricsFormated.append(s"$k: ${s(k)}")
+        metricsFormated.append(s"${k.mkString("\"", "", "\"")}: ${s(k)}")
         iteratedOnce = true
       }
       metricsFormated.append("}")
@@ -69,9 +70,13 @@ object TestListener {
 
 class TestListener extends SparkListener
 {
+
+  override def onJobStart(jobStart: SparkListenerJobStart): Unit = {
+    currentJob = jobStart.jobId
+  }
+
   override def onTaskStart(taskStart: SparkListenerTaskStart): Unit = {
     super.onTaskStart(taskStart)
-    println(s"onTaskStart: ${taskStart}")
   }
 
   def update(jobId: Int)(key: String, v: Long): String = {
@@ -96,43 +101,27 @@ class TestListener extends SparkListener
 
   var currentJob: Int = 0
 
-  override def onJobStart(jobStart: SparkListenerJobStart): Unit = {
-    super.onJobStart(jobStart)
-    currentJob = jobStart.jobId
-  }
-
   override def onTaskEnd(taskEnd: SparkListenerTaskEnd): Unit = {
     super.onTaskEnd(taskEnd)
     val tm: TaskMetrics = taskEnd.taskMetrics
-    val metricsFormated = StringBuilder.newBuilder
     def up: (String, Long) => String = update(currentJob)(_, _)
-    metricsFormated.append("{")
-    metricsFormated.append(s"${up("inputMetrics.bytesRead",     tm.inputMetrics.bytesRead)},\n")
-    metricsFormated.append(s"${up("executor.deserTime",         tm.executorDeserializeTime)},\n")
-    metricsFormated.append(s"${up("executor.deserCPUTime",      tm.executorDeserializeCpuTime)},\n")
-    metricsFormated.append(s"${up("executor.runTime",           tm.executorRunTime)},\n")
-    metricsFormated.append(s"${up("executor.cpuTime",           tm.executorCpuTime)},\n")
-    metricsFormated.append(s"${up("executor.jvmGCTime",         tm.jvmGCTime)},\n")
-    metricsFormated.append(s"${up("executor.resultSerTime",     tm.resultSerializationTime)},\n")
-    metricsFormated.append(s"${up("executor.memorySpilled",     tm.memoryBytesSpilled)},\n")
-    metricsFormated.append(s"${up("executor.diskSpilled",       tm.diskBytesSpilled)},\n")
-    metricsFormated.append(s"${up("outputMetrics.bytesWritten", tm.outputMetrics.bytesWritten)},\n")
-    metricsFormated.append(s"${up("resultSize",                 tm.resultSize)},\n")
-    metricsFormated.append(
-      s"${up("shuffleRead.remoteBlocksFetched", tm.shuffleReadMetrics.remoteBlocksFetched)},\n")
-    metricsFormated.append(
-      s"${up("shuffleRead.remoteBytesFetched",  tm.shuffleReadMetrics.remoteBytesRead)},\n")
-    metricsFormated.append(
-      s"${up("shuffleRead.localBlocksFetched",  tm.shuffleReadMetrics.localBlocksFetched)},\n")
-    metricsFormated.append(
-      s"${up("shuffleRead.localBytesFetched",   tm.shuffleReadMetrics.localBytesRead)},\n")
-    metricsFormated.append(
-      s"${up("shuffleRead.fetchWait",           tm.shuffleReadMetrics.fetchWaitTime)},\n")
-    metricsFormated.append(
-      s"${up("shuffleWriteMetrics.bytesWritten", tm.shuffleWriteMetrics.bytesWritten)},\n")
-    metricsFormated.append(
-      s"${up("shuffleReadMetrics.totalBytesRead", tm.shuffleReadMetrics.totalBytesRead)}\n")
-    metricsFormated.append("}")
-    println(s"Task ${taskEnd.taskInfo.taskId}: ${metricsFormated.toString}")
+    up("inputMetrics.bytesRead",     tm.inputMetrics.bytesRead)
+    up("executor.deserTime",         tm.executorDeserializeTime)
+    up("executor.deserCPUTime",      tm.executorDeserializeCpuTime)
+    up("executor.runTime",           tm.executorRunTime)
+    up("executor.cpuTime",           tm.executorCpuTime)
+    up("executor.jvmGCTime",         tm.jvmGCTime)
+    up("executor.resultSerTime",     tm.resultSerializationTime)
+    up("executor.memorySpilled",     tm.memoryBytesSpilled)
+    up("executor.diskSpilled",       tm.diskBytesSpilled)
+    up("outputMetrics.bytesWritten", tm.outputMetrics.bytesWritten)
+    up("resultSize",                 tm.resultSize)
+    up("shuffleRead.remoteBlocksFetched", tm.shuffleReadMetrics.remoteBlocksFetched)
+    up("shuffleRead.remoteBytesFetched", tm.shuffleReadMetrics.remoteBytesRead)
+    up("shuffleRead.localBlocksFetched", tm.shuffleReadMetrics.localBlocksFetched)
+    up("shuffleRead.localBytesFetched", tm.shuffleReadMetrics.localBytesRead)
+    up("shuffleRead.fetchWait", tm.shuffleReadMetrics.fetchWaitTime)
+    up("shuffleWriteMetrics.bytesWritten", tm.shuffleWriteMetrics.bytesWritten)
+    up("shuffleReadMetrics.totalBytesRead", tm.shuffleReadMetrics.totalBytesRead)
   }
 }
