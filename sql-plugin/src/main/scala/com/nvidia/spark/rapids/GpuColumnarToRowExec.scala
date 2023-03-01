@@ -189,7 +189,8 @@ class ColumnarToRowIterator(batches: Iterator[ColumnarBatch],
     numOutputRows: GpuMetric,
     opTime: GpuMetric,
     streamTime: GpuMetric,
-    nullSafe: Boolean = false) extends Iterator[InternalRow] with Arm {
+    nullSafe: Boolean = false,
+    releaseSemaphore: Boolean = true) extends Iterator[InternalRow] with Arm {
   // GPU batches read in must be closed by the receiver (us)
   @transient private var cb: ColumnarBatch = null
   private var it: java.util.Iterator[InternalRow] = null
@@ -228,7 +229,9 @@ class ColumnarToRowIterator(batches: Iterator[ColumnarBatch],
         } finally {
           devCb.close()
           // Leaving the GPU for a while
-          GpuSemaphore.releaseIfNecessary(TaskContext.get())
+          if (releaseSemaphore) {
+            GpuSemaphore.releaseIfNecessary(TaskContext.get())
+          }
         }
       }
     }

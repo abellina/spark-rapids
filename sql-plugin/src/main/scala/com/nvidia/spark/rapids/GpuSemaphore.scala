@@ -213,21 +213,22 @@ private final class GpuSemaphore() extends Logging with Arm {
         }
         if (semaphoreHeld) {
           stackTracesSemaphoreHeld.append(
-            s"Semaphore held. " +
+            s"[debug jar2] Semaphore held. " +
               s"Stack trace for task attempt id $taskAttemptId:\n${sb.toString()}")
         } else {
           otherStackTraces.append(
-            s"Semaphore not held. " +
+            s"[debug jar2] Semaphore not held. " +
               s"Stack trace for task attempt id $taskAttemptId:\n${sb.toString()}")
         }
       }
-      logWarning(s"Dumping stack traces. The semaphore sees ${activeTasks.size()} tasks, " +
+      logWarning(s"[debug jar2] Dumping stack traces. " +
+          s"The semaphore sees ${activeTasks.size()} tasks, " +
         s"${stackTracesSemaphoreHeld.size} are holding onto the semaphore. " +
         stackTracesSemaphoreHeld.mkString("\n", "\n", "\n") +
         otherStackTraces.mkString("\n", "\n", "\n"))
     } catch {
       case t: Throwable =>
-        logWarning("Unable to obtain stack traces in the semaphore.", t)
+        logWarning("[debug jar2] Unable to obtain stack traces in the semaphore.", t)
     }
   }
 

@@ -133,7 +133,8 @@ trait GpuRowBasedUserDefinedFunction extends GpuExpression
             NoopMetric,
             NoopMetric,
             NoopMetric,
-            nullSafe).foreach { row =>
+            nullSafe,
+            releaseSemaphore = false).foreach { row =>
           retRow.update(0, evaluateRow(row))
           retConverter.append(retRow, 0, builder)
         }
