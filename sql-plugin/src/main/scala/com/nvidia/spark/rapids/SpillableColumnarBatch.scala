@@ -96,7 +96,7 @@ class SpillableColumnarBatchImpl (
   }
 
   override lazy val sizeInBytes: Long =
-    withRapidsBuffer(_.size)
+    withRapidsBuffer(_.getSize)
 
   /**
    * Set a new spill priority.
@@ -139,10 +139,12 @@ object SpillableColumnarBatch extends Arm {
     } else {
       val types = GpuColumnVector.extractTypes(batch)
       val handle = addBatch(batch, priority)
-      new SpillableColumnarBatchImpl(
+      val impl = new SpillableColumnarBatchImpl(
         handle,
         numRows,
         types)
+      // TODO: remove RapidsBufferCatalog.spillMock()
+      impl
     }
   }
 
@@ -205,14 +207,7 @@ object SpillableColumnarBatch extends Arm {
         val buff = cv.getBuffer
         RapidsBufferCatalog.addBuffer(buff, cv.getTableMeta, initialSpillPriority)
       } else {
-        withResource(GpuColumnVector.from(batch)) { tmpTable =>
-          withResource(tmpTable.contiguousSplit()) { contigTables =>
-            require(contigTables.length == 1, "Unexpected number of contiguous spit tables")
-            RapidsBufferCatalog.addContiguousTable(
-              contigTables.head,
-              initialSpillPriority)
-          }
-        }
+        RapidsBufferCatalog.addBatch(batch, initialSpillPriority)
       }
     }
   }

@@ -20,6 +20,7 @@ import ai.rapids.cudf.{Cuda, DeviceMemoryBuffer, HostMemoryBuffer, MemoryBuffer}
 import com.nvidia.spark.rapids.StorageTier.StorageTier
 import com.nvidia.spark.rapids.format.TableMeta
 
+import org.apache.spark.sql.rapids.TempSpillBufferId
 import org.apache.spark.sql.types.DataType
 import org.apache.spark.sql.vectorized.ColumnarBatch
 
@@ -35,14 +36,22 @@ class RapidsDeviceMemoryStore
 
   override protected def createBuffer(
       other: RapidsBuffer,
-      memoryBuffer: MemoryBuffer,
+      memoryBufferIterator: Iterator[(MemoryBuffer, Long)],
+      shouldClose: Boolean,
       stream: Cuda.Stream): RapidsBufferBase = {
+    var memoryBuffer : MemoryBuffer = null
+    while(memoryBufferIterator.hasNext) {
+      val (mb, _) = memoryBufferIterator.next()
+      memoryBuffer = mb
+      require(!memoryBufferIterator.hasNext,
+        "Expected a single item, but got multiple")
+    }
     val deviceBuffer = {
       memoryBuffer match {
         case d: DeviceMemoryBuffer => d
         case h: HostMemoryBuffer =>
           withResource(h) { _ =>
-            closeOnExcept(DeviceMemoryBuffer.allocate(other.size)) { deviceBuffer =>
+            closeOnExcept(DeviceMemoryBuffer.allocate(other.getSize)) { deviceBuffer =>
               logDebug(s"copying from host $h to device $deviceBuffer")
               deviceBuffer.copyFromHostBuffer(h, stream)
               deviceBuffer
@@ -53,8 +62,8 @@ class RapidsDeviceMemoryStore
     }
     new RapidsDeviceMemoryBuffer(
       other.id,
-      other.size,
-      other.meta,
+      other.getSize,
+      other.getMeta,
       deviceBuffer,
       other.getSpillPriority)
   }
@@ -89,10 +98,28 @@ class RapidsDeviceMemoryStore
       initialSpillPriority)
     freeOnExcept(rapidsBuffer) { _ =>
       logDebug(s"Adding receive side table for: [id=$id, size=${buffer.getLength}, " +
-        s"uncompressed=${rapidsBuffer.meta.bufferMeta.uncompressedSize}, " +
+        s"uncompressed=${rapidsBuffer.getMeta().bufferMeta.uncompressedSize}, " +
         s"meta_id=${tableMeta.bufferMeta.id}, " +
         s"meta_size=${tableMeta.bufferMeta.size}]")
-      addDeviceBuffer(rapidsBuffer, needsSync)
+      addBuffer(rapidsBuffer, needsSync)
+      rapidsBuffer
+    }
+  }
+
+  def addBatch(
+      id: TempSpillBufferId,
+      batch: ColumnarBatch,
+      initialSpillPriority: Long,
+      needsSync: Boolean): RapidsBuffer = {
+    GpuColumnVector.incRefCounts(batch) // TODO: do I need this
+    val rapidsBuffer = new RapidsDeviceMemoryBatch(
+      id,
+      batch,
+      initialSpillPriority)
+    freeOnExcept(rapidsBuffer) { _ =>
+      addBuffer(rapidsBuffer, needsSync)
+      // TODO: we need to figure out a different signal for batch
+      doSetSpillable(rapidsBuffer, true)
       rapidsBuffer
     }
   }
@@ -104,8 +131,8 @@ class RapidsDeviceMemoryStore
    *
    * @param needsSync true if we should stream synchronize before adding the buffer
    */
-  private def addDeviceBuffer(
-      buffer: RapidsDeviceMemoryBuffer,
+  private def addBuffer(
+      buffer: RapidsBufferBase,
       needsSync: Boolean): Unit = {
     if (needsSync) {
       Cuda.DEFAULT_STREAM.sync()
@@ -121,14 +148,88 @@ class RapidsDeviceMemoryStore
     doSetSpillable(buffer, spillable)
   }
 
+  class RapidsDeviceMemoryBatch(
+      id: TempSpillBufferId,
+      batch: ColumnarBatch,
+      spillPriority: Long)
+      extends RapidsBufferBase(
+        id,
+        null,
+        spillPriority) {
+
+    /** Release the underlying resources for this buffer. */
+    override protected def releaseResources(): Unit = {
+      batch.close()
+    }
+
+    /** The storage tier for this buffer */
+    override val storageTier: StorageTier = StorageTier.DEVICE
+
+    override val supportsChunkedPacker: Boolean = true
+
+    // TODO: need a way to construct the packed chunked split without a user buffer
+    // so we can get the packed meta
+    lazy val chunkedPacker: ChunkedPacker = new ChunkedPacker(id, batch)
+
+    override def getMeta(): TableMeta = {
+      chunkedPacker.getMeta()
+    }
+
+    /** The size of this buffer in bytes. */
+    override def getSize: Long = {
+      if (chunkedPacker.getMeta() != null) {
+        chunkedPacker.getMeta().bufferMeta().size()
+      } else {
+        GpuColumnVector.getTotalDeviceMemoryUsed(batch)
+      }
+    }
+
+    /**
+     * Get the underlying memory buffer. This may be either a HostMemoryBuffer or a DeviceMemoryBuffer
+     * depending on where the buffer currently resides.
+     * The caller must have successfully acquired the buffer beforehand.
+     *
+     * @see [[addReference]]
+     * @note It is the responsibility of the caller to close the buffer.
+     */
+    override def getChunkedPacker: ChunkedPacker = {
+      chunkedPacker
+    }
+
+    override def getColumnarBatch(sparkTypes: Array[DataType]): ColumnarBatch = {
+      // TODO: assert that the sparkTypes match the CB types
+      GpuColumnVector.incRefCounts(batch)
+    }
+
+    /**
+     * Get the underlying memory buffer. This may be either a HostMemoryBuffer or a DeviceMemoryBuffer
+     * depending on where the buffer currently resides.
+     * The caller must have successfully acquired the buffer beforehand.
+     *
+     * @see [[addReference]]
+     * @note It is the responsibility of the caller to close the buffer.
+     */
+    override def getMemoryBuffer: MemoryBuffer = {
+      throw new UnsupportedOperationException(
+        "RapidsDeviceMemoryBatch doesn't support getMemoryBuffer")
+    }
+
+    override def free(): Unit = {
+      super.free()
+      chunkedPacker.close()
+    }
+  }
+
   class RapidsDeviceMemoryBuffer(
       id: RapidsBufferId,
       size: Long,
       meta: TableMeta,
       contigBuffer: DeviceMemoryBuffer,
       spillPriority: Long)
-      extends RapidsBufferBase(id, size, meta, spillPriority)
+      extends RapidsBufferBase(id, meta, spillPriority)
         with MemoryBuffer.EventHandler {
+
+    override def getSize(): Long = size
 
     override val storageTier: StorageTier = StorageTier.DEVICE
 

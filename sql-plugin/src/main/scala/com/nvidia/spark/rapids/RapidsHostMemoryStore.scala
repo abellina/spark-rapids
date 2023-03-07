@@ -16,7 +16,7 @@
 
 package com.nvidia.spark.rapids
 
-import ai.rapids.cudf.{Cuda, DeviceMemoryBuffer, HostMemoryBuffer, MemoryBuffer, PinnedMemoryPool}
+import ai.rapids.cudf.{Cuda, DeviceMemoryBuffer, HostMemoryBuffer, MemoryBuffer, NvtxRange, PinnedMemoryPool, Table}
 import com.nvidia.spark.rapids.SpillPriorities.{applyPriorityOffset, HOST_MEMORY_BUFFER_DIRECT_OFFSET, HOST_MEMORY_BUFFER_PAGEABLE_OFFSET, HOST_MEMORY_BUFFER_PINNED_OFFSET}
 import com.nvidia.spark.rapids.StorageTier.StorageTier
 import com.nvidia.spark.rapids.format.TableMeta
@@ -61,14 +61,21 @@ class RapidsHostMemoryStore(
     (HostMemoryBuffer.allocate(size, false), Direct)
   }
 
-  override protected def createBuffer(other: RapidsBuffer, otherBuffer: MemoryBuffer,
+  override protected def createBuffer(
+      other: RapidsBuffer,
+      otherBufferIterator: Iterator[(MemoryBuffer, Long)],
+      shouldClose: Boolean,
       stream: Cuda.Stream): RapidsBufferBase = {
-    withResource(otherBuffer) { _ =>
-      val (hostBuffer, allocationMode) = allocateHostBuffer(other.size)
+    val (hostBuffer, allocationMode) = allocateHostBuffer(other.getSize)
+    var hostOffset = 0L
+    while (otherBufferIterator.hasNext) {
+      val (otherBuffer, deviceSize) = otherBufferIterator.next()
       try {
         otherBuffer match {
           case devBuffer: DeviceMemoryBuffer =>
-            hostBuffer.copyFromDeviceBuffer(devBuffer, stream)
+            hostBuffer.copyFromMemoryBuffer(
+              hostOffset, devBuffer, 0, deviceSize, stream)
+            hostOffset += deviceSize
           case _ =>
             throw new IllegalStateException("copying from buffer without device memory")
         }
@@ -77,14 +84,41 @@ class RapidsHostMemoryStore(
           hostBuffer.close()
           throw e
       }
-      new RapidsHostMemoryBuffer(
-        other.id,
-        other.size,
-        other.meta,
-        applyPriorityOffset(other.getSpillPriority, allocationMode.spillPriorityOffset),
-        hostBuffer,
-        allocationMode)
+      if (shouldClose) {
+        otherBuffer.close()
+      }
     }
+
+    var meta: TableMeta = null
+    otherBufferIterator match {
+      case p: ChunkedPacker =>
+        // host memory buffer now has the full buffer contiguously
+        // try to unpack it
+        //GpuColumnVector.debug("before", p.tbl)
+        //withResource(DeviceMemoryBuffer.allocate(other.size)) { throwAway =>
+        //  throwAway.copyFromHostBuffer(hostBuffer)
+        //  withResource(p.tbl.contiguousSplit()(0)) { csplit => 
+        //    val metaBuff = csplit.getMetadataDirectBuffer()
+        //    meta = MetaUtils.buildTableMeta(other.id.tableId, csplit)
+        //    withResource(Table.fromPackedTable(metaBuff, throwAway)) { tbl =>
+        //      GpuColumnVector.debug("unpacked", tbl)
+        //      logInfo(s"num cols: ${tbl.getNumberOfColumns}, row count: ${tbl.getRowCount}")
+        //      (0 until tbl.getNumberOfColumns).foreach { c =>
+        //        logInfo(s"col $c type ${tbl.getColumn(c)}")
+        //      }
+        //    }
+        //  }
+        //}
+        p.close()
+      case _ => // noop
+    }
+    new RapidsHostMemoryBuffer(
+      other.id,
+      other.getSize,
+      other.getMeta,
+      applyPriorityOffset(other.getSpillPriority, allocationMode.spillPriorityOffset),
+      hostBuffer,
+      allocationMode)
   }
 
   def numBytesFree: Long = maxSize - currentSize
@@ -102,7 +136,7 @@ class RapidsHostMemoryStore(
       buffer: HostMemoryBuffer,
       allocationMode: AllocationMode)
       extends RapidsBufferBase(
-        id, size, meta, spillPriority) {
+        id, meta, spillPriority) {
     override val storageTier: StorageTier = StorageTier.HOST
 
     override def getMemoryBuffer: MemoryBuffer = {
@@ -120,5 +154,8 @@ class RapidsHostMemoryStore(
       }
       buffer.close()
     }
+
+    /** The size of this buffer in bytes. */
+    override def getSize: Long = size
   }
 }

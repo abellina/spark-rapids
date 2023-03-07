@@ -36,8 +36,13 @@ class RapidsGdsStore(
     extends RapidsBufferStore(StorageTier.GDS) with Arm {
   private[this] val batchSpiller = new BatchSpiller()
 
-  override protected def createBuffer(other: RapidsBuffer, otherBuffer: MemoryBuffer,
+  override protected def createBuffer(
+      other: RapidsBuffer,
+      otherBufferIter: Iterator[(MemoryBuffer, Long)],
+      shouldClose: Boolean,
       stream: Cuda.Stream): RapidsBufferBase = {
+    // assume that we get 1 buffer
+    val (otherBuffer, _) = otherBufferIter.next()
     withResource(otherBuffer) { _ =>
       val deviceBuffer = otherBuffer match {
         case d: BaseDeviceMemoryBuffer => d
@@ -58,11 +63,13 @@ class RapidsGdsStore(
 
   abstract class RapidsGdsBuffer(
       override val id: RapidsBufferId,
-      override val size: Long,
+      val size: Long,
       override val meta: TableMeta,
       spillPriority: Long)
-      extends RapidsBufferBase(id, size, meta, spillPriority) {
+      extends RapidsBufferBase(id, meta, spillPriority) {
     override val storageTier: StorageTier = StorageTier.GDS
+
+    override def getSize(): Long = size
 
     override def getMemoryBuffer: MemoryBuffer = getDeviceMemoryBuffer
   }
@@ -121,13 +128,13 @@ class RapidsGdsStore(
       CuFile.writeDeviceBufferToFile(path, 0, deviceBuffer)
       0
     }
-    logDebug(s"Spilled to $path $fileOffset:${other.size} via GDS")
+    logDebug(s"Spilled to $path $fileOffset:${other.getSize} via GDS")
     new RapidsGdsSingleShotBuffer(
       id,
       path,
       fileOffset,
-      other.size,
-      other.meta,
+      other.getSize,
+      other.getMeta,
       other.getSpillPriority)
   }
 
@@ -168,8 +175,8 @@ class RapidsGdsStore(
           id,
           currentFile,
           currentOffset,
-          other.size,
-          other.meta,
+          other.getSize,
+          other.getMeta,
           other.getSpillPriority)
         currentOffset += alignUp(deviceBuffer.getLength)
         pendingBuffers += gdsBuffer
@@ -221,6 +228,8 @@ class RapidsGdsStore(
         spillPriority: Long,
         var isPending: Boolean = true)
         extends RapidsGdsBuffer(id, size, meta, spillPriority) {
+
+      override def getSize(): Long = size
 
       override def materializeMemoryBuffer: MemoryBuffer = this.synchronized {
         closeOnExcept(DeviceMemoryBuffer.allocate(size)) { buffer =>
