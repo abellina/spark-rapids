@@ -66,14 +66,14 @@ abstract class RapidsBufferStore(val tier: StorageTier)
       if (old != null) {
         throw new DuplicateBufferException(s"duplicate buffer registered: ${buffer.id}")
       }
-      totalBytesStored += buffer.size
+      totalBytesStored += buffer.getSize
 
       // device buffers "spillability" is handled via DeviceMemoryBuffer ref counting
       // so spillableOnAdd should be false, all other buffer tiers are spillable at
       // all times.
       if (spillableOnAdd) {
         if (spillable.offer(buffer)) {
-          totalBytesSpillable += buffer.size
+          totalBytesSpillable += buffer.getSize
         }
       }
     }
@@ -83,9 +83,9 @@ abstract class RapidsBufferStore(val tier: StorageTier)
       spilling.remove(id)
       val obj = buffers.remove(id)
       if (obj != null) {
-        totalBytesStored -= obj.size
+        totalBytesStored -= obj.getSize
         if (spillable.remove(obj)) {
-          totalBytesSpillable -= obj.size
+          totalBytesSpillable -= obj.getSize
         }
       }
     }
@@ -119,14 +119,14 @@ abstract class RapidsBufferStore(val tier: StorageTier)
         if (!spilling.contains(buffer.id) && buffers.containsKey(buffer.id)) {
           // try to add it to the spillable collection
           if (spillable.offer(buffer)) {
-            totalBytesSpillable += buffer.size
+            totalBytesSpillable += buffer.getSize
             logDebug(s"Buffer ${buffer.id} is spillable. " +
               s"total=${totalBytesStored} spillable=${totalBytesSpillable}")
           } // else it was already there (unlikely)
         }
       } else {
         if (spillable.remove(buffer)) {
-          totalBytesSpillable -= buffer.size
+          totalBytesSpillable -= buffer.getSize
           logDebug(s"Buffer ${buffer.id} is not spillable. " +
             s"total=${totalBytesStored}, spillable=${totalBytesSpillable}")
         } // else it was already removed
@@ -138,8 +138,8 @@ abstract class RapidsBufferStore(val tier: StorageTier)
       if (buffer != null) {
         // mark the id as "spilling" (this buffer is in the middle of a spill operation)
         spilling.add(buffer.id)
-        totalBytesSpillable -= buffer.size
-        logDebug(s"Spilling buffer ${buffer.id}. size=${buffer.size} " +
+        totalBytesSpillable -= buffer.getSize
+        logDebug(s"Spilling buffer ${buffer.id}. size=${buffer.getSize} " +
           s"total=${totalBytesStored}, new spillable=${totalBytesSpillable}")
       }
       buffer
@@ -188,6 +188,7 @@ abstract class RapidsBufferStore(val tier: StorageTier)
     require(spillStore == null, "spill store already registered")
     spillStore = store
   }
+  var bounceBuffer: DeviceMemoryBuffer = DeviceMemoryBuffer.allocate(100L * 1024 * 1024)
 
   /**
    * Adds an existing buffer from another store to this store. The buffer must already
@@ -195,17 +196,30 @@ abstract class RapidsBufferStore(val tier: StorageTier)
    * (i.e.: this method will not take ownership of the incoming buffer object).
    * This does not need to update the catalog, the caller is responsible for that.
    * @param buffer data from another store
-   * @param memoryBuffer memory buffer obtained from the specified Rapids buffer. The ownership
-   *                     for `memoryBuffer` is transferred to this store. The store may close
-   *                     `memoryBuffer` if necessary.
    * @param stream CUDA stream to use for copy or null
    * @return the new buffer that was created
    */
   def copyBuffer(
       buffer: RapidsBuffer,
-      memoryBuffer: MemoryBuffer,
       stream: Cuda.Stream): RapidsBufferBase = {
-    freeOnExcept(createBuffer(buffer, memoryBuffer, stream)) { newBuffer =>
+    var shouldClose = false
+    val iter = if (buffer.supportsChunkedPacker) {
+      val chunkedPacker = buffer.getChunkedPacker
+      chunkedPacker.init(bounceBuffer)
+      chunkedPacker
+    } else {
+      shouldClose = true
+      new Iterator[(MemoryBuffer, Long)] {
+        var wasCalled: Boolean = false
+        override def hasNext: Boolean = !wasCalled
+        override def next(): (MemoryBuffer, Long) = {
+          val result = (buffer.getMemoryBuffer, buffer.getSize)
+          wasCalled = true
+          result
+        }
+      }
+    }
+    freeOnExcept(createBuffer(buffer, iter, shouldClose, stream)) { newBuffer =>
       addBuffer(newBuffer)
       newBuffer
     }
@@ -235,7 +249,8 @@ abstract class RapidsBufferStore(val tier: StorageTier)
    */
   protected def createBuffer(
      buffer: RapidsBuffer,
-     memoryBuffer: MemoryBuffer,
+     memoryBufferIterator: Iterator[(MemoryBuffer, Long)],
+     shouldClose: Boolean,
      stream: Cuda.Stream): RapidsBufferBase
 
   /** Update bookkeeping for a new buffer */
@@ -254,8 +269,7 @@ abstract class RapidsBufferStore(val tier: StorageTier)
   /** Base class for all buffers in this store. */
   abstract class RapidsBufferBase(
       override val id: RapidsBufferId,
-      override val size: Long,
-      override val meta: TableMeta,
+      val meta: TableMeta,
       initialSpillPriority: Long,
       catalog: RapidsBufferCatalog = RapidsBufferCatalog.singleton)
       extends RapidsBuffer {
@@ -269,6 +283,8 @@ abstract class RapidsBufferStore(val tier: StorageTier)
 
     /** Release the underlying resources for this buffer. */
     protected def releaseResources(): Unit
+
+    override def getMeta(): TableMeta = meta
 
     /**
      * Materialize the memory buffer from the underlying storage.
@@ -302,11 +318,14 @@ abstract class RapidsBufferStore(val tier: StorageTier)
 
     protected def columnarBatchFromDeviceBuffer(devBuffer: DeviceMemoryBuffer,
         sparkTypes: Array[DataType]): ColumnarBatch = {
-      val bufferMeta = meta.bufferMeta()
+      val tableMeta = getMeta()
+      val bufferMeta = tableMeta.bufferMeta()
       if (bufferMeta == null || bufferMeta.codecBufferDescrsLength == 0) {
-        MetaUtils.getBatchFromMeta(devBuffer, meta, sparkTypes)
+        val b = MetaUtils.getBatchFromMeta(devBuffer, tableMeta, sparkTypes)
+        //GpuColumnVector.debug("recostitued", b)
+        b
       } else {
-        GpuCompressedColumnVector.from(devBuffer, meta)
+        GpuCompressedColumnVector.from(devBuffer, tableMeta)
       }
     }
 
@@ -344,7 +363,6 @@ abstract class RapidsBufferStore(val tier: StorageTier)
                   logDebug(s"Unspilling $this $id to $DEVICE")
                   val newBuffer = catalog.unspillBufferToDeviceStore(
                     this,
-                    materializeMemoryBuffer,
                     Cuda.DEFAULT_STREAM)
                   withResource(newBuffer) { _ =>
                     return newBuffer.getDeviceMemoryBuffer
@@ -360,8 +378,8 @@ abstract class RapidsBufferStore(val tier: StorageTier)
           materializeMemoryBuffer match {
             case h: HostMemoryBuffer =>
               withResource(h) { _ =>
-                closeOnExcept(DeviceMemoryBuffer.allocate(size)) { deviceBuffer =>
-                  logDebug(s"copying from host $h to device $deviceBuffer")
+                closeOnExcept(DeviceMemoryBuffer.allocate(getSize)) { deviceBuffer =>
+                  logWarning(s"copying ${h.getLength} from host $h to device $deviceBuffer of size ${getSize}")
                   deviceBuffer.copyFromHostBuffer(h)
                   deviceBuffer
                 }
@@ -403,7 +421,7 @@ abstract class RapidsBufferStore(val tier: StorageTier)
           freeBuffer()
         }
       } else {
-        logWarning(s"Trying to free an invalid buffer => $id, size = $size, $this")
+        logWarning(s"Trying to free an invalid buffer => $id, size = ${getSize}, $this")
       }
     }
 
@@ -421,6 +439,6 @@ abstract class RapidsBufferStore(val tier: StorageTier)
       releaseResources()
     }
 
-    override def toString: String = s"$name buffer size=$size"
+    override def toString: String = s"$name buffer size=${getSize}"
   }
 }

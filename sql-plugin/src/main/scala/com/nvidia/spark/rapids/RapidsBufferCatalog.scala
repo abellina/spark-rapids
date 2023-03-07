@@ -16,10 +16,10 @@
 
 package com.nvidia.spark.rapids
 
-import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.{ConcurrentHashMap, Executors, TimeUnit}
 import java.util.function.BiFunction
 
-import ai.rapids.cudf.{ContiguousTable, Cuda, DeviceMemoryBuffer, MemoryBuffer, NvtxColor, NvtxRange, Rmm}
+import ai.rapids.cudf.{ContiguousTable, Cuda, DeviceMemoryBuffer, NvtxColor, NvtxRange, Rmm}
 import com.nvidia.spark.rapids.Arm.withResource
 import com.nvidia.spark.rapids.RapidsBufferCatalog.getExistingRapidsBufferAndAcquire
 import com.nvidia.spark.rapids.RapidsPluginImplicits._
@@ -31,6 +31,7 @@ import org.apache.spark.{SparkConf, SparkEnv}
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.rapids.{RapidsDiskBlockManager, TempSpillBufferId}
 import org.apache.spark.sql.rapids.execution.TrampolineUtil
+import org.apache.spark.sql.vectorized.ColumnarBatch
 
 /**
  *  Exception thrown when inserting a buffer into the catalog with a duplicate buffer ID
@@ -319,6 +320,22 @@ class RapidsBufferCatalog(
     makeNewHandle(id, initialSpillPriority)
   }
 
+  def addBatch(
+      batch: ColumnarBatch,
+      initialSpillPriority: Long,
+      needsSync: Boolean = true): RapidsBufferHandle = {
+    val id = TempSpillBufferId()
+    logDebug(s"Adding batch ${id} to ${deviceStorage}")
+    val rapidsBuffer = deviceStorage.addBatch(
+      id,
+      batch,
+      initialSpillPriority,
+      needsSync)
+    registerNewBuffer(rapidsBuffer)
+    makeNewHandle(id, initialSpillPriority)
+  }
+
+
   /**
    * Register a degenerate RapidsBufferId given a TableMeta
    * @note this is called from the shuffle catalogs only
@@ -407,7 +424,7 @@ class RapidsBufferCatalog(
     if (buffers == null || buffers.isEmpty) {
       throw new NoSuchElementException(s"Cannot locate buffer associated with ID: $id")
     }
-    buffers.head.meta
+    buffers.head.getMeta
   }
 
   /**
@@ -447,6 +464,8 @@ class RapidsBufferCatalog(
       store: RapidsBufferStore,
       targetTotalSize: Long,
       stream: Cuda.Stream = Cuda.DEFAULT_STREAM): Option[Long] = {
+    RmmSpark.removeCurrentThreadAssociation()
+    RmmSpark.associateCurrentThreadWithShuffle()
     val spillStore = store.spillStore
     if (spillStore == null) {
       throw new OutOfMemoryError("Requested to spill without a spill store")
@@ -482,7 +501,7 @@ class RapidsBufferCatalog(
               if (nextSpillable != null) {
                 // we have a buffer (nextSpillable) to spill
                 spillAndFreeBuffer(nextSpillable, spillStore, stream)
-                totalSpilled += nextSpillable.size
+                totalSpilled += nextSpillable.getSize
               }
             } else {
               rmmShouldRetryAlloc = true
@@ -500,6 +519,7 @@ class RapidsBufferCatalog(
       }
     }
 
+    RmmSpark.removeCurrentThreadAssociation()
     if (rmmShouldRetryAlloc) {
       // if we are going to retry, and didn't spill, returning None prevents extra
       // logs where we say we spilled 0 bytes from X store
@@ -527,7 +547,7 @@ class RapidsBufferCatalog(
           trySpillToMaximumSize(buffer, spillStore, stream)
 
           // copy the buffer to spillStore
-          val newBuffer = spillStore.copyBuffer(buffer, buffer.getMemoryBuffer, stream)
+          val newBuffer = spillStore.copyBuffer(buffer, stream)
 
           // once spilled, we get back a new RapidsBuffer instance in this new tier
           registerNewBuffer(newBuffer)
@@ -555,7 +575,7 @@ class RapidsBufferCatalog(
       // this spillStore has a maximum size requirement (host only). We need to spill from it
       // in order to make room for `buffer`.
       val targetTotalSize =
-        math.max(spillStoreMaxSize.get - buffer.size, 0)
+        math.max(spillStoreMaxSize.get - buffer.getSize, 0)
       val maybeAmountSpilled = synchronousSpill(spillStore, targetTotalSize, stream)
       maybeAmountSpilled.foreach { amountSpilled =>
         if (amountSpilled != 0) {
@@ -576,21 +596,17 @@ class RapidsBufferCatalog(
    */
   def unspillBufferToDeviceStore(
     buffer: RapidsBuffer,
-    memoryBuffer: MemoryBuffer,
     stream: Cuda.Stream): RapidsBuffer = synchronized {
     // try to acquire the buffer, if it's already in the store
     // do not create a new one, else add a reference
     acquireBuffer(buffer.id, StorageTier.DEVICE) match {
       case None =>
-        val newBuffer = deviceStorage.copyBuffer(
-          buffer,
-          memoryBuffer,
-          stream)
+        val newBuffer = deviceStorage.copyBuffer(buffer, stream)
         newBuffer.addReference() // add a reference since we are about to use it
         registerNewBuffer(newBuffer)
         newBuffer
       case Some(existingBuffer) =>
-        withResource(memoryBuffer) { _ =>
+        withResource(buffer) { _ =>
           existingBuffer
         }
     }
@@ -811,6 +827,17 @@ object RapidsBufferCatalog extends Logging {
       tableMeta: TableMeta,
       initialSpillPriority: Long): RapidsBufferHandle = {
     singleton.addBuffer(buffer, tableMeta, initialSpillPriority)
+  }
+
+  def addBatch(
+      batch: ColumnarBatch,
+      initialSpillPriority: Long): RapidsBufferHandle = {
+    singleton.addBatch(batch, initialSpillPriority)
+
+  }
+  def spillMock(): Unit = {
+    // immediatelly spill for now
+    singleton.synchronousSpill(deviceStorage, 0)
   }
 
   /**

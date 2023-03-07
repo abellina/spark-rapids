@@ -1,4 +1,4 @@
-/*
+  /*
  * Copyright (c) 2020-2023, NVIDIA CORPORATION.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -18,14 +18,17 @@ package com.nvidia.spark.rapids
 
 import java.io.File
 
-import ai.rapids.cudf.{Cuda, DeviceMemoryBuffer, MemoryBuffer, Table}
+import ai.rapids.cudf.{ChunkedContiguousSplit, ContiguousTable, Cuda, DeviceMemoryBuffer, MemoryBuffer, PackedColumnMetadata, Rmm, RmmCudaMemoryResource, RmmPoolMemoryResource, Table}
 import com.nvidia.spark.rapids.Arm.withResource
 import com.nvidia.spark.rapids.StorageTier.StorageTier
 import com.nvidia.spark.rapids.format.TableMeta
+import org.apache.curator.utils.DebugUtils
 
+import org.apache.spark.internal.Logging
 import org.apache.spark.sql.rapids.RapidsDiskBlockManager
 import org.apache.spark.sql.types.DataType
 import org.apache.spark.sql.vectorized.ColumnarBatch
+import java.awt.image.PackedColorModel
 
 /**
  * An identifier for a RAPIDS buffer that can be automatically spilled between buffer stores.
@@ -59,16 +62,60 @@ object StorageTier extends Enumeration {
   val GDS: StorageTier = Value(3, "GPUDirect Storage")
 }
 
+class ChunkedPacker(id: RapidsBufferId, batch: ColumnarBatch)
+    extends Iterator[(MemoryBuffer, Long)]
+      with Logging
+      with AutoCloseable with Arm {
+
+  val numRows = batch.numRows()
+  var bounceBuffer: DeviceMemoryBuffer = null
+  val tbl = GpuColumnVector.from(batch)
+  val chunkedContigSplit =
+    tbl.makeChunkedContiguousSplit(
+      100L*1024*1024,
+      GpuDeviceManager.contigSplitMemoryResource)
+  var packedMeta: PackedColumnMetadata = chunkedContigSplit.getPackedColumnMetadata()
+  var tableMeta: TableMeta = MetaUtils.buildTableMeta(
+    id.tableId, chunkedContigSplit.getSize(), packedMeta.getMetadataDirectBuffer(), numRows)
+
+  def init(bounceBuffer: DeviceMemoryBuffer): Unit = {
+    this.bounceBuffer = bounceBuffer
+  }
+
+  def getMeta(): TableMeta = {
+    tableMeta
+  }
+
+  override def hasNext: Boolean = chunkedContigSplit.hasNext
+
+  // in the normal case we would call cuDF with a bounce buffer and we would get
+  // back how much it wrote to it, so we can turn around and copy it to host later
+  // val sizeWritten = Table.chunked_packer(state, bounceBuffer)
+  def next(): (MemoryBuffer, Long) = {
+    val bytesWritten = chunkedContigSplit.next(bounceBuffer)
+    (bounceBuffer, bytesWritten)
+  }
+
+  var closed: Boolean = false
+  override def close(): Unit = synchronized {
+    if (!closed) {
+      closed = true
+      chunkedContigSplit.close()
+      tbl.close()
+    }
+  }
+}
+
 /** Interface provided by all types of RAPIDS buffers */
 trait RapidsBuffer extends AutoCloseable {
   /** The buffer identifier for this buffer. */
   val id: RapidsBufferId
 
   /** The size of this buffer in bytes. */
-  val size: Long
+  def getSize: Long
 
   /** Descriptor for how the memory buffer is formatted */
-  val meta: TableMeta
+  def getMeta: TableMeta
 
   /** The storage tier for this buffer */
   val storageTier: StorageTier
@@ -93,6 +140,12 @@ trait RapidsBuffer extends AutoCloseable {
    * @note It is the responsibility of the caller to close the buffer.
    */
   def getMemoryBuffer: MemoryBuffer
+
+  val supportsChunkedPacker: Boolean = false
+
+  def getChunkedPacker: ChunkedPacker = {
+    throw new NotImplementedError("not implemented for this store")
+  }
 
   /**
    * Copy the content of this buffer into the specified memory buffer, starting from the given
@@ -162,8 +215,10 @@ trait RapidsBuffer extends AutoCloseable {
  */
 sealed class DegenerateRapidsBuffer(
     override val id: RapidsBufferId,
-    override val meta: TableMeta) extends RapidsBuffer {
-  override val size: Long = 0L
+    val meta: TableMeta) extends RapidsBuffer with Arm {
+
+  override def getSize: Long = 0L
+
   override val storageTier: StorageTier = StorageTier.DEVICE
 
   override def getColumnarBatch(sparkTypes: Array[DataType]): ColumnarBatch = {
@@ -200,4 +255,7 @@ sealed class DegenerateRapidsBuffer(
   override def setSpillPriority(priority: Long): Unit = {}
 
   override def close(): Unit = {}
+
+  /** Descriptor for how the memory buffer is formatted */
+  override def getMeta: TableMeta = meta
 }
