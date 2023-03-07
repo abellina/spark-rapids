@@ -34,8 +34,11 @@ class RapidsDiskStore(diskBlockManager: RapidsDiskBlockManager)
 
   override protected def createBuffer(
       incoming: RapidsBuffer,
-      incomingBuffer: MemoryBuffer,
+      incomingBufferIter: Iterator[(MemoryBuffer, Long)],
+      shouldClose: Boolean,
       stream: Cuda.Stream): RapidsBufferBase = {
+    // assuming that the disk store gets contiguous buffers
+    val (incomingBuffer, _) = incomingBufferIter.next()
     withResource(incomingBuffer) { _ =>
       val hostBuffer = incomingBuffer match {
         case h: HostMemoryBuffer => h
@@ -55,12 +58,12 @@ class RapidsDiskStore(diskBlockManager: RapidsDiskBlockManager)
       } else {
         copyBufferToPath(hostBuffer, path, append = false)
       }
-      logDebug(s"Spilled to $path $fileOffset:${incoming.size}")
+      logDebug(s"Spilled to $path $fileOffset:${incoming.getSize}")
       new RapidsDiskBuffer(
         id,
         fileOffset,
-        incoming.size,
-        incoming.meta,
+        incoming.getSize,
+        incoming.getMeta,
         incoming.getSpillPriority)
     }
   }
@@ -94,8 +97,10 @@ class RapidsDiskStore(diskBlockManager: RapidsDiskBlockManager)
       meta: TableMeta,
       spillPriority: Long)
       extends RapidsBufferBase(
-        id, size, meta, spillPriority) {
+        id, meta, spillPriority) {
     private[this] var hostBuffer: Option[HostMemoryBuffer] = None
+
+    override def getSize(): Long = size
 
     override val storageTier: StorageTier = StorageTier.DISK
 
