@@ -42,6 +42,8 @@ object GpuDeviceManager extends Logging {
     java.lang.Boolean.getBoolean("com.nvidia.spark.rapids.memory.gpu.rmm.init.task")
   }
 
+  var contigSplitMemoryResource: RmmPoolMemoryResource[RmmCudaMemoryResource] = null
+
   // for testing only
   def setRmmTaskInitEnabled(enabled: Boolean): Unit = {
     rmmTaskInitEnabled = enabled
@@ -356,6 +358,10 @@ object GpuDeviceManager extends Logging {
    * @param rapidsConf the config to use.
    */
   def initializeMemory(gpuId: Option[Int], rapidsConf: Option[RapidsConf] = None): Unit = {
+    val poolSize = 10L*1024*1024
+    contigSplitMemoryResource =
+      new RmmPoolMemoryResource(new RmmCudaMemoryResource(), poolSize, poolSize)
+
     if (singletonMemoryInitialized != Initialized) {
       // Memory or memory related components that only need to be initialized once per executor.
       // This synchronize prevents multiple tasks from trying to initialize these at the same time.
