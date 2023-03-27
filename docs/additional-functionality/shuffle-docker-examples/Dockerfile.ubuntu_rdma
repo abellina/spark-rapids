@@ -14,7 +14,7 @@
 # limitations under the License.
 
 
-# Sample Dockerfile to install UCX in a Unbuntu 18.04 image with RDMA support.
+# Sample Dockerfile to install UCX in a Unbuntu 20.04 image with RDMA support.
 #
 # The parameters are: 
 #   - RDMA_CORE_VERSION: Set to 32.1 to match the rdma-core line in the latest 
@@ -23,16 +23,16 @@
 #   - UCX_VER and UCX_CUDA_VER: these are used to pick a package matching a specific UCX version and
 #                               CUDA runtime from the UCX github repo.
 #                               See: https://github.com/openucx/ucx/releases/
-#   - UBUNTU_VER: 22.04 by default
+#   - UBUNTU_VER: 20.04 by default
 #
 # The Dockerfile first fetches and builds `rdma-core` to satisfy requirements for
-# the ucx-ib and ucx-rdma RPMs.
+# the RDMA components of UCX.
 #
 # Note that tzdata has to be installed with a time zone configuration, and UTC has been picked in this container
 #
 
 
-ARG RDMA_CORE_VERSION=32.1
+ARG RDMA_CORE_VERSION=45.0
 ARG CUDA_VER=11.8.0
 ARG UCX_VER=1.14.0
 ARG UCX_CUDA_VER=11
@@ -66,7 +66,8 @@ ARG UBUNTU_VER
 COPY --from=rdma_core /*.deb /tmp/
 
 RUN apt update
-RUN apt-get install -y wget
+RUN apt-get install -y wget bzip2
+RUN apt install -y /tmp/*.deb && rm /tmp/*.deb
 RUN mkdir /tmp/ucx_install && cd /tmp/ucx_install && \
   wget https://github.com/openucx/ucx/releases/download/v$UCX_VER/ucx-$UCX_VER-ubuntu$UBUNTU_VER-mofed5-cuda$UCX_CUDA_VER.tar.bz2 && \
   tar -xvf ucx-$UCX_VER-ubuntu$UBUNTU_VER-mofed5-cuda$UCX_CUDA_VER.tar.bz2 && \
