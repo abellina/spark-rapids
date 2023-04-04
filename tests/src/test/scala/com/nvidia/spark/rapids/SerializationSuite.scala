@@ -44,7 +44,7 @@ class SerializationSuite extends FunSuite
 
   private def createDeserializedHostBuffer(
       batch: ColumnarBatch): SerializeBatchDeserializeHostBuffer = {
-    withResource(new SerializeBatchDeserializeHostBuffer(batch)) { obj =>
+    withResource(new SerializeBatchDeserializeHostBuffer(batch, "test")) { obj =>
       // Return a deserialized form of the object as if it was read on the driver
       SerializationUtils.clone(obj)
     }

@@ -240,8 +240,8 @@ class SerializeConcatHostBuffersDeserializeBatch(
 // scalastyle:on no.finalize
 
 @SerialVersionUID(100L)
-class SerializeBatchDeserializeHostBuffer(batch: ColumnarBatch)
-  extends Serializable with AutoCloseable with Arm {
+class SerializeBatchDeserializeHostBuffer(batch: ColumnarBatch, uuid: String)
+  extends Serializable with AutoCloseable with Logging with Arm {
   @transient private var columns = GpuColumnVector.extractBases(batch).map(_.copyToHost())
   @transient var header: JCudfSerialization.SerializedTableHeader = null
   @transient var buffer: HostMemoryBuffer = null
@@ -249,6 +249,9 @@ class SerializeBatchDeserializeHostBuffer(batch: ColumnarBatch)
 
   private def writeObject(out: ObjectOutputStream): Unit = {
     withResource(new NvtxRange("SerializeBatch", NvtxColor.PURPLE)) { _ =>
+      logWarning(s"debug: $uuid about to serialize batch with " +
+          s"num rows: ${batch.numRows()} and cols: ${batch.numCols()} and " +
+          s"types: ${(0 until batch.numCols()).map(c => batch.column(c).dataType()).mkString(",")}")
       if (buffer != null) {
         throw new IllegalStateException("Cannot re-serialize a batch this way...")
       } else {
@@ -267,6 +270,11 @@ class SerializeBatchDeserializeHostBuffer(batch: ColumnarBatch)
   private def readObject(in: ObjectInputStream): Unit = {
     withResource(new NvtxRange("HostDeserializeBatch", NvtxColor.PURPLE)) { _ =>
       val (h, b) = SerializedHostTableUtils.readTableHeaderAndBuffer(in)
+      if (h != null) {
+        logWarning(s"debug: At readObject header: ${h}, buffer: ${b}, numRows: ${h.getNumRows}")
+      } else {
+        logWarning(s"debug: At readObject header: ${h}, buffer: ${b}, numRows: N/A")
+      }
       header = h
       buffer = b
       numRows = h.getNumRows
@@ -338,7 +346,19 @@ abstract class GpuBroadcastExchangeExecBase(
 
   val _runId: UUID = UUID.randomUUID()
 
+  val _runIdStr: String = _runId.toString()
+
   override def runId: UUID = _runId
+
+  def execute(runIdStr: String): RDD[SerializeBatchDeserializeHostBuffer] = {
+    val childRdd = child.executeColumnar()
+    val data = childRdd.map(cb => try {
+      new SerializeBatchDeserializeHostBuffer(cb, runIdStr)
+    } finally {
+      cb.close()
+    })
+    data
+  }
 
   @transient
   lazy val relationFuture: Future[Broadcast[Any]] = {
@@ -349,7 +369,6 @@ abstract class GpuBroadcastExchangeExecBase(
     val collectTime = gpuLongMetric(COLLECT_TIME)
     val buildTime = gpuLongMetric(BUILD_TIME)
     val broadcastTime = gpuLongMetric("broadcastTime")
-
     val task = new Callable[Broadcast[Any]]() {
       override def call(): Broadcast[Any] = {
         // This will run in another thread. Set the execution id so that we can connect these jobs
@@ -363,13 +382,7 @@ abstract class GpuBroadcastExchangeExecBase(
             val broadcastResult =
               withResource(new NvtxWithMetrics("broadcast collect", NvtxColor.GREEN,
                 collectTime)) { _ =>
-                val childRdd = child.executeColumnar()
-                val data = childRdd.map(cb => try {
-                  new SerializeBatchDeserializeHostBuffer(cb)
-                } finally {
-                  cb.close()
-                })
-
+                val data = execute(_runIdStr)
                 val d = data.collect()
                 val emptyRelation: Option[Any] = if (d.isEmpty) {
                   SparkShimImpl.tryTransformIfEmptyRelation(mode)
@@ -378,13 +391,29 @@ abstract class GpuBroadcastExchangeExecBase(
                 }
 
                 emptyRelation.getOrElse({
+                  logWarning(s"debug: ${d.length} serialized host buffers")
+                  val uuid = _runIdStr
+                  d.indices.foreach { i =>
+                    logWarning(s"debug: $uuid buff ${i} ${d(i)}")
+                    if (d(i) != null) {
+                      logWarning(s"debug: $uuid ${i} contents ${d(i).header}; ${d(i).buffer}")
+                    } else {
+                      logWarning(s"debug: $uuid ${i} is null...")
+                    }
+                  }
                   val batch = new SerializeConcatHostBuffersDeserializeBatch(d, output)
-                  val numRows = batch.numRows
-                  checkRowLimit(numRows)
-                  numOutputBatches += 1
-                  numOutputRows += numRows
-                  dataSize += batch.dataSize
-                  batch
+                  try {
+                    val numRows = batch.numRows
+                    checkRowLimit(numRows)
+                    numOutputBatches += 1
+                    numOutputRows += numRows
+                    dataSize += batch.dataSize
+                    batch
+                  } catch {
+                    case t: Throwable =>
+                      logWarning(s"debug: $uuid failed", t)
+                      throw t
+                  }
                 })
               }
             withResource(new NvtxWithMetrics("broadcast build", NvtxColor.DARK_GREEN,
