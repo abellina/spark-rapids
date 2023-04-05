@@ -66,7 +66,11 @@ class RapidsHostMemoryStore(
       otherBufferIterator: Iterator[(MemoryBuffer, Long)],
       shouldClose: Boolean,
       stream: Cuda.Stream): RapidsBufferBase = {
-    val (hostBuffer, allocationMode) = allocateHostBuffer(other.getSize)
+    val hostBuffSize = otherBufferIterator match {
+      case p: ChunkedPacker => p.getMeta().bufferMeta().size()
+      case _ => other.getSize
+    }
+    val (hostBuffer, allocationMode) = allocateHostBuffer(hostBuffSize)
     var hostOffset = 0L
     while (otherBufferIterator.hasNext) {
       val (otherBuffer, deviceSize) = otherBufferIterator.next()

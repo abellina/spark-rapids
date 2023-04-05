@@ -311,13 +311,9 @@ case class GpuOutOfCoreSortIterator(
 
     if (sortedOffset == rows) {
       // The entire thing is sorted
-      withResource(sortedTbl.contiguousSplit()) { splits =>
-        assert(splits.length == 1)
-        val ct = splits.head
-        memUsed += ct.getBuffer.getLength
-        val sp = SpillableColumnarBatch(ct, sorter.projectedBatchTypes,
-          SpillPriorities.ACTIVE_ON_DECK_PRIORITY)
-        sortedSize += sp.sizeInBytes
+      withResource(GpuColumnVector.from(sortedTbl, sorter.projectedBatchTypes)) { batch =>
+        val sp = SpillableColumnarBatch(batch, SpillPriorities.ACTIVE_ON_DECK_PRIORITY)
+        sortedSize += memUsed
         sorted.add(sp)
       }
     } else {
