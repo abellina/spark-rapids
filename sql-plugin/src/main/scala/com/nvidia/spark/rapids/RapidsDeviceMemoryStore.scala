@@ -168,9 +168,14 @@ class RapidsDeviceMemoryStore
 
     override val supportsChunkedPacker: Boolean = true
 
+    var initializedChunkedPacker: Boolean = false
+
     // TODO: need a way to construct the packed chunked split without a user buffer
     // so we can get the packed meta
-    lazy val chunkedPacker: ChunkedPacker = new ChunkedPacker(id, batch)
+    lazy val chunkedPacker: ChunkedPacker = {
+      initializedChunkedPacker = true
+      new ChunkedPacker(id, batch)
+    }
 
     override def getMeta(): TableMeta = {
       chunkedPacker.getMeta()
@@ -178,11 +183,11 @@ class RapidsDeviceMemoryStore
 
     /** The size of this buffer in bytes. */
     override def getSize: Long = {
-      if (chunkedPacker.getMeta() != null) {
-        chunkedPacker.getMeta().bufferMeta().size()
-      } else {
+      //if (chunkedPacker.getMeta() != null) {
+      //  chunkedPacker.getMeta().bufferMeta().size()
+      //} else {
         GpuColumnVector.getTotalDeviceMemoryUsed(batch)
-      }
+     // }
     }
 
     /**
@@ -217,7 +222,9 @@ class RapidsDeviceMemoryStore
 
     override def free(): Unit = {
       super.free()
-      chunkedPacker.close()
+      if (initializedChunkedPacker) {
+        chunkedPacker.close()
+      }
     }
   }
 
