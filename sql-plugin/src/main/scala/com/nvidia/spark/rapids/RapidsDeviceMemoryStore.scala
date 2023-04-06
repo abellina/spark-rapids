@@ -62,7 +62,7 @@ class RapidsDeviceMemoryStore
     }
     new RapidsDeviceMemoryBuffer(
       other.id,
-      other.getSize,
+      deviceBuffer.getLength,
       other.getMeta,
       deviceBuffer,
       other.getSpillPriority)
@@ -179,13 +179,15 @@ class RapidsDeviceMemoryStore
     override def getMeta(): TableMeta = {
       chunkedPacker.getMeta()
     }
+    
+    val estSize = GpuColumnVector.getTotalDeviceMemoryUsed(batch)
 
     /** The size of this buffer in bytes. */
     override def getSize: Long = {
       //if (chunkedPacker.getMeta() != null) {
       //  chunkedPacker.getMeta().bufferMeta().size()
       //} else {
-        GpuColumnVector.getTotalDeviceMemoryUsed(batch)
+      estSize
      // }
     }
 
