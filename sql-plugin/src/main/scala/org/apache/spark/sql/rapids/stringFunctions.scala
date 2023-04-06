@@ -763,12 +763,11 @@ trait HasGpuStringReplace {
     strExpr: GpuColumnVector,
     search: Seq[String],
     replacement: String): ColumnVector = {
-    null
-     //withResource(ColumnVector.fromStrings(search: _*)) { targets =>
-     //  withResource(ColumnVector.fromStrings(replacement)) {  repls =>
-     //    strExpr.getBase.stringReplace(targets, repls)
-     //  }
-     //}
+     withResource(ColumnVector.fromStrings(search: _*)) { targets =>
+       withResource(ColumnVector.fromStrings(replacement)) {  repls =>
+         strExpr.getBase.stringReplace(targets, repls)
+       }
+     }
   }
 }
 
