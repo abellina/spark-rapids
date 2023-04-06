@@ -170,7 +170,10 @@ abstract class Spark31XShims extends Spark31Xuntil33XShims with Logging {
     SQLConf.LEGACY_PARQUET_INT96_REBASE_MODE_IN_WRITE.key
 
   override def tryTransformIfEmptyRelation(mode: BroadcastMode): Option[Any] = {
-    Some(broadcastModeTransform(mode, Array.empty)).filter(isEmptyRelation)
+    val transformed = broadcastModeTransform(mode, Array.empty)
+    val res = Some(transformed).filter(isEmptyRelation)
+    logWarning(s"transformed: ${mode} to ${transformed}. after filter: $res")
+    res
   }
 
   override def isEmptyRelation(relation: Any): Boolean = relation match {

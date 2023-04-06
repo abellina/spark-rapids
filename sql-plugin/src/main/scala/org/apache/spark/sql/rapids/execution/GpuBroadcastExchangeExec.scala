@@ -352,7 +352,10 @@ abstract class GpuBroadcastExchangeExecBase(
 
   def execute(runIdStr: String): RDD[SerializeBatchDeserializeHostBuffer] = {
     val childRdd = child.executeColumnar()
+    logDebug(
+      s"debug: ${_runIdStr} executing ${child.nodeName} ... ${child} ... ${child.toString()}")
     val data = childRdd.map(cb => try {
+      logDebug(s"debug: ${_runIdStr} wrapping ${cb} in a SerializedBatchDeserializeHostBuffer")
       new SerializeBatchDeserializeHostBuffer(cb, runIdStr)
     } finally {
       cb.close()
@@ -384,6 +387,7 @@ abstract class GpuBroadcastExchangeExecBase(
                 collectTime)) { _ =>
                 val data = execute(_runIdStr)
                 val d = data.collect()
+                logWarning(s"debug: broadcast mode for: ${_runIdStr} is ${mode}. data.isEmpty? ${d.isEmpty}")
                 val emptyRelation: Option[Any] = if (d.isEmpty) {
                   SparkShimImpl.tryTransformIfEmptyRelation(mode)
                 } else {
