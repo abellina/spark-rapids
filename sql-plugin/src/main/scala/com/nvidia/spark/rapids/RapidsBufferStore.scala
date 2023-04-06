@@ -378,8 +378,8 @@ abstract class RapidsBufferStore(val tier: StorageTier)
           materializeMemoryBuffer match {
             case h: HostMemoryBuffer =>
               withResource(h) { _ =>
-                closeOnExcept(DeviceMemoryBuffer.allocate(getSize)) { deviceBuffer =>
-                  logWarning(s"copying ${h.getLength} from host $h to device $deviceBuffer of size ${getSize}")
+                closeOnExcept(DeviceMemoryBuffer.allocate(h.getLength)) { deviceBuffer =>
+                  logWarning(s"copying ${h.getLength} from host $h to device $deviceBuffer of size ${deviceBuffer.getLength}")
                   deviceBuffer.copyFromHostBuffer(h)
                   deviceBuffer
                 }
