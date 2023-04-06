@@ -464,8 +464,6 @@ class RapidsBufferCatalog(
       store: RapidsBufferStore,
       targetTotalSize: Long,
       stream: Cuda.Stream = Cuda.DEFAULT_STREAM): Option[Long] = {
-    RmmSpark.removeCurrentThreadAssociation()
-    RmmSpark.associateCurrentThreadWithShuffle()
     val spillStore = store.spillStore
     if (spillStore == null) {
       throw new OutOfMemoryError("Requested to spill without a spill store")
@@ -519,7 +517,6 @@ class RapidsBufferCatalog(
       }
     }
 
-    RmmSpark.removeCurrentThreadAssociation()
     if (rmmShouldRetryAlloc) {
       // if we are going to retry, and didn't spill, returning None prevents extra
       // logs where we say we spilled 0 bytes from X store

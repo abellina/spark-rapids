@@ -312,11 +312,10 @@ case class GpuOutOfCoreSortIterator(
 
     if (sortedOffset == rows) {
       // The entire thing is sorted
-      withResource(GpuColumnVector.from(sortedTbl, sorter.projectedBatchTypes)) { batch =>
-        val sp = SpillableColumnarBatch(batch, SpillPriorities.ACTIVE_ON_DECK_PRIORITY)
-        sortedSize += memUsed
-        sorted.add(sp)
-      }
+      val batch = GpuColumnVector.from(sortedTbl, sorter.projectedBatchTypes)
+      val sp = SpillableColumnarBatch(batch, SpillPriorities.ACTIVE_ON_DECK_PRIORITY)
+      sortedSize += memUsed
+      sorted.add(sp)
     } else {
       val hasFullySortedData = sortedOffset > 0
       val splitIndexes = if (hasFullySortedData) {
