@@ -387,7 +387,8 @@ abstract class GpuBroadcastExchangeExecBase(
                 collectTime)) { _ =>
                 val data = execute(_runIdStr)
                 val d = data.collect()
-                logWarning(s"debug: broadcast mode for: ${_runIdStr} is ${mode}. data.isEmpty? ${d.isEmpty}")
+                logWarning(
+                  s"debug: broadcast mode for: ${_runIdStr} is ${mode}. data.isEmpty? ${d.isEmpty}")
                 val emptyRelation: Option[Any] = if (d.isEmpty) {
                   SparkShimImpl.tryTransformIfEmptyRelation(mode)
                 } else {
