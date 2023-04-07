@@ -94,6 +94,8 @@ class RapidsHostMemoryStore(
       }
     }
 
+    stream.sync()
+
     var meta: TableMeta = null
     otherBufferIterator match {
       case p: ChunkedPacker =>
@@ -119,7 +121,7 @@ class RapidsHostMemoryStore(
     }
     new RapidsHostMemoryBuffer(
       other.id,
-      other.getSize,
+      hostBuffSize,
       other.getMeta,
       applyPriorityOffset(other.getSpillPriority, allocationMode.spillPriorityOffset),
       hostBuffer,
