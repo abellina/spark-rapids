@@ -100,6 +100,7 @@ class ChunkedPacker(id: RapidsBufferId, batch: ColumnarBatch)
     if (!closed) {
       closed = true
       chunkedContigSplit.close()
+      packedMeta.close()
       tbl.close()
     }
   }
