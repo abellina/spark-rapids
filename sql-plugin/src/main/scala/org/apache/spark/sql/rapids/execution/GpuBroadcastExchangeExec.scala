@@ -352,10 +352,10 @@ abstract class GpuBroadcastExchangeExecBase(
 
   def execute(runIdStr: String): RDD[SerializeBatchDeserializeHostBuffer] = {
     val childRdd = child.executeColumnar()
-    logDebug(
+    logWarning(
       s"debug: ${_runIdStr} executing ${child.nodeName} ... ${child} ... ${child.toString()}")
     val data = childRdd.map(cb => try {
-      logDebug(s"debug: ${_runIdStr} wrapping ${cb} in a SerializedBatchDeserializeHostBuffer")
+      logWarning(s"debug: ${_runIdStr} wrapping ${cb} in a SerializedBatchDeserializeHostBuffer")
       new SerializeBatchDeserializeHostBuffer(cb, runIdStr)
     } finally {
       cb.close()
