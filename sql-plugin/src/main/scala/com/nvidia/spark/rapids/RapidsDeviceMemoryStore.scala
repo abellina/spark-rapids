@@ -106,12 +106,17 @@ class RapidsDeviceMemoryStore
     }
   }
 
+  class SpillableBatchTracker extends ai.rapids.cudf.ColumnVector.EventHandler {
+    override def onClosed(refCount: Int): Unit = {
+      logWarning(s"closed cv ${this} with refcount ${refCount}")
+    }
+  }
+
   def addBatch(
       id: TempSpillBufferId,
       batch: ColumnarBatch,
       initialSpillPriority: Long,
       needsSync: Boolean): RapidsBuffer = {
-    GpuColumnVector.incRefCounts(batch) // TODO: do I need this
     val rapidsBuffer = new RapidsDeviceMemoryBatch(
       id,
       batch,
@@ -119,7 +124,7 @@ class RapidsDeviceMemoryStore
     freeOnExcept(rapidsBuffer) { _ =>
       addBuffer(rapidsBuffer, needsSync)
       // TODO: we need to figure out a different signal for batch
-      doSetSpillable(rapidsBuffer, true)
+      //doSetSpillable(rapidsBuffer, true)
       rapidsBuffer
     }
   }
@@ -148,6 +153,36 @@ class RapidsDeviceMemoryStore
     doSetSpillable(buffer, spillable)
   }
 
+  class EventTrackerForColumn(
+    val colIx: Int, 
+    var refCount: Int, 
+    dmb: RapidsDeviceMemoryBatch,
+    val wrapped: EventTrackerForColumn = null) 
+    extends ai.rapids.cudf.ColumnVector.EventHandler {
+    /**
+     * Override from the ColumnVector.EventHandler interface.
+     *
+     * If we are being invoked we have the `ColumnVector` lock, as this callback
+     * is being invoked from `ColumnVector.close`
+     *
+     * @param refCount - the vector's current refCount
+     */
+    override def onClosed(refCount: Int): Unit = {
+      logWarning(s"for column ${this} ${colIx} new refCount is ${refCount}")
+      this.refCount = refCount
+      // refCount == 1 means only 1 reference exists to `contigBuffer` in the
+      // RapidsDeviceMemoryBuffer (we own it)
+      if (wrapped != null) {
+        logWarning(s"Calling wrapped tracker for ${this} col ${colIx} and refCount ${refCount}")
+        wrapped.onClosed(refCount)
+      }
+      if (refCount == 1) {
+        dmb.onColumnSpillable()
+      }
+    }
+  }
+
+
   class RapidsDeviceMemoryBatch(
       id: TempSpillBufferId,
       batch: ColumnarBatch,
@@ -156,6 +191,51 @@ class RapidsDeviceMemoryStore
         id,
         null,
         spillPriority) {
+    GpuColumnVector.incRefCounts(batch)
+    var refCounts = new Array[EventTrackerForColumn](batch.numCols())
+    makeSpillableTrackingBatch(batch)
+    private def makeSpillableTrackingBatch(batch: ColumnarBatch): Unit = {
+      val cudfCVs = GpuColumnVector.extractBases(batch)
+      cudfCVs.zipWithIndex.foreach { case(c, ix) => 
+        val tracker = if (c.getEventHandler != null) {
+          val tracker = c.getEventHandler.asInstanceOf[EventTrackerForColumn]
+          val parentTracker = new EventTrackerForColumn(ix, c.getRefCount(), this, tracker)
+          c.setEventHandler(parentTracker)
+          tracker
+        } else {
+          val tracker = new EventTrackerForColumn(ix, c.getRefCount(), this)
+          c.setEventHandler(tracker)
+          tracker
+        }
+        refCounts(ix) = tracker
+      }
+    }
+
+    private def removeTracker(): Unit = {
+      val cudfCVs = GpuColumnVector.extractBases(batch)
+      cudfCVs.zipWithIndex.foreach { case(c, ix) => 
+        val tracker = c.getEventHandler.asInstanceOf[EventTrackerForColumn]
+        logWarning(s"Removing tracker ${tracker} for ${this} col ${ix} ${c}")
+        c.setEventHandler(tracker.wrapped) // which could be null
+      }
+    }
+
+    def onColumnSpillable(): Unit = {
+      val otherSpillable = refCounts.zipWithIndex.map { case (tracker, ix) => 
+        if (tracker == null) {
+          true
+        } else {
+          logWarning(s"column $ix has refcount ${tracker.refCount}")
+          tracker.refCount > 1
+        }
+      }.reduce(_ || _)
+
+      logWarning(s"Making batch spillable? ${!otherSpillable}")
+
+      if (!otherSpillable) {
+        setSpillable(this, true)
+      }
+    }
 
     /** Release the underlying resources for this buffer. */
     override protected def releaseResources(): Unit = {
@@ -205,7 +285,9 @@ class RapidsDeviceMemoryStore
 
     override def getColumnarBatch(sparkTypes: Array[DataType]): ColumnarBatch = {
       // TODO: assert that the sparkTypes match the CB types
-      GpuColumnVector.incRefCounts(batch)
+      val res = GpuColumnVector.incRefCounts(batch)
+      setSpillable(this, false)
+      res
     }
 
     /**
@@ -223,6 +305,7 @@ class RapidsDeviceMemoryStore
 
     override def free(): Unit = {
       super.free()
+      removeTracker()
       if (initializedChunkedPacker) {
         chunkedPacker.close()
       }
