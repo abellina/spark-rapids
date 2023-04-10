@@ -326,15 +326,22 @@ class RapidsBufferCatalog(
       needsSync: Boolean = true): RapidsBufferHandle = {
     val id = TempSpillBufferId()
     logDebug(s"Adding batch ${id} to ${deviceStorage}")
-    val rapidsBuffer = deviceStorage.addBatch(
-      id,
-      batch,
-      initialSpillPriority,
-      needsSync)
-    registerNewBuffer(rapidsBuffer)
-    makeNewHandle(id, initialSpillPriority)
+    val existing = getExistingRapidsBufferAndAcquire(batch)
+    existing match {
+      case None =>
+        val rapidsBuffer = deviceStorage.addBatch(
+          id,
+          batch,
+          initialSpillPriority,
+          needsSync)
+        registerNewBuffer(rapidsBuffer)
+        makeNewHandle(id, initialSpillPriority)
+      case Some(rapidsBuffer) =>
+        withResource(rapidsBuffer) { _ => 
+          makeNewHandle(rapidsBuffer.id, initialSpillPriority)
+        }
+    }
   }
-
 
   /**
    * Register a degenerate RapidsBufferId given a TableMeta
@@ -880,6 +887,36 @@ object RapidsBufferCatalog extends Logging {
         }
       case _ =>
         throw new IllegalStateException("Unknown event handler")
+    }
+  }
+
+
+  private def getExistingRapidsBufferAndAcquire(
+      batch: ColumnarBatch): Option[RapidsBuffer] = {
+    val cvs = GpuColumnVector.extractBases(batch)
+    val handlers = cvs.map(_.getEventHandler)
+    if (handlers.length == 0) {
+      None
+    } else {
+      val allSame = handlers.distinct.length == 1
+      if (!allSame) {
+        throw new IllegalStateException(s"ColumnarBatch ${batch} has handlers: ${handlers.mkString(",")} which are not the same!!")
+        None
+      } else {
+        val eh = handlers.head
+        eh match {
+          case null =>
+            None
+          case rapidsBuffer: RapidsBuffer =>
+            if (rapidsBuffer.addReference()) {
+              Some(rapidsBuffer)
+            } else {
+              None
+            }
+          case _ =>
+            throw new IllegalStateException("Unknown event handler")
+        }
+      }
     }
   }
 }

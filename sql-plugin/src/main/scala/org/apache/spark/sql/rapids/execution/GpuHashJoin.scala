@@ -978,10 +978,13 @@ trait GpuHashJoin extends GpuExec {
     val spillableBuiltBatch = withResource(nullFiltered) {
       LazySpillableColumnarBatch(_, "built")
     }
+    spillableBuiltBatch.allowSpilling()
 
     val lazyStream = stream.map { cb =>
       withResource(cb) { cb =>
-        LazySpillableColumnarBatch(cb, "stream_batch")
+        val res = LazySpillableColumnarBatch(cb, "stream_batch")
+        res.allowSpilling()
+        res
       }
     }
 
