@@ -20,6 +20,7 @@ import scala.collection.mutable
 
 import ai.rapids.cudf
 import ai.rapids.cudf.DType
+import com.nvidia.spark.rapids.Arm.withResource
 import com.nvidia.spark.rapids.shims.ShimExpression
 
 import org.apache.spark.sql.catalyst.expressions.{Attribute, AttributeReference, AttributeSeq, Expression, ExprId, NamedExpression}

@@ -19,6 +19,7 @@ package org.apache.spark.sql.rapids
 
 import ai.rapids.cudf.ColumnVector
 import com.nvidia.spark.rapids.{GpuColumnVector, GpuUnaryExpression}
+import com.nvidia.spark.rapids.Arm.withResource
 
 import org.apache.spark.sql.catalyst.expressions.{ExpectsInputTypes, Expression}
 import org.apache.spark.sql.types.{AbstractDataType, DataType}

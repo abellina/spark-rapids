@@ -18,6 +18,7 @@ package org.apache.spark.sql.rapids
 
 import ai.rapids.cudf.{BinaryOp, ColumnVector, DType, Scalar}
 import com.nvidia.spark.rapids.{DataFromReplacementRule, GpuBinaryExpression, GpuColumnVector, GpuExpression, GpuListUtils, GpuMapUtils, GpuScalar, GpuUnaryExpression, RapidsConf, RapidsMeta, UnaryExprMeta}
+import com.nvidia.spark.rapids.Arm.{withResource, withResourceIfAllowed}
 import com.nvidia.spark.rapids.ArrayIndexUtils.firstIndexAndNumElementUnchecked
 import com.nvidia.spark.rapids.BoolUtils.isAnyValidTrue
 import com.nvidia.spark.rapids.RapidsPluginImplicits._

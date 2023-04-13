@@ -18,9 +18,10 @@ package com.nvidia.spark.rapids
 
 import ai.rapids.cudf.ColumnVector
 import com.nvidia.spark.RebaseHelper
+import com.nvidia.spark.rapids.Arm.withResource
 import org.scalatest.FunSuite
 
-class RebaseHelperSuite extends FunSuite with Arm {
+class RebaseHelperSuite extends FunSuite {
   test("all null timestamp days column rebase check") {
     withResource(ColumnVector.timestampDaysFromBoxedInts(null, null, null)) { c =>
       assertResult(false)(RebaseHelper.isDateRebaseNeededInWrite(c))

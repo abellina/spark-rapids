@@ -17,13 +17,14 @@
 package com.nvidia.spark.rapids
 
 import ai.rapids.cudf.{ColumnView, DType, HostColumnVector, HostColumnVectorCore}
+import com.nvidia.spark.rapids.Arm.withResource
 import org.junit.jupiter.api.Assertions.{assertArrayEquals, assertEquals}
 
 /**
  * Convenience methods for testing cuDF calls directly. This code is largely copied
  * from the cuDF Java test suite.
  */
-object CudfTestHelper extends Arm {
+object CudfTestHelper {
 
   /**
    * Checks and asserts that passed in columns match

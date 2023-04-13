@@ -25,6 +25,7 @@ import scala.concurrent.duration._
 
 import ai.rapids.cudf
 import com.nvidia.spark.rapids.{GpuColumnVector, SparkQueryCompareTestSuite}
+import com.nvidia.spark.rapids.Arm.withResource
 import org.apache.hadoop.conf.Configuration
 import org.apache.hadoop.fs.Path
 import org.apache.parquet.hadoop.ParquetWriter

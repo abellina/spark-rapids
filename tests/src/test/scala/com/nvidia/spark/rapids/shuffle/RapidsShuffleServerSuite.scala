@@ -21,7 +21,8 @@ import java.nio.ByteBuffer
 import java.util
 
 import ai.rapids.cudf.{Cuda, DeviceMemoryBuffer, HostMemoryBuffer, MemoryBuffer}
-import com.nvidia.spark.rapids.{Arm, MetaUtils, RapidsBuffer, ShuffleMetadata}
+import com.nvidia.spark.rapids.{MetaUtils, RapidsBuffer, ShuffleMetadata}
+import com.nvidia.spark.rapids.Arm.{closeOnExcept, withResource}
 import com.nvidia.spark.rapids.format.TableMeta
 import org.mockito.{ArgumentCaptor, ArgumentMatchers}
 import org.mockito.ArgumentMatchers.{any, anyLong}
@@ -29,7 +30,7 @@ import org.mockito.Mockito._
 
 import org.apache.spark.storage.ShuffleBlockBatchId
 
-class RapidsShuffleServerSuite extends RapidsShuffleTestHelper with Arm {
+class RapidsShuffleServerSuite extends RapidsShuffleTestHelper {
 
   def setupMocks(deviceBuffers: Seq[DeviceMemoryBuffer]): (RapidsShuffleRequestHandler,
       Seq[RapidsBuffer], util.HashMap[RapidsBuffer, Int]) = {

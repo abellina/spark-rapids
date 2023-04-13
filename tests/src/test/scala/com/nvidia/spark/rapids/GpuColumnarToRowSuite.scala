@@ -17,6 +17,7 @@
 package com.nvidia.spark.rapids
 
 import ai.rapids.cudf.ColumnVector
+import com.nvidia.spark.rapids.Arm._
 import com.nvidia.spark.rapids.GpuColumnVector.GpuColumnarBatchBuilder
 
 import org.apache.spark.sql.types.{BinaryType, StringType, StructField, StructType}

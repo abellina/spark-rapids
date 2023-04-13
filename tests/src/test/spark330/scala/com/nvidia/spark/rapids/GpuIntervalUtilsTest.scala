@@ -22,6 +22,7 @@ spark-rapids-shim-json-lines ***/
 package com.nvidia.spark.rapids
 
 import ai.rapids.cudf.ColumnVector
+import com.nvidia.spark.rapids.Arm.withResource
 import com.nvidia.spark.rapids.shims.GpuIntervalUtils
 import org.scalatest.FunSuite
 
@@ -33,7 +34,7 @@ import org.apache.spark.sql.types.{DayTimeIntervalType => DT}
  * Unit test cases for testing `GpuIntervalUtils.toDayTimeIntervalString`
  *
  */
-class GpuIntervalUtilsTest extends FunSuite with Arm {
+class GpuIntervalUtilsTest extends FunSuite {
 
   def testDayTimeToString(fromField: Byte, endField: Byte,
       testData: Array[(Long, String)]): Unit = {

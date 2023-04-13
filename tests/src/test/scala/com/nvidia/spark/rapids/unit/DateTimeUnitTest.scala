@@ -18,6 +18,7 @@ package com.nvidia.spark.rapids.unit
 
 import ai.rapids.cudf.ColumnVector
 import com.nvidia.spark.rapids.{GpuBoundReference, GpuColumnVector, GpuLiteral, GpuUnitTests}
+import com.nvidia.spark.rapids.Arm.withResource
 
 import org.apache.spark.sql.catalyst.expressions.NamedExpression
 import org.apache.spark.sql.rapids.{GpuDateAdd, GpuDateSub}

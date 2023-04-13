@@ -17,13 +17,13 @@
 package com.nvidia.spark
 
 import ai.rapids.cudf.{ColumnVector, DType, Scalar}
-import com.nvidia.spark.rapids.Arm
+import com.nvidia.spark.rapids.Arm.withResource
 import com.nvidia.spark.rapids.shims.SparkShimImpl
 
 import org.apache.spark.sql.catalyst.util.RebaseDateTime
 import org.apache.spark.sql.rapids.execution.TrampolineUtil
 
-object RebaseHelper extends Arm {
+object RebaseHelper {
   private[this] def isDateRebaseNeeded(column: ColumnVector,
       startDay: Int): Boolean = {
     // TODO update this for nested column checks

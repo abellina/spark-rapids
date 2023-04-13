@@ -19,6 +19,7 @@ package com.nvidia.spark.rapids
 import java.util.Random
 
 import ai.rapids.cudf.{NvtxColor, NvtxRange}
+import com.nvidia.spark.rapids.Arm.withResource
 import com.nvidia.spark.rapids.shims.ShimExpression
 
 import org.apache.spark.TaskContext

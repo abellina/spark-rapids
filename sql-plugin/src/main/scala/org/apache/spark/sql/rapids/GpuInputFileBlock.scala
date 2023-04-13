@@ -18,6 +18,7 @@ package org.apache.spark.sql.rapids
 
 import ai.rapids.cudf.{ColumnVector, Scalar}
 import com.nvidia.spark.rapids.{GpuColumnVector, GpuLeafExpression}
+import com.nvidia.spark.rapids.Arm.withResource
 
 import org.apache.spark.rdd.InputFileBlockHolder
 import org.apache.spark.sql.types.{DataType, LongType, StringType}

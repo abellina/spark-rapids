@@ -17,6 +17,7 @@ package com.nvidia.spark.rapids
 
 import ai.rapids.cudf
 import ai.rapids.cudf.{ColumnVector, DecimalUtils, DType, Scalar}
+import com.nvidia.spark.rapids.Arm.withResource
 
 import org.apache.spark.sql.catalyst.expressions.Expression
 import org.apache.spark.sql.types.{DataType, DecimalType, LongType}

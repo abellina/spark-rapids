@@ -18,6 +18,7 @@ package org.apache.spark.sql.rapids.zorder
 
 import ai.rapids.cudf.{ColumnVector, NvtxColor, NvtxRange}
 import com.nvidia.spark.rapids.{GpuColumnVector, GpuRangePartitioner, GpuUnaryExpression}
+import com.nvidia.spark.rapids.Arm.withResource
 
 import org.apache.spark.sql.catalyst.expressions.Expression
 import org.apache.spark.sql.types._

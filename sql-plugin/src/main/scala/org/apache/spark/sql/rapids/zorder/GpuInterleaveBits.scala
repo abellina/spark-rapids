@@ -18,6 +18,7 @@ package org.apache.spark.sql.rapids.zorder
 
 import ai.rapids.cudf.{NvtxColor, NvtxRange}
 import com.nvidia.spark.rapids.{GpuColumnVector, GpuExpression, GpuProjectExec}
+import com.nvidia.spark.rapids.Arm.withResource
 import com.nvidia.spark.rapids.jni.ZOrder
 import com.nvidia.spark.rapids.shims.ShimExpression
 

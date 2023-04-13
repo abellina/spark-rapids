@@ -19,6 +19,7 @@ package com.nvidia.spark.rapids
 import scala.collection.mutable.ArrayBuffer
 
 import ai.rapids.cudf.{BaseDeviceMemoryBuffer, ContiguousTable, Cuda, DeviceMemoryBuffer, NvtxColor, NvtxRange}
+import com.nvidia.spark.rapids.Arm.{closeOnExcept, withResource}
 import com.nvidia.spark.rapids.RapidsPluginImplicits._
 import com.nvidia.spark.rapids.format.{BufferMeta, CodecType, TableMeta}
 
@@ -111,7 +112,7 @@ object TableCompressionCodec {
  * @param stream CUDA stream to use
  */
 abstract class BatchedTableCompressor(maxBatchMemorySize: Long, stream: Cuda.Stream)
-    extends AutoCloseable with Arm with Logging {
+    extends AutoCloseable with Logging {
   // The tables that need to be compressed in the next batch
   private[this] val tables = new ArrayBuffer[ContiguousTable]
 
@@ -256,7 +257,7 @@ abstract class BatchedTableCompressor(maxBatchMemorySize: Long, stream: Cuda.Str
  * @param stream CUDA stream to use
  */
 abstract class BatchedBufferDecompressor(maxBatchMemorySize: Long, stream: Cuda.Stream)
-    extends AutoCloseable with Arm with Logging {
+    extends AutoCloseable with Logging {
   // The buffers of compressed data that will be decompressed in the next batch
   private[this] val inputBuffers = new ArrayBuffer[BaseDeviceMemoryBuffer]
 

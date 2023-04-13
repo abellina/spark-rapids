@@ -22,6 +22,7 @@ import scala.util.Random
 
 import ai.rapids.cudf.{ColumnVector, DType, HostColumnVector}
 import com.nvidia.spark.rapids.{GpuAlias, GpuColumnVector, GpuIsNotNull, GpuIsNull, GpuLiteral, GpuOverrides, GpuScalar, GpuUnitTests, HostColumnarToGpu, RapidsConf}
+import com.nvidia.spark.rapids.Arm._
 import com.nvidia.spark.rapids.shims.GpuBatchScanExec
 
 import org.apache.spark.SparkConf

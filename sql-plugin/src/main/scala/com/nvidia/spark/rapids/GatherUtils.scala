@@ -18,10 +18,11 @@ package com.nvidia.spark.rapids
 import scala.collection.mutable.ArrayBuffer
 
 import ai.rapids.cudf.ColumnVector
+import com.nvidia.spark.rapids.Arm.withResource
 
 import org.apache.spark.sql.vectorized.ColumnarBatch
 
-object GatherUtils extends Arm {
+object GatherUtils {
   def gather(cb: ColumnarBatch, rows: ArrayBuffer[Int]): ColumnarBatch = {
     val colTypes = GpuColumnVector.extractTypes(cb)
     if (rows.isEmpty) {

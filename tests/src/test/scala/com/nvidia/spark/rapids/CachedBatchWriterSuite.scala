@@ -20,6 +20,7 @@ import scala.collection.mutable
 import scala.collection.mutable.ArrayBuffer
 
 import ai.rapids.cudf.{ColumnVector, CompressionType, DType, Table, TableWriter}
+import com.nvidia.spark.rapids.Arm.withResource
 import org.apache.hadoop.mapreduce.{RecordWriter, TaskAttemptContext}
 import org.mockito.ArgumentMatchers._
 import org.mockito.Mockito._

@@ -21,6 +21,7 @@ import scala.util.hashing.byteswap32
 
 import ai.rapids.cudf
 import ai.rapids.cudf.{NvtxColor, NvtxRange}
+import com.nvidia.spark.rapids.Arm.withResource
 import com.nvidia.spark.rapids.shims.ShimExpression
 
 import org.apache.spark.rdd.{PartitionPruningRDD, RDD}

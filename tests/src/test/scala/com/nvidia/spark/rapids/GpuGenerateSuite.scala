@@ -16,17 +16,19 @@
 
 package com.nvidia.spark.rapids
 
+import java.util
+
+import scala.collection.mutable.ArrayBuffer
+
 import ai.rapids.cudf.{ColumnVector, DType, Table}
 import ai.rapids.cudf.HostColumnVector.{BasicType, ListType}
-import java.util
-import scala.collection.mutable.ArrayBuffer
+import com.nvidia.spark.rapids.Arm.withResource
 
 import org.apache.spark.sql.types.{ArrayType, DataType, IntegerType}
 import org.apache.spark.sql.vectorized.ColumnarBatch
 
 class GpuGenerateSuite
-  extends SparkQueryCompareTestSuite
-    with Arm {
+  extends SparkQueryCompareTestSuite {
   val rapidsConf = new RapidsConf(Map.empty[String, String])
 
   def makeListColumn(

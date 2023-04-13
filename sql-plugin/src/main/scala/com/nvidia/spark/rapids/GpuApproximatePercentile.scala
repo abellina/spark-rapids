@@ -18,6 +18,7 @@ package com.nvidia.spark.rapids
 
 import ai.rapids.cudf
 import ai.rapids.cudf.{DType, GroupByAggregation, ReductionAggregation}
+import com.nvidia.spark.rapids.Arm.withResource
 import com.nvidia.spark.rapids.GpuCast.doCast
 import com.nvidia.spark.rapids.shims.ShimExpression
 

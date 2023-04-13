@@ -17,6 +17,7 @@
 package com.nvidia.spark.rapids
 
 import ai.rapids.cudf.ColumnVector
+import com.nvidia.spark.rapids.Arm.withResource
 
 import org.apache.spark.sql.catalyst.expressions.{ExpectsInputTypes, Expression}
 import org.apache.spark.sql.types.{DataType, StringType}

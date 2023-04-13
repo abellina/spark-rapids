@@ -20,6 +20,7 @@ import java.io.File
 
 import scala.collection.JavaConverters._
 
+import com.nvidia.spark.rapids.Arm.withResource
 import org.apache.hadoop.conf.Configuration
 import org.apache.hadoop.fs.Path
 import org.apache.parquet.hadoop.ParquetFileReader

@@ -17,11 +17,12 @@
 package com.nvidia.spark.rapids
 
 import ai.rapids.cudf.{BaseDeviceMemoryBuffer, ContiguousTable, Cuda, DeviceMemoryBuffer}
+import com.nvidia.spark.rapids.Arm.closeOnExcept
 import com.nvidia.spark.rapids.RapidsPluginImplicits._
 import com.nvidia.spark.rapids.format.{BufferMeta, CodecType}
 
 /** A table compression codec used only for testing that copies the data. */
-class CopyCompressionCodec extends TableCompressionCodec with Arm {
+class CopyCompressionCodec extends TableCompressionCodec {
   override val name: String = "COPY"
   override val codecId: Byte = CodecType.COPY
 

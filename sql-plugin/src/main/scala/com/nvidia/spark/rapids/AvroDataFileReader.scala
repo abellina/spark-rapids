@@ -22,6 +22,7 @@ import java.nio.charset.StandardCharsets
 
 import scala.collection.mutable
 
+import com.nvidia.spark.rapids.Arm.closeOnExcept
 import org.apache.avro.Schema
 import org.apache.avro.file.DataFileConstants._
 import org.apache.avro.file.SeekableInput
@@ -456,7 +457,7 @@ class AvroDataFileReader(si: SeekableInput) extends AvroFileReader(si) {
 
 }
 
-object AvroFileReader extends Arm {
+object AvroFileReader {
 
   def openMetaReader(filePath: String, conf: Configuration): AvroMetaFileReader = {
     closeOnExcept(openFile(filePath, conf)) { si =>

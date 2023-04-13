@@ -18,6 +18,7 @@ package com.nvidia.spark.rapids.unit
 
 import ai.rapids.cudf.ColumnVector
 import com.nvidia.spark.rapids.{GpuColumnVector, GpuScalar, GpuUnitTests}
+import com.nvidia.spark.rapids.Arm.withResource
 
 import org.apache.spark.sql.rapids.GpuStringRepeat
 import org.apache.spark.sql.types.DataTypes

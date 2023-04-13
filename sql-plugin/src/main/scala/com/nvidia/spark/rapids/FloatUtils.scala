@@ -17,8 +17,9 @@
 package com.nvidia.spark.rapids
 
 import ai.rapids.cudf.{ColumnVector, ColumnView, DType, Scalar}
+import com.nvidia.spark.rapids.Arm.withResource
 
-object FloatUtils extends Arm {
+object FloatUtils {
 
   def nanToZero(cv: ColumnView): ColumnVector = {
     if (cv.getType() != DType.FLOAT32 && cv.getType() != DType.FLOAT64) {

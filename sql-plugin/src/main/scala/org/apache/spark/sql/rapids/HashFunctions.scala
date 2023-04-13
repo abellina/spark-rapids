@@ -17,7 +17,8 @@
 package org.apache.spark.sql.rapids
 
 import ai.rapids.cudf.{BinaryOp, ColumnVector, ColumnView}
-import com.nvidia.spark.rapids.{Arm, GpuColumnVector, GpuExpression, GpuProjectExec, GpuUnaryExpression}
+import com.nvidia.spark.rapids.{GpuColumnVector, GpuExpression, GpuProjectExec, GpuUnaryExpression}
+import com.nvidia.spark.rapids.Arm.withResource
 import com.nvidia.spark.rapids.RapidsPluginImplicits._
 import com.nvidia.spark.rapids.shims.{HashUtils, ShimExpression}
 
@@ -40,7 +41,7 @@ case class GpuMd5(child: Expression)
   }
 }
 
-object GpuMurmur3Hash extends Arm {
+object GpuMurmur3Hash {
   def compute(batch: ColumnarBatch,
       boundExpr: Seq[Expression],
       seed: Int = 42): ColumnVector = {

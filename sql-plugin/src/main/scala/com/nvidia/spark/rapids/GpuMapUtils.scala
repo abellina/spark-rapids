@@ -19,6 +19,7 @@ package com.nvidia.spark.rapids
 import java.util.Optional
 
 import ai.rapids.cudf.{ColumnVector, ColumnView, DType}
+import com.nvidia.spark.rapids.Arm.withResource
 import com.nvidia.spark.rapids.RapidsPluginImplicits.AutoCloseableColumn
 
 import org.apache.spark.sql.catalyst.trees.Origin
@@ -30,7 +31,7 @@ import org.apache.spark.sql.types.DataType
  * Provide a set of APIs to manipulate map columns in common ways. CUDF does not officially support
  * maps so we store it as a list of key/value structs.
  */
-object GpuMapUtils extends Arm {
+object GpuMapUtils {
   val KEY_INDEX: Int = 0
   val VALUE_INDEX: Int = 1
   private[this] def pullChildOutAsListView(input: ColumnView, index: Int): ColumnView = {

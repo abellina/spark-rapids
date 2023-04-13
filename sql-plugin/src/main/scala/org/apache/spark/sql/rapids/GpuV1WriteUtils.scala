@@ -18,11 +18,12 @@ package org.apache.spark.sql.rapids
 
 import ai.rapids.cudf.ColumnVector
 import com.nvidia.spark.rapids._
+import com.nvidia.spark.rapids.Arm.withResource
 
 import org.apache.spark.sql.catalyst.expressions.{Attribute, AttributeSet, Expression, NamedExpression}
 import org.apache.spark.sql.types.{DataType, StringType}
 
-object GpuV1WriteUtils extends Arm {
+object GpuV1WriteUtils {
 
   /** A function that converts the empty string to null for partition values. */
   case class GpuEmpty2Null(child: Expression) extends GpuUnaryExpression {

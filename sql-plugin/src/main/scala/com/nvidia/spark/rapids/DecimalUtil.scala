@@ -21,7 +21,7 @@ import ai.rapids.cudf.{DecimalUtils, DType}
 
 import org.apache.spark.sql.types._
 
-object DecimalUtil extends Arm {
+object DecimalUtil {
 
   def createCudfDecimal(dt: DecimalType): DType =
     DecimalUtils.createDecimalType(dt.precision, dt.scale)

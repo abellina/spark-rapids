@@ -19,6 +19,7 @@ package org.apache.spark.sql.rapids
 import ai.rapids.cudf._
 import ai.rapids.cudf.ast.BinaryOperator
 import com.nvidia.spark.rapids._
+import com.nvidia.spark.rapids.Arm.withResource
 
 import org.apache.spark.sql.catalyst.analysis.TypeCheckResult
 import org.apache.spark.sql.catalyst.expressions._

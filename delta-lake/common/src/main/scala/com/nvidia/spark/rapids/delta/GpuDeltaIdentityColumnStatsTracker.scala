@@ -19,7 +19,8 @@ package com.nvidia.spark.rapids.delta
 import scala.collection.mutable
 
 import ai.rapids.cudf.ColumnView
-import com.nvidia.spark.rapids.{Arm, GpuScalar}
+import com.nvidia.spark.rapids.Arm.withResource
+import com.nvidia.spark.rapids.GpuScalar
 import com.nvidia.spark.rapids.delta.shims.ShimJsonUtils
 
 import org.apache.spark.sql.catalyst.InternalRow
@@ -56,7 +57,7 @@ class GpuDeltaIdentityColumnStatsTracker(
   }
 }
 
-object GpuDeltaIdentityColumnStatsTracker extends Arm {
+object GpuDeltaIdentityColumnStatsTracker {
   def batchStatsToRow(
       dataCols: Seq[Attribute],
       identityStatsExpr: Expression,

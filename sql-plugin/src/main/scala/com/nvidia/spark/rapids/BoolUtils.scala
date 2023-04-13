@@ -17,8 +17,9 @@
 package com.nvidia.spark.rapids
 
 import ai.rapids.cudf.{ColumnVector, DType}
+import com.nvidia.spark.rapids.Arm.withResource
 
-object BoolUtils extends Arm {
+object BoolUtils {
 
   /**
    * Whether all the valid rows in 'col' are true. An empty column will get true.

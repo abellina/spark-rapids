@@ -18,6 +18,7 @@ package com.nvidia.spark.rapids.unit
 
 import ai.rapids.cudf.Scalar
 import com.nvidia.spark.rapids._
+import com.nvidia.spark.rapids.Arm.withResource
 
 import org.apache.spark.sql.types.{FloatType, IntegerType}
 

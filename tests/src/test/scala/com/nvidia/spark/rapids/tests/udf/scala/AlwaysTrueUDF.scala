@@ -18,13 +18,13 @@ package com.nvidia.spark.rapids.tests.udf.scala
 
 import ai.rapids.cudf.{ColumnVector, Scalar}
 import com.nvidia.spark.RapidsUDF
-import com.nvidia.spark.rapids.Arm
+import com.nvidia.spark.rapids.Arm.withResource
 
 /**
  * A Scala user-defined function (UDF) that always returns true.
  * Used for testing RAPIDS accelerated UDFs with no inputs.
  */
-class AlwaysTrueUDF extends (() => Boolean) with RapidsUDF with Arm with Serializable {
+class AlwaysTrueUDF extends (() => Boolean) with RapidsUDF with Serializable {
   /** Row-by-row implementation that executes on the CPU */
   override def apply(): Boolean = true
 

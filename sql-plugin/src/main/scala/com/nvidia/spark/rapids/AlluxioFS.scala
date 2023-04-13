@@ -21,6 +21,7 @@ import scala.collection.mutable
 import alluxio.AlluxioURI
 import alluxio.conf.{AlluxioProperties, InstancedConfiguration, PropertyKey}
 import alluxio.grpc.MountPOptions
+import com.nvidia.spark.rapids.Arm.withResource
 
 /**
  * interfaces for Alluxio file system.
@@ -28,7 +29,7 @@ import alluxio.grpc.MountPOptions
  *   get mount points
  *   mount
  */
-class AlluxioFS extends Arm {
+class AlluxioFS {
   private var masterHost: String = _
   private var masterPort: Int = _
   private var masterHostAndPort: Option[String] = None

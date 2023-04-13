@@ -17,8 +17,9 @@
 package com.nvidia.spark.rapids
 
 import ai.rapids.cudf.{ColumnVector, ColumnView, Table}
+import com.nvidia.spark.rapids.Arm.withResource
 
-object ArrayIndexUtils extends Arm {
+object ArrayIndexUtils {
 
   /**
    * Return the first int value (should be valid) in 'indices' and 'numElements' as a pair

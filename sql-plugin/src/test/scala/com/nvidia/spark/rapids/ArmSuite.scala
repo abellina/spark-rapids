@@ -18,9 +18,10 @@ package com.nvidia.spark.rapids
 
 import scala.collection.mutable.ArrayBuffer
 
+import com.nvidia.spark.rapids.Arm._
 import org.scalatest.FunSuite
 
-class ArmSuite extends FunSuite with Arm {
+class ArmSuite extends FunSuite {
   class TestResource extends AutoCloseable {
     var closed = false
 

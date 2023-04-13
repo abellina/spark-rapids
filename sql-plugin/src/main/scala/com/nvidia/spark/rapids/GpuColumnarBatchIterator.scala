@@ -16,6 +16,8 @@
 
 package com.nvidia.spark.rapids
 
+import com.nvidia.spark.rapids.Arm.closeOnExcept
+
 import org.apache.spark.TaskContext
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.types.StructType
@@ -96,7 +98,7 @@ class GpuColumnarBatchWithPartitionValuesIterator(
     inputIter: GpuColumnarBatchIterator,
     partValues: Array[InternalRow],
     partRowNums: Array[Long],
-    partSchema: StructType) extends Iterator[ColumnarBatch] with Arm {
+    partSchema: StructType) extends Iterator[ColumnarBatch] {
   assert(partValues.length == partRowNums.length)
 
   private var leftValues: Array[InternalRow] = partValues

@@ -17,6 +17,7 @@
 package com.nvidia.spark.rapids
 
 import ai.rapids.cudf.Table
+import com.nvidia.spark.rapids.Arm.withResource
 import org.apache.commons.lang3.SerializationUtils
 import org.scalatest.{BeforeAndAfterAll, FunSuite}
 
@@ -26,7 +27,7 @@ import org.apache.spark.sql.types.{DoubleType, IntegerType, StringType}
 import org.apache.spark.sql.vectorized.ColumnarBatch
 
 class SerializationSuite extends FunSuite
-  with BeforeAndAfterAll with Arm {
+  with BeforeAndAfterAll {
 
   override def beforeAll(): Unit = {
     RapidsBufferCatalog.setDeviceStorage(new RapidsDeviceMemoryStore())

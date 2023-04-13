@@ -17,13 +17,14 @@
 package com.nvidia.spark.rapids
 
 import ai.rapids.cudf.{Cuda, DeviceMemoryBuffer}
+import com.nvidia.spark.rapids.Arm.withResource
 import org.scalatest.{BeforeAndAfter, FunSuite}
 
 import org.apache.spark.SparkConf
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.rapids.execution.TrampolineUtil
 
-class GpuDeviceManagerSuite extends FunSuite with Arm with BeforeAndAfter {
+class GpuDeviceManagerSuite extends FunSuite with BeforeAndAfter {
 
   before {
     TrampolineUtil.cleanupAnyExistingSession()

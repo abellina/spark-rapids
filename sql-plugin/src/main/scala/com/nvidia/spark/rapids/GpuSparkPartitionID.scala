@@ -16,6 +16,7 @@
 package com.nvidia.spark.rapids
 
 import ai.rapids.cudf.{ColumnVector, Scalar}
+import com.nvidia.spark.rapids.Arm.withResource
 
 import org.apache.spark.TaskContext
 import org.apache.spark.sql.types.{DataType, IntegerType}

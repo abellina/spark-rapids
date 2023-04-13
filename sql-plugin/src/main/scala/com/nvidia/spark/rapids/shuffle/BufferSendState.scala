@@ -19,7 +19,8 @@ package com.nvidia.spark.rapids.shuffle
 import java.io.IOException
 
 import ai.rapids.cudf.{Cuda, MemoryBuffer}
-import com.nvidia.spark.rapids.{Arm, RapidsBuffer, ShuffleMetadata, StorageTier}
+import com.nvidia.spark.rapids.{RapidsBuffer, ShuffleMetadata, StorageTier}
+import com.nvidia.spark.rapids.Arm.{closeOnExcept, withResource}
 import com.nvidia.spark.rapids.RapidsPluginImplicits._
 import com.nvidia.spark.rapids.format.{BufferMeta, BufferTransferRequest}
 
@@ -57,7 +58,7 @@ class BufferSendState(
     sendBounceBuffers: SendBounceBuffers,
     requestHandler: RapidsShuffleRequestHandler,
     serverStream: Cuda.Stream = Cuda.DEFAULT_STREAM)
-    extends AutoCloseable with Logging with Arm {
+    extends AutoCloseable with Logging {
 
   class SendBlock(val bufferId: Int, tableSize: Long) extends BlockWithSize {
     override def size: Long = tableSize
