@@ -69,17 +69,29 @@ class ChunkedPacker(id: RapidsBufferId, batch: ColumnarBatch)
 
   val numRows = batch.numRows()
   var bounceBuffer: DeviceMemoryBuffer = null
-  val tbl = GpuColumnVector.from(batch)
-  val chunkedContigSplit =
-    tbl.makeChunkedContiguousSplit(
-      100L*1024*1024,
-      GpuDeviceManager.contigSplitMemoryResource)
-  var packedMeta: PackedColumnMetadata = chunkedContigSplit.getPackedColumnMetadata()
-  var tableMeta: TableMeta = MetaUtils.buildTableMeta(
-    id.tableId, chunkedContigSplit.getSize(), packedMeta.getMetadataDirectBuffer(), numRows)
+
+  val tableMeta = withResource(GpuColumnVector.from(batch)) { tbl =>
+    val chunkedContigSplit =
+      tbl.makeChunkedContiguousSplit(
+        100L * 1024 * 1024,
+        GpuDeviceManager.contigSplitMemoryResource)
+    withResource(chunkedContigSplit) { _ =>
+      val packedMeta = chunkedContigSplit.getPackedColumnMetadata()
+      MetaUtils.buildTableMeta(
+        id.tableId, chunkedContigSplit.getSize(), packedMeta.getMetadataDirectBuffer(), numRows)
+    }
+  }
+
+  var chunkedContigSplit: ChunkedContiguousSplit = null
+  var table: Table = null
 
   def init(bounceBuffer: DeviceMemoryBuffer): Unit = {
     this.bounceBuffer = bounceBuffer
+    table = GpuColumnVector.from(batch)
+    chunkedContigSplit =
+      table.makeChunkedContiguousSplit(
+        100L * 1024 * 1024,
+        GpuDeviceManager.contigSplitMemoryResource)
   }
 
   def getMeta(): TableMeta = {
@@ -100,9 +112,12 @@ class ChunkedPacker(id: RapidsBufferId, batch: ColumnarBatch)
   override def close(): Unit = synchronized {
     if (!closed) {
       closed = true
-      chunkedContigSplit.close()
-      packedMeta.close()
-      tbl.close()
+      if (chunkedContigSplit != null) {
+        chunkedContigSplit.close()
+      }
+      if (table != null) {
+        table.close()
+      }
     }
   }
 }

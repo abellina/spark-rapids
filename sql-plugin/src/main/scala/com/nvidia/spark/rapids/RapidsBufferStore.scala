@@ -204,10 +204,12 @@ abstract class RapidsBufferStore(val tier: StorageTier)
       stream: Cuda.Stream): RapidsBufferBase = {
     var shouldClose = false
     val iter = if (buffer.supportsChunkedPacker) {
+      logWarning("at copyBuffer for chunked")
       val chunkedPacker = buffer.getChunkedPacker
       chunkedPacker.init(bounceBuffer)
       chunkedPacker
     } else {
+      logWarning("at copyBuffer for non chunked")
       shouldClose = true
       new Iterator[(MemoryBuffer, Long)] {
         var wasCalled: Boolean = false

@@ -107,12 +107,6 @@ class RapidsDeviceMemoryStore
     }
   }
 
-  class SpillableBatchTracker extends ai.rapids.cudf.ColumnVector.EventHandler {
-    override def onClosed(refCount: Int): Unit = {
-      logWarning(s"closed cv ${this} with refcount ${refCount}")
-    }
-  }
-
   def addBatch(
       id: TempSpillBufferId,
       batch: ColumnarBatch,
@@ -125,7 +119,7 @@ class RapidsDeviceMemoryStore
     freeOnExcept(rapidsBuffer) { _ =>
       addBuffer(rapidsBuffer, needsSync)
       // TODO: we need to figure out a different signal for batch
-      //doSetSpillable(rapidsBuffer, true)
+      doSetSpillable(rapidsBuffer, true)
       rapidsBuffer
     }
   }
@@ -183,7 +177,6 @@ class RapidsDeviceMemoryStore
     }
   }
 
-
   class RapidsDeviceMemoryBatch(
       id: TempSpillBufferId,
       batch: ColumnarBatch,
@@ -192,9 +185,11 @@ class RapidsDeviceMemoryStore
         id,
         null,
         spillPriority) {
+
+    logWarning(s"Added RapidsDeviceMemoryBatch ${id}")
     GpuColumnVector.incRefCounts(batch)
     var refCounts = new Array[EventTrackerForColumn](batch.numCols())
-    makeSpillableTrackingBatch(batch)
+    //makeSpillableTrackingBatch(batch)
     private def makeSpillableTrackingBatch(batch: ColumnarBatch): Unit = {
       val cudfCVs = GpuColumnVector.extractBases(batch)
       cudfCVs.zipWithIndex.foreach { case(c, ix) => 
@@ -248,28 +243,23 @@ class RapidsDeviceMemoryStore
 
     override val supportsChunkedPacker: Boolean = true
 
-    var initializedChunkedPacker: Boolean = false
 
     // TODO: need a way to construct the packed chunked split without a user buffer
     // so we can get the packed meta
-    lazy val chunkedPacker: ChunkedPacker = {
-      initializedChunkedPacker = true
-      new ChunkedPacker(id, batch)
+    val chunkedPacker: ChunkedPacker = {
+      val chunkedPacker = new ChunkedPacker(id, batch)
+      logInfo(s"chunkedPacker initialized for ${id}. " +
+          s"Size is: ${chunkedPacker.getMeta().bufferMeta().size()}")
+      chunkedPacker
     }
 
     override def getMeta(): TableMeta = {
       chunkedPacker.getMeta()
     }
     
-    val estSize = GpuColumnVector.getTotalDeviceMemoryUsed(batch)
-
     /** The size of this buffer in bytes. */
     override def getSize: Long = {
-      //if (chunkedPacker.getMeta() != null) {
-      //  chunkedPacker.getMeta().bufferMeta().size()
-      //} else {
-      estSize
-     // }
+      chunkedPacker.getMeta().bufferMeta().size()
     }
 
     /**
@@ -287,7 +277,7 @@ class RapidsDeviceMemoryStore
     override def getColumnarBatch(sparkTypes: Array[DataType]): ColumnarBatch = {
       // TODO: assert that the sparkTypes match the CB types
       val res = GpuColumnVector.incRefCounts(batch)
-      setSpillable(this, false)
+      //setSpillable(this, false)
       res
     }
 
@@ -306,10 +296,8 @@ class RapidsDeviceMemoryStore
 
     override def free(): Unit = {
       super.free()
-      removeTracker()
-      if (initializedChunkedPacker) {
-        chunkedPacker.close()
-      }
+      //removeTracker()
+      chunkedPacker.close()
     }
   }
 
@@ -322,6 +310,7 @@ class RapidsDeviceMemoryStore
       extends RapidsBufferBase(id, meta, spillPriority)
         with MemoryBuffer.EventHandler {
 
+    logWarning(s"Added RapidsDviceMemoryBuffer ${id}")
     override def getSize(): Long = size
 
     override val storageTier: StorageTier = StorageTier.DEVICE

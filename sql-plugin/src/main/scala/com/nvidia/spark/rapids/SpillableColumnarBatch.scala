@@ -208,7 +208,19 @@ object SpillableColumnarBatch {
         val buff = cv.getBuffer
         RapidsBufferCatalog.addBuffer(buff, cv.getTableMeta, initialSpillPriority)
       } else {
-        RapidsBufferCatalog.addBatch(batch, initialSpillPriority)
+        if (true) {
+          withResource(GpuColumnVector.from(batch)) { tmpTable =>
+            withResource(tmpTable.contiguousSplit()) { contigTables =>
+              require(contigTables.length == 1, "Unexpected number of contiguous spit tables")
+              RapidsBufferCatalog.addContiguousTable(
+                contigTables.head,
+                initialSpillPriority)
+            }
+          }
+        } else {
+          //RapidsBufferCatalog.addBatch(batch, initialSpillPriority)
+          null
+        }
       }
     }
   }

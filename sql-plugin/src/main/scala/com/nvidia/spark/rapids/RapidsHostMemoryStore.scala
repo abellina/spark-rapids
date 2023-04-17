@@ -16,6 +16,9 @@
 
 package com.nvidia.spark.rapids
 
+import java.util.concurrent.Executors
+import java.util.concurrent.Future
+
 import ai.rapids.cudf.{Cuda, DeviceMemoryBuffer, HostMemoryBuffer, MemoryBuffer, NvtxRange, PinnedMemoryPool, Table}
 import com.nvidia.spark.rapids.Arm.withResource
 import com.nvidia.spark.rapids.SpillPriorities.{applyPriorityOffset, HOST_MEMORY_BUFFER_DIRECT_OFFSET, HOST_MEMORY_BUFFER_PAGEABLE_OFFSET, HOST_MEMORY_BUFFER_PINNED_OFFSET}
@@ -62,24 +65,98 @@ class RapidsHostMemoryStore(
     (HostMemoryBuffer.allocate(size, false), Direct)
   }
 
+  var allocated = false
+  var buffer1: HostMemoryBuffer = null
+  var buffer2: HostMemoryBuffer = null
+
+  class DoubleBufferedCopy(target: HostMemoryBuffer) {
+    
+    val bbs = new Array[HostMemoryBuffer](2)
+    if (allocated == false) {
+      allocated = true
+      val (b1, _) = allocateHostBuffer(100L*1024*1024)
+      val (b2, _) = allocateHostBuffer(100L*1024*1024)
+      buffer1 = b1
+      buffer2 = b2
+    }
+
+    bbs(0) = buffer1
+    bbs(1) = buffer2
+    
+    val futs = new Array[Future[Unit]](2)
+    futs(0) = null
+    futs(1) = null
+    val evts = new Array[Cuda.Event](2)
+    evts(0) = new Cuda.Event()
+    evts(1) = new Cuda.Event()
+
+    var currentBufferIx = 0
+
+    val exec = Executors.newSingleThreadExecutor()
+    var hostOffset: Long = 0L
+    
+    def copy(devBuffer: DeviceMemoryBuffer, size: Long) = {
+      val hostBounceBuffer = bbs(currentBufferIx)
+      evts(currentBufferIx).sync()
+      if (futs(currentBufferIx) != null) {
+        futs(currentBufferIx).get()
+      }
+      withResource(new NvtxRange(s"copy to bb ${currentBufferIx}", NvtxColor.YELLOW)) { _ =>
+        hostBounceBuffer.copyFromMemoryBufferAsync(0, devBuffer, 0, size, Cuda.DEFAULT_STREAM)
+        evts(currentBufferIx).record(Cuda.DEFAULT_STREAM)
+      }
+
+      val myix = currentBufferIx
+      futs(myix) = exec.submit(() => {
+        withResource(new NvtxRange(s"h2h ${myix}", NvtxColor.RED)) { _ =>
+          evts(myix).sync()
+          target.copyFromMemoryBuffer(
+            hostOffset, hostBounceBuffer, 0L, size, Cuda.DEFAULT_STREAM) // h2h (blocking)
+          hostOffset = hostOffset + size
+        }
+      })
+      currentBufferIx = (currentBufferIx + 1) % 2
+    }
+  }
+
+  var hostBounceBuffer: HostMemoryBuffer = null
+
   override protected def createBuffer(
       other: RapidsBuffer,
       otherBufferIterator: Iterator[(MemoryBuffer, Long)],
       shouldClose: Boolean,
       stream: Cuda.Stream): RapidsBufferBase = {
+    if(hostBounceBuffer == null) {
+      val (hostbb, mode) = allocateHostBuffer(100L*1024*1024)
+      hostBounceBuffer = hostbb
+      logWarning(s"host bounce buffer allocation mode: ${mode}")
+    }
+
     val hostBuffSize = otherBufferIterator match {
       case p: ChunkedPacker => p.getMeta().bufferMeta().size()
       case _ => other.getSize
     }
     val (hostBuffer, allocationMode) = allocateHostBuffer(hostBuffSize)
+    val startTime = System.currentTimeMillis()
     var hostOffset = 0L
+    //val dbc = new DoubleBufferedCopy(hostBuffer)
     while (otherBufferIterator.hasNext) {
       val (otherBuffer, deviceSize) = otherBufferIterator.next()
       try {
         otherBuffer match {
           case devBuffer: DeviceMemoryBuffer =>
-            hostBuffer.copyFromMemoryBuffer(
-              hostOffset, devBuffer, 0, deviceSize, stream)
+            //dbc.copy(devBuffer, deviceSize)
+            hostBounceBuffer.copyFromMemoryBuffer(
+              0, devBuffer, 0, deviceSize, stream)
+            stream.sync()
+            withResource(new NvtxRange("h2h", NvtxColor.RED)) { _ =>
+              hostBuffer.copyFromHostBuffer(
+                hostOffset,
+                hostBounceBuffer,
+                0L,
+                deviceSize)
+              stream.sync()
+            }
             hostOffset += deviceSize
           case _ =>
             throw new IllegalStateException("copying from buffer without device memory")
@@ -93,8 +170,13 @@ class RapidsHostMemoryStore(
         otherBuffer.close()
       }
     }
+    stream.sync() // pinned host buffer has data
 
-    stream.sync()
+    val endTime = System.currentTimeMillis()
+    val amt = hostBuffSize.toDouble/1024.0/1024.0
+    val bandwidth = (hostBuffSize.toDouble /1024.0/1024.0) / ((endTime - startTime).toDouble / 1000.0)
+
+    logWarning(s"Spill bandwidth: copied ${amt} MB @ ${bandwidth} MB/sec")
 
     var meta: TableMeta = null
     otherBufferIterator match {

@@ -325,8 +325,8 @@ class RapidsBufferCatalog(
       initialSpillPriority: Long,
       needsSync: Boolean = true): RapidsBufferHandle = {
     val id = TempSpillBufferId()
-    logDebug(s"Adding batch ${id} to ${deviceStorage}")
-    val existing = getExistingRapidsBufferAndAcquire(batch)
+    logInfo(s"Adding batch ${id} to ${deviceStorage}")
+    val existing: Option[RapidsBuffer] = None //getExistingRapidsBufferAndAcquire(batch)
     existing match {
       case None =>
         val rapidsBuffer = deviceStorage.addBatch(
