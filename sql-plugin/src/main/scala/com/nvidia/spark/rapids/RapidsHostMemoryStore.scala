@@ -67,12 +67,16 @@ class RapidsHostMemoryStore(
       otherBufferIterator: Iterator[(MemoryBuffer, Long)],
       shouldClose: Boolean,
       stream: Cuda.Stream): RapidsBufferBase = {
+    var isChunked = false
     val hostBuffSize = otherBufferIterator match {
-      case p: ChunkedPacker => p.getMeta().bufferMeta().size()
+      case p: ChunkedPacker =>
+        isChunked = true
+        p.getMeta().bufferMeta().size()
       case _ => other.getSize
     }
     val (hostBuffer, allocationMode) = allocateHostBuffer(hostBuffSize)
     var hostOffset = 0L
+    val start = System.nanoTime()
     while (otherBufferIterator.hasNext) {
       val (otherBuffer, deviceSize) = otherBufferIterator.next()
       try {
@@ -95,6 +99,10 @@ class RapidsHostMemoryStore(
     }
 
     stream.sync()
+    val end = System.nanoTime()
+    val sz = (hostBuffSize.toDouble/1024.0/1024.0).toLong
+    val bw = ((hostBuffSize/((end-start).toDouble/1000000000.0))/1024.0/1024.0).toLong
+    logWarning(s"Spill to host bandwidth for chunked? $isChunked. size=$sz MB @ ${bw} MB/sec")
 
     var meta: TableMeta = null
     otherBufferIterator match {
