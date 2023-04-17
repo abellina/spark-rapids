@@ -65,7 +65,7 @@ object StorageTier extends Enumeration {
 class ChunkedPacker(id: RapidsBufferId, batch: ColumnarBatch)
     extends Iterator[(MemoryBuffer, Long)]
       with Logging
-      with AutoCloseable with Arm {
+      with AutoCloseable {
 
   val numRows = batch.numRows()
   var bounceBuffer: DeviceMemoryBuffer = null
@@ -216,7 +216,7 @@ trait RapidsBuffer extends AutoCloseable {
  */
 sealed class DegenerateRapidsBuffer(
     override val id: RapidsBufferId,
-    val meta: TableMeta) extends RapidsBuffer with Arm {
+    val meta: TableMeta) extends RapidsBuffer {
 
   override def getSize: Long = 0L
 
