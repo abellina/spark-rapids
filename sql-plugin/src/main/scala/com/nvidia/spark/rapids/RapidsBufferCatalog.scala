@@ -325,7 +325,7 @@ class RapidsBufferCatalog(
       initialSpillPriority: Long,
       needsSync: Boolean = true): RapidsBufferHandle = {
     val id = TempSpillBufferId()
-    logDebug(s"Adding batch ${id} to ${deviceStorage}")
+    logInfo(s"Adding batch ${id} to ${deviceStorage}")
     val rapidsBuffer = deviceStorage.addBatch(
       id,
       batch,
@@ -830,8 +830,8 @@ object RapidsBufferCatalog extends Logging {
       batch: ColumnarBatch,
       initialSpillPriority: Long): RapidsBufferHandle = {
     singleton.addBatch(batch, initialSpillPriority)
-
   }
+
   def spillMock(): Unit = {
     // immediatelly spill for now
     singleton.synchronousSpill(deviceStorage, 0)
