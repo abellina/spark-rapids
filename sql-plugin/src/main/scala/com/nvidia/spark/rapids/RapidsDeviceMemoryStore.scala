@@ -24,6 +24,7 @@ import com.nvidia.spark.rapids.format.TableMeta
 import org.apache.spark.sql.rapids.TempSpillBufferId
 import org.apache.spark.sql.types.DataType
 import org.apache.spark.sql.vectorized.ColumnarBatch
+import ai.rapids.cudf.ColumnVector
 
 /**
  * Buffer storage using device memory.
@@ -112,15 +113,13 @@ class RapidsDeviceMemoryStore
       batch: ColumnarBatch,
       initialSpillPriority: Long,
       needsSync: Boolean): RapidsBuffer = {
-    GpuColumnVector.incRefCounts(batch) // TODO: do I need this
+    GpuColumnVector.incRefCounts(batch)
     val rapidsBuffer = new RapidsDeviceMemoryBatch(
       id,
       batch,
       initialSpillPriority)
     freeOnExcept(rapidsBuffer) { _ =>
       addBuffer(rapidsBuffer, needsSync)
-      // TODO: we need to figure out a different signal for batch
-      doSetSpillable(rapidsBuffer, true)
       rapidsBuffer
     }
   }
@@ -149,6 +148,60 @@ class RapidsDeviceMemoryStore
     doSetSpillable(buffer, spillable)
   }
 
+  class RapidsDeviceColumnEventHandler(
+    val rapidsBuffer: RapidsDeviceMemoryBatch,
+    columnIx: Int,
+    var wrapped: Option[RapidsDeviceColumnEventHandler] = None)
+      extends ColumnVector.EventHandler {
+    override def onClosed(refCount: Int): Unit = {
+      if (refCount == 1) {
+        rapidsBuffer.onColumnSpillable(columnIx)
+      }
+      wrapped.foreach(_.onClosed(refCount))
+    }
+  }
+
+  def registerCallbacks(batch: ColumnarBatch, rapidsBuffer: RapidsDeviceMemoryBatch): Unit = {
+    val cudfColumns = GpuColumnVector.extractBases(batch)
+    val repeated = cudfColumns.distinct.length != cudfColumns.length
+    require(!repeated, s"Batch has repeated cols ${cudfColumns.mkString(",")}")
+    cudfColumns.zipWithIndex.foreach { case (cv, columnIx) =>
+      cv.synchronized {
+        val priorEventHandler = cv.getEventHandler.asInstanceOf[RapidsDeviceColumnEventHandler]
+        val columnEventHandler =
+          new RapidsDeviceColumnEventHandler(
+            rapidsBuffer,
+            columnIx,
+            Option(priorEventHandler))
+        cv.setEventHandler(columnEventHandler)
+      }
+    }
+  }
+
+  def removeCallbacks(batch: ColumnarBatch, rapidsBuffer: RapidsDeviceMemoryBatch): Unit = {
+    val cudfColumns = GpuColumnVector.extractBases(batch)
+    cudfColumns.zipWithIndex.foreach { case (cv, columnIx) =>
+      cv.synchronized {
+        var priorEventHandler = cv.getEventHandler.asInstanceOf[RapidsDeviceColumnEventHandler]
+        // find the event handler that belongs to this rapidsBuffer
+        var isHead = true
+        var parent = priorEventHandler
+        while (priorEventHandler.rapidsBuffer != rapidsBuffer) {
+          isHead = false
+          parent = priorEventHandler
+          priorEventHandler = priorEventHandler.wrapped.get
+        }
+
+        if (isHead) {
+          cv.setEventHandler(priorEventHandler.wrapped.orNull)
+        } else {
+          logInfo(s"Removing non-head event handler for ${batch}")
+          parent.wrapped = priorEventHandler.wrapped
+        }
+      }
+    }
+  }
+
   class RapidsDeviceMemoryBatch(
       id: TempSpillBufferId,
       batch: ColumnarBatch,
@@ -157,6 +210,16 @@ class RapidsDeviceMemoryStore
         id,
         null,
         spillPriority) {
+
+    registerCallbacks(batch, this)
+
+    val columnSpillability = Array.fill(batch.numCols())(false)
+
+    def onColumnSpillable(columnIx: Int): Unit = {
+      columnSpillability(columnIx) = true
+      val batchSpillable = !columnSpillability.contains(false)
+      doSetSpillable(this, batchSpillable)
+    }
 
     /** Release the underlying resources for this buffer. */
     override protected def releaseResources(): Unit = {
@@ -207,6 +270,8 @@ class RapidsDeviceMemoryStore
     override def getColumnarBatch(sparkTypes: Array[DataType]): ColumnarBatch = {
       // TODO: assert that the sparkTypes match the CB types
       GpuColumnVector.incRefCounts(batch)
+      doSetSpillable(this, false)
+      batch
     }
 
     /**
@@ -227,6 +292,7 @@ class RapidsDeviceMemoryStore
       if (initializedChunkedPacker) {
         chunkedPacker.close()
       }
+      removeCallbacks(batch, this)
     }
   }
 
