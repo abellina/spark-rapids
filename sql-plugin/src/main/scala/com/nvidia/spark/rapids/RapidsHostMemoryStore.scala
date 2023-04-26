@@ -16,7 +16,7 @@
 
 package com.nvidia.spark.rapids
 
-import ai.rapids.cudf.{Cuda, DeviceMemoryBuffer, HostMemoryBuffer, MemoryBuffer, NvtxRange, PinnedMemoryPool, Table}
+import ai.rapids.cudf.{Cuda, DeviceMemoryBuffer, HostMemoryBuffer, MemoryBuffer, NvtxColor, NvtxRange, PinnedMemoryPool, Table}
 import com.nvidia.spark.rapids.Arm.withResource
 import com.nvidia.spark.rapids.SpillPriorities.{applyPriorityOffset, HOST_MEMORY_BUFFER_DIRECT_OFFSET, HOST_MEMORY_BUFFER_PAGEABLE_OFFSET, HOST_MEMORY_BUFFER_PINNED_OFFSET}
 import com.nvidia.spark.rapids.StorageTier.StorageTier
@@ -42,10 +42,15 @@ class RapidsHostMemoryStore(
 
   override def getMaxSize: Option[Long] = Some(maxSize)
 
-  private def allocateHostBuffer(size: Long): (HostMemoryBuffer, AllocationMode) = {
-    var buffer: HostMemoryBuffer = PinnedMemoryPool.tryAllocate(size)
-    if (buffer != null) {
-      return (buffer, Pinned)
+  private def allocateHostBuffer(
+      size: Long,
+      preferPinned: Boolean = true): (HostMemoryBuffer, AllocationMode) = {
+    var buffer: HostMemoryBuffer = null
+    if (preferPinned) {
+      PinnedMemoryPool.tryAllocate(size)
+      if (buffer != null) {
+        return (buffer, Pinned)
+      }
     }
 
     val allocation = addressAllocator.allocate(size)
@@ -74,35 +79,39 @@ class RapidsHostMemoryStore(
         p.getMeta().bufferMeta().size()
       case _ => other.getSize
     }
-    val (hostBuffer, allocationMode) = allocateHostBuffer(hostBuffSize)
-    var hostOffset = 0L
-    val start = System.nanoTime()
-    while (otherBufferIterator.hasNext) {
-      val (otherBuffer, deviceSize) = otherBufferIterator.next()
-      try {
-        otherBuffer match {
-          case devBuffer: DeviceMemoryBuffer =>
-            hostBuffer.copyFromMemoryBuffer(
-              hostOffset, devBuffer, 0, deviceSize, stream)
-            hostOffset += deviceSize
-          case _ =>
-            throw new IllegalStateException("copying from buffer without device memory")
-        }
-      } catch {
-        case e: Exception =>
-          hostBuffer.close()
-          throw e
-      }
-      if (shouldClose) {
-        otherBuffer.close()
-      }
-    }
 
-    stream.sync()
-    val end = System.nanoTime()
-    val sz = (hostBuffSize.toDouble/1024.0/1024.0).toLong
-    val bw = ((hostBuffSize/((end-start).toDouble/1000000000.0))/1024.0/1024.0).toLong
-    logWarning(s"Spill to host bandwidth for chunked? $isChunked. size=$sz MB @ ${bw} MB/sec")
+    val (hostBuffer, allocationMode) = allocateHostBuffer(hostBuffSize, false)
+    withResource(new NvtxRange("host spill", NvtxColor.BLUE)) { _ =>
+      var hostOffset = 0L
+      val start = System.nanoTime()
+      while (otherBufferIterator.hasNext) {
+        val (otherBuffer, deviceSize) = otherBufferIterator.next()
+        try {
+          otherBuffer match {
+            case devBuffer: DeviceMemoryBuffer =>
+              hostBuffer.copyFromMemoryBuffer(
+                hostOffset, devBuffer, 0, deviceSize, stream)
+              hostOffset += deviceSize
+            case _ =>
+              throw new IllegalStateException("copying from buffer without device memory")
+          }
+        } catch {
+          case e: Exception =>
+            hostBuffer.close()
+            throw e
+        }
+        if (shouldClose) {
+          otherBuffer.close()
+        }
+      }
+
+      stream.sync()
+      val end = System.nanoTime()
+      val sz = (hostBuffSize.toDouble/1024.0/1024.0).toLong
+      val bw = ((hostBuffSize/((end-start).toDouble/1000000000.0))/1024.0/1024.0).toLong
+      logWarning(s"Spill to host bandwidth for chunked? $isChunked. " +
+          s"to host buffer: ${allocationMode} size=$sz MB @ ${bw} MB/sec")
+    }
 
     var meta: TableMeta = null
     otherBufferIterator match {
