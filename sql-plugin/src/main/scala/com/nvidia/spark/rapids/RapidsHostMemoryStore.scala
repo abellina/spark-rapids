@@ -89,6 +89,9 @@ class RapidsHostMemoryStore(
         try {
           otherBuffer match {
             case devBuffer: DeviceMemoryBuffer =>
+              if (allocationMode != Pinned) {
+                stream.sync()
+              }
               hostBuffer.copyFromMemoryBuffer(
                 hostOffset, devBuffer, 0, deviceSize, stream)
               hostOffset += deviceSize
