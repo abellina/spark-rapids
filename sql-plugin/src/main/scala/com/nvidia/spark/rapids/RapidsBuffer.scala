@@ -18,7 +18,7 @@ package com.nvidia.spark.rapids
 
 import java.io.File
 
-import ai.rapids.cudf.{ChunkedContiguousSplit, ContiguousTable, Cuda, DeviceMemoryBuffer, MemoryBuffer, PackedColumnMetadata, Rmm, RmmCudaMemoryResource, RmmPoolMemoryResource, Table}
+import ai.rapids.cudf.{ChunkedPack, ContiguousTable, Cuda, DeviceMemoryBuffer, MemoryBuffer, PackedColumnMetadata, Rmm, RmmCudaMemoryResource, RmmPoolMemoryResource, Table}
 import com.nvidia.spark.rapids.Arm.withResource
 import com.nvidia.spark.rapids.StorageTier.StorageTier
 import com.nvidia.spark.rapids.format.TableMeta
@@ -71,12 +71,15 @@ class ChunkedPacker(id: RapidsBufferId, batch: ColumnarBatch)
   var bounceBuffer: DeviceMemoryBuffer = null
   val tbl = GpuColumnVector.from(batch)
   val chunkedContigSplit =
-    tbl.makeChunkedContiguousSplit(
+    tbl.makeChunkedPack(
       100L*1024*1024,
       GpuDeviceManager.contigSplitMemoryResource)
-  var packedMeta: PackedColumnMetadata = chunkedContigSplit.getPackedColumnMetadata()
+  var packedMeta: PackedColumnMetadata = chunkedContigSplit.buildMetadata()
   var tableMeta: TableMeta = MetaUtils.buildTableMeta(
-    id.tableId, chunkedContigSplit.getSize(), packedMeta.getMetadataDirectBuffer(), numRows)
+    id.tableId,
+    chunkedContigSplit.getTotalContiguousSize(),
+    packedMeta.getMetadataDirectBuffer(),
+    numRows)
 
   def init(bounceBuffer: DeviceMemoryBuffer): Unit = {
     this.bounceBuffer = bounceBuffer
