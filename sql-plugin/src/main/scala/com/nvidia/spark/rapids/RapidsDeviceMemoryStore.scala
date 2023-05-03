@@ -39,7 +39,7 @@ class RapidsDeviceMemoryStore
   override protected def createBuffer(
       other: RapidsBuffer,
       stream: Cuda.Stream): RapidsBufferBase = {
-    val (memoryBuffer, _) = withResource(other.getCopyIterator) { copyIterator =>
+    val (memoryBuffer, totalCopySize) = withResource(other.getCopyIterator) { copyIterator =>
       copyIterator.next()
     }
     val deviceBuffer = {
@@ -47,7 +47,7 @@ class RapidsDeviceMemoryStore
         case d: DeviceMemoryBuffer => d
         case h: HostMemoryBuffer =>
           withResource(h) { _ =>
-            closeOnExcept(DeviceMemoryBuffer.allocate(other.getSize)) { deviceBuffer =>
+            closeOnExcept(DeviceMemoryBuffer.allocate(totalCopySize)) { deviceBuffer =>
               logDebug(s"copying from host $h to device $deviceBuffer")
               deviceBuffer.copyFromHostBuffer(h, stream)
               deviceBuffer
@@ -236,8 +236,6 @@ class RapidsDeviceMemoryStore
       chunkedPacker.getMeta()
     }
     
-    val estSize = GpuColumnVector.getTotalDeviceMemoryUsed(batch)
-
     /** The size of this buffer in bytes. */
     override def getSize: Long = {
       // NOTE: this size is an estimate due to alignment differences
@@ -246,14 +244,6 @@ class RapidsDeviceMemoryStore
       GpuColumnVector.getTotalDeviceMemoryUsed(batch)
     }
 
-    /**
-     * Get the underlying memory buffer. This may be either a HostMemoryBuffer or a DeviceMemoryBuffer
-     * depending on where the buffer currently resides.
-     * The caller must have successfully acquired the buffer beforehand.
-     *
-     * @see [[addReference]]
-     * @note It is the responsibility of the caller to close the buffer.
-     */
     override def getChunkedPacker: ChunkedPacker = {
       chunkedPacker
     }

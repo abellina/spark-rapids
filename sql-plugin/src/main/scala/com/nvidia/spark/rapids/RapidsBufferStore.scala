@@ -224,9 +224,6 @@ abstract class RapidsBufferStore(val tier: StorageTier)
    * @note DO NOT close the buffer unless adding a reference!
    * @note `createBuffer` impls should synchronize against `stream` before returning, if needed.
    * @param buffer data from another store
-   * @param memoryBuffer memory buffer obtained from the specified Rapids buffer. The ownership
-   *                     for `memoryBuffer` is transferred to this store. The store may close
-   *                     `memoryBuffer` if necessary.
    * @param stream CUDA stream to use or null
    * @return the new buffer that was created.
    */
