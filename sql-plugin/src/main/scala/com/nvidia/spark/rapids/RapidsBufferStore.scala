@@ -202,24 +202,7 @@ abstract class RapidsBufferStore(val tier: StorageTier)
   def copyBuffer(
       buffer: RapidsBuffer,
       stream: Cuda.Stream): RapidsBufferBase = {
-    var shouldClose = false
-    val iter = if (buffer.supportsChunkedPacker) {
-      val chunkedPacker = buffer.getChunkedPacker
-      chunkedPacker.init(bounceBuffer)
-      chunkedPacker
-    } else {
-      shouldClose = true
-      new Iterator[(MemoryBuffer, Long)] {
-        var wasCalled: Boolean = false
-        override def hasNext: Boolean = !wasCalled
-        override def next(): (MemoryBuffer, Long) = {
-          val result = (buffer.getMemoryBuffer, buffer.getSize)
-          wasCalled = true
-          result
-        }
-      }
-    }
-    freeOnExcept(createBuffer(buffer, iter, shouldClose, stream)) { newBuffer =>
+    freeOnExcept(createBuffer(buffer, stream)) { newBuffer =>
       addBuffer(newBuffer)
       newBuffer
     }
@@ -249,8 +232,6 @@ abstract class RapidsBufferStore(val tier: StorageTier)
    */
   protected def createBuffer(
      buffer: RapidsBuffer,
-     memoryBufferIterator: Iterator[(MemoryBuffer, Long)],
-     shouldClose: Boolean,
      stream: Cuda.Stream): RapidsBufferBase
 
   /** Update bookkeeping for a new buffer */

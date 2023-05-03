@@ -69,83 +69,48 @@ class RapidsHostMemoryStore(
 
   override protected def createBuffer(
       other: RapidsBuffer,
-      otherBufferIterator: Iterator[(MemoryBuffer, Long)],
-      shouldClose: Boolean,
       stream: Cuda.Stream): RapidsBufferBase = {
-    var isChunked = false
-    val hostBuffSize = otherBufferIterator match {
-      case p: ChunkedPacker =>
-        isChunked = true
-        p.getMeta().bufferMeta().size()
-      case _ => other.getSize
-    }
-
-    val (hostBuffer, allocationMode) = allocateHostBuffer(hostBuffSize, false)
-    withResource(new NvtxRange("host spill", NvtxColor.BLUE)) { _ =>
-      var hostOffset = 0L
-      val start = System.nanoTime()
-      while (otherBufferIterator.hasNext) {
-        val (otherBuffer, deviceSize) = otherBufferIterator.next()
-        try {
-          otherBuffer match {
-            case devBuffer: DeviceMemoryBuffer =>
-              if (allocationMode != Pinned) {
-                stream.sync()
+    withResource(other.getCopyIterator) { otherBufferIterator =>
+      val isChunked = otherBufferIterator.isChunked
+      val totalCopySize = otherBufferIterator.getTotalCopySize
+      val (hostBuffer, allocationMode) = allocateHostBuffer(totalCopySize, false)
+      withResource(new NvtxRange("host spill", NvtxColor.BLUE)) { _ =>
+        var hostOffset = 0L
+        val start = System.nanoTime()
+        while (otherBufferIterator.hasNext) {
+          val (otherBuffer, deviceSize) = otherBufferIterator.next()
+          withResource(otherBuffer) { _ =>
+            try {
+              otherBuffer match {
+                case devBuffer: DeviceMemoryBuffer =>
+                  hostBuffer.copyFromMemoryBuffer(
+                    hostOffset, devBuffer, 0, deviceSize, stream)
+                  hostOffset += deviceSize
+                case _ =>
+                  throw new IllegalStateException("copying from buffer without device memory")
               }
-              hostBuffer.copyFromMemoryBuffer(
-                hostOffset, devBuffer, 0, deviceSize, stream)
-              hostOffset += deviceSize
-            case _ =>
-              throw new IllegalStateException("copying from buffer without device memory")
+            } catch {
+              case e: Exception =>
+                hostBuffer.close()
+                throw e
+            }
           }
-        } catch {
-          case e: Exception =>
-            hostBuffer.close()
-            throw e
         }
-        if (shouldClose) {
-          otherBuffer.close()
-        }
+        stream.sync()
+        val end = System.nanoTime()
+        val szMB = (totalCopySize.toDouble / 1024.0 / 1024.0).toLong
+        val bw = (szMB.toDouble / ((end - start).toDouble / 1000000000.0)).toLong
+        logWarning(s"Spill to host bandwidth for chunked? $isChunked. " +
+            s"to host buffer: $allocationMode size=$szMB MB @ $bw MB/sec")
       }
-
-      stream.sync()
-      val end = System.nanoTime()
-      val sz = (hostBuffSize.toDouble/1024.0/1024.0).toLong
-      val bw = ((hostBuffSize/((end-start).toDouble/1000000000.0))/1024.0/1024.0).toLong
-      logWarning(s"Spill to host bandwidth for chunked? $isChunked. " +
-          s"to host buffer: ${allocationMode} size=$sz MB @ ${bw} MB/sec")
+      new RapidsHostMemoryBuffer(
+        other.id,
+        totalCopySize,
+        other.getMeta,
+        applyPriorityOffset(other.getSpillPriority, allocationMode.spillPriorityOffset),
+        hostBuffer,
+        allocationMode)
     }
-
-    var meta: TableMeta = null
-    otherBufferIterator match {
-      case p: ChunkedPacker =>
-        // host memory buffer now has the full buffer contiguously
-        // try to unpack it
-        //GpuColumnVector.debug("before", p.tbl)
-        //withResource(DeviceMemoryBuffer.allocate(other.size)) { throwAway =>
-        //  throwAway.copyFromHostBuffer(hostBuffer)
-        //  withResource(p.tbl.contiguousSplit()(0)) { csplit => 
-        //    val metaBuff = csplit.getMetadataDirectBuffer()
-        //    meta = MetaUtils.buildTableMeta(other.id.tableId, csplit)
-        //    withResource(Table.fromPackedTable(metaBuff, throwAway)) { tbl =>
-        //      GpuColumnVector.debug("unpacked", tbl)
-        //      logInfo(s"num cols: ${tbl.getNumberOfColumns}, row count: ${tbl.getRowCount}")
-        //      (0 until tbl.getNumberOfColumns).foreach { c =>
-        //        logInfo(s"col $c type ${tbl.getColumn(c)}")
-        //      }
-        //    }
-        //  }
-        //}
-        p.close()
-      case _ => // noop
-    }
-    new RapidsHostMemoryBuffer(
-      other.id,
-      hostBuffSize,
-      other.getMeta,
-      applyPriorityOffset(other.getSpillPriority, allocationMode.spillPriorityOffset),
-      hostBuffer,
-      allocationMode)
   }
 
   def numBytesFree: Long = maxSize - currentSize

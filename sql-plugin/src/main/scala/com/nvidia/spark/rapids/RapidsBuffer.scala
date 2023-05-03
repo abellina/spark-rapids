@@ -89,13 +89,13 @@ class ChunkedPacker(id: RapidsBufferId, batch: ColumnarBatch)
     tableMeta
   }
 
-  override def hasNext: Boolean = chunkedContigSplit.hasNext
+  override def hasNext: Boolean = !closed && chunkedContigSplit.hasNext
 
-  // in the normal case we would call cuDF with a bounce buffer and we would get
-  // back how much it wrote to it, so we can turn around and copy it to host later
-  // val sizeWritten = Table.chunked_packer(state, bounceBuffer)
   def next(): (MemoryBuffer, Long) = {
     val bytesWritten = chunkedContigSplit.next(bounceBuffer)
+    // we increment the refcount because the caller has no idea where
+    // this memory came from, so it should close it.
+    bounceBuffer.incRefCount()
     (bounceBuffer, bytesWritten)
   }
 
@@ -110,8 +110,56 @@ class ChunkedPacker(id: RapidsBufferId, batch: ColumnarBatch)
   }
 }
 
+class RapidsBufferCopyIterator(buffer: RapidsBuffer)
+    extends Iterator[(MemoryBuffer, Long)]
+        with AutoCloseable {
+
+  private val chunkedPacker: Option[ChunkedPacker] = if (buffer.supportsChunkedPacker) {
+    Some(buffer.getChunkedPacker)
+  } else {
+    None
+  }
+
+  def isChunked: Boolean = chunkedPacker.isDefined
+
+  private var singleShotCopyHasNext: Boolean = true
+  private var singleShotBuffer: MemoryBuffer = null
+
+  override def hasNext: Boolean =
+    chunkedPacker.map(_.hasNext).getOrElse(singleShotCopyHasNext)
+
+  override def next(): (MemoryBuffer, Long) = {
+    chunkedPacker.map(_.next()).getOrElse {
+      singleShotCopyHasNext = false
+      singleShotBuffer = buffer.getMemoryBuffer
+      (singleShotBuffer, singleShotBuffer.getLength)
+    }
+  }
+
+  def getTotalCopySize: Long = {
+    chunkedPacker
+        .map(_.getMeta().bufferMeta().size())
+        .getOrElse(singleShotBuffer.getLength)
+  }
+
+  override def close(): Unit = {
+    val hasNextBeforeClose = hasNext
+    if (chunkedPacker.isDefined){
+      chunkedPacker.foreach(_.close())
+    } else {
+      singleShotBuffer.close()
+    }
+    require(hasNextBeforeClose,
+      "Iterator closed with pending chunks to copy!")
+  }
+}
+
 /** Interface provided by all types of RAPIDS buffers */
 trait RapidsBuffer extends AutoCloseable {
+  def getCopyIterator: RapidsBufferCopyIterator = {
+    new RapidsBufferCopyIterator(this)
+  }
+
   /** The buffer identifier for this buffer. */
   val id: RapidsBufferId
 

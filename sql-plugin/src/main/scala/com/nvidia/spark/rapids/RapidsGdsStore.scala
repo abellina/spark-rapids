@@ -39,11 +39,12 @@ class RapidsGdsStore(
 
   override protected def createBuffer(
       other: RapidsBuffer,
-      otherBufferIter: Iterator[(MemoryBuffer, Long)],
-      shouldClose: Boolean,
       stream: Cuda.Stream): RapidsBufferBase = {
     // assume that we get 1 buffer
-    val (otherBuffer, _) = otherBufferIter.next()
+    val (otherBuffer, _) = withResource(other.getCopyIterator) { it =>
+      it.next()
+    }
+
     withResource(otherBuffer) { _ =>
       val deviceBuffer = otherBuffer match {
         case d: BaseDeviceMemoryBuffer => d

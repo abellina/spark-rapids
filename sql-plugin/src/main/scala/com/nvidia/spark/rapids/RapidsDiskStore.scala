@@ -34,11 +34,12 @@ class RapidsDiskStore(diskBlockManager: RapidsDiskBlockManager)
 
   override protected def createBuffer(
       incoming: RapidsBuffer,
-      incomingBufferIter: Iterator[(MemoryBuffer, Long)],
-      shouldClose: Boolean,
       stream: Cuda.Stream): RapidsBufferBase = {
     // assuming that the disk store gets contiguous buffers
-    val (incomingBuffer, _) = incomingBufferIter.next()
+    val (incomingBuffer, _) =
+      withResource(incoming.getCopyIterator) { incomingCopyIterator =>
+        incomingCopyIterator.next()
+      }
     withResource(incomingBuffer) { _ =>
       val hostBuffer = incomingBuffer match {
         case h: HostMemoryBuffer => h
