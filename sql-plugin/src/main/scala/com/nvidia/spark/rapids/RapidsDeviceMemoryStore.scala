@@ -38,15 +38,9 @@ class RapidsDeviceMemoryStore
 
   override protected def createBuffer(
       other: RapidsBuffer,
-      memoryBufferIterator: Iterator[(MemoryBuffer, Long)],
-      shouldClose: Boolean,
       stream: Cuda.Stream): RapidsBufferBase = {
-    var memoryBuffer : MemoryBuffer = null
-    while(memoryBufferIterator.hasNext) {
-      val (mb, _) = memoryBufferIterator.next()
-      memoryBuffer = mb
-      require(!memoryBufferIterator.hasNext,
-        "Expected a single item, but got multiple")
+    val (memoryBuffer, _) = withResource(other.getCopyIterator) { copyIterator =>
+      copyIterator.next()
     }
     val deviceBuffer = {
       memoryBuffer match {
@@ -233,8 +227,6 @@ class RapidsDeviceMemoryStore
 
     var initializedChunkedPacker: Boolean = false
 
-    // TODO: need a way to construct the packed chunked split without a user buffer
-    // so we can get the packed meta
     lazy val chunkedPacker: ChunkedPacker = {
       initializedChunkedPacker = true
       new ChunkedPacker(id, batch)
@@ -248,11 +240,10 @@ class RapidsDeviceMemoryStore
 
     /** The size of this buffer in bytes. */
     override def getSize: Long = {
-      //if (chunkedPacker.getMeta() != null) {
-      //  chunkedPacker.getMeta().bufferMeta().size()
-      //} else {
-      estSize
-     // }
+      // NOTE: this size is an estimate due to alignment differences
+      // the actual size for the contiguous buffer will be available once
+      // `chunkedPacker` is instantiated.
+      GpuColumnVector.getTotalDeviceMemoryUsed(batch)
     }
 
     /**
