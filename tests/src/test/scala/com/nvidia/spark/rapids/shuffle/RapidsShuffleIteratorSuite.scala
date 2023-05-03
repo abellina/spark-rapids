@@ -227,7 +227,7 @@ class RapidsShuffleIteratorSuite extends RapidsShuffleTestHelper {
       assert(cl.hasNext)
       assertResult(cb)(cl.next())
       assertResult(1)(testMetricsUpdater.totalRemoteBlocksFetched)
-      assertResult(mockBuffer.size)(testMetricsUpdater.totalRemoteBytesRead)
+      assertResult(mockBuffer.getSize)(testMetricsUpdater.totalRemoteBytesRead)
       assertResult(10)(testMetricsUpdater.totalRowsFetched)
     } finally {
       RmmSpark.taskDone(taskId)

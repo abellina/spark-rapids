@@ -85,6 +85,8 @@ class ChunkedPacker(id: RapidsBufferId, batch: ColumnarBatch)
     this.bounceBuffer = bounceBuffer
   }
 
+  def getTotalContiguousSize: Long = chunkedContigSplit.getTotalContiguousSize()
+
   def getMeta(): TableMeta = {
     tableMeta
   }
@@ -163,7 +165,11 @@ trait RapidsBuffer extends AutoCloseable {
   /** The buffer identifier for this buffer. */
   val id: RapidsBufferId
 
-  /** The size of this buffer in bytes. */
+  /**
+   * The size of this buffer in bytes. If the RapidsBuffer isn't backed by a contiguous buffer,
+   * this is an estimate as it doesn't contain alignment that cuDF applies. If you need
+   * the exact contiguous size cuDF needs, use `getTotalCopySize` in `RapidsBufferCopyIterator`.
+   * */
   def getSize: Long
 
   /** Descriptor for how the memory buffer is formatted */
