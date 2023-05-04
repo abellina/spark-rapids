@@ -30,6 +30,10 @@ import org.apache.spark.sql.types.DataType
 import org.apache.spark.sql.vectorized.ColumnarBatch
 import java.awt.image.PackedColorModel
 
+import scala.collection.mutable.ArrayBuffer
+
+import com.nvidia.spark.rapids.RapidsPluginImplicits.AutoCloseableSeq
+
 /**
  * An identifier for a RAPIDS buffer that can be automatically spilled between buffer stores.
  * NOTE: Derived classes MUST implement proper hashCode and equals methods, as these objects are
@@ -62,28 +66,35 @@ object StorageTier extends Enumeration {
   val GDS: StorageTier = Value(3, "GPUDirect Storage")
 }
 
-class ChunkedPacker(id: RapidsBufferId, batch: ColumnarBatch)
+class ChunkedPacker(
+    id: RapidsBufferId,
+    batch: ColumnarBatch,
+    bounceBuffer: DeviceMemoryBuffer)
     extends Iterator[(MemoryBuffer, Long)]
-      with Logging
-      with AutoCloseable {
+        with Logging
+        with AutoCloseable {
 
-  val numRows = batch.numRows()
-  var bounceBuffer: DeviceMemoryBuffer = null
-  val tbl = GpuColumnVector.from(batch)
-  val chunkedContigSplit =
+  private var closed: Boolean = false
+
+  private val numRows = batch.numRows()
+
+  private val tbl = GpuColumnVector.from(batch)
+
+  private val chunkedContigSplit =
     tbl.makeChunkedPack(
       100L*1024*1024,
       GpuDeviceManager.contigSplitMemoryResource)
-  var packedMeta: PackedColumnMetadata = chunkedContigSplit.buildMetadata()
-  var tableMeta: TableMeta = MetaUtils.buildTableMeta(
+
+  private var packedMeta: PackedColumnMetadata = chunkedContigSplit.buildMetadata()
+
+  private var tableMeta: TableMeta = MetaUtils.buildTableMeta(
     id.tableId,
     chunkedContigSplit.getTotalContiguousSize(),
     packedMeta.getMetadataDirectBuffer(),
     numRows)
 
-  def init(bounceBuffer: DeviceMemoryBuffer): Unit = {
-    this.bounceBuffer = bounceBuffer
-  }
+  // take out a lease on the bounce buffer
+  bounceBuffer.incRefCount()
 
   def getTotalContiguousSize: Long = chunkedContigSplit.getTotalContiguousSize()
 
@@ -95,20 +106,18 @@ class ChunkedPacker(id: RapidsBufferId, batch: ColumnarBatch)
 
   def next(): (MemoryBuffer, Long) = {
     val bytesWritten = chunkedContigSplit.next(bounceBuffer)
-    logWarning(s"Inc ref counting bb: ${bounceBuffer}")
     // we increment the refcount because the caller has no idea where
     // this memory came from, so it should close it.
     bounceBuffer.incRefCount()
     (bounceBuffer, bytesWritten)
   }
 
-  var closed: Boolean = false
   override def close(): Unit = synchronized {
     if (!closed) {
       closed = true
-      chunkedContigSplit.close()
-      packedMeta.close()
-      tbl.close()
+      val toClose = new ArrayBuffer[AutoCloseable]()
+      toClose.append(chunkedContigSplit, packedMeta, tbl, bounceBuffer)
+      toClose.safeClose()
     }
   }
 }
@@ -154,11 +163,11 @@ class RapidsBufferCopyIterator(buffer: RapidsBuffer)
 
   override def close(): Unit = {
     val hasNextBeforeClose = hasNext
-    if (chunkedPacker.isDefined){
-      chunkedPacker.foreach(_.close())
-    } else {
-      singleShotBuffer.close()
-    }
+    val toClose = new ArrayBuffer[AutoCloseable]()
+    toClose.appendAll(chunkedPacker)
+    toClose.appendAll(Option(singleShotBuffer))
+
+    toClose.safeClose()
     require(!hasNextBeforeClose,
       "RapidsBufferCopyIterator was closed before exhausting")
   }
