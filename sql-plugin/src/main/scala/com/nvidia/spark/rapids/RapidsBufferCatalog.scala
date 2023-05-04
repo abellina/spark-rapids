@@ -16,7 +16,7 @@
 
 package com.nvidia.spark.rapids
 
-import java.util.concurrent.{ConcurrentHashMap, Executors, TimeUnit}
+import java.util.concurrent.ConcurrentHashMap
 import java.util.function.BiFunction
 
 import ai.rapids.cudf.{ContiguousTable, Cuda, DeviceMemoryBuffer, NvtxColor, NvtxRange, Rmm}
@@ -320,12 +320,22 @@ class RapidsBufferCatalog(
     makeNewHandle(id, initialSpillPriority)
   }
 
+  /**
+   * Adds a batch to the device storage. This does NOT take ownership of the
+   * batch, so it is the responsibility of the caller to close it.
+   *
+   * @param batch                batch that will be owned by the store
+   * @param initialSpillPriority starting spill priority value for the batch
+   * @param needsSync            whether the spill framework should stream synchronize while adding
+   *                             this batch (defaults to true)
+   * @return RapidsBufferHandle handle for this RapidsBuffer
+   */
   def addBatch(
       batch: ColumnarBatch,
       initialSpillPriority: Long,
       needsSync: Boolean = true): RapidsBufferHandle = {
     val id = TempSpillBufferId()
-    logInfo(s"Adding batch ${id} to ${deviceStorage}")
+    logInfo(s"Adding batch $id to $deviceStorage")
     val rapidsBuffer = deviceStorage.addBatch(
       id,
       batch,
@@ -334,7 +344,6 @@ class RapidsBufferCatalog(
     registerNewBuffer(rapidsBuffer)
     makeNewHandle(id, initialSpillPriority)
   }
-
 
   /**
    * Register a degenerate RapidsBufferId given a TableMeta
@@ -830,11 +839,6 @@ object RapidsBufferCatalog extends Logging {
       batch: ColumnarBatch,
       initialSpillPriority: Long): RapidsBufferHandle = {
     singleton.addBatch(batch, initialSpillPriority)
-  }
-
-  def spillMock(): Unit = {
-    // immediatelly spill for now
-    singleton.synchronousSpill(deviceStorage, 0)
   }
 
   /**

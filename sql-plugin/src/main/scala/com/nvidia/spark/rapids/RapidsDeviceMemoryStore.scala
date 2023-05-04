@@ -107,6 +107,20 @@ class RapidsDeviceMemoryStore
     }
   }
 
+  /**
+   * Adds a batch to the device storage. This does NOT take ownership of the
+   * batch, so it is the responsibility of the caller to close it.
+   *
+   * This function is called only from the RapidsBufferCatalog, under the
+   * catalog lock.
+   *
+   * @param id                   the RapidsBufferId to use for this batch
+   * @param batch                batch that will be owned by the store
+   * @param initialSpillPriority starting spill priority value for the batch
+   * @param needsSync            whether the spill framework should stream synchronize while adding
+   *                             this batch (defaults to true)
+   * @return the RapidsBuffer instance that was added.
+   */
   def addBatch(
       id: TempSpillBufferId,
       batch: ColumnarBatch,
