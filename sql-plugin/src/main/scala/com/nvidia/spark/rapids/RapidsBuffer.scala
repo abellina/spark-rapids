@@ -124,8 +124,13 @@ class RapidsBufferCopyIterator(buffer: RapidsBuffer)
 
   def isChunked: Boolean = chunkedPacker.isDefined
 
-  private var singleShotCopyHasNext: Boolean = true
+  private var singleShotCopyHasNext: Boolean = false
   private var singleShotBuffer: MemoryBuffer = null
+
+  if (!isChunked) {
+    singleShotCopyHasNext = true
+    singleShotBuffer = buffer.getMemoryBuffer
+  }
 
   override def hasNext: Boolean =
     chunkedPacker.map(_.hasNext).getOrElse(singleShotCopyHasNext)
@@ -133,7 +138,7 @@ class RapidsBufferCopyIterator(buffer: RapidsBuffer)
   override def next(): (MemoryBuffer, Long) = {
     chunkedPacker.map(_.next()).getOrElse {
       singleShotCopyHasNext = false
-      singleShotBuffer = buffer.getMemoryBuffer
+      singleShotBuffer.incRefCount()
       (singleShotBuffer, singleShotBuffer.getLength)
     }
   }
@@ -151,8 +156,8 @@ class RapidsBufferCopyIterator(buffer: RapidsBuffer)
     } else {
       singleShotBuffer.close()
     }
-    require(hasNextBeforeClose,
-      "Iterator closed with pending chunks to copy!")
+    require(!hasNextBeforeClose,
+      "RapidsBufferCopyIterator was closed before exhausting")
   }
 }
 
