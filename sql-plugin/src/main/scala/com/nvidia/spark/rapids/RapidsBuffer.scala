@@ -95,6 +95,7 @@ class ChunkedPacker(id: RapidsBufferId, batch: ColumnarBatch)
 
   def next(): (MemoryBuffer, Long) = {
     val bytesWritten = chunkedContigSplit.next(bounceBuffer)
+    logWarning(s"Inc ref counting bb: ${bounceBuffer}")
     // we increment the refcount because the caller has no idea where
     // this memory came from, so it should close it.
     bounceBuffer.incRefCount()
@@ -136,6 +137,8 @@ class RapidsBufferCopyIterator(buffer: RapidsBuffer)
     chunkedPacker.map(_.hasNext).getOrElse(singleShotCopyHasNext)
 
   override def next(): (MemoryBuffer, Long) = {
+    require(hasNext,
+      "next called on exhausted iterator")
     chunkedPacker.map(_.next()).getOrElse {
       singleShotCopyHasNext = false
       singleShotBuffer.incRefCount()

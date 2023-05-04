@@ -36,6 +36,7 @@ class RapidsDeviceMemoryStore
   // The RapidsDeviceMemoryStore handles spillability via ref counting
   override protected def spillableOnAdd: Boolean = false
 
+  logWarning(s"Instantiating bounce buffer!!! ${bounceBuffer}")
   var bounceBuffer: DeviceMemoryBuffer = DeviceMemoryBuffer.allocate(128L * 1024 * 1024)
 
   override protected def createBuffer(
@@ -44,26 +45,28 @@ class RapidsDeviceMemoryStore
     val (memoryBuffer, totalCopySize) = withResource(other.getCopyIterator) { copyIterator =>
       copyIterator.next()
     }
-    val deviceBuffer = {
-      memoryBuffer match {
-        case d: DeviceMemoryBuffer => d
-        case h: HostMemoryBuffer =>
-          withResource(h) { _ =>
+    withResource(memoryBuffer) { _ =>
+      val deviceBuffer = {
+        memoryBuffer match {
+          case d: DeviceMemoryBuffer =>
+            logWarning(s"Returning a device buffer?? ${d}")
+            d
+          case h: HostMemoryBuffer =>
             closeOnExcept(DeviceMemoryBuffer.allocate(totalCopySize)) { deviceBuffer =>
               logDebug(s"copying from host $h to device $deviceBuffer")
               deviceBuffer.copyFromHostBuffer(h, stream)
               deviceBuffer
             }
-          }
-        case b => throw new IllegalStateException(s"Unrecognized buffer: $b")
+          case b => throw new IllegalStateException(s"Unrecognized buffer: $b")
+        }
       }
+      new RapidsDeviceMemoryBuffer(
+        other.id,
+        deviceBuffer.getLength,
+        other.getMeta,
+        deviceBuffer,
+        other.getSpillPriority)
     }
-    new RapidsDeviceMemoryBuffer(
-      other.id,
-      deviceBuffer.getLength,
-      other.getMeta,
-      deviceBuffer,
-      other.getSpillPriority)
   }
 
   /**
@@ -371,6 +374,7 @@ class RapidsDeviceMemoryStore
   }
   override def close(): Unit = {
     super.close()
+    logWarning(s"Closing bounce buffer ${bounceBuffer}!!")
     bounceBuffer.close()
   }
 }
