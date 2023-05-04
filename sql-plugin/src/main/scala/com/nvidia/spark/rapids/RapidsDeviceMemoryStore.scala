@@ -153,70 +153,27 @@ class RapidsDeviceMemoryStore
     var wrapped: Option[RapidsDeviceColumnEventHandler] = None)
       extends ColumnVector.EventHandler {
     override def onClosed(refCount: Int): Unit = {
+      logInfo(s"Column ${columnIx} for buffer ${rapidsBuffer.id} " +
+          s"with batch ${rapidsBuffer.batch} has refCount ${refCount}")
       if (refCount == 1) {
         rapidsBuffer.onColumnSpillable(columnIx)
-      }
-      wrapped.foreach(_.onClosed(refCount))
-    }
-  }
-
-  def registerCallbacks(batch: ColumnarBatch, rapidsBuffer: RapidsDeviceMemoryBatch): Unit = {
-    val cudfColumns = GpuColumnVector.extractBases(batch)
-
-    /**
-     * If a batch has two columns that are the same instance, we here associate two callbacks:
-     * - The first one for column at index 1
-     * - The second one for column at index 2 (which wraps the callback for index 1)
-     */
-    cudfColumns.zipWithIndex.foreach { case (cv, columnIx) =>
-      cv.synchronized {
-        val priorEventHandler = cv.getEventHandler.asInstanceOf[RapidsDeviceColumnEventHandler]
-        val columnEventHandler =
-          new RapidsDeviceColumnEventHandler(
-            rapidsBuffer,
-            columnIx,
-            Option(priorEventHandler))
-        cv.setEventHandler(columnEventHandler)
-      }
-    }
-  }
-
-  def removeCallbacks(batch: ColumnarBatch, rapidsBuffer: RapidsDeviceMemoryBatch): Unit = {
-    val cudfColumns = GpuColumnVector.extractBases(batch)
-    cudfColumns.zipWithIndex.foreach { case (cv, columnIx) =>
-      cv.synchronized {
-        var priorEventHandler = cv.getEventHandler.asInstanceOf[RapidsDeviceColumnEventHandler]
-        // find the event handler that belongs to this rapidsBuffer
-        var isHead = true
-        var parent = priorEventHandler
-        while (priorEventHandler.rapidsBuffer != rapidsBuffer) {
-          isHead = false
-          parent = priorEventHandler
-          priorEventHandler = priorEventHandler.wrapped.get
-        }
-
-        if (isHead) {
-          cv.setEventHandler(priorEventHandler.wrapped.orNull)
-        } else {
-          logInfo(s"Removing non-head event handler for ${batch}")
-          parent.wrapped = priorEventHandler.wrapped
-        }
+        wrapped.foreach(_.onClosed(refCount))
       }
     }
   }
 
   class RapidsDeviceMemoryBatch(
       id: TempSpillBufferId,
-      batch: ColumnarBatch,
+      val batch: ColumnarBatch,
       spillPriority: Long)
       extends RapidsBufferBase(
         id,
         null,
         spillPriority) {
 
-    registerCallbacks(batch, this)
+    registerOnCloseEventHandler()
 
-    val columnSpillability = Array.fill(batch.numCols())(false)
+    private val columnSpillability = Array.fill(batch.numCols())(false)
 
     def onColumnSpillable(columnIx: Int): Unit = {
       columnSpillability(columnIx) = true
@@ -234,13 +191,11 @@ class RapidsDeviceMemoryStore
 
     override val supportsChunkedPacker: Boolean = true
 
-    var initializedChunkedPacker: Boolean = false
+    private var initializedChunkedPacker: Boolean = false
 
     lazy val chunkedPacker: ChunkedPacker = {
       initializedChunkedPacker = true
-      val cp = new ChunkedPacker(id, batch)
-      cp.init(bounceBuffer)
-      cp
+      new ChunkedPacker(id, batch, bounceBuffer)
     }
 
     override def getMeta(): TableMeta = {
@@ -280,12 +235,65 @@ class RapidsDeviceMemoryStore
     }
 
     override def free(): Unit = {
+      // lets remove our handler from the chain of handlers for each column
+      removeOnCloseEventHandler()
       super.free()
       if (initializedChunkedPacker) {
         chunkedPacker.close()
+        initializedChunkedPacker = false
       }
-      removeCallbacks(batch, this)
     }
+
+    private def registerOnCloseEventHandler(): Unit = {
+      val cudfColumns = GpuColumnVector.extractBases(batch)
+
+      /**
+       * If a batch has two columns that are the same instance, we here associate two callbacks:
+       * - The first one for column at index 1
+       * - The second one for column at index 2 (which wraps the callback for index 1)
+       */
+      cudfColumns.zipWithIndex.foreach { case (cv, columnIx) =>
+        cv.synchronized {
+          val priorEventHandler = cv.getEventHandler.asInstanceOf[RapidsDeviceColumnEventHandler]
+          val columnEventHandler =
+            new RapidsDeviceColumnEventHandler(
+              this,
+              columnIx,
+              Option(priorEventHandler))
+          cv.setEventHandler(columnEventHandler)
+        }
+      }
+    }
+
+    private def removeOnCloseEventHandler(): Unit = {
+      val cudfColumns = GpuColumnVector.extractBases(batch)
+
+      cudfColumns.foreach { cv =>
+        cv.synchronized {
+          cv.getEventHandler match {
+            case handler: RapidsDeviceColumnEventHandler =>
+              // find the event handler that belongs to this rapidsBuffer
+              var isHead = true
+              var priorEventHandler = handler
+              var parent = priorEventHandler
+              while (handler.rapidsBuffer != this) {
+                isHead = false
+                parent = priorEventHandler
+                priorEventHandler = priorEventHandler.wrapped.get
+              }
+
+              if (isHead) {
+                cv.setEventHandler(priorEventHandler.wrapped.orNull)
+              } else {
+                parent.wrapped = priorEventHandler.wrapped
+              }
+            case t =>
+              throw new IllegalStateException(s"Unknown column event handler $t")
+          }
+        }
+      }
+    }
+
   }
 
   class RapidsDeviceMemoryBuffer(
