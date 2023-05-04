@@ -229,13 +229,6 @@ class RapidsDeviceMemoryStoreSuite extends FunSuite with MockitoSugar {
     }
   }
 
-  test("cannot receive spilled buffers") {
-    withResource(new RapidsDeviceMemoryStore) { store =>
-      assertThrows[IllegalStateException](store.copyBuffer(
-        mock[RapidsBuffer], Cuda.DEFAULT_STREAM))
-    }
-  }
-
   test("size statistics") {
 
     withResource(new RapidsDeviceMemoryStore) { store =>

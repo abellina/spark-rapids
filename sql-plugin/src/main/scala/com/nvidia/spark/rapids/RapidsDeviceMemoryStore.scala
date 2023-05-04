@@ -36,6 +36,8 @@ class RapidsDeviceMemoryStore
   // The RapidsDeviceMemoryStore handles spillability via ref counting
   override protected def spillableOnAdd: Boolean = false
 
+  var bounceBuffer: DeviceMemoryBuffer = DeviceMemoryBuffer.allocate(128L * 1024 * 1024)
+
   override protected def createBuffer(
       other: RapidsBuffer,
       stream: Cuda.Stream): RapidsBufferBase = {
@@ -157,8 +159,12 @@ class RapidsDeviceMemoryStore
 
   def registerCallbacks(batch: ColumnarBatch, rapidsBuffer: RapidsDeviceMemoryBatch): Unit = {
     val cudfColumns = GpuColumnVector.extractBases(batch)
-    val repeated = cudfColumns.distinct.length != cudfColumns.length
-    require(!repeated, s"Batch has repeated cols ${cudfColumns.mkString(",")}")
+
+    /**
+     * If a batch has two columns that are the same instance, we here associate two callbacks:
+     * - The first one for column at index 1
+     * - The second one for column at index 2 (which wraps the callback for index 1)
+     */
     cudfColumns.zipWithIndex.foreach { case (cv, columnIx) =>
       cv.synchronized {
         val priorEventHandler = cv.getEventHandler.asInstanceOf[RapidsDeviceColumnEventHandler]
@@ -229,7 +235,9 @@ class RapidsDeviceMemoryStore
 
     lazy val chunkedPacker: ChunkedPacker = {
       initializedChunkedPacker = true
-      new ChunkedPacker(id, batch)
+      val cp = new ChunkedPacker(id, batch)
+      cp.init(bounceBuffer)
+      cp
     }
 
     override def getMeta(): TableMeta = {
@@ -360,5 +368,9 @@ class RapidsDeviceMemoryStore
       }
       super.free()
     }
+  }
+  override def close(): Unit = {
+    super.close()
+    bounceBuffer.close()
   }
 }

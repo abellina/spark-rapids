@@ -188,7 +188,6 @@ abstract class RapidsBufferStore(val tier: StorageTier)
     require(spillStore == null, "spill store already registered")
     spillStore = store
   }
-  var bounceBuffer: DeviceMemoryBuffer = DeviceMemoryBuffer.allocate(100L * 1024 * 1024)
 
   /**
    * Adds an existing buffer from another store to this store. The buffer must already
