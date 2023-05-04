@@ -142,6 +142,7 @@ object GpuDeviceManager extends Logging {
 
   def shutdown(): Unit = synchronized {
     // assume error during shutdown until we complete it
+    contigSplitMemoryResource.close()
     singletonMemoryInitialized = Errored
     RapidsBufferCatalog.close()
     GpuShuffleEnv.shutdown()
