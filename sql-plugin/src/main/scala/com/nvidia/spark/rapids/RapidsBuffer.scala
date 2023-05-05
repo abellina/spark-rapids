@@ -82,16 +82,16 @@ class ChunkedPacker(
 
   private val chunkedContigSplit =
     tbl.makeChunkedPack(
-      100L*1024*1024,
+      bounceBuffer.getLength(),
       GpuDeviceManager.contigSplitMemoryResource)
 
-  private var packedMeta: PackedColumnMetadata = chunkedContigSplit.buildMetadata()
-
-  private var tableMeta: TableMeta = MetaUtils.buildTableMeta(
-    id.tableId,
-    chunkedContigSplit.getTotalContiguousSize(),
-    packedMeta.getMetadataDirectBuffer(),
-    numRows)
+  private val tableMeta = withResource(chunkedContigSplit.buildMetadata()) { packedMeta =>
+    MetaUtils.buildTableMeta(
+      id.tableId,
+      chunkedContigSplit.getTotalContiguousSize,
+      packedMeta.getMetadataDirectBuffer,
+      numRows)
+  }
 
   // take out a lease on the bounce buffer
   bounceBuffer.incRefCount()
@@ -102,7 +102,10 @@ class ChunkedPacker(
     tableMeta
   }
 
-  override def hasNext: Boolean = !closed && chunkedContigSplit.hasNext
+  override def hasNext: Boolean = {
+    logWarning(s"At hasNext: closed? ${closed} ccs.hasNext? ${chunkedContigSplit.hasNext}")
+    !closed && chunkedContigSplit.hasNext
+  }
 
   def next(): (MemoryBuffer, Long) = {
     val bytesWritten = chunkedContigSplit.next(bounceBuffer)
@@ -116,7 +119,7 @@ class ChunkedPacker(
     if (!closed) {
       closed = true
       val toClose = new ArrayBuffer[AutoCloseable]()
-      toClose.append(chunkedContigSplit, packedMeta, tbl, bounceBuffer)
+      toClose.append(chunkedContigSplit, tbl, bounceBuffer)
       toClose.safeClose()
     }
   }
@@ -124,9 +127,10 @@ class ChunkedPacker(
 
 class RapidsBufferCopyIterator(buffer: RapidsBuffer)
     extends Iterator[(MemoryBuffer, Long)]
-        with AutoCloseable {
+        with AutoCloseable with Logging {
 
   private val chunkedPacker: Option[ChunkedPacker] = if (buffer.supportsChunkedPacker) {
+    logWarning(s"Using a chunked packer for ${buffer.id}")
     Some(buffer.getChunkedPacker)
   } else {
     None
@@ -168,6 +172,13 @@ class RapidsBufferCopyIterator(buffer: RapidsBuffer)
     toClose.appendAll(Option(singleShotBuffer))
 
     toClose.safeClose()
+    if (hasNextBeforeClose) {
+      if (chunkedPacker.isDefined) {
+        logInfo(s"Had next, was chunked packer. ${buffer.id}")
+      } else {
+        logInfo(s"Had next, was regular. ${buffer.id}")
+      }
+    }
     require(!hasNextBeforeClose,
       "RapidsBufferCopyIterator was closed before exhausting")
   }

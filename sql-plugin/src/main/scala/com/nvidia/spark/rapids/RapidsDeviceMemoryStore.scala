@@ -215,14 +215,14 @@ class RapidsDeviceMemoryStore
     override def getMeta(): TableMeta = {
       chunkedPacker.getMeta()
     }
+
+    // NOTE: this size is an estimate due to alignment differences
+    // the actual size for the contiguous buffer will be available once
+    // `chunkedPacker` is instantiated.
+    val estSize = GpuColumnVector.getTotalDeviceMemoryUsed(batch)
     
     /** The size of this buffer in bytes. */
-    override def getSize: Long = {
-      // NOTE: this size is an estimate due to alignment differences
-      // the actual size for the contiguous buffer will be available once
-      // `chunkedPacker` is instantiated.
-      GpuColumnVector.getTotalDeviceMemoryUsed(batch)
-    }
+    override def getSize: Long = estSize
 
     override def getChunkedPacker: ChunkedPacker = {
       chunkedPacker

@@ -140,12 +140,10 @@ object SpillableColumnarBatch {
     } else {
       val types = GpuColumnVector.extractTypes(batch)
       val handle = addBatch(batch, priority)
-      val impl = new SpillableColumnarBatchImpl(
+      new SpillableColumnarBatchImpl(
         handle,
         numRows,
         types)
-      // TODO: remove RapidsBufferCatalog.spillMock()
-      impl
     }
   }
 
