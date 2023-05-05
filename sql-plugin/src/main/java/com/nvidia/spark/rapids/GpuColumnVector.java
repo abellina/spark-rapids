@@ -16,7 +16,15 @@
 
 package com.nvidia.spark.rapids;
 
-import ai.rapids.cudf.*;
+import ai.rapids.cudf.BaseDeviceMemoryBuffer;
+import ai.rapids.cudf.ColumnView;
+import ai.rapids.cudf.DType;
+import ai.rapids.cudf.ArrowColumnBuilder;
+import ai.rapids.cudf.HostColumnVector;
+import ai.rapids.cudf.HostColumnVectorCore;
+import ai.rapids.cudf.Scalar;
+import ai.rapids.cudf.Schema;
+import ai.rapids.cudf.Table;
 import com.nvidia.spark.rapids.shims.GpuTypeShims;
 import org.apache.arrow.memory.ReferenceManager;
 
@@ -1134,18 +1142,11 @@ public class GpuColumnVector extends GpuColumnVectorBase {
         sum += wtb.getTableBuffer().getLength();
       } else {
         HashSet<Long> found = new HashSet<>();
-        System.err.println("Calling getDeviceMemorySize for # cols: " + batch.numCols());
         for (int i = 0; i < batch.numCols(); i++) {
           ai.rapids.cudf.ColumnVector cv = ((GpuColumnVector)batch.column(i)).getBase();
           long id = cv.getNativeView();
           if (found.add(id)) {
-            try {
-              System.err.println("Calling getDeviceMemorySize: " + cv.getType());
-              sum += cv.getDeviceMemorySize();
-            } catch (CudfException ex){
-              System.err.println("Got an exception for column of type: " + cv.getType() + " : " + ex);
-              throw ex;
-            }
+            sum += cv.getDeviceMemorySize();
           }
         }
       }
