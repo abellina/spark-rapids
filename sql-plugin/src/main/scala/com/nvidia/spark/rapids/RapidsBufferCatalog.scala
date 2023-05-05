@@ -309,7 +309,6 @@ class RapidsBufferCatalog(
       tableMeta: TableMeta,
       initialSpillPriority: Long,
       needsSync: Boolean): RapidsBufferHandle = synchronized {
-    logDebug(s"Adding buffer ${id} to ${deviceStorage}")
     val rapidsBuffer = deviceStorage.addBuffer(
       id,
       buffer,
