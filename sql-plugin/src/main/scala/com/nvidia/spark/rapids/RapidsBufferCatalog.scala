@@ -596,7 +596,6 @@ class RapidsBufferCatalog(
    * Copies `buffer` to the `deviceStorage` store, registering a new `RapidsBuffer` in
    * the process
    * @param buffer - buffer to copy
-   * @param memoryBuffer - cuDF MemoryBuffer to copy from
    * @param stream - Cuda.Stream to synchronize on
    * @return - The `RapidsBuffer` instance that was added to the device store.
    */
@@ -611,10 +610,7 @@ class RapidsBufferCatalog(
         newBuffer.addReference() // add a reference since we are about to use it
         registerNewBuffer(newBuffer)
         newBuffer
-      case Some(existingBuffer) =>
-        withResource(buffer) { _ =>
-          existingBuffer
-        }
+      case Some(existingBuffer) => existingBuffer
     }
   }
 
