@@ -16,7 +16,7 @@
 
 package com.nvidia.spark.rapids
 
-import ai.rapids.cudf.{Cuda, DeviceMemoryBuffer, HostMemoryBuffer, MemoryBuffer, NvtxColor, NvtxRange, PinnedMemoryPool, Table}
+import ai.rapids.cudf.{Cuda, DeviceMemoryBuffer, HostMemoryBuffer, MemoryBuffer, NvtxColor, NvtxRange, PinnedMemoryPool}
 import com.nvidia.spark.rapids.Arm.withResource
 import com.nvidia.spark.rapids.SpillPriorities.{applyPriorityOffset, HOST_MEMORY_BUFFER_DIRECT_OFFSET, HOST_MEMORY_BUFFER_PAGEABLE_OFFSET, HOST_MEMORY_BUFFER_PINNED_OFFSET}
 import com.nvidia.spark.rapids.StorageTier.StorageTier
@@ -32,7 +32,7 @@ class RapidsHostMemoryStore(
     pageableMemoryPoolSize: Long)
     extends RapidsBufferStore(StorageTier.HOST) {
   private[this] val pool = HostMemoryBuffer.allocate(pageableMemoryPoolSize, false)
-  private[this] val addressAllocator = new AddressSpaceAllocator(pageableMemoryPoolSize)
+  private[this] val addressAllocator = new AddreaTablesSpaceAllocator(pageableMemoryPoolSize)
   private[this] var haveLoggedMaxExceeded = false
 
   private sealed abstract class AllocationMode(val spillPriorityOffset: Long)

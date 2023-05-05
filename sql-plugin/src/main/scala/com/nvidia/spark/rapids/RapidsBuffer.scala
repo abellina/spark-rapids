@@ -18,21 +18,18 @@ package com.nvidia.spark.rapids
 
 import java.io.File
 
-import ai.rapids.cudf.{ChunkedPack, ContiguousTable, Cuda, DeviceMemoryBuffer, MemoryBuffer, PackedColumnMetadata, Rmm, RmmCudaMemoryResource, RmmPoolMemoryResource, Table}
+import scala.collection.mutable.ArrayBuffer
+
+import ai.rapids.cudf.{Cuda, DeviceMemoryBuffer, MemoryBuffer, Table}
 import com.nvidia.spark.rapids.Arm.withResource
+import com.nvidia.spark.rapids.RapidsPluginImplicits._
 import com.nvidia.spark.rapids.StorageTier.StorageTier
 import com.nvidia.spark.rapids.format.TableMeta
-import org.apache.curator.utils.DebugUtils
 
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.rapids.RapidsDiskBlockManager
 import org.apache.spark.sql.types.DataType
 import org.apache.spark.sql.vectorized.ColumnarBatch
-import java.awt.image.PackedColorModel
-
-import scala.collection.mutable.ArrayBuffer
-
-import com.nvidia.spark.rapids.RapidsPluginImplicits.AutoCloseableSeq
 
 /**
  * An identifier for a RAPIDS buffer that can be automatically spilled between buffer stores.
@@ -130,7 +127,6 @@ class RapidsBufferCopyIterator(buffer: RapidsBuffer)
         with AutoCloseable with Logging {
 
   private val chunkedPacker: Option[ChunkedPacker] = if (buffer.supportsChunkedPacker) {
-    logWarning(s"Using a chunked packer for ${buffer.id}")
     Some(buffer.getChunkedPacker)
   } else {
     None
@@ -172,13 +168,6 @@ class RapidsBufferCopyIterator(buffer: RapidsBuffer)
     toClose.appendAll(Option(singleShotBuffer))
 
     toClose.safeClose()
-    if (hasNextBeforeClose) {
-      if (chunkedPacker.isDefined) {
-        logInfo(s"Had next, was chunked packer. ${buffer.id}")
-      } else {
-        logInfo(s"Had next, was regular. ${buffer.id}")
-      }
-    }
     require(!hasNextBeforeClose,
       "RapidsBufferCopyIterator was closed before exhausting")
   }

@@ -36,7 +36,6 @@ class RapidsDeviceMemoryStore
   // The RapidsDeviceMemoryStore handles spillability via ref counting
   override protected def spillableOnAdd: Boolean = false
 
-  logWarning(s"Instantiating bounce buffer!!! ${bounceBuffer}")
   var bounceBuffer: DeviceMemoryBuffer = DeviceMemoryBuffer.allocate(128L * 1024 * 1024)
 
   override protected def createBuffer(
@@ -48,9 +47,7 @@ class RapidsDeviceMemoryStore
     withResource(memoryBuffer) { _ =>
       val deviceBuffer = {
         memoryBuffer match {
-          case d: DeviceMemoryBuffer =>
-            logWarning(s"Returning a device buffer?? ${d}")
-            d
+          case d: DeviceMemoryBuffer => d
           case h: HostMemoryBuffer =>
             closeOnExcept(DeviceMemoryBuffer.allocate(totalCopySize)) { deviceBuffer =>
               logDebug(s"copying from host $h to device $deviceBuffer")
@@ -167,8 +164,6 @@ class RapidsDeviceMemoryStore
     var wrapped: Option[RapidsDeviceColumnEventHandler] = None)
       extends ColumnVector.EventHandler {
     override def onClosed(refCount: Int): Unit = {
-      logInfo(s"Column ${columnIx} for buffer ${rapidsBuffer.id} " +
-          s"with batch ${rapidsBuffer.batch} has refCount ${refCount}")
       if (refCount == 1) {
         rapidsBuffer.onColumnSpillable(columnIx)
         wrapped.foreach(_.onClosed(refCount))
@@ -396,7 +391,6 @@ class RapidsDeviceMemoryStore
   }
   override def close(): Unit = {
     super.close()
-    logWarning(s"Closing bounce buffer ${bounceBuffer}!!")
     bounceBuffer.close()
   }
 }
