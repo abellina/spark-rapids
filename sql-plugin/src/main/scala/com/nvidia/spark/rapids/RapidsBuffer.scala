@@ -65,65 +65,60 @@ object StorageTier extends Enumeration {
 
 class ChunkedPacker(
     id: RapidsBufferId,
-    batch: ColumnarBatch,
+    table: Table,
     bounceBuffer: DeviceMemoryBuffer)
-    extends Iterator[(MemoryBuffer, Long)]
+    extends Iterator[MemoryBuffer]
         with Logging
         with AutoCloseable {
 
   private var closed: Boolean = false
 
-  private val numRows = batch.numRows()
-
-  private val tbl = GpuColumnVector.from(batch)
-
-  private val chunkedContigSplit =
-    tbl.makeChunkedPack(
+  private val chunkedPack =
+    table.makeChunkedPack(
       bounceBuffer.getLength(),
       GpuDeviceManager.contigSplitMemoryResource)
 
-  private val tableMeta = withResource(chunkedContigSplit.buildMetadata()) { packedMeta =>
+  private val tableMeta = withResource(chunkedPack.buildMetadata()) { packedMeta =>
     MetaUtils.buildTableMeta(
       id.tableId,
-      chunkedContigSplit.getTotalContiguousSize,
+      chunkedPack.getTotalContiguousSize,
       packedMeta.getMetadataDirectBuffer,
-      numRows)
+      table.getRowCount())
   }
 
   // take out a lease on the bounce buffer
   bounceBuffer.incRefCount()
 
-  def getTotalContiguousSize: Long = chunkedContigSplit.getTotalContiguousSize()
+  def getTotalContiguousSize: Long = chunkedPack.getTotalContiguousSize()
 
   def getMeta(): TableMeta = {
     tableMeta
   }
 
   override def hasNext: Boolean = {
-    logWarning(s"At hasNext: closed? ${closed} ccs.hasNext? ${chunkedContigSplit.hasNext}")
-    !closed && chunkedContigSplit.hasNext
+    logWarning(s"At hasNext: closed? ${closed} ccs.hasNext? ${chunkedPack.hasNext}")
+    !closed && chunkedPack.hasNext
   }
 
-  def next(): (MemoryBuffer, Long) = {
-    val bytesWritten = chunkedContigSplit.next(bounceBuffer)
+  def next(): MemoryBuffer = {
+    val bytesWritten = chunkedPack.next(bounceBuffer)
     // we increment the refcount because the caller has no idea where
     // this memory came from, so it should close it.
-    bounceBuffer.incRefCount()
-    (bounceBuffer, bytesWritten)
+    bounceBuffer.slice(0, bytesWritten)
   }
 
   override def close(): Unit = synchronized {
     if (!closed) {
       closed = true
       val toClose = new ArrayBuffer[AutoCloseable]()
-      toClose.append(chunkedContigSplit, tbl, bounceBuffer)
+      toClose.append(chunkedPack, bounceBuffer)
       toClose.safeClose()
     }
   }
 }
 
 class RapidsBufferCopyIterator(buffer: RapidsBuffer)
-    extends Iterator[(MemoryBuffer, Long)]
+    extends Iterator[MemoryBuffer]
         with AutoCloseable with Logging {
 
   private val chunkedPacker: Option[ChunkedPacker] = if (buffer.supportsChunkedPacker) {
@@ -145,13 +140,12 @@ class RapidsBufferCopyIterator(buffer: RapidsBuffer)
   override def hasNext: Boolean =
     chunkedPacker.map(_.hasNext).getOrElse(singleShotCopyHasNext)
 
-  override def next(): (MemoryBuffer, Long) = {
+  override def next(): MemoryBuffer = {
     require(hasNext,
       "next called on exhausted iterator")
     chunkedPacker.map(_.next()).getOrElse {
       singleShotCopyHasNext = false
-      singleShotBuffer.incRefCount()
-      (singleShotBuffer, singleShotBuffer.getLength)
+      singleShotBuffer
     }
   }
 

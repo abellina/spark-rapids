@@ -41,7 +41,7 @@ class RapidsGdsStore(
       other: RapidsBuffer,
       stream: Cuda.Stream): RapidsBufferBase = {
     // assume that we get 1 buffer
-    val (otherBuffer, _) = withResource(other.getCopyIterator) { it =>
+    val otherBuffer = withResource(other.getCopyIterator) { it =>
       it.next()
     }
 

@@ -36,7 +36,7 @@ class RapidsDiskStore(diskBlockManager: RapidsDiskBlockManager)
       incoming: RapidsBuffer,
       stream: Cuda.Stream): RapidsBufferBase = {
     // assuming that the disk store gets contiguous buffers
-    val (incomingBuffer, totalSize) =
+    val incomingBuffer =
       withResource(incoming.getCopyIterator) { incomingCopyIterator =>
         incomingCopyIterator.next()
       }
@@ -59,11 +59,11 @@ class RapidsDiskStore(diskBlockManager: RapidsDiskBlockManager)
       } else {
         copyBufferToPath(hostBuffer, path, append = false)
       }
-      logDebug(s"Spilled to $path $fileOffset:$totalSize")
+      logDebug(s"Spilled to $path $fileOffset:${incomingBuffer.getLength}")
       new RapidsDiskBuffer(
         id,
         fileOffset,
-        totalSize,
+        incomingBuffer.getLength,
         incoming.getMeta,
         incoming.getSpillPriority)
     }

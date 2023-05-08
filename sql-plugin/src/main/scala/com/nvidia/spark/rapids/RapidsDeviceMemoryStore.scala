@@ -16,7 +16,7 @@
 
 package com.nvidia.spark.rapids
 
-import ai.rapids.cudf.{Cuda, DeviceMemoryBuffer, HostMemoryBuffer, MemoryBuffer}
+import ai.rapids.cudf.{Cuda, DeviceMemoryBuffer, HostMemoryBuffer, MemoryBuffer, Table}
 import com.nvidia.spark.rapids.Arm._
 import com.nvidia.spark.rapids.StorageTier.StorageTier
 import com.nvidia.spark.rapids.format.TableMeta
@@ -41,7 +41,7 @@ class RapidsDeviceMemoryStore
   override protected def createBuffer(
       other: RapidsBuffer,
       stream: Cuda.Stream): RapidsBufferBase = {
-    val (memoryBuffer, totalCopySize) = withResource(other.getCopyIterator) { copyIterator =>
+    val memoryBuffer = withResource(other.getCopyIterator) { copyIterator =>
       copyIterator.next()
     }
     withResource(memoryBuffer) { _ =>
@@ -49,7 +49,7 @@ class RapidsDeviceMemoryStore
         memoryBuffer match {
           case d: DeviceMemoryBuffer => d
           case h: HostMemoryBuffer =>
-            closeOnExcept(DeviceMemoryBuffer.allocate(totalCopySize)) { deviceBuffer =>
+            closeOnExcept(DeviceMemoryBuffer.allocate(memoryBuffer.getLength)) { deviceBuffer =>
               logDebug(s"copying from host $h to device $deviceBuffer")
               deviceBuffer.copyFromHostBuffer(h, stream)
               deviceBuffer
@@ -118,19 +118,20 @@ class RapidsDeviceMemoryStore
    *                             this batch (defaults to true)
    * @return the RapidsBuffer instance that was added.
    */
-  def addBatch(
+  def addTable(
       id: TempSpillBufferId,
-      batch: ColumnarBatch,
+      table: Table,
       initialSpillPriority: Long,
       needsSync: Boolean): RapidsBuffer = {
-    GpuColumnVector.incRefCounts(batch)
-    val rapidsBuffer = new RapidsDeviceMemoryBatch(
-      id,
-      batch,
-      initialSpillPriority)
-    freeOnExcept(rapidsBuffer) { _ =>
-      addBuffer(rapidsBuffer, needsSync)
-      rapidsBuffer
+    closeOnExcept(table) { _ =>
+      val rapidsBuffer = new RapidsTable(
+        id,
+        table,
+        initialSpillPriority)
+      freeOnExcept(rapidsBuffer) { _ =>
+        addBuffer(rapidsBuffer, needsSync)
+        rapidsBuffer
+      }
     }
   }
 
@@ -159,9 +160,9 @@ class RapidsDeviceMemoryStore
   }
 
   class RapidsDeviceColumnEventHandler(
-    val rapidsBuffer: RapidsDeviceMemoryBatch,
-    columnIx: Int,
-    var wrapped: Option[RapidsDeviceColumnEventHandler] = None)
+                                        val rapidsBuffer: RapidsTable,
+                                        columnIx: Int,
+                                        var wrapped: Option[RapidsDeviceColumnEventHandler] = None)
       extends ColumnVector.EventHandler {
     override def onClosed(refCount: Int): Unit = {
       if (refCount == 1) {
@@ -171,9 +172,9 @@ class RapidsDeviceMemoryStore
     }
   }
 
-  class RapidsDeviceMemoryBatch(
+  class RapidsTable(
       id: TempSpillBufferId,
-      val batch: ColumnarBatch,
+      table: Table,
       spillPriority: Long)
       extends RapidsBufferBase(
         id,
@@ -182,17 +183,16 @@ class RapidsDeviceMemoryStore
 
     registerOnCloseEventHandler()
 
-    private val columnSpillability = Array.fill(batch.numCols())(false)
+    private val columnSpillability = Array.fill(table.getNumberOfColumns)(false)
 
     def onColumnSpillable(columnIx: Int): Unit = {
       columnSpillability(columnIx) = true
-      val batchSpillable = !columnSpillability.contains(false)
-      doSetSpillable(this, batchSpillable)
+      doSetSpillable(this, !columnSpillability.contains(false))
     }
 
     /** Release the underlying resources for this buffer. */
     override protected def releaseResources(): Unit = {
-      batch.close()
+      table.close()
     }
 
     /** The storage tier for this buffer */
@@ -204,7 +204,7 @@ class RapidsDeviceMemoryStore
 
     lazy val chunkedPacker: ChunkedPacker = {
       initializedChunkedPacker = true
-      new ChunkedPacker(id, batch, bounceBuffer)
+      new ChunkedPacker(id, table, bounceBuffer)
     }
 
     override def getMeta(): TableMeta = {
@@ -214,7 +214,7 @@ class RapidsDeviceMemoryStore
     // NOTE: this size is an estimate due to alignment differences
     // the actual size for the contiguous buffer will be available once
     // `chunkedPacker` is instantiated.
-    val estSize = GpuColumnVector.getTotalDeviceMemoryUsed(batch)
+    val estSize = GpuColumnVector.getTotalDeviceMemoryUsed(table)
     
     /** The size of this buffer in bytes. */
     override def getSize: Long = estSize
@@ -224,15 +224,13 @@ class RapidsDeviceMemoryStore
     }
 
     override def getColumnarBatch(sparkTypes: Array[DataType]): ColumnarBatch = {
-      // TODO: assert that the sparkTypes match the CB types
-      GpuColumnVector.incRefCounts(batch)
       doSetSpillable(this, false)
-      batch
+      GpuColumnVector.from(table, sparkTypes)
     }
 
     /**
-     * Get the underlying memory buffer. This may be either a HostMemoryBuffer or a DeviceMemoryBuffer
-     * depending on where the buffer currently resides.
+     * Get the underlying memory buffer. This may be either a HostMemoryBuffer or a
+     * DeviceMemoryBuffer depending on where the buffer currently resides.
      * The caller must have successfully acquired the buffer beforehand.
      *
      * @see [[addReference]]
@@ -254,7 +252,7 @@ class RapidsDeviceMemoryStore
     }
 
     private def registerOnCloseEventHandler(): Unit = {
-      val cudfColumns = GpuColumnVector.extractBases(batch)
+      val cudfColumns = (0 until table.getNumberOfColumns).map(table.getColumn)
 
       /**
        * If a batch has two columns that are the same instance, we here associate two callbacks:
@@ -275,7 +273,7 @@ class RapidsDeviceMemoryStore
     }
 
     private def removeOnCloseEventHandler(): Unit = {
-      val cudfColumns = GpuColumnVector.extractBases(batch)
+      val cudfColumns = (0 until table.getNumberOfColumns).map(table.getColumn)
 
       cudfColumns.foreach { cv =>
         cv.synchronized {

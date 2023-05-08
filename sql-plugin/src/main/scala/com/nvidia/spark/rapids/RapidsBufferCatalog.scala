@@ -335,9 +335,9 @@ class RapidsBufferCatalog(
       needsSync: Boolean = true): RapidsBufferHandle = {
     val id = TempSpillBufferId()
     logInfo(s"Adding batch $id to $deviceStorage")
-    val rapidsBuffer = deviceStorage.addBatch(
+    val rapidsBuffer = deviceStorage.addTable(
       id,
-      batch,
+      GpuColumnVector.from(batch),
       initialSpillPriority,
       needsSync)
     registerNewBuffer(rapidsBuffer)

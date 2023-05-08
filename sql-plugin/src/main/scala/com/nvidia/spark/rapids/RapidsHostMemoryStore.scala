@@ -32,7 +32,7 @@ class RapidsHostMemoryStore(
     pageableMemoryPoolSize: Long)
     extends RapidsBufferStore(StorageTier.HOST) {
   private[this] val pool = HostMemoryBuffer.allocate(pageableMemoryPoolSize, false)
-  private[this] val addressAllocator = new AddreaTablesSpaceAllocator(pageableMemoryPoolSize)
+  private[this] val addressAllocator = new AddressSpaceAllocator(pageableMemoryPoolSize)
   private[this] var haveLoggedMaxExceeded = false
 
   private sealed abstract class AllocationMode(val spillPriorityOffset: Long)
@@ -74,18 +74,18 @@ class RapidsHostMemoryStore(
       val isChunked = otherBufferIterator.isChunked
       val totalCopySize = otherBufferIterator.getTotalCopySize
       val (hostBuffer, allocationMode) = allocateHostBuffer(totalCopySize, false)
-      withResource(new NvtxRange("host spill", NvtxColor.BLUE)) { _ =>
+      withResource(new NvtxRange("spill to host", NvtxColor.BLUE)) { _ =>
         var hostOffset = 0L
         val start = System.nanoTime()
         while (otherBufferIterator.hasNext) {
-          val (otherBuffer, deviceSize) = otherBufferIterator.next()
+          val otherBuffer = otherBufferIterator.next()
           withResource(otherBuffer) { _ =>
             try {
               otherBuffer match {
                 case devBuffer: DeviceMemoryBuffer =>
-                  hostBuffer.copyFromMemoryBuffer(
-                    hostOffset, devBuffer, 0, deviceSize, stream)
-                  hostOffset += deviceSize
+                  hostBuffer.copyFromMemoryBufferAsync(
+                    hostOffset, devBuffer, 0, otherBuffer.getLength, stream)
+                  hostOffset += otherBuffer.getLength
                 case _ =>
                   throw new IllegalStateException("copying from buffer without device memory")
               }
