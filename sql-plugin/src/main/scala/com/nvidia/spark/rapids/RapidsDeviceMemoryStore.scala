@@ -163,19 +163,44 @@ class RapidsDeviceMemoryStore(chunkedPackBounceBufferSize: Long = 1L*1024*1024)
     doSetSpillable(buffer, spillable)
   }
 
+  /**
+   * A per cuDF column event handler that handles calls to .close()
+   * inside of the `ColumnVector` lock.
+   * @param rapidsTable the `RapidsTable` this handler was associated with
+   * @param columnIx the index of the column that this handler belongs to
+   * @param wrapped an optional RapidsDeviceColumnEventHandler that could be
+   *                not None if this column has been added multiple times to the
+   *                spill store.
+   */
   class RapidsDeviceColumnEventHandler(
-                                        val rapidsBuffer: RapidsTable,
-                                        columnIx: Int,
-                                        var wrapped: Option[RapidsDeviceColumnEventHandler] = None)
+      val rapidsTable: RapidsTable,
+      columnIx: Int,
+      var wrapped: Option[RapidsDeviceColumnEventHandler] = None)
       extends ColumnVector.EventHandler {
     override def onClosed(refCount: Int): Unit = {
+      // We trigger callbacks iff we reach `refCount` of 1 for this column.
+      // This signals the `RapidsTable` that a column at index `columnIx` has become
+      // spillable again.
       if (refCount == 1) {
-        rapidsBuffer.onColumnSpillable(columnIx)
+        rapidsTable.onColumnSpillable(columnIx)
         wrapped.foreach(_.onClosed(refCount))
       }
     }
   }
 
+  /**
+   * A `RapidsTable` is the spill store holder of a cuDF `Table`.
+   *
+   * The table is not contiguous in GPU memory. Instead, this `RapidsBuffer` instance
+   * allows us to use the cuDF chunked_pack API to make the table contiguous as the spill
+   * is happening.
+   *
+   * This class owns the cuDF table and will close it when `close` is called.
+   *
+   * @param id the `RapidsBufferId` this table is associated with
+   * @param table the cuDF table that we are managing
+   * @param spillPriority a starting spill priority
+   */
   class RapidsTable(
       id: TempSpillBufferId,
       table: Table,
@@ -185,14 +210,15 @@ class RapidsDeviceMemoryStore(chunkedPackBounceBufferSize: Long = 1L*1024*1024)
         null,
         spillPriority) {
 
+    // we register our event callbacks as the very first action to deal with
+    // spillability
     registerOnCloseEventHandler()
 
+    // By default all columns are NOT spillable since we are not the only owners of
+    // the columns (the caller is holding onto a ColumnarBatch that will be closed
+    // after instantiation, triggering onClosed callbacks)
+    // Holds the spillability status per column.
     private val columnSpillability = Array.fill(table.getNumberOfColumns)(false)
-
-    def onColumnSpillable(columnIx: Int): Unit = {
-      columnSpillability(columnIx) = true
-      doSetSpillable(this, !columnSpillability.contains(false))
-    }
 
     /** Release the underlying resources for this buffer. */
     override protected def releaseResources(): Unit = {
@@ -227,7 +253,13 @@ class RapidsDeviceMemoryStore(chunkedPackBounceBufferSize: Long = 1L*1024*1024)
       chunkedPacker
     }
 
+    def onColumnSpillable(columnIx: Int): Unit = {
+      columnSpillability(columnIx) = true
+      doSetSpillable(this, !columnSpillability.contains(false))
+    }
+
     override def getColumnarBatch(sparkTypes: Array[DataType]): ColumnarBatch = {
+      columnSpillability.indices.foreach(c => columnSpillability(c) = false)
       doSetSpillable(this, false)
       GpuColumnVector.from(table, sparkTypes)
     }
