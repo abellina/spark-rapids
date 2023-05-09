@@ -19,15 +19,15 @@ package com.nvidia.spark.rapids
 import java.util.concurrent.ConcurrentHashMap
 import java.util.function.BiFunction
 
-import ai.rapids.cudf.{ContiguousTable, Cuda, DeviceMemoryBuffer, NvtxColor, NvtxRange, Rmm}
-import com.nvidia.spark.rapids.Arm.withResource
+import ai.rapids.cudf.{ContiguousTable, Cuda, DeviceMemoryBuffer, NvtxColor, NvtxRange, Rmm, Table}
+import com.nvidia.spark.rapids.Arm.{closeOnExcept, withResource}
 import com.nvidia.spark.rapids.RapidsBufferCatalog.getExistingRapidsBufferAndAcquire
 import com.nvidia.spark.rapids.RapidsPluginImplicits._
 import com.nvidia.spark.rapids.StorageTier.StorageTier
 import com.nvidia.spark.rapids.format.TableMeta
 import com.nvidia.spark.rapids.jni.RmmSpark
-
 import org.apache.spark.{SparkConf, SparkEnv}
+
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.rapids.{RapidsDiskBlockManager, TempSpillBufferId}
 import org.apache.spark.sql.rapids.execution.TrampolineUtil
@@ -333,11 +333,30 @@ class RapidsBufferCatalog(
       batch: ColumnarBatch,
       initialSpillPriority: Long,
       needsSync: Boolean = true): RapidsBufferHandle = {
+    closeOnExcept(GpuColumnVector.from(batch)) { table =>
+      addTable(table, initialSpillPriority, needsSync)
+    }
+  }
+
+  /**
+   * Adds a table to the device storage.
+   *
+   * This takes ownership of the table.
+   *
+   * @param table                table that will be owned by the store
+   * @param initialSpillPriority starting spill priority value
+   * @param needsSync            whether the spill framework should stream synchronize while adding
+   *                             this table (defaults to true)
+   * @return RapidsBufferHandle handle for this RapidsBuffer
+   */
+  def addTable(
+      table: Table,
+      initialSpillPriority: Long,
+      needsSync: Boolean = true): RapidsBufferHandle = {
     val id = TempSpillBufferId()
-    logInfo(s"Adding batch $id to $deviceStorage")
     val rapidsBuffer = deviceStorage.addTable(
       id,
-      GpuColumnVector.from(batch),
+      table,
       initialSpillPriority,
       needsSync)
     registerNewBuffer(rapidsBuffer)

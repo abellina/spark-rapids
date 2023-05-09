@@ -105,17 +105,18 @@ class RapidsDeviceMemoryStore
   }
 
   /**
-   * Adds a batch to the device storage. This does NOT take ownership of the
-   * batch, so it is the responsibility of the caller to close it.
+   * Adds a table to the device storage.
+   *
+   * This takes ownership of the table.
    *
    * This function is called only from the RapidsBufferCatalog, under the
    * catalog lock.
    *
-   * @param id                   the RapidsBufferId to use for this batch
-   * @param batch                batch that will be owned by the store
-   * @param initialSpillPriority starting spill priority value for the batch
+   * @param id                   the RapidsBufferId to use for this table
+   * @param table                table that will be owned by the store
+   * @param initialSpillPriority starting spill priority value
    * @param needsSync            whether the spill framework should stream synchronize while adding
-   *                             this batch (defaults to true)
+   *                             this table (defaults to true)
    * @return the RapidsBuffer instance that was added.
    */
   def addTable(
@@ -123,15 +124,13 @@ class RapidsDeviceMemoryStore
       table: Table,
       initialSpillPriority: Long,
       needsSync: Boolean): RapidsBuffer = {
-    closeOnExcept(table) { _ =>
-      val rapidsBuffer = new RapidsTable(
-        id,
-        table,
-        initialSpillPriority)
-      freeOnExcept(rapidsBuffer) { _ =>
-        addBuffer(rapidsBuffer, needsSync)
-        rapidsBuffer
-      }
+    val rapidsBuffer = new RapidsTable(
+      id,
+      table,
+      initialSpillPriority)
+    freeOnExcept(rapidsBuffer) { _ =>
+      addBuffer(rapidsBuffer, needsSync)
+      rapidsBuffer
     }
   }
 
