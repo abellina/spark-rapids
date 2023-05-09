@@ -145,7 +145,7 @@ class RapidsBufferCopyIterator(buffer: RapidsBuffer)
       "next called on exhausted iterator")
     chunkedPacker.map(_.next()).getOrElse {
       singleShotCopyHasNext = false
-      singleShotBuffer
+      singleShotBuffer.slice(0, singleShotBuffer.getLength)
     }
   }
 
