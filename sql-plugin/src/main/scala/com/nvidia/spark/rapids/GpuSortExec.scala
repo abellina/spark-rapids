@@ -329,7 +329,6 @@ case class GpuOutOfCoreSortIterator(
     val pendingObs: ArrayBuffer[OutOfCoreBatch] = ArrayBuffer.empty
     if (sortedOffset == rows) {
       // The entire thing is sorted
-<<<<<<< HEAD
       withResource(sortedTbl.contiguousSplit()) { splits =>
         assert(splits.length == 1)
         val ct = splits.head
@@ -338,12 +337,6 @@ case class GpuOutOfCoreSortIterator(
           SpillPriorities.ACTIVE_ON_DECK_PRIORITY)
         sortedCb = Some(sp)
       }
-=======
-      val batch = GpuColumnVector.from(sortedTbl, sorter.projectedBatchTypes)
-      val sp = SpillableColumnarBatch(batch, SpillPriorities.ACTIVE_ON_DECK_PRIORITY)
-      sortedSize += memUsed
-      sorted.add(sp)
->>>>>>> f6a5340cf... Revert "revert sortexec change"
     } else {
       val hasFullySortedData = sortedOffset > 0
       val splitIndexes = if (hasFullySortedData) {
@@ -374,10 +367,21 @@ case class GpuOutOfCoreSortIterator(
       withResource(sortedTbl.contiguousSplit(splitIndexes: _*)) { splits =>
         memUsed += splits.map(_.getBuffer.getLength).sum
         val stillPending = if (hasFullySortedData) {
+<<<<<<< HEAD
           val sp = SpillableColumnarBatch(splits.head, sorter.projectedBatchTypes,
             SpillPriorities.ACTIVE_ON_DECK_PRIORITY)
           sortedCb = Some(sp)
           splits.slice(1, splits.length)
+=======
+          withResource(sortedTbl.contiguousSplit()) { splits =>
+            assert(splits.length == 1)
+            val ct = splits.head
+            memUsed += ct.getBuffer.getLength
+            val sp = SpillableColumnarBatch(ct, sorter.projectedBatchTypes,
+              SpillPriorities.ACTIVE_ON_DECK_PRIORITY)
+            sortedCb = Some(sp)
+          }
+>>>>>>> d6efbfc41... rollback
         } else {
           splits
         }
