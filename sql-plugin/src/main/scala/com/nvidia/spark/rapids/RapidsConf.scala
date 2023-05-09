@@ -1856,11 +1856,17 @@ object RapidsConf {
       .booleanConf
       .createWithDefault(true)
 
-  val CHUNKED_PACK_POOL_SIZE = conf("spark.rapids.sql.chunkedPackPoolSize")
+  val CHUNKED_PACK_POOL_SIZE = conf("spark.rapids.sql.chunkedPack.poolSize")
       .doc("Amount of GPU memory (in bytes) to set aside at startup for the chunked pack " +
            "scratch space, needed during spill from GPU to host memory.")
       .bytesConf(ByteUnit.BYTE)
       .createWithDefault(10L*1024*1024)
+
+  val CHUNKED_PACK_BOUNCE_BUFFER_SIZE = conf("spark.rapids.sql.chunkedPack.bounceBufferSize")
+      .doc("Amount of GPU memory (in bytes) to set aside at startup for the chunked pack " +
+          "bounce buffer, needed during spill from GPU to host memory. ")
+      .bytesConf(ByteUnit.BYTE)
+      .createWithDefault(128L * 1024 * 1024)
 
   private def printSectionHeader(category: String): Unit =
     println(s"\n### $category")
@@ -2469,6 +2475,8 @@ class RapidsConf(conf: Map[String, String]) extends Logging {
   lazy val isAqeExchangeReuseFixupEnabled: Boolean = get(ENABLE_AQE_EXCHANGE_REUSE_FIXUP)
 
   lazy val chunkedPackPoolSize: Long = get(CHUNKED_PACK_POOL_SIZE)
+
+  lazy val chunkedPackBounceBufferSize: Long = get(CHUNKED_PACK_BOUNCE_BUFFER_SIZE)
 
   private val optimizerDefaults = Map(
     // this is not accurate because CPU projections do have a cost due to appending values

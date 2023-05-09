@@ -30,13 +30,15 @@ import ai.rapids.cudf.ColumnVector
  * Buffer storage using device memory.
  * @param catalog catalog to register this store
  */
-class RapidsDeviceMemoryStore
+class RapidsDeviceMemoryStore(conf: RapidsConf)
   extends RapidsBufferStore(StorageTier.DEVICE) {
 
   // The RapidsDeviceMemoryStore handles spillability via ref counting
   override protected def spillableOnAdd: Boolean = false
 
-  var bounceBuffer: DeviceMemoryBuffer = DeviceMemoryBuffer.allocate(128L * 1024 * 1024)
+  // bounce buffer to be used during chunked pack in GPU to host memory spill
+  private var chunkedPackBounceBuffer: DeviceMemoryBuffer =
+    DeviceMemoryBuffer.allocate(conf.chunkedPackBounceBufferSize)
 
   override protected def createBuffer(
       other: RapidsBuffer,
@@ -203,7 +205,7 @@ class RapidsDeviceMemoryStore
 
     lazy val chunkedPacker: ChunkedPacker = {
       initializedChunkedPacker = true
-      new ChunkedPacker(id, table, bounceBuffer)
+      new ChunkedPacker(id, table, chunkedPackBounceBuffer)
     }
 
     override def getMeta(): TableMeta = {
@@ -388,6 +390,7 @@ class RapidsDeviceMemoryStore
   }
   override def close(): Unit = {
     super.close()
-    bounceBuffer.close()
+    chunkedPackBounceBuffer.close()
+    chunkedPackBounceBuffer = null
   }
 }
