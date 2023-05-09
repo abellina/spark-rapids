@@ -96,7 +96,6 @@ class ChunkedPacker(
   }
 
   override def hasNext: Boolean = {
-    logWarning(s"At hasNext: closed? ${closed} ccs.hasNext? ${chunkedPack.hasNext}")
     !closed && chunkedPack.hasNext
   }
 

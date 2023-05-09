@@ -100,8 +100,8 @@ class RapidsHostMemoryStore(
         val end = System.nanoTime()
         val szMB = (totalCopySize.toDouble / 1024.0 / 1024.0).toLong
         val bw = (szMB.toDouble / ((end - start).toDouble / 1000000000.0)).toLong
-        logWarning(s"Spill to host bandwidth for chunked? $isChunked. " +
-            s"to host buffer: $allocationMode size=$szMB MB @ $bw MB/sec")
+        logDebug(s"Spill to host (mode=$allocationMode, chunked=$isChunked) " +
+          s"size=$szMB MiB bandwidth=$bw MiB/sec")
       }
       new RapidsHostMemoryBuffer(
         other.id,
