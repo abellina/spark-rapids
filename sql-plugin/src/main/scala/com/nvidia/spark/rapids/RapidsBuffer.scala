@@ -63,6 +63,21 @@ object StorageTier extends Enumeration {
   val GDS: StorageTier = Value(3, "GPUDirect Storage")
 }
 
+/**
+ * ChunkedPacker is an Iterator that uses a cudf::chunked_pack to copy a cuDF `Table`
+ * to a target buffer in chunks.
+ *
+ * Each chunk is sized at most `bounceBuffer.getLength`, and the caller should cudaMemcpy
+ * bytes from `bounceBuffer` to a target buffer after each call to `next()`.
+ *
+ * @note `ChunkedPacker` must be closed by the caller as it has GPU and host resources
+ *       associated with it.
+ *
+ * @param id The RapidsBufferId for this pack operation to be included in the metadata
+ * @param table cuDF Table to chunk_pack
+ * @param bounceBuffer GPU memory to be used for packing. The buffer should be at least 1MB
+ *                     in length.
+ */
 class ChunkedPacker(
     id: RapidsBufferId,
     table: Table,
@@ -75,7 +90,7 @@ class ChunkedPacker(
 
   private val chunkedPack =
     table.makeChunkedPack(
-      bounceBuffer.getLength(),
+      bounceBuffer.getLength,
       GpuDeviceManager.chunkedPackMemoryResource)
 
   private val tableMeta = withResource(chunkedPack.buildMetadata()) { packedMeta =>
@@ -83,15 +98,15 @@ class ChunkedPacker(
       id.tableId,
       chunkedPack.getTotalContiguousSize,
       packedMeta.getMetadataDirectBuffer,
-      table.getRowCount())
+      table.getRowCount)
   }
 
   // take out a lease on the bounce buffer
   bounceBuffer.incRefCount()
 
-  def getTotalContiguousSize: Long = chunkedPack.getTotalContiguousSize()
+  def getTotalContiguousSize: Long = chunkedPack.getTotalContiguousSize
 
-  def getMeta(): TableMeta = {
+  def getMeta: TableMeta = {
     tableMeta
   }
 
