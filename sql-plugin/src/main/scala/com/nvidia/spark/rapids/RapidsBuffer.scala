@@ -177,11 +177,20 @@ trait RapidsBuffer extends AutoCloseable {
   val id: RapidsBufferId
 
   /**
-   * The size of this buffer in bytes. If the RapidsBuffer isn't backed by a contiguous buffer,
-   * this is an estimate as it doesn't contain alignment that cuDF applies. If you need
-   * the exact contiguous size cuDF needs, use `getTotalCopySize` in `RapidsBufferCopyIterator`.
-   * */
-  def getSize: Long
+   * The size of this buffer in bytes in its _current_ store. As the buffer goes through
+   * contiguous split (either added as a contiguous table already, or spilled to host),
+   * its size changes because contiguous_split adds its own alignment padding.
+   *
+   * @note Do not use this size to allocate a target buffer to copy, always use `getPackedSize.`
+   */
+  def getMemoryUsedBytes: Long
+
+  /**
+   * The size of this buffer if it has already gone through contiguous_split.
+   *
+   * @note Use this function when allocating a target buffer for spill or shuffle purposes.
+   */
+  def getPackedSizeBytes: Long = getMemoryUsedBytes
 
   /** Descriptor for how the memory buffer is formatted */
   def getMeta: TableMeta
@@ -286,7 +295,7 @@ sealed class DegenerateRapidsBuffer(
     override val id: RapidsBufferId,
     val meta: TableMeta) extends RapidsBuffer {
 
-  override def getSize: Long = 0L
+  override def getMemoryUsedBytes: Long = 0L
 
   override val storageTier: StorageTier = StorageTier.DEVICE
 

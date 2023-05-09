@@ -66,14 +66,14 @@ abstract class RapidsBufferStore(val tier: StorageTier)
       if (old != null) {
         throw new DuplicateBufferException(s"duplicate buffer registered: ${buffer.id}")
       }
-      totalBytesStored += buffer.getSize
+      totalBytesStored += buffer.getMemoryUsedBytes
 
       // device buffers "spillability" is handled via DeviceMemoryBuffer ref counting
       // so spillableOnAdd should be false, all other buffer tiers are spillable at
       // all times.
       if (spillableOnAdd) {
         if (spillable.offer(buffer)) {
-          totalBytesSpillable += buffer.getSize
+          totalBytesSpillable += buffer.getMemoryUsedBytes
         }
       }
     }
@@ -83,9 +83,9 @@ abstract class RapidsBufferStore(val tier: StorageTier)
       spilling.remove(id)
       val obj = buffers.remove(id)
       if (obj != null) {
-        totalBytesStored -= obj.getSize
+        totalBytesStored -= obj.getMemoryUsedBytes
         if (spillable.remove(obj)) {
-          totalBytesSpillable -= obj.getSize
+          totalBytesSpillable -= obj.getMemoryUsedBytes
         }
       }
     }
@@ -119,14 +119,14 @@ abstract class RapidsBufferStore(val tier: StorageTier)
         if (!spilling.contains(buffer.id) && buffers.containsKey(buffer.id)) {
           // try to add it to the spillable collection
           if (spillable.offer(buffer)) {
-            totalBytesSpillable += buffer.getSize
+            totalBytesSpillable += buffer.getMemoryUsedBytes
             logDebug(s"Buffer ${buffer.id} is spillable. " +
               s"total=${totalBytesStored} spillable=${totalBytesSpillable}")
           } // else it was already there (unlikely)
         }
       } else {
         if (spillable.remove(buffer)) {
-          totalBytesSpillable -= buffer.getSize
+          totalBytesSpillable -= buffer.getMemoryUsedBytes
           logDebug(s"Buffer ${buffer.id} is not spillable. " +
             s"total=${totalBytesStored}, spillable=${totalBytesSpillable}")
         } // else it was already removed
@@ -138,8 +138,8 @@ abstract class RapidsBufferStore(val tier: StorageTier)
       if (buffer != null) {
         // mark the id as "spilling" (this buffer is in the middle of a spill operation)
         spilling.add(buffer.id)
-        totalBytesSpillable -= buffer.getSize
-        logDebug(s"Spilling buffer ${buffer.id}. size=${buffer.getSize} " +
+        totalBytesSpillable -= buffer.getMemoryUsedBytes
+        logDebug(s"Spilling buffer ${buffer.id}. size=${buffer.getMemoryUsedBytes} " +
           s"total=${totalBytesStored}, new spillable=${totalBytesSpillable}")
       }
       buffer
@@ -398,7 +398,7 @@ abstract class RapidsBufferStore(val tier: StorageTier)
           freeBuffer()
         }
       } else {
-        logWarning(s"Trying to free an invalid buffer => $id, size = ${getSize}, $this")
+        logWarning(s"Trying to free an invalid buffer => $id, size = ${getMemoryUsedBytes}, $this")
       }
     }
 
@@ -416,6 +416,6 @@ abstract class RapidsBufferStore(val tier: StorageTier)
       releaseResources()
     }
 
-    override def toString: String = s"$name buffer size=${getSize}"
+    override def toString: String = s"$name buffer size=${getMemoryUsedBytes}"
   }
 }

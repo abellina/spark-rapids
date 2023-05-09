@@ -85,7 +85,7 @@ class RapidsHostMemoryStoreSuite extends FunSuite with MockitoSugar {
             ArgumentMatchers.eq(handle.id), ArgumentMatchers.eq(StorageTier.DEVICE))
           withResource(catalog.acquireBuffer(handle)) { buffer =>
             assertResult(StorageTier.HOST)(buffer.storageTier)
-            assertResult(bufferSize)(buffer.getSize)
+            assertResult(bufferSize)(buffer.getMemoryUsedBytes)
             assertResult(handle.id)(buffer.id)
             assertResult(spillPriority)(buffer.getSpillPriority)
           }

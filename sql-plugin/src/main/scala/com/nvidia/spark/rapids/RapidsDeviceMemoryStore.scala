@@ -211,13 +211,13 @@ class RapidsDeviceMemoryStore
       chunkedPacker.getMeta()
     }
 
-    // NOTE: this size is an estimate due to alignment differences
-    // the actual size for the contiguous buffer will be available once
-    // `chunkedPacker` is instantiated.
-    val estSize = GpuColumnVector.getTotalDeviceMemoryUsed(table)
-    
-    /** The size of this buffer in bytes. */
-    override def getSize: Long = estSize
+    // This is the current size in batch form. It is to be used while this
+    // table hasn't migrated to another store.
+    private val unpackedSizeInBytes: Long = GpuColumnVector.getTotalDeviceMemoryUsed(table)
+
+    override def getMemoryUsedBytes: Long = unpackedSizeInBytes
+
+    override def getPackedSizeBytes: Long = getChunkedPacker.getTotalContiguousSize
 
     override def getChunkedPacker: ChunkedPacker = {
       chunkedPacker
@@ -312,7 +312,7 @@ class RapidsDeviceMemoryStore
       extends RapidsBufferBase(id, meta, spillPriority)
         with MemoryBuffer.EventHandler {
 
-    override def getSize(): Long = size
+    override def getMemoryUsedBytes(): Long = size
 
     override val storageTier: StorageTier = StorageTier.DEVICE
 

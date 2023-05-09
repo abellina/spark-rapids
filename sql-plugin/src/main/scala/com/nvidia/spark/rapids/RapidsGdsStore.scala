@@ -71,7 +71,7 @@ class RapidsGdsStore(
       extends RapidsBufferBase(id, meta, spillPriority) {
     override val storageTier: StorageTier = StorageTier.GDS
 
-    override def getSize(): Long = size
+    override def getMemoryUsedBytes(): Long = size
 
     override def getMemoryBuffer: MemoryBuffer = getDeviceMemoryBuffer
   }
@@ -130,12 +130,12 @@ class RapidsGdsStore(
       CuFile.writeDeviceBufferToFile(path, 0, deviceBuffer)
       0
     }
-    logDebug(s"Spilled to $path $fileOffset:${other.getSize} via GDS")
+    logDebug(s"Spilled to $path $fileOffset:${deviceBuffer.getLength} via GDS")
     new RapidsGdsSingleShotBuffer(
       id,
       path,
       fileOffset,
-      other.getSize,
+      deviceBuffer.getLength,
       other.getMeta,
       other.getSpillPriority)
   }
@@ -177,7 +177,7 @@ class RapidsGdsStore(
           id,
           currentFile,
           currentOffset,
-          other.getSize,
+          deviceBuffer.getLength,
           other.getMeta,
           other.getSpillPriority)
         currentOffset += alignUp(deviceBuffer.getLength)
@@ -231,7 +231,7 @@ class RapidsGdsStore(
         var isPending: Boolean = true)
         extends RapidsGdsBuffer(id, size, meta, spillPriority) {
 
-      override def getSize(): Long = size
+      override def getMemoryUsedBytes(): Long = size
 
       override def materializeMemoryBuffer: MemoryBuffer = this.synchronized {
         closeOnExcept(DeviceMemoryBuffer.allocate(size)) { buffer =>

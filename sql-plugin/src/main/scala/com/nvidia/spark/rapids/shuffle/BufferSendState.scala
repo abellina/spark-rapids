@@ -83,7 +83,7 @@ class BufferSendState(
         withResource(requestHandler.acquireShuffleBuffer(
           bufferTransferRequest.bufferId())) { table =>
           bufferMetas(ix) = table.getMeta.bufferMeta()
-          new SendBlock(bufferTransferRequest.bufferId(), table.getSize)
+          new SendBlock(bufferTransferRequest.bufferId(), table.getPackedSizeBytes)
         }
       }
 

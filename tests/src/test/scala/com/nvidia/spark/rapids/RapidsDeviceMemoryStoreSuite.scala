@@ -310,7 +310,7 @@ class RapidsDeviceMemoryStoreSuite extends FunSuite with MockitoSugar {
         b: RapidsBuffer,
         s: Cuda.Stream): RapidsBufferBase = {
       spilledBuffers += b.id
-      new MockRapidsBuffer(b.id, b.getSize, b.getMeta, b.getSpillPriority)
+      new MockRapidsBuffer(b.id, b.getPackedSizeBytes, b.getMeta, b.getSpillPriority)
     }
 
     class MockRapidsBuffer(id: RapidsBufferId, size: Long, meta: TableMeta, spillPriority: Long)
@@ -323,7 +323,7 @@ class RapidsDeviceMemoryStoreSuite extends FunSuite with MockitoSugar {
         throw new UnsupportedOperationException
 
       /** The size of this buffer in bytes. */
-      override def getSize: Long = size
+      override def getMemoryUsedBytes: Long = size
     }
   }
 }

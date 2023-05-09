@@ -148,6 +148,6 @@ class RapidsHostMemoryStore(
     }
 
     /** The size of this buffer in bytes. */
-    override def getSize: Long = size
+    override def getMemoryUsedBytes: Long = size
   }
 }

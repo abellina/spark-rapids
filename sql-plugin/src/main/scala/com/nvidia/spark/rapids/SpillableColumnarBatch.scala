@@ -97,7 +97,7 @@ class SpillableColumnarBatchImpl (
   }
 
   override lazy val sizeInBytes: Long =
-    withRapidsBuffer(_.getSize)
+    withRapidsBuffer(_.getMemoryUsedBytes)
 
   /**
    * Set a new spill priority.

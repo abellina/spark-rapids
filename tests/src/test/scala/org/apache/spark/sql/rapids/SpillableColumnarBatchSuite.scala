@@ -47,7 +47,7 @@ class SpillableColumnarBatchSuite extends FunSuite {
   }
 
   class MockBuffer(override val id: RapidsBufferId) extends RapidsBuffer {
-    override def getSize: Long = 123
+    override def getMemoryUsedBytes: Long = 123
     override def getMeta: TableMeta = null
     override val storageTier: StorageTier = StorageTier.DEVICE
     override def getMemoryBuffer: MemoryBuffer = null
