@@ -228,14 +228,11 @@ class RapidsBufferCatalogSuite extends FunSuite with MockitoSugar {
         catalog.synchronousSpill(deviceStore, 0)
         val acquiredHostBuffer = catalog.acquireBuffer(handle)
         val unspilled = withResource(acquiredHostBuffer) { _ =>
-          println(s"acquired ${acquiredHostBuffer}")
-          println(s"acquired storage ${acquiredHostBuffer.storageTier}")
           assertResult(HOST)(acquiredHostBuffer.storageTier)
           val unspilled =
             catalog.unspillBufferToDeviceStore(
               acquiredHostBuffer,
               Cuda.DEFAULT_STREAM)
-          println(s"unspilled ${unspilled}")
           withResource(unspilled) { _ =>
             assertResult(DEVICE)(unspilled.storageTier)
           }
