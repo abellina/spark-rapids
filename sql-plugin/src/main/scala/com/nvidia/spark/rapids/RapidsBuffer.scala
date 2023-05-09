@@ -76,7 +76,7 @@ class ChunkedPacker(
   private val chunkedPack =
     table.makeChunkedPack(
       bounceBuffer.getLength(),
-      GpuDeviceManager.contigSplitMemoryResource)
+      GpuDeviceManager.chunkedPackMemoryResource)
 
   private val tableMeta = withResource(chunkedPack.buildMetadata()) { packedMeta =>
     MetaUtils.buildTableMeta(
