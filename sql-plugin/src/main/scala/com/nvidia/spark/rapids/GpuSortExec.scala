@@ -367,12 +367,6 @@ case class GpuOutOfCoreSortIterator(
       withResource(sortedTbl.contiguousSplit(splitIndexes: _*)) { splits =>
         memUsed += splits.map(_.getBuffer.getLength).sum
         val stillPending = if (hasFullySortedData) {
-<<<<<<< HEAD
-          val sp = SpillableColumnarBatch(splits.head, sorter.projectedBatchTypes,
-            SpillPriorities.ACTIVE_ON_DECK_PRIORITY)
-          sortedCb = Some(sp)
-          splits.slice(1, splits.length)
-=======
           withResource(sortedTbl.contiguousSplit()) { splits =>
             assert(splits.length == 1)
             val ct = splits.head
@@ -381,7 +375,6 @@ case class GpuOutOfCoreSortIterator(
               SpillPriorities.ACTIVE_ON_DECK_PRIORITY)
             sortedCb = Some(sp)
           }
->>>>>>> d6efbfc41... rollback
         } else {
           splits
         }
