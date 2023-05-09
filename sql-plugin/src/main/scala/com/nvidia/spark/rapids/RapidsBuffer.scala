@@ -131,9 +131,20 @@ class ChunkedPacker(
   }
 }
 
+/**
+ * This iterator encapsulates a buffer's internal `MemoryBuffer` access
+ * for spill reasons. Internally, there are two known implementations:
+ * - either this is a "single shot" copy, where the entirety of the `RapidsBuffer` is
+ *   already represented as a single contiguous blob of memory, then the expectation
+ *   is that this iterator is exhausted with a single call to `next`
+ * - or, we have a `RapidsBuffer` that isn't contiguous. This iteration will then
+ *   drive a `ChunkedPacker` to pack the `RapidsBuffer`'s table as needed. The
+ *   iterator will likely need several calls to `next` to be exhausted.
+ *
+ * @param buffer `RapidsBuffer` to copy out of its tier.
+ */
 class RapidsBufferCopyIterator(buffer: RapidsBuffer)
-    extends Iterator[MemoryBuffer]
-        with AutoCloseable with Logging {
+    extends Iterator[MemoryBuffer] with AutoCloseable with Logging {
 
   private val chunkedPacker: Option[ChunkedPacker] = if (buffer.supportsChunkedPacker) {
     Some(buffer.getChunkedPacker)
@@ -143,8 +154,10 @@ class RapidsBufferCopyIterator(buffer: RapidsBuffer)
 
   def isChunked: Boolean = chunkedPacker.isDefined
 
+  // this is used for the single shot case to flag when `next` is call
+  // to satisfy the Iterator interface
   private var singleShotCopyHasNext: Boolean = false
-  private var singleShotBuffer: MemoryBuffer = null
+  private var singleShotBuffer: MemoryBuffer = _
 
   if (!isChunked) {
     singleShotCopyHasNext = true
@@ -165,7 +178,7 @@ class RapidsBufferCopyIterator(buffer: RapidsBuffer)
 
   def getTotalCopySize: Long = {
     chunkedPacker
-        .map(_.getMeta().bufferMeta().size())
+        .map(_.getTotalContiguousSize)
         .getOrElse(singleShotBuffer.getLength)
   }
 
@@ -183,10 +196,6 @@ class RapidsBufferCopyIterator(buffer: RapidsBuffer)
 
 /** Interface provided by all types of RAPIDS buffers */
 trait RapidsBuffer extends AutoCloseable {
-  def getCopyIterator: RapidsBufferCopyIterator = {
-    new RapidsBufferCopyIterator(this)
-  }
-
   /** The buffer identifier for this buffer. */
   val id: RapidsBufferId
 
@@ -205,6 +214,12 @@ trait RapidsBuffer extends AutoCloseable {
    * @note Use this function when allocating a target buffer for spill or shuffle purposes.
    */
   def getPackedSizeBytes: Long = getMemoryUsedBytes
+
+  /**
+   * At spill time, obtain an iterator used to copy this buffer to a different tier.
+   */
+  def getCopyIterator: RapidsBufferCopyIterator =
+    new RapidsBufferCopyIterator(this)
 
   /** Descriptor for how the memory buffer is formatted */
   def getMeta: TableMeta

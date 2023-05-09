@@ -212,7 +212,7 @@ class RapidsDeviceMemoryStore(chunkedPackBounceBufferSize: Long = 1L*1024*1024)
     }
 
     override def getMeta(): TableMeta = {
-      chunkedPacker.getMeta()
+      chunkedPacker.getMeta
     }
 
     // This is the current size in batch form. It is to be used while this
