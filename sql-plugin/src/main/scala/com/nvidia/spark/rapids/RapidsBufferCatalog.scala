@@ -738,7 +738,7 @@ object RapidsBufferCatalog extends Logging {
     // We are going to re-initialize so make sure all of the old things were closed...
     closeImpl()
     assert(memoryEventHandler == null)
-    deviceStorage = new RapidsDeviceMemoryStore(rapidsConf)
+    deviceStorage = new RapidsDeviceMemoryStore(rapidsConf.chunkedPackBounceBufferSize)
     diskBlockManager = new RapidsDiskBlockManager(conf)
     if (rapidsConf.isGdsSpillEnabled) {
       gdsStorage = new RapidsGdsStore(diskBlockManager, rapidsConf.gdsSpillBatchWriteBufferSize)

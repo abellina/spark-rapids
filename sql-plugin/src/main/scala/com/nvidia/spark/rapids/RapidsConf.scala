@@ -1866,6 +1866,8 @@ object RapidsConf {
       .doc("Amount of GPU memory (in bytes) to set aside at startup for the chunked pack " +
           "bounce buffer, needed during spill from GPU to host memory. ")
       .bytesConf(ByteUnit.BYTE)
+      .checkValue(v => v >= 1L*1024*1024,
+        "The chunked pack bounce buffer must be at least 1MB in size")
       .createWithDefault(128L * 1024 * 1024)
 
   private def printSectionHeader(category: String): Unit =
