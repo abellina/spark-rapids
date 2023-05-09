@@ -356,7 +356,7 @@ abstract class RapidsBufferStore(val tier: StorageTier)
             case h: HostMemoryBuffer =>
               withResource(h) { _ =>
                 closeOnExcept(DeviceMemoryBuffer.allocate(h.getLength)) { deviceBuffer =>
-                  logWarning(s"copying ${h.getLength} from host $h to device $deviceBuffer of size ${deviceBuffer.getLength}")
+                  logDebug(s"copying ${h.getLength} from host $h to device $deviceBuffer of size ${deviceBuffer.getLength}")
                   deviceBuffer.copyFromHostBuffer(h)
                   deviceBuffer
                 }
