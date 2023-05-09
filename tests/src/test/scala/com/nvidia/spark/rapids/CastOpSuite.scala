@@ -25,9 +25,9 @@ import java.util.TimeZone
 import scala.collection.JavaConverters._
 import scala.util.{Failure, Random, Success, Try}
 
-import org.apache.spark.SparkConf
 import org.scalatest.BeforeAndAfterAll
 
+import org.apache.spark.SparkConf
 import org.apache.spark.sql.{DataFrame, Row, SparkSession}
 import org.apache.spark.sql.catalyst.expressions.{Cast, Expression, NamedExpression}
 import org.apache.spark.sql.functions.col

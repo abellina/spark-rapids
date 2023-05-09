@@ -298,9 +298,7 @@ abstract class RapidsBufferStore(val tier: StorageTier)
       val tableMeta = getMeta()
       val bufferMeta = tableMeta.bufferMeta()
       if (bufferMeta == null || bufferMeta.codecBufferDescrsLength == 0) {
-        val b = MetaUtils.getBatchFromMeta(devBuffer, tableMeta, sparkTypes)
-        //GpuColumnVector.debug("recostitued", b)
-        b
+        MetaUtils.getBatchFromMeta(devBuffer, tableMeta, sparkTypes)
       } else {
         GpuCompressedColumnVector.from(devBuffer, tableMeta)
       }
@@ -356,7 +354,8 @@ abstract class RapidsBufferStore(val tier: StorageTier)
             case h: HostMemoryBuffer =>
               withResource(h) { _ =>
                 closeOnExcept(DeviceMemoryBuffer.allocate(h.getLength)) { deviceBuffer =>
-                  logDebug(s"copying ${h.getLength} from host $h to device $deviceBuffer of size ${deviceBuffer.getLength}")
+                  logDebug(s"copying ${h.getLength} from host $h to device $deviceBuffer " +
+                      s"of size ${deviceBuffer.getLength}")
                   deviceBuffer.copyFromHostBuffer(h)
                   deviceBuffer
                 }
