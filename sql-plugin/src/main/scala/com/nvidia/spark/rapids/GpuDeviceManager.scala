@@ -362,6 +362,9 @@ object GpuDeviceManager extends Logging {
     val poolSize = 10L*1024*1024
     contigSplitMemoryResource =
       new RmmPoolMemoryResource(new RmmCudaMemoryResource(), poolSize, poolSize)
+    logInfo(
+      s"Initialized pool resource for spill operations " +
+          s"of ${contigSplitMemoryResource.getMaxSize} Bytes")
 
     if (singletonMemoryInitialized != Initialized) {
       // Memory or memory related components that only need to be initialized once per executor.
