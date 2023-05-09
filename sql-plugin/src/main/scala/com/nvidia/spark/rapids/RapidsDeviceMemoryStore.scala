@@ -28,7 +28,11 @@ import ai.rapids.cudf.ColumnVector
 
 /**
  * Buffer storage using device memory.
- * @param catalog catalog to register this store
+ * @param chunkedPackBounceBufferSize this is the size of the bounce buffer to be used
+ *    during spill in chunked_pack. The parameter defaults to 1MB,
+ *    since that is the minimum size of this buffer, but
+ *    ideally it should be closer to 128MB for an A100 with the
+ *    rule-of-thumb of 1MB per SM.
  */
 class RapidsDeviceMemoryStore(chunkedPackBounceBufferSize: Long = 1L*1024*1024)
   extends RapidsBufferStore(StorageTier.DEVICE) {
