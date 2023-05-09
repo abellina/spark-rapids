@@ -219,8 +219,7 @@ class GpuDynamicPartitionDataSingleWriter(
     taskAttemptContext: TaskAttemptContext,
     committer: FileCommitProtocol)
   extends GpuFileFormatDataWriter(description, taskAttemptContext, committer) 
-  with WriterUtil
-  with Logging {
+  with WriterUtil{
 
   /** Wrapper class for status of a unique single output writer. */
   protected class WriterStatus(
@@ -505,14 +504,12 @@ class GpuDynamicPartitionDataSingleWriter(
               cachesMap.get.remove(previousPartPath)
             } else {
               // create a new one
-              logWarning(s"creating writer for ${partPath}")
               val writer = newWriter(partPath, None, 0)
               currentWriterStatus = new WriterStatus(writer)
               statsTrackers.foreach(_.newPartition())
             }
           } else {
             // create a new one
-            logWarning(s"creating writer for ${partPath}")
             val writer = newWriter(partPath, None, 0)
             currentWriterStatus = new WriterStatus(writer)
             statsTrackers.foreach(_.newPartition())
