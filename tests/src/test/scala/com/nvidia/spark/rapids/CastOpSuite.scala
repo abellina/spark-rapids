@@ -39,8 +39,6 @@ class CastOpSuite extends GpuExpressionTestSuite with BeforeAndAfterAll {
   import CastOpSuite._
 
   override def afterAll(): Unit = {
-    println("SHUTTING DOWN SESSION")
-    // shut it down
     TrampolineUtil.cleanupAnyExistingSession()
   }
 
@@ -263,10 +261,7 @@ class CastOpSuite extends GpuExpressionTestSuite with BeforeAndAfterAll {
       case (Failure(cpu), Success(_)) =>
         fail(s"Query succeeded on GPU but failed on CPU: $cpu")
     }
-
   }
-
-
 
   test("Test all supported casts with in-range values") {
     // test cast() and ansi_cast()
