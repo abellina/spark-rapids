@@ -34,13 +34,17 @@ import org.apache.spark.sql.rapids.RapidsDiskBlockManager
 import org.apache.spark.sql.types.{DataType, DecimalType, DoubleType, IntegerType, StringType}
 
 class RapidsDeviceMemoryStoreSuite extends FunSuite with MockitoSugar {
+  private def buildTable(): Table = {
+    new Table.TestBuilder()
+      .column(5, null.asInstanceOf[java.lang.Integer], 3, 1)
+      .column("five", "two", null, null)
+      .column(5.0, 2.0, 3.0, 1.0)
+      .decimal64Column(-5, RoundingMode.UNNECESSARY, 0, null, -1.4, 10.123)
+      .build()
+  }
+
   private def buildContiguousTable(): ContiguousTable = {
-    withResource(new Table.TestBuilder()
-        .column(5, null.asInstanceOf[java.lang.Integer], 3, 1)
-        .column("five", "two", null, null)
-        .column(5.0, 2.0, 3.0, 1.0)
-        .decimal64Column(-5, RoundingMode.UNNECESSARY, 0, null, -1.4, 10.123)
-        .build()) { table =>
+    withResource(buildTable()) { table =>
       table.contiguousSplit()(0)
     }
   }
@@ -62,7 +66,20 @@ class RapidsDeviceMemoryStoreSuite extends FunSuite with MockitoSugar {
     }
   }
 
-  test("a table is not spillable until the owner closes it") {
+  test("a non-contiguous table is not spillable until the owner closes it") {
+    withResource(new RapidsDeviceMemoryStore) { store =>
+      val catalog = spy(new RapidsBufferCatalog(store))
+      val spillPriority = 3
+      catalog.addTable(buildTable(), spillPriority)
+      assertResult(buffSize)(store.currentSize)
+      assertResult(1)(store.currentSpillableSize)
+      // after closing the original table, the RapidsBuffer should be spillable
+      assertResult(buffSize)(store.currentSize)
+      assertResult(buffSize)(store.currentSpillableSize)
+    }
+  }
+
+  test("a contiguous table is not spillable until the owner closes it") {
     withResource(new RapidsDeviceMemoryStore) { store =>
       val catalog = spy(new RapidsBufferCatalog(store))
       val spillPriority = 3

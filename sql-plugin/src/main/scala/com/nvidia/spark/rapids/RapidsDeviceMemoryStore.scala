@@ -18,6 +18,8 @@ package com.nvidia.spark.rapids
 
 import java.util.concurrent.ConcurrentHashMap
 
+import scala.collection.mutable
+
 import ai.rapids.cudf.{ColumnVector, Cuda, DeviceMemoryBuffer, HostMemoryBuffer, MemoryBuffer, Table}
 import com.nvidia.spark.rapids.Arm._
 import com.nvidia.spark.rapids.StorageTier.StorageTier
@@ -170,6 +172,7 @@ class RapidsDeviceMemoryStore(chunkedPackBounceBufferSize: Long = 1L*1024*1024)
    * inside of the `ColumnVector` lock.
    * @param rapidsTable the `RapidsTable` this handler was associated with
    * @param columnIx the index of the column that this handler belongs to
+   * @param repetitionCount the number of times that this column appeared in `RapidsTable`
    * @param wrapped an optional RapidsDeviceColumnEventHandler that could be
    *                not None if this column has been added multiple times to the
    *                spill store.
@@ -177,14 +180,18 @@ class RapidsDeviceMemoryStore(chunkedPackBounceBufferSize: Long = 1L*1024*1024)
   class RapidsDeviceColumnEventHandler(
       val rapidsTable: RapidsTable,
       columnIx: Int,
+      repetitionCount: Int,
       var wrapped: Option[RapidsDeviceColumnEventHandler] = None)
       extends ColumnVector.EventHandler {
 
     override def onClosed(refCount: Int): Unit = {
-      // We trigger callbacks iff we reach `refCount` of 1 for this column.
+      // We trigger callbacks iff we reach `refCount` of repetitionCount for this column.
+      // repetitionCount == 1 for a column that is not repeated in a table, so this means
+      // we are looking for a refCount of 1, but if the column is aliased several times in the
+      // table, refCount will be equal to the number of aliases (aka repetitionCount).
       // This signals the `RapidsTable` that a column at index `columnIx` has become
       // spillable again.
-      if (refCount == 1) {
+      if (refCount == repetitionCount) {
         rapidsTable.onColumnSpillable(columnIx)
         wrapped.foreach(_.onClosed(refCount))
       }
@@ -212,10 +219,6 @@ class RapidsDeviceMemoryStore(chunkedPackBounceBufferSize: Long = 1L*1024*1024)
         id,
         null,
         spillPriority) {
-
-    // we register our event callbacks as the very first action to deal with
-    // spillability
-    registerOnCloseEventHandler()
 
     // By default all columns are NOT spillable since we are not the only owners of
     // the columns (the caller is holding onto a ColumnarBatch that will be closed
@@ -302,8 +305,20 @@ class RapidsDeviceMemoryStore(chunkedPackBounceBufferSize: Long = 1L*1024*1024)
       }
     }
 
+    // we register our event callbacks as the very first action to deal with
+    // spillability
+    registerOnCloseEventHandler()
+
     private def registerOnCloseEventHandler(): Unit = {
       val cudfColumns = (0 until table.getNumberOfColumns).map(table.getColumn)
+      // cudfColumns could contain duplicates. We need to take this into account when we are
+      // deciding the floor refCount for a duplicated column
+      val repetitionPerColumn = new mutable.HashMap[ColumnVector, Int]()
+      cudfColumns.foreach { col =>
+        val repetitionCount = repetitionPerColumn.getOrElse(col, 0)
+        repetitionCount(col) = repetitionCount + 1
+      }
+
       cudfColumns.zipWithIndex.foreach { case (cv, columnIx) =>
         cv.synchronized {
           val priorEventHandler = cv.getEventHandler.asInstanceOf[RapidsDeviceColumnEventHandler]
@@ -311,8 +326,12 @@ class RapidsDeviceMemoryStore(chunkedPackBounceBufferSize: Long = 1L*1024*1024)
             new RapidsDeviceColumnEventHandler(
               this,
               columnIx,
+              repetitionPerColumn(cv),
               Option(priorEventHandler))
           cv.setEventHandler(columnEventHandler)
+          if (cv.getRefCount == repetitionPerColumn(cv)) {
+            onColumnSpillable(columnIx)
+          }
         }
       }
     }
