@@ -953,20 +953,24 @@ class GpuDynamicPartitionDataConcurrentWriter(
 
     if (!needSplitBatch(maxRecordsPerFile, status.writerStatus.recordsInFile, t.getRowCount)) {
       withResource(t) { _ =>
-        withResource(GpuColumnVector.from(t, outDataTypes)) { batch =>
-          statsTrackers.foreach(_.newBatch(status.writerStatus.outputWriter.path(), batch))
-          status.writerStatus.recordsInFile += batch.numRows()
-          status.writerStatus.outputWriter.writeAndClose(batch, statsTrackers)
-        }
+        // closed by writeAndClose
+        val batch = GpuColumnVector.from(t, outDataTypes)
+        statsTrackers.foreach(_.newBatch(status.writerStatus.outputWriter.path(), batch))
+        status.writerStatus.recordsInFile += batch.numRows()
+        status.writerStatus.outputWriter.writeAndClose(batch, statsTrackers)
       }
     } else {
-      val tabs = withResource(t) { _ =>
+      val partitionBatches = withResource(t) { _ =>
         val splitIndexes =
           getSplitIndexes(maxRecordsPerFile, status.writerStatus.recordsInFile, t.getRowCount)
-        t.contiguousSplit(splitIndexes: _*)
+        t.contiguousSplit(splitIndexes: _*).map { contigTable =>
+          withResource(contigTable) { _ =>
+            GpuColumnVector.from(contigTable.getTable, outDataTypes)
+          }
+        }
       }
       var needNewWriter = status.writerStatus.recordsInFile >= maxRecordsPerFile
-      tabs.foreach(b => {
+      partitionBatches.foreach(partBatch => {
         if (needNewWriter) {
           status.writerStatus.fileCounter += 1
           assert(status.writerStatus.fileCounter <= MAX_FILE_COUNTER,
@@ -979,12 +983,9 @@ class GpuDynamicPartitionDataConcurrentWriter(
           status.writerStatus.outputWriter = w
           status.writerStatus.recordsInFile = 0L
         }
-        val cb = withResource(b.getTable) { tab =>
-          GpuColumnVector.from(tab, outDataTypes)
-        }
-        statsTrackers.foreach(_.newBatch(status.writerStatus.outputWriter.path(), cb))
-        status.writerStatus.recordsInFile += b.getRowCount
-        status.writerStatus.outputWriter.writeAndClose(cb, statsTrackers)
+        statsTrackers.foreach(_.newBatch(status.writerStatus.outputWriter.path(), partBatch))
+        status.writerStatus.recordsInFile += partBatch.numRows()
+        status.writerStatus.outputWriter.writeAndClose(partBatch, statsTrackers)
         needNewWriter = true
       })
     }
