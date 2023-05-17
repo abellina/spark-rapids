@@ -16,6 +16,7 @@ import os
 import pytest
 import random
 import warnings
+import shutil
 
 # TODO redo _spark stuff using fixtures
 #
@@ -296,16 +297,17 @@ def spark_tmp_path(request):
     worker_id = get_worker_id(request)
     pid = os.getpid()
     hostname = os.uname()[1]
-    ret = f'{ret}/{hostname}-{worker_id}-{pid}-{random.randrange(0, 1<<31)}/'
+    ret = '/tmp/pytest/' #f'{ret}/{hostname}-{worker_id}-{pid}-{random.randrange(0, 1<<31)}/'
     # Make sure it is there and accessible
-    sc = get_spark_i_know_what_i_am_doing().sparkContext
-    config = sc._jsc.hadoopConfiguration()
-    path = sc._jvm.org.apache.hadoop.fs.Path(ret)
-    fs = sc._jvm.org.apache.hadoop.fs.FileSystem.get(config)
-    fs.mkdirs(path)
-    yield ret
+    #sc = get_spark_i_know_what_i_am_doing().sparkContext
+    #config = sc._jsc.hadoopConfiguration()
+    #path = sc._jvm.org.apache.hadoop.fs.Path(ret)
+    #fs = sc._jvm.org.apache.hadoop.fs.FileSystem.get(config)
+    #fs.mkdirs(path)
+    os.mkdir(ret)
+    yield "file:///" +ret
     if not debug:
-        fs.delete(path)
+        shutil.rmtree(ret, ignore_errors=True)
 
 class TmpTableFactory:
   def __init__(self, base_id):
