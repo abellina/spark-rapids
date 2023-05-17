@@ -381,21 +381,14 @@ class GpuParquetWriter(
     }
   }
 
-  /**
-   * Persists a columnar batch. Invoked on the executor side. When writing to dynamically
-   * partitioned tables, dynamic partition columns are not included in columns to be written.
-   * NOTE: It is the writer's responsibility to close the batch.
-   */
-  override def writeAndClose(batch: ColumnarBatch,
-                             statsTrackers: Seq[ColumnarWriteTaskStatsTracker]): Unit = {
-    val newBatch = withResource(batch) { batch =>
+  def deepTransformAndClose(batch: ColumnarBatch): ColumnarBatch = {
+    withResource(batch) { _ =>
       val transformedCols = GpuColumnVector.extractColumns(batch).safeMap { cv =>
         new GpuColumnVector(cv.dataType, deepTransformColumn(cv.getBase, cv.dataType))
-          .asInstanceOf[org.apache.spark.sql.vectorized.ColumnVector]
+            .asInstanceOf[org.apache.spark.sql.vectorized.ColumnVector]
       }
       new ColumnarBatch(transformedCols)
     }
-    super.writeAndClose(newBatch, statsTrackers)
   }
 
   override val tableWriter: TableWriter = {

@@ -18,9 +18,9 @@ package com.nvidia.spark.rapids
 
 import ai.rapids.cudf.{ContiguousTable, DeviceMemoryBuffer}
 import com.nvidia.spark.rapids.Arm.withResource
-
 import org.apache.spark.TaskContext
-import org.apache.spark.sql.types.DataType
+
+import org.apache.spark.sql.types.{DataType, DataTypes, StructType}
 import org.apache.spark.sql.vectorized.ColumnarBatch
 
 /**
@@ -64,6 +64,22 @@ class JustRowsColumnarBatch(numRows: Int)
   def getColumnarBatch(): ColumnarBatch = {
     GpuSemaphore.acquireIfNecessary(TaskContext.get())
     new ColumnarBatch(Array.empty, numRows)
+  }
+
+  override def close(): Unit = () // NOOP nothing to close
+  override val sizeInBytes: Long = 0L
+
+  override def dataTypes: Array[DataType] = Array.empty
+}
+
+class EmptySpillableColumnarBatch(types: StructType)
+    extends SpillableColumnarBatch {
+  override def numRows(): Int = 0
+  override def setSpillPriority(priority: Long): Unit = () // NOOP nothing to spill
+
+  def getColumnarBatch(): ColumnarBatch = {
+    GpuSemaphore.acquireIfNecessary(TaskContext.get())
+    GpuColumnVector.emptyBatch(types)
   }
 
   override def close(): Unit = () // NOOP nothing to close

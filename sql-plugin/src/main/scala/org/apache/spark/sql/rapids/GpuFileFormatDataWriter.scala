@@ -165,14 +165,16 @@ class GpuSingleDirectoryDataWriter(
 
   override def write(batch: ColumnarBatch): Unit = {
     val maxRecordsPerFile = description.maxRecordsPerFile
+    val dataTypes = GpuColumnVector.extractTypes(batch)
     if (!needSplitBatch(maxRecordsPerFile, recordsInFile, batch.numRows())) {
       closeOnExcept(batch) { _ =>
         statsTrackers.foreach(_.newBatch(currentWriter.path(), batch))
         recordsInFile += batch.numRows()
       }
-      currentWriter.writeAndClose(batch, statsTrackers)
+      val spillableBatch =
+        SpillableColumnarBatch(batch, SpillPriorities.ACTIVE_BATCHING_PRIORITY)
+      currentWriter.writeAndClose(spillableBatch, statsTrackers)
     } else {
-      val dataTypes = GpuColumnVector.extractTypes(batch)
       val partitionBatches = withResource(batch) { batch =>
         withResource(GpuColumnVector.from(batch)) { table =>
           val splitIndexes = getSplitIndexes(
@@ -181,7 +183,10 @@ class GpuSingleDirectoryDataWriter(
             table.getRowCount())
           table.contiguousSplit(splitIndexes: _*).map { contigTable =>
             withResource(contigTable) { _ =>
-              GpuColumnVector.from(contigTable.getTable, dataTypes)
+              SpillableColumnarBatch(
+                contigTable,
+                dataTypes,
+                SpillPriorities.ACTIVE_BATCHING_PRIORITY)
             }
           }
         }
@@ -523,9 +528,7 @@ class GpuDynamicPartitionDataSingleWriter(
           }
           // write concat table
           if (!needSplitBatch(
-            maxRecordsPerFile,
-            currentWriterStatus.recordsInFile,
-            concat.getRowCount()))
+            maxRecordsPerFile, currentWriterStatus.recordsInFile, concat.getRowCount()))
           {
             val batch  = GpuColumnVector.from(concat, outDataTypes)
             closeOnExcept(batch) { _ =>
