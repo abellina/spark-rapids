@@ -388,6 +388,16 @@ class GpuParquetWriter(
     }
   }
 
+  def deepTransformAndClose(batch: ColumnarBatch): ColumnarBatch = {
+    withResource(batch) { _ =>
+      val transformedCols = GpuColumnVector.extractColumns(batch).safeMap { cv =>
+        new GpuColumnVector(cv.dataType, deepTransformColumn(cv.getBase, cv.dataType))
+            .asInstanceOf[org.apache.spark.sql.vectorized.ColumnVector]
+      }
+      new ColumnarBatch(transformedCols)
+    }
+  }
+
   override val tableWriter: TableWriter = {
     val writeContext = new ParquetWriteSupport().init(conf)
     val builder = SchemaUtils

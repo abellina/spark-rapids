@@ -23,10 +23,11 @@ import scala.collection.mutable
 import ai.rapids.cudf.{HostBufferConsumer, HostMemoryBuffer, NvtxColor, NvtxRange, Table, TableWriter}
 import com.nvidia.spark.rapids.Arm.withResource
 import com.nvidia.spark.rapids.RapidsPluginImplicits._
+import com.nvidia.spark.rapids.RmmRapidsRetryIterator.{splitSpillableInHalfByRows, withRestoreOnRetry, withRetry}
 import org.apache.hadoop.fs.{FSDataOutputStream, Path}
 import org.apache.hadoop.mapreduce.TaskAttemptContext
-
 import org.apache.spark.TaskContext
+
 import org.apache.spark.sql.rapids.{ColumnarWriteTaskStatsTracker, GpuWriteTaskStatsTracker}
 import org.apache.spark.sql.types.StructType
 import org.apache.spark.sql.vectorized.ColumnarBatch
@@ -65,7 +66,7 @@ abstract class ColumnarOutputWriterFactory extends Serializable {
 abstract class ColumnarOutputWriter(context: TaskAttemptContext,
     dataSchema: StructType,
     rangeName: String,
-    includeRetry: Boolean) extends HostBufferConsumer {
+    val includeRetry: Boolean) extends HostBufferConsumer {
 
   val tableWriter: TableWriter
   val conf = context.getConfiguration
@@ -93,6 +94,8 @@ abstract class ColumnarOutputWriter(context: TaskAttemptContext,
       true
   }
 
+  def deepTransformAndClose(batch: ColumnarBatch): ColumnarBatch
+
   /**
    * Persists a columnar batch. Invoked on the executor side. When writing to dynamically
    * partitioned tables, dynamic partition columns are not included in columns to be written.
@@ -104,17 +107,14 @@ abstract class ColumnarOutputWriter(context: TaskAttemptContext,
    * GPU processing.
    */
   def writeAndClose(
-      batch: ColumnarBatch,
+      spillableBatch: SpillableColumnarBatch,
       statsTrackers: Seq[ColumnarWriteTaskStatsTracker]): Unit = {
     var needToCloseBatch = true
     try {
       val writeStartTimestamp = System.nanoTime
-      val writeRange = new NvtxRange("File write", NvtxColor.YELLOW)
-      val gpuTime = try {
+      val gpuTime = withResource(new NvtxRange("File write", NvtxColor.YELLOW)) { _ =>
         needToCloseBatch = false
-        writeBatch(batch)
-      } finally {
-        writeRange.close()
+        writeBatch(spillableBatch)
       }
 
       // Update statistics
@@ -127,7 +127,7 @@ abstract class ColumnarOutputWriter(context: TaskAttemptContext,
       }
     } finally {
       if (needToCloseBatch) {
-        batch.close()
+        spillableBatch.close()
       }
     }
   }
@@ -145,23 +145,22 @@ abstract class ColumnarOutputWriter(context: TaskAttemptContext,
    * during the distributed filesystem transfer to allow other tasks to start/continue
    * GPU processing.
    *
-   * @param batch Columnar batch that needs to be written
+   * @param spillableBatch SpillableColumnarBatch that needs to be written
    * @return time in ns taken to write the batch
    */
-  private[this] def writeBatch(batch: ColumnarBatch): Long = {
+  private[this] def writeBatch(spillableBatch: SpillableColumnarBatch ): Long = {
     if (includeRetry) {
-      writeBatchWithRetry(batch)
+      writeBatchWithRetry(spillableBatch)
     } else {
-      writeBatchNoRetry(batch)
+      writeBatchNoRetry(spillableBatch)
     }
   }
 
   /** Apply any necessary casts before writing batch out */
   def transform(cb: ColumnarBatch): Option[ColumnarBatch] = None
 
-  private[this] def writeBatchWithRetry(batch: ColumnarBatch): Long = {
-    val sb = SpillableColumnarBatch(batch, SpillPriorities.ACTIVE_ON_DECK_PRIORITY)
-    RmmRapidsRetryIterator.withRetry(sb, RmmRapidsRetryIterator.splitSpillableInHalfByRows) { sb =>
+  private[this] def writeBatchWithRetry(spillableBatch: SpillableColumnarBatch): Long = {
+    withRetry(spillableBatch, splitSpillableInHalfByRows) { sb =>
       val cr = new CheckpointRestore {
         override def checkpoint(): Unit = ()
         override def restore(): Unit = dropBufferedData()
@@ -172,7 +171,7 @@ abstract class ColumnarOutputWriter(context: TaskAttemptContext,
         // to the expected types before spilling but we need a SpillableTable
         // rather than a SpillableColumnBatch to be able to do that
         // See https://github.com/NVIDIA/spark-rapids/issues/8262
-        RmmRapidsRetryIterator.withRestoreOnRetry(cr) {
+        withRestoreOnRetry(cr) {
           withResource(new NvtxRange(s"GPU $rangeName write", NvtxColor.BLUE)) { _ =>
             transform(cb) match {
               case Some(transformed) =>
@@ -193,24 +192,25 @@ abstract class ColumnarOutputWriter(context: TaskAttemptContext,
     }.sum
   }
 
-  private[this] def writeBatchNoRetry(batch: ColumnarBatch): Long = {
+  private[this] def writeBatchNoRetry(spillableBatch: SpillableColumnarBatch): Long = {
     var needToCloseBatch = true
     try {
       val startTimestamp = System.nanoTime
-      withResource(new NvtxRange(s"GPU $rangeName write", NvtxColor.BLUE)) { _ =>
-        transform(batch) match {
-          case Some(transformed) =>
-            // because we created a new transformed batch, we need to make sure we close it
-            withResource(transformed) { _ =>
-              scanAndWrite(transformed)
+      withResource(spillableBatch) { _ =>
+        withResource(new NvtxRange(s"GPU $rangeName write", NvtxColor.BLUE)) { _ =>
+          withResource(spillableBatch.getColumnarBatch()) { batch =>
+            transform(batch) match {
+              case Some(transformed) =>
+                // because we created a new transformed batch, we need to make sure we close it
+                withResource(transformed) { _ =>
+                  scanAndWrite(transformed)
+                }
+              case _ =>
+                scanAndWrite(batch)
             }
-          case _ =>
-            scanAndWrite(batch)
+          }
         }
       }
-
-      // Batch is no longer needed, write process from here does not use GPU.
-      batch.close()
       needToCloseBatch = false
       GpuSemaphore.releaseIfNecessary(TaskContext.get)
       val gpuTime = System.nanoTime - startTimestamp
@@ -218,7 +218,7 @@ abstract class ColumnarOutputWriter(context: TaskAttemptContext,
       gpuTime
     } finally {
       if (needToCloseBatch) {
-        batch.close()
+        spillableBatch.close()
       }
     }
   }
@@ -238,7 +238,7 @@ abstract class ColumnarOutputWriter(context: TaskAttemptContext,
   def close(): Unit = {
     if (!anythingWritten) {
       // This prevents writing out bad files
-      writeBatch(GpuColumnVector.emptyBatch(dataSchema))
+      writeBatch(new EmptySpillableColumnarBatch(dataSchema))
     }
     tableWriter.close()
     writeBufferedData()

@@ -21,10 +21,11 @@ import java.nio.charset.StandardCharsets
 
 import scala.collection.mutable
 
+import com.nvidia.spark.rapids.SpillableColumnarBatch
 import org.apache.hadoop.conf.Configuration
 import org.apache.hadoop.fs.{FileSystem, Path}
-
 import org.apache.spark.{SparkContext, TaskContext}
+
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.execution.SQLExecution
 import org.apache.spark.sql.execution.datasources.WriteTaskStats
@@ -151,6 +152,10 @@ class BasicColumnarWriteTaskStatsTracker(
       numBytes += len
       numFiles += 1
     }
+  }
+
+  override def newBatch(filePath: String, batch: SpillableColumnarBatch): Unit = {
+    numRows += batch.numRows
   }
 
   override def newBatch(filePath: String, batch: ColumnarBatch): Unit = {
