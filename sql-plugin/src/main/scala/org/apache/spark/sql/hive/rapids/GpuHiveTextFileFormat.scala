@@ -29,6 +29,7 @@ import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.hive.rapids.GpuHiveTextFileUtils._
 import org.apache.spark.sql.hive.rapids.shims.GpuInsertIntoHiveTableMeta
 import org.apache.spark.sql.types.{DataType, StructType}
+import org.apache.spark.sql.vectorized.ColumnarBatch
 
 object GpuHiveTextFileFormat extends Logging {
 
@@ -200,5 +201,7 @@ class GpuHiveTextWriter(override val path: String,
     new ComplianceReformattingCSVWriter(writeOptions = writeOptions.build,
                                         bufferConsumer = this)
   }
+
+  override def deepTransformAndClose(batch: ColumnarBatch): ColumnarBatch = batch
 }
 
