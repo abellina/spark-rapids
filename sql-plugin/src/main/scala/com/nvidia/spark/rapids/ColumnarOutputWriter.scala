@@ -193,11 +193,9 @@ abstract class ColumnarOutputWriter(context: TaskAttemptContext,
       val startTimestamp = System.nanoTime
       withResource(spillableBatch) { _ =>
         withResource(new NvtxRange(s"GPU $rangeName write", NvtxColor.BLUE)) { _ =>
-          withResource(spillableBatch.getColumnarBatch()) { batch =>
-            val maybeTransformedCb = deepTransformAndClose(batch)
-            withResource(GpuColumnVector.from(maybeTransformedCb)) { table =>
-              scanAndWrite(transformed)
-            }
+          val maybeTransformedCb = deepTransformAndClose(spillableBatch.getColumnarBatch())
+          withResource(GpuColumnVector.from(maybeTransformedCb)) { table =>
+            scanAndWrite(transformed)
           }
         }
       }
