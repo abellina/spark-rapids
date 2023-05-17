@@ -161,8 +161,7 @@ class GpuDeltaTaskStatisticsTracker(
 
     withResource(spillableBatch.getColumnarBatch()) { batch =>
       // filter out the partition columns from the batch
-      val columnViews = GpuColumnVector.extractBases(batch).asInstanceOf[Array[ColumnView]]
-      batchStatsToRow(columnViews, gpuResultsBuffer)
+      batchStatsToRow(batch, gpuResultsBuffer)
     }
     extendedRow.update(1, gpuResultsBuffer)
     mergeStats.target(aggBuffer).apply(extendedRow)

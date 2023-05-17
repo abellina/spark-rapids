@@ -171,16 +171,11 @@ abstract class ColumnarOutputWriter(context: TaskAttemptContext,
         // to the expected types before spilling but we need a SpillableTable
         // rather than a SpillableColumnBatch to be able to do that
         // See https://github.com/NVIDIA/spark-rapids/issues/8262
+        val maybeTransformedCb = deepTransformAndClose(cb)
         withRestoreOnRetry(cr) {
           withResource(new NvtxRange(s"GPU $rangeName write", NvtxColor.BLUE)) { _ =>
-            transform(cb) match {
-              case Some(transformed) =>
-                // because we created a new transformed batch, we need to make sure we close it
-                withResource(transformed) { _ =>
-                  scanAndWrite(transformed)
-                }
-              case _ =>
-                scanAndWrite(cb)
+            withResource(GpuColumnVector.from(maybeTransformedCb)) { table =>
+              scanAndWrite(maybeTransformedCb)
             }
           }
         }
@@ -199,14 +194,9 @@ abstract class ColumnarOutputWriter(context: TaskAttemptContext,
       withResource(spillableBatch) { _ =>
         withResource(new NvtxRange(s"GPU $rangeName write", NvtxColor.BLUE)) { _ =>
           withResource(spillableBatch.getColumnarBatch()) { batch =>
-            transform(batch) match {
-              case Some(transformed) =>
-                // because we created a new transformed batch, we need to make sure we close it
-                withResource(transformed) { _ =>
-                  scanAndWrite(transformed)
-                }
-              case _ =>
-                scanAndWrite(batch)
+            val maybeTransformedCb = deepTransformAndClose(batch)
+            withResource(GpuColumnVector.from(maybeTransformedCb)) { table =>
+              scanAndWrite(transformed)
             }
           }
         }
