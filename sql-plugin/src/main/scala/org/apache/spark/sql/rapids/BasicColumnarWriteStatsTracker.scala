@@ -158,10 +158,6 @@ class BasicColumnarWriteTaskStatsTracker(
     numRows += batch.numRows
   }
 
-  override def newBatch(filePath: String, batch: ColumnarBatch): Unit = {
-    numRows += batch.numRows
-  }
-
   override def getFinalStats(taskCommitTime: Long): WriteTaskStats = {
     submittedFiles.foreach(updateFileStats)
     submittedFiles.clear()

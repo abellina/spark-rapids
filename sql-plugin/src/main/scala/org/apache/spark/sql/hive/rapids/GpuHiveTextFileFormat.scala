@@ -187,5 +187,7 @@ class GpuHiveTextWriter(override val path: String,
 
     Table.getCSVBufferWriter(writeOptions, this)
   }
+
+  override def deepTransformAndClose(batch: ColumnarBatch): ColumnarBatch = batch
 }
 
