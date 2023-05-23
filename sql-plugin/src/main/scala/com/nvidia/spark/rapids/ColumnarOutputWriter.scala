@@ -66,7 +66,7 @@ abstract class ColumnarOutputWriterFactory extends Serializable {
 abstract class ColumnarOutputWriter(context: TaskAttemptContext,
     dataSchema: StructType,
     rangeName: String,
-    val includeRetry: Boolean) extends HostBufferConsumer {
+    includeRetry: Boolean) extends HostBufferConsumer {
 
   val tableWriter: TableWriter
   val conf = context.getConfiguration
@@ -155,21 +155,19 @@ abstract class ColumnarOutputWriter(context: TaskAttemptContext,
   def transformAndClose(cb: ColumnarBatch): ColumnarBatch = cb
 
   private[this] def writeBatchWithRetry(spillableBatch: SpillableColumnarBatch): Long = {
-    withRetry(spillableBatch, splitSpillableInHalfByRows) { sb =>
+    withRetry(spillableBatch, splitSpillableInHalfByRows) { spillableBatchAttempt =>
       val cr = new CheckpointRestore {
         override def checkpoint(): Unit = ()
         override def restore(): Unit = dropBufferedData()
       }
       val startTimestamp = System.nanoTime
-      withResource(sb.getColumnarBatch()) { cb =>
-        //TODO: we should really apply the transformations to cast timestamps
-        // to the expected types before spilling but we need a SpillableTable
-        // rather than a SpillableColumnBatch to be able to do that
-        // See https://github.com/NVIDIA/spark-rapids/issues/8262
-        withRestoreOnRetry(cr) {
-          withResource(new NvtxRange(s"GPU $rangeName write", NvtxColor.BLUE)) { _ =>
-            scanAndWrite(transformAndClose(cb))
-          }
+      //TODO: we should really apply the transformations to cast timestamps
+      // to the expected types before spilling but we need a SpillableTable
+      // rather than a SpillableColumnBatch to be able to do that
+      // See https://github.com/NVIDIA/spark-rapids/issues/8262
+      withRestoreOnRetry(cr) {
+        withResource(new NvtxRange(s"GPU $rangeName write", NvtxColor.BLUE)) { _ =>
+          scanAndWrite(transformAndClose(spillableBatchAttempt.getColumnarBatch()))
         }
       }
       GpuSemaphore.releaseIfNecessary(TaskContext.get)
