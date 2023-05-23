@@ -31,7 +31,6 @@ import org.apache.spark.sql.catalyst.util.CaseInsensitiveMap
 import org.apache.spark.sql.execution.datasources.FileFormat
 import org.apache.spark.sql.execution.datasources.orc.{OrcFileFormat, OrcOptions, OrcUtils}
 import org.apache.spark.sql.types._
-import org.apache.spark.sql.vectorized.ColumnarBatch
 
 object GpuOrcFileFormat extends Logging {
   // The classname used when Spark is configured to use the Hive implementation for ORC.
@@ -187,6 +186,4 @@ class GpuOrcWriter(override val path: String,
       .withCompressionType(CompressionType.valueOf(OrcConf.COMPRESS.getString(conf)))
     Table.writeORCChunked(builder.build(), this)
   }
-
-  override def deepTransformAndClose(batch: ColumnarBatch): ColumnarBatch = batch
 }

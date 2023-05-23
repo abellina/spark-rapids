@@ -23,8 +23,7 @@ package com.nvidia.spark.rapids.delta
 
 import scala.collection.mutable
 
-import ai.rapids.cudf.ColumnView
-import com.nvidia.spark.rapids.{GpuColumnVector, SpillableColumnarBatch}
+import com.nvidia.spark.rapids.SpillableColumnarBatch
 import com.nvidia.spark.rapids.Arm.withResource
 import com.nvidia.spark.rapids.delta.shims.ShimJoinedProjection
 import org.apache.hadoop.fs.Path

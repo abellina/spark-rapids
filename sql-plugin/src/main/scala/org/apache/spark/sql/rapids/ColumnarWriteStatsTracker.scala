@@ -19,7 +19,6 @@ package org.apache.spark.sql.rapids
 import com.nvidia.spark.rapids.SpillableColumnarBatch
 
 import org.apache.spark.sql.execution.datasources.WriteTaskStats
-import org.apache.spark.sql.vectorized.ColumnarBatch
 
 /**
  * A trait for classes that are capable of collecting statistics on columnar data that's being

@@ -20,7 +20,7 @@ import ai.rapids.cudf.{ContiguousTable, DeviceMemoryBuffer}
 import com.nvidia.spark.rapids.Arm.withResource
 import org.apache.spark.TaskContext
 
-import org.apache.spark.sql.types.{DataType, DataTypes, StructType}
+import org.apache.spark.sql.types.{DataType, StructType}
 import org.apache.spark.sql.vectorized.ColumnarBatch
 
 /**

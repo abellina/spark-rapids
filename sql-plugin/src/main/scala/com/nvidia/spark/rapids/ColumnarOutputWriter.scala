@@ -94,8 +94,6 @@ abstract class ColumnarOutputWriter(context: TaskAttemptContext,
       true
   }
 
-  def deepTransformAndClose(batch: ColumnarBatch): ColumnarBatch
-
   /**
    * Persists a columnar batch. Invoked on the executor side. When writing to dynamically
    * partitioned tables, dynamic partition columns are not included in columns to be written.
@@ -156,8 +154,8 @@ abstract class ColumnarOutputWriter(context: TaskAttemptContext,
     }
   }
 
-  /** Apply any necessary casts before writing batch out */
-  def transform(cb: ColumnarBatch): Option[ColumnarBatch] = None
+  /** Apply any necessary casts before writing batch out, closing the input batch if needed. */
+  def transformAndClose(cb: ColumnarBatch): ColumnarBatch = cb
 
   private[this] def writeBatchWithRetry(spillableBatch: SpillableColumnarBatch): Long = {
     withRetry(spillableBatch, splitSpillableInHalfByRows) { sb =>
@@ -173,7 +171,7 @@ abstract class ColumnarOutputWriter(context: TaskAttemptContext,
         // See https://github.com/NVIDIA/spark-rapids/issues/8262
         withRestoreOnRetry(cr) {
           withResource(new NvtxRange(s"GPU $rangeName write", NvtxColor.BLUE)) { _ =>
-            scanAndWrite(deepTransformAndClose(cb))
+            scanAndWrite(transformAndClose(cb))
           }
         }
       }
@@ -190,7 +188,7 @@ abstract class ColumnarOutputWriter(context: TaskAttemptContext,
       val startTimestamp = System.nanoTime
       withResource(spillableBatch) { _ =>
         withResource(new NvtxRange(s"GPU $rangeName write", NvtxColor.BLUE)) { _ =>
-          scanAndWrite(deepTransformAndClose(spillableBatch.getColumnarBatch()))
+          scanAndWrite(transformAndClose(spillableBatch.getColumnarBatch()))
         }
       }
       needToCloseBatch = false
