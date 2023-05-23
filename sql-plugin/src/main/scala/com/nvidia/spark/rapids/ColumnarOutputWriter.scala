@@ -107,11 +107,12 @@ abstract class ColumnarOutputWriter(context: TaskAttemptContext,
   def writeAndClose(
       spillableBatch: SpillableColumnarBatch,
       statsTrackers: Seq[ColumnarWriteTaskStatsTracker]): Unit = {
-    var needToCloseBatch = true
-    try {
+    var spillableBatchToClose = spillableBatch
+    withResource(spillableBatchToClose) { _ =>
       val writeStartTimestamp = System.nanoTime
       val gpuTime = withResource(new NvtxRange("File write", NvtxColor.YELLOW)) { _ =>
-        needToCloseBatch = false
+        // hand the spillable batch to the next function to close
+        spillableBatchToClose = null
         writeBatch(spillableBatch)
       }
 
@@ -122,10 +123,6 @@ abstract class ColumnarOutputWriter(context: TaskAttemptContext,
           gpuTracker.addWriteTime(writeTime)
           gpuTracker.addGpuTime(gpuTime)
         case _ =>
-      }
-    } finally {
-      if (needToCloseBatch) {
-        spillableBatch.close()
       }
     }
   }
@@ -183,31 +180,25 @@ abstract class ColumnarOutputWriter(context: TaskAttemptContext,
   }
 
   private[this] def writeBatchNoRetry(spillableBatch: SpillableColumnarBatch): Long = {
-    var needToCloseBatch = true
-    try {
-      val startTimestamp = System.nanoTime
-      withResource(spillableBatch) { _ =>
-        withResource(new NvtxRange(s"GPU $rangeName write", NvtxColor.BLUE)) { _ =>
-          scanAndWrite(transformAndClose(spillableBatch.getColumnarBatch()))
-        }
-      }
-      needToCloseBatch = false
-      GpuSemaphore.releaseIfNecessary(TaskContext.get)
-      val gpuTime = System.nanoTime - startTimestamp
-      writeBufferedData()
-      gpuTime
-    } finally {
-      if (needToCloseBatch) {
-        spillableBatch.close()
+    val startTimestamp = System.nanoTime
+    withResource(spillableBatch) { _ =>
+      withResource(new NvtxRange(s"GPU $rangeName write", NvtxColor.BLUE)) { _ =>
+        scanAndWrite(transformAndClose(spillableBatch.getColumnarBatch()))
       }
     }
+    GpuSemaphore.releaseIfNecessary(TaskContext.get)
+    val gpuTime = System.nanoTime - startTimestamp
+    writeBufferedData()
+    gpuTime
   }
 
   private def scanAndWrite(batch: ColumnarBatch): Unit = {
-    withResource(GpuColumnVector.from(batch)) { table =>
-      scanTableBeforeWrite(table)
-      anythingWritten = true
-      tableWriter.write(table)
+    withResource(batch) { _ =>
+      withResource(GpuColumnVector.from(batch)) { table =>
+        scanTableBeforeWrite(table)
+        anythingWritten = true
+        tableWriter.write(table)
+      }
     }
   }
 

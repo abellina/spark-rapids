@@ -22,12 +22,12 @@ import scala.collection.mutable.{ArrayBuffer, ListBuffer}
 import ai.rapids.cudf.{ColumnVector, OrderByArg, Table}
 import com.nvidia.spark.TimingUtils
 import com.nvidia.spark.rapids._
-import com.nvidia.spark.rapids.Arm.withResource
+import com.nvidia.spark.rapids.Arm.{closeOnExcept, withResource}
 import com.nvidia.spark.rapids.RapidsPluginImplicits._
 import org.apache.hadoop.fs.Path
 import org.apache.hadoop.mapreduce.TaskAttemptContext
-
 import org.apache.spark.TaskContext
+
 import org.apache.spark.internal.Logging
 import org.apache.spark.internal.io.FileCommitProtocol
 import org.apache.spark.sql.catalyst.InternalRow
@@ -190,18 +190,22 @@ class GpuSingleDirectoryDataWriter(
         }
       }
       var needNewWriter = recordsInFile >= maxRecordsPerFile
-      partitionBatches.foreach(partBatch => {
-        if (needNewWriter) {
-          fileCounter += 1
-          assert(fileCounter <= MAX_FILE_COUNTER,
-            s"File counter $fileCounter is beyond max value $MAX_FILE_COUNTER")
-          newOutputWriter()
+      closeOnExcept(partitionBatches) { _ =>
+        partitionBatches.zipWithIndex.foreach { case (partBatch, partIx) =>
+          if (needNewWriter) {
+            fileCounter += 1
+            assert(fileCounter <= MAX_FILE_COUNTER,
+              s"File counter $fileCounter is beyond max value $MAX_FILE_COUNTER")
+            newOutputWriter()
+          }
+          statsTrackers.foreach(_.newBatch(currentWriter.path(), partBatch))
+          recordsInFile += partBatch.numRows()
+          // null out the entry so that we don't double close
+          partitionBatches(partIx) = null
+          currentWriter.writeAndClose(partBatch, statsTrackers)
+          needNewWriter = true
         }
-        statsTrackers.foreach(_.newBatch(currentWriter.path(), partBatch))
-        recordsInFile += partBatch.numRows()
-        currentWriter.writeAndClose(partBatch, statsTrackers)
-        needNewWriter = true
-      })
+      }
     }
   }
 }
