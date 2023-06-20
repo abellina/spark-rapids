@@ -229,6 +229,7 @@ trait RapidsBuffer extends AutoCloseable {
     Thread.currentThread().getStackTrace.foreach { stackTraceElement =>
       sb.append("    " + stackTraceElement + "\n")
     }
+    sb.toString()
   }
 
   /**
