@@ -74,6 +74,7 @@ trait RapidsBuffer extends AutoCloseable {
     Thread.currentThread().getStackTrace.foreach { stackTraceElement =>
       sb.append("    " + stackTraceElement + "\n")
     }
+    sb.toString()
   }
 
   /** Descriptor for how the memory buffer is formatted */
