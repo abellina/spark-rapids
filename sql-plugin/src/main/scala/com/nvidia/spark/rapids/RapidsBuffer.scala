@@ -18,6 +18,7 @@ package com.nvidia.spark.rapids
 
 import java.io.File
 
+import scala.collection.mutable
 import scala.collection.mutable.ArrayBuffer
 
 import ai.rapids.cudf.{Cuda, DeviceMemoryBuffer, MemoryBuffer, Table}
@@ -222,6 +223,13 @@ class RapidsBufferCopyIterator(buffer: RapidsBuffer)
 trait RapidsBuffer extends AutoCloseable {
   /** The buffer identifier for this buffer. */
   val id: RapidsBufferId
+
+  val creationStackTrace = {
+    val sb = new mutable.StringBuilder()
+    Thread.currentThread().getStackTrace.foreach { stackTraceElement =>
+      sb.append("    " + stackTraceElement + "\n")
+    }
+  }
 
   /**
    * The size of this buffer in bytes in its _current_ store. As the buffer goes through

@@ -139,8 +139,9 @@ abstract class RapidsBufferStore(val tier: StorageTier)
         // mark the id as "spilling" (this buffer is in the middle of a spill operation)
         spilling.add(buffer.id)
         totalBytesSpillable -= buffer.getMemoryUsedBytes
-        logDebug(s"Spilling buffer ${buffer.id}. size=${buffer.getMemoryUsedBytes} " +
-          s"total=${totalBytesStored}, new spillable=${totalBytesSpillable}")
+        logInfo(s"Spilling buffer ${buffer.id}. size=${buffer.getMemoryUsedBytes} " +
+          s"total=${totalBytesStored}, new spillable=${totalBytesSpillable}, " +
+            s"creation stack=${buffer.creationStackTrace}")
       }
       buffer
     }
