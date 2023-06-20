@@ -139,7 +139,8 @@ abstract class RapidsBufferStore(val tier: StorageTier)
         spilling.add(buffer.id)
         totalBytesSpillable -= buffer.size
         logDebug(s"Spilling buffer ${buffer.id}. size=${buffer.size} " +
-          s"total=${totalBytesStored}, new spillable=${totalBytesSpillable}")
+          s"total=${totalBytesStored}, new spillable=${totalBytesSpillable}, " +
+            s"creation stack=${buffer.creationStackTrace}")
       }
       buffer
     }

@@ -18,6 +18,9 @@ package com.nvidia.spark.rapids
 
 import java.io.File
 
+import scala.collection.mutable
+import scala.collection.mutable.ArrayBuffer
+
 import ai.rapids.cudf.{Cuda, DeviceMemoryBuffer, MemoryBuffer, Table}
 import com.nvidia.spark.rapids.StorageTier.StorageTier
 import com.nvidia.spark.rapids.format.TableMeta
@@ -65,6 +68,13 @@ trait RapidsBuffer extends AutoCloseable {
 
   /** The size of this buffer in bytes. */
   val size: Long
+
+  val creationStackTrace = {
+    val sb = new mutable.StringBuilder()
+    Thread.currentThread().getStackTrace.foreach { stackTraceElement =>
+      sb.append("    " + stackTraceElement + "\n")
+    }
+  }
 
   /** Descriptor for how the memory buffer is formatted */
   val meta: TableMeta
