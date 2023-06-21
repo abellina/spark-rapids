@@ -19,7 +19,6 @@ package com.nvidia.spark.rapids
 import java.io.File
 
 import scala.collection.mutable
-import scala.collection.mutable.ArrayBuffer
 
 import ai.rapids.cudf.{Cuda, DeviceMemoryBuffer, MemoryBuffer, Table}
 import com.nvidia.spark.rapids.StorageTier.StorageTier
