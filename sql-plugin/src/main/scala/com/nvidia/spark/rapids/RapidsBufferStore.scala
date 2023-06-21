@@ -80,29 +80,50 @@ abstract class RapidsBufferStore(val tier: StorageTier)
       }
     }
 
-    def getOldest(): RapidsBufferBase = synchronized {
+    def getOldest(): (RapidsBufferBase, RapidsBufferBase) = synchronized {
       var oldest: RapidsBufferBase = null
+      var oldestNonBroadcast: RapidsBufferBase = null
       buffers.forEach { case (_, b) =>
         if (oldest == null || b.creationTime < oldest.creationTime) {
           oldest = b
         }
+        if (b.name== null) {
+          if (oldestNonBroadcast == null || b.creationTime < oldestNonBroadcast.creationTime) {
+            oldestNonBroadcast = b
+          }
+        }
       }
-      oldest
+      (oldest, oldestNonBroadcast)
     }
 
     val exec = Executors.newSingleThreadScheduledExecutor()
     exec.scheduleAtFixedRate(new Runnable() {
       override def run(): Unit = {
-        val oldest = getOldest()
+        val (oldest, oldestNonBroadcast) = getOldest()
         if (oldest == null) {
           logInfo(s"Old buffer checker: No buffers!")
         } else {
           val ago = System.currentTimeMillis() - oldest.creationTime
+          var oldestNonBroadcastStr: String = "N/A"
+          var oldestNonBroadcastStack: String = "N/A"
+          var oldestNonBroadcastSize: Long = -1L
+          var oldestNonBroadcastAgo: Long = -1L
+          if (oldestNonBroadcast != null) {
+            oldestNonBroadcastStr = oldestNonBroadcast.id.toString
+            oldestNonBroadcastSize = oldestNonBroadcast.getMemoryUsedBytes
+            oldestNonBroadcastAgo = System.currentTimeMillis() - oldestNonBroadcast.creationTime
+            oldestNonBroadcastStack = oldestNonBroadcast.creationStackTrace
+          }
+
           logInfo(s"Old buffer checker: " +
               s"Total ${buffers.size()} buffers stored. " +
               s"The oldest buffer I know about is ${oldest.id} " +
               s"sized ${oldest.getMemoryUsedBytes} B. " +
-              s"Added ${ago} ms ago with stack ${oldest.creationStackTrace}")
+              s"Added ${ago} ms ago with stack ${oldest.creationStackTrace}." +
+              s"The oldest non-broadcast buffer I know about is ${oldestNonBroadcastStr} " +
+              s"sized ${oldestNonBroadcastSize} B. " +
+              s"Added ${oldestNonBroadcastAgo} ms ago with stack ${oldestNonBroadcastStack}.")
+
         }
       }
     }, 10, 10, TimeUnit.SECONDS)
@@ -280,6 +301,7 @@ abstract class RapidsBufferStore(val tier: StorageTier)
       override val id: RapidsBufferId,
       _meta: TableMeta,
       initialSpillPriority: Long,
+      val name: String = null,
       catalog: RapidsBufferCatalog = RapidsBufferCatalog.singleton)
       extends RapidsBuffer {
     private val MAX_UNSPILL_ATTEMPTS = 100

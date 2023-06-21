@@ -131,7 +131,8 @@ object SpillableColumnarBatch {
    * @param priority      the initial spill priority of this batch
    */
   def apply(batch: ColumnarBatch,
-      priority: Long): SpillableColumnarBatch = {
+      priority: Long,
+      name: String = null): SpillableColumnarBatch = {
     val numRows = batch.numRows()
     if (batch.numCols() <= 0) {
       // We consumed it
@@ -157,8 +158,9 @@ object SpillableColumnarBatch {
   def apply(
       ct: ContiguousTable,
       sparkTypes: Array[DataType],
-      priority: Long): SpillableColumnarBatch = {
-    val handle = RapidsBufferCatalog.addContiguousTable(ct, priority)
+      priority: Long,
+      name: String = null): SpillableColumnarBatch = {
+    val handle = RapidsBufferCatalog.addContiguousTable(ct, priority, name)
     withResource(RapidsBufferCatalog.acquireBuffer(handle)) { _ =>
       new SpillableColumnarBatchImpl(
         handle,

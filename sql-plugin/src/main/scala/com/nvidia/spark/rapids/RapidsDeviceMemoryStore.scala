@@ -93,14 +93,16 @@ class RapidsDeviceMemoryStore(chunkedPackBounceBufferSize: Long = 128L*1024*1024
       buffer: DeviceMemoryBuffer,
       tableMeta: TableMeta,
       initialSpillPriority: Long,
-      needsSync: Boolean): RapidsBuffer = {
+      needsSync: Boolean,
+      name: String = null): RapidsBuffer = {
     buffer.incRefCount()
     val rapidsBuffer = new RapidsDeviceMemoryBuffer(
       id,
       buffer.getLength,
       tableMeta,
       buffer,
-      initialSpillPriority)
+      initialSpillPriority,
+      name)
     freeOnExcept(rapidsBuffer) { _ =>
       logDebug(s"Adding receive side table for: [id=$id, size=${buffer.getLength}, " +
         s"uncompressed=${rapidsBuffer.meta.bufferMeta.uncompressedSize}, " +
@@ -403,8 +405,9 @@ class RapidsDeviceMemoryStore(chunkedPackBounceBufferSize: Long = 128L*1024*1024
       size: Long,
       meta: TableMeta,
       contigBuffer: DeviceMemoryBuffer,
-      spillPriority: Long)
-      extends RapidsBufferBase(id, meta, spillPriority)
+      spillPriority: Long,
+      name: String = null)
+      extends RapidsBufferBase(id, meta, spillPriority, name)
         with MemoryBuffer.EventHandler {
 
     override def getMemoryUsedBytes(): Long = size

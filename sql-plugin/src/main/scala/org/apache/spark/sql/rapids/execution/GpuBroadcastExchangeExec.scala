@@ -130,7 +130,8 @@ class SerializeConcatHostBuffersDeserializeBatch(
                   SpillableColumnarBatch(new ColumnarBatch(Array.empty[ColumnVector], numRows),
                     SpillPriorities.ACTIVE_BATCHING_PRIORITY)
                 } else {
-                  SpillableColumnarBatch(table, dataTypes, SpillPriorities.ACTIVE_BATCHING_PRIORITY)
+                  SpillableColumnarBatch(
+                    table, dataTypes, SpillPriorities.ACTIVE_BATCHING_PRIORITY, "broadcast")
                 }
             }
           }
