@@ -17,6 +17,7 @@
 package com.nvidia.spark.rapids
 
 import java.util.Comparator
+import java.util.concurrent.{Executors, TimeUnit}
 
 import scala.collection.mutable
 
@@ -59,6 +60,7 @@ abstract class RapidsBufferStore(val tier: StorageTier)
     private[this] var totalBytesSpillable: Long = 0L
 
     def add(buffer: RapidsBufferBase): Unit = synchronized {
+      logInfo(s"Added buffer ${buffer.id}. ${buffer.creationStackTrace}")
       val old = buffers.put(buffer.id, buffer)
       // it is unlikely that the buffer was in this collection, but removing
       // anyway. We assume the buffer is safe in this tier, and is not spilling
@@ -78,11 +80,40 @@ abstract class RapidsBufferStore(val tier: StorageTier)
       }
     }
 
+    def getOldest(): RapidsBufferBase = synchronized {
+      var oldest: RapidsBufferBase = null
+      buffers.forEach { case (_, b) =>
+        if (oldest == null || b.creationTime < oldest.creationTime) {
+          oldest = b
+        }
+      }
+      oldest
+    }
+
+    val exec = Executors.newSingleThreadScheduledExecutor()
+    exec.scheduleAtFixedRate(new Runnable() {
+      override def run(): Unit = {
+        val oldest = getOldest()
+        if (oldest == null) {
+          logInfo(s"Old buffer checker: No buffers!")
+        } else {
+          val ago = System.currentTimeMillis() - oldest.creationTime
+          logInfo(s"Old buffer checker: " +
+              s"Total ${buffers.size()} buffers stored. " +
+              s"The oldest buffer I know about is ${oldest.id} " +
+              s"sized ${oldest.getMemoryUsedBytes} B. " +
+              s"Added ${ago} ms ago with stack ${oldest.creationStackTrace}")
+        }
+      }
+    }, 10, 10, TimeUnit.SECONDS)
+
     def remove(id: RapidsBufferId): Unit = synchronized {
       // when removing a buffer we no longer need to know if it was spilling
       spilling.remove(id)
       val obj = buffers.remove(id)
       if (obj != null) {
+
+        logInfo(s"Removing buffer ${id}. ${obj.creationStackTrace}")
         totalBytesStored -= obj.getMemoryUsedBytes
         if (spillable.remove(obj)) {
           totalBytesSpillable -= obj.getMemoryUsedBytes

@@ -224,6 +224,8 @@ trait RapidsBuffer extends AutoCloseable {
   /** The buffer identifier for this buffer. */
   val id: RapidsBufferId
 
+  val creationTime = System.currentTimeMillis()
+
   val creationStackTrace = {
     val sb = new mutable.StringBuilder()
     Thread.currentThread().getStackTrace.foreach { stackTraceElement =>
