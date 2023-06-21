@@ -756,7 +756,7 @@ case class GpuGenerateExec(
         closeOnExcept(splitInput.slice(i + 1, splitInput.length)) { _ =>
           withResource(ct) { ct: ContiguousTable =>
             SpillableColumnarBatch(ct, schema,
-              SpillPriorities.ACTIVE_BATCHING_PRIORITY)
+              SpillPriorities.ACTIVE_BATCHING_PRIORITY, null)
           }
         }
       }

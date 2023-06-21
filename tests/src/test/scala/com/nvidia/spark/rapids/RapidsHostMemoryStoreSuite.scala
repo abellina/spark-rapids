@@ -73,7 +73,7 @@ class RapidsHostMemoryStoreSuite extends FunSuite with MockitoSugar {
             // store takes ownership of the table
             val handle = catalog.addContiguousTable(
               ct,
-              spillPriority)
+              spillPriority, null)
             (len, handle)
           }
 
@@ -109,7 +109,7 @@ class RapidsHostMemoryStoreSuite extends FunSuite with MockitoSugar {
             expectedBuffer.copyFromDeviceBuffer(ct.getBuffer)
             catalog.addContiguousTable(
               ct,
-              spillPriority)
+              spillPriority, null)
           }
           withResource(expectedBuffer) { _ =>
             catalog.synchronousSpill(devStore, 0)
@@ -147,7 +147,7 @@ class RapidsHostMemoryStoreSuite extends FunSuite with MockitoSugar {
             }
             catalog.addContiguousTable(
               ct,
-              spillPriority)
+              spillPriority, null)
           }
           withResource(expectedBatch) { _ =>
             catalog.synchronousSpill(devStore, 0)
@@ -195,7 +195,7 @@ class RapidsHostMemoryStoreSuite extends FunSuite with MockitoSugar {
               bigHandle = withResource(bigTable) { _ =>
                 catalog.addContiguousTable(
                   bigTable,
-                  spillPriority)
+                  spillPriority, null)
               } // close the bigTable so it can be spilled
               bigTable = null
               catalog.synchronousSpill(devStore, 0)
@@ -210,7 +210,7 @@ class RapidsHostMemoryStoreSuite extends FunSuite with MockitoSugar {
             }
             withResource(smallTable) { _ =>
               catalog.addContiguousTable(
-                smallTable, spillPriority,
+                smallTable, spillPriority, null,
                 false)
             } // close the smallTable so it can be spilled
             smallTable = null

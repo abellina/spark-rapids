@@ -131,8 +131,7 @@ object SpillableColumnarBatch {
    * @param priority      the initial spill priority of this batch
    */
   def apply(batch: ColumnarBatch,
-      priority: Long,
-      name: String = null): SpillableColumnarBatch = {
+      priority: Long): SpillableColumnarBatch = {
     val numRows = batch.numRows()
     if (batch.numCols() <= 0) {
       // We consumed it
@@ -159,7 +158,7 @@ object SpillableColumnarBatch {
       ct: ContiguousTable,
       sparkTypes: Array[DataType],
       priority: Long,
-      name: String = null): SpillableColumnarBatch = {
+      name: String): SpillableColumnarBatch = {
     val handle = RapidsBufferCatalog.addContiguousTable(ct, priority, name)
     withResource(RapidsBufferCatalog.acquireBuffer(handle)) { _ =>
       new SpillableColumnarBatchImpl(
@@ -201,7 +200,8 @@ object SpillableColumnarBatch {
         val cv = batch.column(0).asInstanceOf[GpuPackedTableColumn]
         RapidsBufferCatalog.addContiguousTable(
           cv.getContiguousTable,
-          initialSpillPriority)
+          initialSpillPriority,
+          null)
       } else if (numColumns > 0 &&
           allFromSameBuffer(batch)) {
         val cv = batch.column(0).asInstanceOf[GpuColumnVectorFromBuffer]

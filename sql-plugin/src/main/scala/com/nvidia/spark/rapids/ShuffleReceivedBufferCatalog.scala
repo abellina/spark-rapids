@@ -86,7 +86,7 @@ class ShuffleReceivedBufferCatalog(
         buffer,
         tableMeta,
         initialSpillPriority,
-        needsSync)
+        needsSync, null)
     }
   }
 

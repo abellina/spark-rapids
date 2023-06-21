@@ -90,7 +90,8 @@ class ShuffleBufferCatalog(
         bufferId,
         contigTable,
         initialSpillPriority,
-        needsSync)
+        needsSync,
+        null)
       trackCachedHandle(bufferId, handle)
       handle
     }
@@ -119,7 +120,7 @@ class ShuffleBufferCatalog(
       buffer,
       tableMeta,
       initialSpillPriority,
-      needsSync)
+      needsSync,null)
     trackCachedHandle(bufferId, handle)
     handle
   }

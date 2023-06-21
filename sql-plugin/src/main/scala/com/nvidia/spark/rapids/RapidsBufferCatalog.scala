@@ -224,7 +224,8 @@ class RapidsBufferCatalog(
           buffer,
           tableMeta,
           initialSpillPriority,
-          needsSync)
+          needsSync,
+          name)
       case Some(rapidsBuffer) =>
         withResource(rapidsBuffer) { _ =>
           makeNewHandle(rapidsBuffer.id, initialSpillPriority)
@@ -250,7 +251,7 @@ class RapidsBufferCatalog(
   def addContiguousTable(
       contigTable: ContiguousTable,
       initialSpillPriority: Long,
-      name: String = null,
+      name: String,
       needsSync: Boolean = true): RapidsBufferHandle = synchronized {
     val existing = getExistingRapidsBufferAndAcquire(contigTable.getBuffer)
     existing match {
@@ -286,7 +287,7 @@ class RapidsBufferCatalog(
       contigTable: ContiguousTable,
       initialSpillPriority: Long,
       needsSync: Boolean,
-      name: String = null): RapidsBufferHandle = synchronized {
+      name: String): RapidsBufferHandle = synchronized {
     addBuffer(
       id,
       contigTable.getBuffer,
@@ -314,7 +315,7 @@ class RapidsBufferCatalog(
       tableMeta: TableMeta,
       initialSpillPriority: Long,
       needsSync: Boolean,
-      name: String = null): RapidsBufferHandle = synchronized {
+      name: String): RapidsBufferHandle = synchronized {
     val rapidsBuffer = deviceStorage.addBuffer(
       id,
       buffer,
@@ -839,7 +840,7 @@ object RapidsBufferCatalog extends Logging {
   def addContiguousTable(
       contigTable: ContiguousTable,
       initialSpillPriority: Long,
-      name: String = null): RapidsBufferHandle = {
+      name: String): RapidsBufferHandle = {
     singleton.addContiguousTable(contigTable, initialSpillPriority, name = name)
   }
 

@@ -177,7 +177,7 @@ class GpuKeyBatchingIterator(
       val (firstSpill, secondSpill) = withResource(tables) { tables =>
         assert(tables.length == 2)
         val tmp = tables.safeMap { t =>
-          SpillableColumnarBatch(t, types, SpillPriorities.ACTIVE_ON_DECK_PRIORITY)
+          SpillableColumnarBatch(t, types, SpillPriorities.ACTIVE_ON_DECK_PRIORITY, null)
         }
         (tmp(0), tmp(1))
       }
