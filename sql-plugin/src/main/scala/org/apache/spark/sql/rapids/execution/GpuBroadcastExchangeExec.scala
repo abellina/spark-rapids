@@ -96,6 +96,13 @@ object SerializedHostTableUtils {
  * are cleaned via GC. Because Spark closes `AutoCloseable` broadcast results after spilling
  * to disk, this class does not subclass `AutoCloseable`. Instead we implement a `closeInternal`
  * method only to be triggered via GC.
+ *
+ * @param data HostConcatResult populated for a broadcast that has column, otherwise it is null.
+ *             It is transient because we want the executor to deserialize its `data` from Spark's
+ *             torrent-backed input stream.
+ * @param output used to find the schema for this broadcast batch
+ * @param numRows number of rows for this broadcast batch
+ * @param dataLen size in bytes for this broadcast batch
  */
 // scalastyle:off no.finalize
 @SerialVersionUID(100L)
@@ -110,15 +117,14 @@ class SerializeConcatHostBuffersDeserializeBatch(
   // used for memoization of deserialization to GPU on Executor
   @transient private var batchInternal: SpillableColumnarBatch = null
 
-  private def getBatchInternal: Option[SpillableColumnarBatch] = Option(batchInternal)
+  private def maybeGpuBatch: Option[SpillableColumnarBatch] = Option(batchInternal)
 
   def batch: SpillableColumnarBatch = this.synchronized {
-    getBatchInternal.getOrElse {
+    maybeGpuBatch.getOrElse {
       withResource(new NvtxRange("broadcast manifest batch", NvtxColor.PURPLE)) { _ =>
-        val spillable = withResource(data) { _ =>
+        val spillable =
           if (data == null || data.getTableHeader.getNumColumns == 0) {
-            // if data were null for some reason or the number of columns is 0, this is a
-            // "JustRows" spillable
+            // If `data` is null or there are no columns, this is a rows-only batch
             SpillableColumnarBatch(
               new ColumnarBatch(Array.empty, numRows),
               SpillPriorities.ACTIVE_BATCHING_PRIORITY)
@@ -128,16 +134,20 @@ class SerializeConcatHostBuffersDeserializeBatch(
               GpuColumnVector.emptyBatchFromTypes(dataTypes),
               SpillPriorities.ACTIVE_BATCHING_PRIORITY)
           } else {
+            // Regular GPU batch with rows/cols
             withResource(data.toContiguousTable) { ct =>
-              // Regular GPU batch with rows/cols
               SpillableColumnarBatch(
                 ct,
                 dataTypes,
                 SpillPriorities.ACTIVE_BATCHING_PRIORITY)
             }
           }
-        }
         // At this point we no longer need the host data and should not need to touch it again.
+        // Note that we don't close this using `withResources` around the creation of the
+        // `SpillableColumnarBatch`. That is because if a retry exception is thrown we want to
+        // still be able to recreate this broadcast batch, so we can't close the host data
+        // until we are at this line.
+        data.safeClose()
         data = null
         batchInternal = spillable
         spillable
@@ -153,7 +163,7 @@ class SerializeConcatHostBuffersDeserializeBatch(
    * NOTE: The caller is responsible to release these host columnar batches.
    */
   def hostBatch: ColumnarBatch = this.synchronized {
-    getBatchInternal.map { spillable =>
+    maybeGpuBatch.map { spillable =>
       withResource(spillable.getColumnarBatch()) { batch =>
         val hostColumns: Array[ColumnVector] = GpuColumnVector
           .extractColumns(batch)
@@ -189,14 +199,11 @@ class SerializeConcatHostBuffersDeserializeBatch(
    * a collected broadcast result on an stream to torrent broadcast to executors, and also
    * when the executor MemoryStore evicts a "broadcast_[id]" block to make room in host memory.
    *
-   * The driver will have `headers` and `buffers` derived from the `data` collection we were
-   * constructed with.
+   * The driver will have `data` populated on construction and the executor will deserialize
+   * the object and, as part of the deserialization, invoke `doReadObject`.
+   * This will populate `data` before any task has had a chance to call `.batch` on this class.
    *
-   * The executor will deserialize the object and, as part of the deserialization, invoke
-   * `doReadObject`. This will populate `headers` and `buffers` before any task has had a chance
-   * to call `.batch` on this class.
-   *
-   * If `batchInternal` is defined, we are in the executor, and there is no work to be done.
+   * If `batchInternal` is defined we are in the executor, and there is no work to be done.
    * This broadcast has been materialized on the GPU/RapidsBufferCatalog, and it is completely
    * managed by the plugin.
    *
@@ -205,7 +212,7 @@ class SerializeConcatHostBuffersDeserializeBatch(
    * @param out the stream to write to
    */
   def doWriteObject(out: ObjectOutputStream): Unit = this.synchronized {
-    getBatchInternal.map {
+    maybeGpuBatch.map {
       case justRows: JustRowsColumnarBatch =>
         JCudfSerialization.writeRowsToStream(out, justRows.numRows())
       case scb: SpillableColumnarBatch =>
@@ -250,9 +257,15 @@ class SerializeConcatHostBuffersDeserializeBatch(
           } else {
             Array.empty
           }
-          data = JCudfSerialization.concatToHostBuffer(Array(header), Array(buffer))
+          // for a rowsOnly broadcast, null out the `data` member.
+          val rowsOnly = dataTypes.isEmpty
           numRows = header.getNumRows
           dataLen = header.getDataLen
+          data = if (!rowsOnly) {
+            JCudfSerialization.concatToHostBuffer(Array(header), Array(buffer))
+          } else {
+            null
+          }
         }
       }
     }
@@ -270,9 +283,8 @@ class SerializeConcatHostBuffersDeserializeBatch(
    * Public for tests.
    */
   def closeInternal(): Unit = this.synchronized {
-    data.safeClose()
+    Seq(data, batchInternal).safeClose()
     data = null
-    batchInternal.safeClose()
     batchInternal = null
   }
 
