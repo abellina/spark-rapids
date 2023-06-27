@@ -18,7 +18,7 @@ package com.nvidia.spark.rapids
 
 import java.io.{ObjectInputStream, ObjectOutputStream}
 
-import ai.rapids.cudf.{JCudfSerialization, Table}
+import ai.rapids.cudf.Table
 import com.nvidia.spark.rapids.Arm.withResource
 import org.apache.commons.io.output.ByteArrayOutputStream
 import org.apache.commons.lang3.SerializationUtils
@@ -26,7 +26,7 @@ import org.scalatest.BeforeAndAfterAll
 import org.scalatest.funsuite.AnyFunSuite
 
 import org.apache.spark.sql.catalyst.expressions.AttributeReference
-import org.apache.spark.sql.rapids.execution.{SerializeBatchDeserializeHostBuffer, SerializeConcatHostBuffersDeserializeBatch}
+import org.apache.spark.sql.rapids.execution.{GpuBroadcastExchangeExecBase, SerializeBatchDeserializeHostBuffer, SerializeConcatHostBuffersDeserializeBatch}
 import org.apache.spark.sql.types.{DoubleType, FloatType, IntegerType, StringType}
 import org.apache.spark.sql.vectorized.ColumnarBatch
 
@@ -35,6 +35,10 @@ class SerializationSuite extends AnyFunSuite
 
   override def beforeAll(): Unit = {
     RapidsBufferCatalog.setDeviceStorage(new RapidsDeviceMemoryStore())
+  }
+
+  override def afterAll(): Unit = {
+    RapidsBufferCatalog.close()
   }
 
   private def buildBatch(): ColumnarBatch = {
@@ -55,7 +59,7 @@ class SerializationSuite extends AnyFunSuite
   }
 
   /**
-   * Creates a completely empty batch: no columns nor rows
+   * Creates a completely empty batch: 0 columns and 0 rows
    */
   private def buildEmptyBatchNoCols(): ColumnarBatch = {
     GpuColumnVector.emptyBatchFromTypes(Array.empty)
@@ -70,7 +74,7 @@ class SerializationSuite extends AnyFunSuite
   }
 
   /**
-   * Creates a "just rows" batch: no columns and numrows == 0
+   * Creates a "just rows" batch: no columns and numRows == 0
    * Seen with a no-condition cross join followed by a count
    */
   private def buildJustRowsBatchZeroRows(): ColumnarBatch = {
@@ -85,19 +89,24 @@ class SerializationSuite extends AnyFunSuite
     }
   }
 
-  test("SerializeConcatHostBuffersDeserializeBatch driver serialize after deserialize") {
-    val hostBatch = withResource(buildBatch()) { gpuBatch =>
-      val attrs = GpuColumnVector.extractTypes(gpuBatch).map(t => AttributeReference("", t)())
-      withResource(createDeserializedHostBuffer(gpuBatch)) { buffer =>
-        val hostConcatResult =
-          JCudfSerialization.concatToHostBuffer(Array(buffer.header), Array(buffer.buffer))
-        new SerializeConcatHostBuffersDeserializeBatch(
-          hostConcatResult,
-          attrs,
-          hostConcatResult.getTableHeader.getNumRows,
-          hostConcatResult.getTableHeader.getDataLen)
-      }
+  private def makeBroadcastBatch(
+      gpuBatch: ColumnarBatch): SerializeConcatHostBuffersDeserializeBatch = {
+    val attrs = GpuColumnVector.extractTypes(gpuBatch).map(t => AttributeReference("", t)())
+    if (gpuBatch.numCols() == 0) {
+      new SerializeConcatHostBuffersDeserializeBatch(
+        null,
+        attrs,
+        gpuBatch.numRows(),
+        0L)
+    } else {
+      val buffer = createDeserializedHostBuffer(gpuBatch)
+      GpuBroadcastExchangeExecBase.makeBroadcastBatch(
+        Array(buffer), attrs, NoopMetric, NoopMetric, NoopMetric)
     }
+  }
+
+  test("broadcast driver serialize after deserialize") {
+    val hostBatch = withResource(buildBatch()){ makeBroadcastBatch }
     try {
       // clone via serialization without manifesting the GPU batch
       val clonedObj = SerializationUtils.clone(hostBatch)
@@ -115,19 +124,8 @@ class SerializationSuite extends AnyFunSuite
     }
   }
 
-  test("SerializeConcatHostBuffersDeserializeBatch driver obtain hostBatch") {
-    val hostBatch = withResource(buildBatch()) { gpuBatch =>
-      val attrs = GpuColumnVector.extractTypes(gpuBatch).map(t => AttributeReference("", t)())
-      withResource(createDeserializedHostBuffer(gpuBatch)) { buffer =>
-        val hostConcatResult =
-          JCudfSerialization.concatToHostBuffer(Array(buffer.header), Array(buffer.buffer))
-        new SerializeConcatHostBuffersDeserializeBatch(
-          hostConcatResult,
-          attrs,
-          hostConcatResult.getTableHeader.getNumRows,
-          hostConcatResult.getTableHeader.getDataLen)
-      }
-    }
+  test("broadcast driver obtain hostBatch") {
+    val hostBatch = withResource(buildBatch()){ makeBroadcastBatch }
     try {
       withResource(hostBatch.hostBatch) { hostBatch1 =>
         val clonedObj = SerializationUtils.clone(hostBatch)
@@ -140,16 +138,10 @@ class SerializationSuite extends AnyFunSuite
     }
   }
 
-  test("SerializeConcatHostBuffersDeserializeBatch executor ser/deser empty batch") {
+  test("broadcast executor ser/deser empty batch") {
     withResource(Seq(buildEmptyBatch(), buildEmptyBatchNoCols())) { batches =>
       batches.foreach { gpuExpected =>
-        val numRows = gpuExpected.numRows()
-        val attrs = GpuColumnVector.extractTypes(gpuExpected).map(t => AttributeReference("", t)())
-        val hostBatch = withResource(createDeserializedHostBuffer(gpuExpected)) { buffer =>
-          val hostConcatResult =
-            JCudfSerialization.concatToHostBuffer(Array(buffer.header), Array(buffer.buffer))
-          new SerializeConcatHostBuffersDeserializeBatch(hostConcatResult, attrs, numRows, 0)
-        }
+        val hostBatch = makeBroadcastBatch(gpuExpected)
         try {
           withResource(hostBatch.batch.getColumnarBatch()) { gpuBatch =>
             TestUtils.compareBatches(gpuExpected, gpuBatch)
@@ -172,13 +164,10 @@ class SerializationSuite extends AnyFunSuite
     }
   }
 
-  test("SerializeConcatHostBuffersDeserializeBatch executor ser/deser just rows") {
+  test("broadcast executor ser/deser just rows") {
     withResource(Seq(buildJustRowsBatch(), buildJustRowsBatchZeroRows())) { batches =>
       batches.foreach { gpuExpected =>
-        val attrs = GpuColumnVector.extractTypes(gpuExpected).map(t => AttributeReference("", t)())
-        val hostBatch =
-          new SerializeConcatHostBuffersDeserializeBatch(
-            null, attrs, gpuExpected.numRows(), 0L)
+        val hostBatch = makeBroadcastBatch(gpuExpected)
         try {
           withResource(hostBatch.batch.getColumnarBatch()) { gpuBatch =>
             TestUtils.compareBatches(gpuExpected, gpuBatch)
@@ -201,18 +190,9 @@ class SerializationSuite extends AnyFunSuite
     }
   }
 
-  test("SerializeConcatHostBuffersDeserializeBatch executor serialize after deserialize") {
+  test("broadcast executor serialize after deserialize") {
     withResource(buildBatch()) { gpuExpected =>
-      val attrs = GpuColumnVector.extractTypes(gpuExpected).map(t => AttributeReference("", t)())
-      val hostBatch = withResource(createDeserializedHostBuffer(gpuExpected)) { buffer =>
-        val hostConcatResult =
-          JCudfSerialization.concatToHostBuffer(Array(buffer.header), Array(buffer.buffer))
-        new SerializeConcatHostBuffersDeserializeBatch(
-          hostConcatResult,
-          attrs,
-          hostConcatResult.getTableHeader.getNumRows,
-          hostConcatResult.getTableHeader.getDataLen)
-      }
+      val hostBatch = makeBroadcastBatch(gpuExpected)
       try {
         withResource(hostBatch.batch.getColumnarBatch()) { gpuBatch =>
           TestUtils.compareBatches(gpuExpected, gpuBatch)
@@ -234,18 +214,9 @@ class SerializationSuite extends AnyFunSuite
     }
   }
 
-  test("SerializeConcatHostBuffersDeserializeBatch reuse after spill") {
+  test("broadcast reuse after spill") {
     withResource(buildBatch()) { gpuExpected =>
-      val attrs = GpuColumnVector.extractTypes(gpuExpected).map(t => AttributeReference("", t)())
-      val hostBatch = withResource(createDeserializedHostBuffer(gpuExpected)) { buffer =>
-        val hostConcatResult =
-          JCudfSerialization.concatToHostBuffer(Array(buffer.header), Array(buffer.buffer))
-        new SerializeConcatHostBuffersDeserializeBatch(
-          hostConcatResult,
-          attrs,
-          hostConcatResult.getTableHeader.getNumRows,
-          hostConcatResult.getTableHeader.getDataLen)
-      }
+      val hostBatch = makeBroadcastBatch(gpuExpected)
       try {
         // spill first thing (we didn't materialize it in the executor)
         val baos = new ByteArrayOutputStream()
@@ -265,18 +236,36 @@ class SerializationSuite extends AnyFunSuite
     }
   }
 
-  test("SerializeConcatHostBuffersDeserializeBatch cloned use after spill") {
+  test("broadcast reuse materialized after spill") {
     withResource(buildBatch()) { gpuExpected =>
-      val attrs = GpuColumnVector.extractTypes(gpuExpected).map(t => AttributeReference("", t)())
-      val hostBatch = withResource(createDeserializedHostBuffer(gpuExpected)) { buffer =>
-        val hostConcatResult =
-          JCudfSerialization.concatToHostBuffer(Array(buffer.header), Array(buffer.buffer))
-        new SerializeConcatHostBuffersDeserializeBatch(
-          hostConcatResult,
-          attrs,
-          hostConcatResult.getTableHeader.getNumRows,
-          hostConcatResult.getTableHeader.getDataLen)
+      val hostBatch = makeBroadcastBatch(gpuExpected)
+      try {
+        // materialize
+        withResource(hostBatch.batch.getColumnarBatch()) { cb =>
+          TestUtils.compareBatches(gpuExpected, cb)
+        }
+
+        // spill first thing (we didn't materialize it in the executor)
+        val baos = new ByteArrayOutputStream()
+        val oos = new ObjectOutputStream(baos)
+        hostBatch.doWriteObject(oos)
+
+        val inputStream = new ObjectInputStream(baos.toInputStream)
+        hostBatch.doReadObject(inputStream)
+
+        // use it now
+        withResource(hostBatch.batch.getColumnarBatch()) { gpuBatch =>
+          TestUtils.compareBatches(gpuExpected, gpuBatch)
+        }
+      } finally {
+        hostBatch.closeInternal()
       }
+    }
+  }
+
+  test("broadcast cloned use after spill") {
+    withResource(buildBatch()) { gpuExpected =>
+      val hostBatch = makeBroadcastBatch(gpuExpected)
       try {
         // spill first thing (we didn't materialize it in the executor)
         val baos = new ByteArrayOutputStream()
@@ -290,37 +279,6 @@ class SerializationSuite extends AnyFunSuite
           TestUtils.compareBatches(gpuExpected, gpuBatch)
         }
         materialized.closeInternal()
-      } finally {
-        hostBatch.closeInternal()
-      }
-    }
-  }
-
-  test("SerializeConcatHostBuffersDeserializeBatch reuse materialized after spill") {
-    withResource(buildBatch()) { gpuExpected =>
-      val attrs = GpuColumnVector.extractTypes(gpuExpected).map(t => AttributeReference("", t)())
-      val hostBatch = withResource(createDeserializedHostBuffer(gpuExpected)) { buffer =>
-        val hostConcatResult =
-          JCudfSerialization.concatToHostBuffer(Array(buffer.header), Array(buffer.buffer))
-        new SerializeConcatHostBuffersDeserializeBatch(
-          hostConcatResult,
-          attrs,
-          hostConcatResult.getTableHeader.getNumRows,
-          hostConcatResult.getTableHeader.getDataLen)
-      }
-      try {
-        withResource(hostBatch.batch.getColumnarBatch()) { gpuBatch =>
-          TestUtils.compareBatches(gpuExpected, gpuBatch)
-        }
-        val baos = new ByteArrayOutputStream()
-        val oos = new ObjectOutputStream(baos)
-        hostBatch.doWriteObject(oos)
-
-        val inputStream = new ObjectInputStream(baos.toInputStream)
-        hostBatch.doReadObject(inputStream)
-        withResource(hostBatch.batch.getColumnarBatch()) { gpuBatch =>
-          TestUtils.compareBatches(gpuExpected, gpuBatch)
-        }
       } finally {
         hostBatch.closeInternal()
       }

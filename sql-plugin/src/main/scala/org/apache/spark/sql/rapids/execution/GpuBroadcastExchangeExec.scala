@@ -439,7 +439,7 @@ abstract class GpuBroadcastExchangeExecBase(
                   val childRdd = child.executeColumnar()
 
                   // collect batches from the executors
-                  val data = childRdd.map(cb => withResource(cb) { _ =>
+                  val data = childRdd.map(withResource(_) { cb =>
                     new SerializeBatchDeserializeHostBuffer(cb)
                   })
                   data.collect()
@@ -452,41 +452,8 @@ abstract class GpuBroadcastExchangeExecBase(
                   None
                 }
                 emptyRelation.getOrElse {
-                  // concat the deserialized host buffers into a single HostConcatResult
-                  val rowsOnly = collected.head.header.getNumColumns == 0
-                  var numRows = 0
-                  var dataLen: Long = 0
-                  val hostConcatResult = if (rowsOnly) {
-                    numRows = withResource(collected) { _ =>
-                      require(output.isEmpty,
-                        "Rows-only broadcast resolved had non-empty " +
-                            s"output ${output.mkString(",")}")
-                      collected.map(_.header.getNumRows).sum
-                    }
-                    checkRowLimit(numRows)
-                    null
-                  } else {
-                    val hostConcatResult = withResource(collected) { _ =>
-                      JCudfSerialization.concatToHostBuffer(
-                        collected.map(_.header), collected.map(_.buffer))
-                    }
-                    closeOnExcept(hostConcatResult) { _ =>
-                      checkRowLimit(hostConcatResult.getTableHeader.getNumRows)
-                      checkSizeLimit(hostConcatResult.getTableHeader.getDataLen)
-                    }
-                    // this result will be GC'ed later, so we mark it as such
-                    hostConcatResult.getHostBuffer.noWarnLeakExpected()
-                    numRows = hostConcatResult.getTableHeader.getNumRows
-                    dataLen = hostConcatResult.getTableHeader.getDataLen
-                    hostConcatResult
-                  }
-                  numOutputBatches += 1
-                  numOutputRows += numRows
-                  dataSize += dataLen
-
-                  // create the batch we will broadcast out
-                  new SerializeConcatHostBuffersDeserializeBatch(
-                    hostConcatResult, output, numRows, dataLen)
+                  GpuBroadcastExchangeExecBase.makeBroadcastBatch(
+                    collected, output, numOutputBatches, numOutputRows, dataSize)
                 }
               }
             }
@@ -521,6 +488,7 @@ abstract class GpuBroadcastExchangeExecBase(
     GpuBroadcastExchangeExecBase.executionContext.submit[Broadcast[Any]](task)
   }
 
+
   protected def createOutOfMemoryException(oe: OutOfMemoryError) = {
     new Exception(
       new OutOfMemoryError("Not enough memory to build and broadcast the table to all " +
@@ -528,27 +496,6 @@ abstract class GpuBroadcastExchangeExecBase(
         s"${SQLConf.AUTO_BROADCASTJOIN_THRESHOLD.key} to -1 or increase the spark " +
         s"driver memory by setting ${SparkLauncher.DRIVER_MEMORY} to a higher value.")
         .initCause(oe.getCause))
-  }
-
-  protected def checkRowLimit(numRows: Int) = {
-    // Spark restricts the size of broadcast relations to be less than 512000000 rows and we
-    // enforce the same limit
-    // scalastyle:off line.size.limit
-    // https://github.com/apache/spark/blob/v3.1.1/sql/core/src/main/scala/org/apache/spark/sql/execution/joins/HashedRelation.scala#L586
-    // scalastyle:on line.size.limit
-    if (numRows >= 512000000) {
-      throw new SparkException(
-        s"Cannot broadcast the table with 512 million or more rows: $numRows rows")
-    }
-  }
-
-  protected def checkSizeLimit(sizeInBytes: Long) = {
-    // Spark restricts the size of broadcast relations to be less than 8GB
-    if (sizeInBytes >= MAX_BROADCAST_TABLE_BYTES) {
-      throw new SparkException(
-        s"Cannot broadcast the table that is larger than" +
-            s"${MAX_BROADCAST_TABLE_BYTES >> 30}GB: ${sizeInBytes >> 30} GB")
-    }
   }
 
   override protected def doPrepare(): Unit = {
@@ -639,6 +586,75 @@ object GpuBroadcastExchangeExecBase {
   val executionContext = ExecutionContext.fromExecutorService(
     newDaemonCachedThreadPool("gpu-broadcast-exchange",
       SQLConf.get.getConf(StaticSQLConf.BROADCAST_EXCHANGE_MAX_THREAD_THRESHOLD)))
+
+  protected def checkRowLimit(numRows: Int) = {
+    // Spark restricts the size of broadcast relations to be less than 512000000 rows and we
+    // enforce the same limit
+    // scalastyle:off line.size.limit
+    // https://github.com/apache/spark/blob/v3.1.1/sql/core/src/main/scala/org/apache/spark/sql/execution/joins/HashedRelation.scala#L586
+    // scalastyle:on line.size.limit
+    if (numRows >= 512000000) {
+      throw new SparkException(
+        s"Cannot broadcast the table with 512 million or more rows: $numRows rows")
+    }
+  }
+
+  protected def checkSizeLimit(sizeInBytes: Long) = {
+    // Spark restricts the size of broadcast relations to be less than 8GB
+    if (sizeInBytes >= MAX_BROADCAST_TABLE_BYTES) {
+      throw new SparkException(
+        s"Cannot broadcast the table that is larger than" +
+            s"${MAX_BROADCAST_TABLE_BYTES >> 30}GB: ${sizeInBytes >> 30} GB")
+    }
+  }
+
+  /**
+   * Concatenate deserialized host buffers into a single HostConcatResult that is then
+   * passed to a `SerializeConcatHostBuffersDeserializeBatch`.
+   *
+   * This result will in turn be broadcasted from the driver to the executors.
+   */
+  def makeBroadcastBatch(
+      buffers: Array[SerializeBatchDeserializeHostBuffer],
+      output: Seq[Attribute],
+      numOutputBatches: GpuMetric,
+      numOutputRows: GpuMetric,
+      dataSize: GpuMetric): SerializeConcatHostBuffersDeserializeBatch = {
+    val rowsOnly = buffers.head.header.getNumColumns == 0
+    var numRows = 0
+    var dataLen: Long = 0
+    val hostConcatResult = if (rowsOnly) {
+      numRows = withResource(buffers) { _ =>
+        require(output.isEmpty,
+          "Rows-only broadcast resolved had non-empty " +
+              s"output ${output.mkString(",")}")
+        buffers.map(_.header.getNumRows).sum
+      }
+      checkRowLimit(numRows)
+      null
+    } else {
+      val hostConcatResult = withResource(buffers) { _ =>
+        JCudfSerialization.concatToHostBuffer(
+          buffers.map(_.header), buffers.map(_.buffer))
+      }
+      closeOnExcept(hostConcatResult) { _ =>
+        checkRowLimit(hostConcatResult.getTableHeader.getNumRows)
+        checkSizeLimit(hostConcatResult.getTableHeader.getDataLen)
+      }
+      // this result will be GC'ed later, so we mark it as such
+      hostConcatResult.getHostBuffer.noWarnLeakExpected()
+      numRows = hostConcatResult.getTableHeader.getNumRows
+      dataLen = hostConcatResult.getTableHeader.getDataLen
+      hostConcatResult
+    }
+    numOutputBatches += 1
+    numOutputRows += numRows
+    dataSize += dataLen
+
+    // create the batch we will broadcast out
+    new SerializeConcatHostBuffersDeserializeBatch(
+      hostConcatResult, output, numRows, dataLen)
+  }
 }
 
 case class GpuBroadcastExchangeExec(
