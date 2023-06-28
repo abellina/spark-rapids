@@ -19,16 +19,17 @@ package org.apache.spark.sql.rapids
 import scala.collection.mutable
 import scala.collection.mutable.{ArrayBuffer, ListBuffer}
 
-import ai.rapids.cudf.{ColumnVector, ContiguousTable, OrderByArg, Table}
+import ai.rapids.cudf.{ColumnVector, OrderByArg, Table}
 import com.nvidia.spark.TimingUtils
 import com.nvidia.spark.rapids._
 import com.nvidia.spark.rapids.Arm.{closeOnExcept, withResource}
 import com.nvidia.spark.rapids.RapidsPluginImplicits._
 import com.nvidia.spark.rapids.shims.GpuFileFormatDataWriterShim
+import com.nvidia.spark.rapids.RmmRapidsRetryIterator.withRetryNoSplit
 import org.apache.hadoop.fs.Path
 import org.apache.hadoop.mapreduce.TaskAttemptContext
-
 import org.apache.spark.TaskContext
+
 import org.apache.spark.internal.Logging
 import org.apache.spark.internal.io.FileCommitProtocol
 import org.apache.spark.sql.catalyst.InternalRow
@@ -475,7 +476,7 @@ class GpuDynamicPartitionDataSingleWriter(
     write(cb, cachesMap = None)
   }
 
-  private case class SplitAndPath(var split: ContiguousTable, path: String, partIx: Int)
+  private case class SplitAndPath(var split: SpillableColumnarBatch, path: String, partIx: Int)
       extends AutoCloseable {
     override def close(): Unit = {
       split.safeClose()
@@ -509,7 +510,9 @@ class GpuDynamicPartitionDataSingleWriter(
     }
     val splits = closeOnExcept(cbKeys) { _ =>
       withResource(outputColumnsTbl) { _ =>
-        outputColumnsTbl.contiguousSplit(partitionIndexes: _*)
+        withRetryNoSplit {
+          outputColumnsTbl.contiguousSplit(partitionIndexes: _*)
+        }
       }
     }
     logInfo(s"Produced ${splits.size} contig tables.")
@@ -527,10 +530,16 @@ class GpuDynamicPartitionDataSingleWriter(
       // NOTE: the `zip` here has the effect that will remove an extra `ContiguousTable`
       // added at the end of `splits` because we use `upperBound` to find the split points,
       // and the last split point is the number of rows.
+      val outDataTypes = description.dataColumns.map(_.dataType).toArray
       splits.zip(paths).zipWithIndex.map { case ((split, path), ix) =>
-        logInfo(s"SplitAndPath ${ix}. Splits is ${splits.count(x => x!=null)}")
+        if (ix % 1000 == 0) {
+          logInfo(s"SplitAndPath ${ix} out of ${splits.size}")
+        }
         splits(ix) = null
-        SplitAndPath(split, path, ix)
+        SplitAndPath(
+          SpillableColumnarBatch(
+            split, outDataTypes, SpillPriorities.ACTIVE_BATCHING_PRIORITY),
+          path, ix)
       }
     }
   }
@@ -557,8 +566,7 @@ class GpuDynamicPartitionDataSingleWriter(
 
     // We have an entire batch that is sorted, so we need to split it up by key
     // to get a batch per path
-    val splitsAndPaths = splitBatchByKey(cb, partDataTypes)
-    withResource(splitsAndPaths) { _ =>
+    withResource(splitBatchByKey(cb, partDataTypes)) { splitsAndPaths =>
       splitsAndPaths.foreach { case SplitAndPath(partContigTable, partPath, partIx) =>
         // If fall back from for `GpuDynamicPartitionDataConcurrentWriter`, we should get the
         // saved status
@@ -573,7 +581,9 @@ class GpuDynamicPartitionDataSingleWriter(
               savedStatus.get.tableCaches.clear()
               splitsAndPaths(partIx) = null
               withResource(partContigTable) { _ =>
-                subTables += partContigTable.getTable
+                subTables += withResource(partContigTable.getColumnarBatch()) { cb =>
+                  GpuColumnVector.from(cb)
+                }
                 Table.concatenate(subTables: _*)
               }
             }
@@ -583,7 +593,7 @@ class GpuDynamicPartitionDataSingleWriter(
           } else {
             splitsAndPaths(partIx) = null
             withResource(partContigTable) { _ =>
-              GpuColumnVector.from(partContigTable.getTable, outDataTypes)
+              partContigTable.getColumnarBatch()
             }
           }
 
