@@ -284,7 +284,7 @@ class GpuDynamicPartitionDataSingleWriter(
     description: GpuWriteJobDescription,
     taskAttemptContext: TaskAttemptContext,
     committer: FileCommitProtocol)
-  extends GpuFileFormatDataWriter(description, taskAttemptContext, committer) {
+  extends GpuFileFormatDataWriter(description, taskAttemptContext, committer) with Logging {
 
   /** Wrapper class for status of a unique single output writer. */
   protected class WriterStatus(
@@ -475,10 +475,11 @@ class GpuDynamicPartitionDataSingleWriter(
     write(cb, cachesMap = None)
   }
 
-  private case class SplitAndPath(split: ContiguousTable, path: String, partIx: Int)
+  private case class SplitAndPath(var split: ContiguousTable, path: String, partIx: Int)
       extends AutoCloseable {
     override def close(): Unit = {
-      split.close()
+      split.safeClose()
+      split = null
     }
   }
 
@@ -511,6 +512,7 @@ class GpuDynamicPartitionDataSingleWriter(
         outputColumnsTbl.contiguousSplit(partitionIndexes: _*)
       }
     }
+    logInfo(s"Produced ${splits.size} contig tables.")
     val paths = closeOnExcept(splits) { _ =>
       withResource(cbKeys) { _ =>
         // Use the existing code to convert each row into a path. It would be nice to do this
@@ -526,6 +528,7 @@ class GpuDynamicPartitionDataSingleWriter(
       // added at the end of `splits` because we use `upperBound` to find the split points,
       // and the last split point is the number of rows.
       splits.zip(paths).zipWithIndex.map { case ((split, path), ix) =>
+        logInfo(s"SplitAndPath ${ix}. Splits is ${splits.count(x => x!=null)}")
         splits(ix) = null
         SplitAndPath(split, path, ix)
       }
