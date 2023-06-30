@@ -16,7 +16,7 @@
 
 package com.nvidia.spark.rapids
 
-import ai.rapids.cudf.{ContiguousTable, DeviceMemoryBuffer}
+import ai.rapids.cudf.{ContiguousTable, DeviceMemoryBuffer, NvtxColor, NvtxRange}
 import com.nvidia.spark.rapids.Arm.withResource
 
 import org.apache.spark.TaskContext
@@ -139,11 +139,15 @@ object SpillableColumnarBatch {
       new JustRowsColumnarBatch(numRows)
     } else {
       val types = GpuColumnVector.extractTypes(batch)
-      val handle = addBatch(batch, priority)
-      new SpillableColumnarBatchImpl(
-        handle,
-        numRows,
-        types)
+      val handle = withResource(new NvtxRange("addBatch", NvtxColor.RED)) { _ =>
+        addBatch(batch, priority)
+      }
+      withResource(new NvtxRange("Instantiating spillable", NvtxColor.YELLOW)) { _ =>
+        new SpillableColumnarBatchImpl(
+          handle,
+          numRows,
+          types)
+      }
     }
   }
 
@@ -158,12 +162,18 @@ object SpillableColumnarBatch {
       ct: ContiguousTable,
       sparkTypes: Array[DataType],
       priority: Long): SpillableColumnarBatch = {
-    val handle = RapidsBufferCatalog.addContiguousTable(ct, priority)
-    withResource(RapidsBufferCatalog.acquireBuffer(handle)) { _ =>
-      new SpillableColumnarBatchImpl(
-        handle,
-        ct.getRowCount.toInt,
-        sparkTypes)
+    val handle = withResource(new NvtxRange("adding the table", NvtxColor.PURPLE)) { _ =>
+      RapidsBufferCatalog.addContiguousTable(ct, priority)
+    }
+    withResource(new NvtxRange("acq + making the scb impl", NvtxColor.DARK_GREEN)) { _ =>
+      withResource(RapidsBufferCatalog.acquireBuffer(handle)) { _ =>
+        withResource(new NvtxRange("making the scb impl", NvtxColor.GREEN)) { _ =>
+        new SpillableColumnarBatchImpl(
+          handle,
+          ct.getRowCount.toInt,
+          sparkTypes)
+        }
+      }
     }
   }
 
