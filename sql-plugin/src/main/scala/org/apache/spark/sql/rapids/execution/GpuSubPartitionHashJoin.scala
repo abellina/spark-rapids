@@ -28,7 +28,7 @@ import org.apache.spark.sql.catalyst.plans.InnerLike
 import org.apache.spark.sql.types.StructType
 import org.apache.spark.sql.vectorized.ColumnarBatch
 
-object GpuSubPartitionHashJoin {
+object GpuSubPartitionHashJoin extends Logging {
   /**
    * Concatenate the input batches into a single one.
    * The caller is responsible for closing the returned batch.
@@ -105,7 +105,7 @@ class GpuBatchSubPartitioner(
     inputIter: Iterator[ColumnarBatch],
     inputBoundKeys: Seq[GpuExpression],
     numPartitions: Int,
-    hashSeed: Int) extends AutoCloseable {
+    hashSeed: Int) extends AutoCloseable with Logging {
 
   private var isNotInited = true
   private var numCurBatches = 0
@@ -164,6 +164,7 @@ class GpuBatchSubPartitioner(
 
   private def initPartitions(): Unit = {
     if (isNotInited) {
+      logInfo("at initPartitions!")
       partitionBatches()
       isNotInited = false
     }
@@ -177,6 +178,9 @@ class GpuBatchSubPartitioner(
         // 1) Hash partition on the batch
         val partedTable = GpuHashPartitioningBase.hashPartitionAndClose(
           gpuBatch, inputBoundKeys, realNumPartitions, "Sub-Hash Calculate", hashSeed)
+        logInfo(s"Partitioning " +
+            s"batch ${partedTable.getTable.getDeviceMemorySize} bytes, " +
+            s"${partedTable.getPartitions} parts.")
         // 2) Split into smaller tables according to partitions
         val subTables = withResource(partedTable) { _ =>
           partedTable.getTable.contiguousSplit(partedTable.getPartitions.tail: _*)
@@ -333,7 +337,7 @@ class GpuSubPartitionPairIterator(
     numPartitions: Int,
     targetBatchSize: Long,
     skipEmptyPairs: Boolean = true)
-  extends Iterator[PartitionPair] with AutoCloseable {
+  extends Iterator[PartitionPair] with AutoCloseable with Logging {
 
   private[this] var hashSeed = 100
 
@@ -400,6 +404,7 @@ class GpuSubPartitionPairIterator(
     var pair: Option[PartitionPair] = None
     var continue = true
     while(continue) {
+      logInfo("At tryPullNextPair")
       if (hasNextBatch()) {
         val (partIds, buildBatches) = buildSubIterator.next()
         val (buildPartsSize, streamBatches) = closeOnExcept(buildBatches) { _ =>
@@ -433,12 +438,14 @@ class GpuSubPartitionPairIterator(
         continue = false
       }
     }
+    logInfo(s"GOT pair ${pair.isDefined}")
     pair
   }
 
   private[this] def repartition(): Unit = {
     hashSeed += 10
     val realNumPartitions = computeNumPartitions(bigBuildBatches)
+    logInfo(s"REPARTITIONING to ${realNumPartitions}")
     // build partitioner
     val buildIt = GpuSubPartitionHashJoin.safeIteratorFromSeq(bigBuildBatches)
       .map(_.getColumnarBatch())
