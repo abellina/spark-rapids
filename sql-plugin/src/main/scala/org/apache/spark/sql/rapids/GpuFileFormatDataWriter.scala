@@ -19,7 +19,7 @@ package org.apache.spark.sql.rapids
 import scala.collection.mutable
 import scala.collection.mutable.{ArrayBuffer, ListBuffer}
 
-import ai.rapids.cudf.{ColumnVector, OrderByArg, Table}
+import ai.rapids.cudf.{ColumnVector, NvtxColor, NvtxRange, OrderByArg, Table}
 import com.nvidia.spark.TimingUtils
 import com.nvidia.spark.rapids._
 import com.nvidia.spark.rapids.Arm.{closeOnExcept, withResource}
@@ -536,10 +536,12 @@ class GpuDynamicPartitionDataSingleWriter(
           logInfo(s"SplitAndPath ${ix} out of ${splits.size}")
         }
         splits(ix) = null
-        SplitAndPath(
-          SpillableColumnarBatch(
-            split, outDataTypes, SpillPriorities.ACTIVE_BATCHING_PRIORITY),
-          path, ix)
+        withResource(new NvtxRange("creating SplitandPath", NvtxColor.BLUE)) { _ =>
+          SplitAndPath(
+            SpillableColumnarBatch(
+              split, outDataTypes, SpillPriorities.ACTIVE_BATCHING_PRIORITY),
+            path, ix)
+        }
       }
     }
   }
