@@ -160,6 +160,7 @@ abstract class ColumnarOutputWriter(context: TaskAttemptContext,
   def transform(cb: ColumnarBatch): Option[ColumnarBatch] = None
 
   private[this] def writeBatchWithRetry(batch: ColumnarBatch): Long = {
+    // TODO: if the batch was spillable in the past make sure we don't re-add here....
     val sb = SpillableColumnarBatch(batch, SpillPriorities.ACTIVE_ON_DECK_PRIORITY)
     RmmRapidsRetryIterator.withRetry(sb, RmmRapidsRetryIterator.splitSpillableInHalfByRows) { sb =>
       val cr = new CheckpointRestore {

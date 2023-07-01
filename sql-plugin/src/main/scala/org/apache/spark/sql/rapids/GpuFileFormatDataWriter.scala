@@ -1057,6 +1057,7 @@ class GpuDynamicPartitionDataConcurrentWriter(
               statsTrackers.foreach(_.newBatch(status.writerStatus.outputWriter.path(), batch))
               status.writerStatus.recordsInFile += batch.numRows()
             }
+            // TODO: keep it spillable!!!
             status.writerStatus.outputWriter.writeAndClose(batch, statsTrackers)
           }
           needNewWriter = true
