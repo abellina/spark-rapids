@@ -175,14 +175,15 @@ abstract class ColumnarOutputWriter(context: TaskAttemptContext,
   /** Apply any necessary casts before writing batch out */
   def transform(cb: ColumnarBatch): Option[ColumnarBatch] = None
 
+  private val checkpointRestore = new CheckpointRestore {
+    override def checkpoint(): Unit = ()
+    override def restore(): Unit = dropBufferedData()
+  }
+
   private[this] def writeBatch(batch: ColumnarBatch): Long = {
     withResource(batch) { _ =>
       val startTimestamp = System.nanoTime
-      val cr = new CheckpointRestore {
-        override def checkpoint(): Unit = ()
-        override def restore(): Unit = dropBufferedData()
-      }
-      withRestoreOnRetry(cr) {
+      withRestoreOnRetry(checkpointRestore) {
         withResource(new NvtxRange(s"GPU $rangeName write", NvtxColor.BLUE)) { _ =>
           transform(batch) match {
             case Some(transformed) =>
@@ -217,9 +218,7 @@ abstract class ColumnarOutputWriter(context: TaskAttemptContext,
   def close(): Unit = {
     if (!anythingWritten) {
       // This prevents writing out bad files
-      writeBatch(SpillableColumnarBatch(
-        GpuColumnVector.emptyBatch(dataSchema),
-        SpillPriorities.ACTIVE_ON_DECK_PRIORITY))
+      writeBatch(GpuColumnVector.emptyBatch(dataSchema))
     }
     tableWriter.close()
     writeBufferedData()
