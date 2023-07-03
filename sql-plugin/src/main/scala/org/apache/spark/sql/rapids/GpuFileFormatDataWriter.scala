@@ -243,11 +243,11 @@ class GpuSingleDirectoryDataWriter(
     val maxRecordsPerFile = description.maxRecordsPerFile
     if (!shouldSplitToFitMaxRecordsPerFile(
         maxRecordsPerFile, recordsInFile, batch.numRows())) {
-      closeOnExcept(batch) { _ =>
-        statsTrackers.foreach(_.newBatch(currentWriter.path(), batch))
-        recordsInFile += batch.numRows()
-      }
       val scb = SpillableColumnarBatch(batch, SpillPriorities.ACTIVE_ON_DECK_PRIORITY)
+      closeOnExcept(scb) { _ =>
+        statsTrackers.foreach(_.newBatch(currentWriter.path(), scb))
+        recordsInFile += scb.numRows
+      }
       currentWriter.writeSpillableAndClose(scb, statsTrackers)
     } else {
       val partBatches = splitToFitMaxRecordsAndClose(
@@ -263,15 +263,12 @@ class GpuSingleDirectoryDataWriter(
           }
           // null out the entry so that we don't double close
           partBatches(partIx) = null
-          withResource(partBatch) { _ =>
-            val cb = partBatch.getColumnarBatch()
-            // TODO: make this work with spillable
-            closeOnExcept(cb) { _ =>
-              statsTrackers.foreach(_.newBatch(currentWriter.path(), cb))
-            }
-            recordsInFile += cb.numRows()
-            currentWriter.writeSpillableAndClose(partBatch, statsTrackers)
+          closeOnExcept(partBatch) { _ =>
+            statsTrackers.foreach(_.newBatch(
+              currentWriter.path(), partBatch))
+            recordsInFile += partBatch.numRows()
           }
+          currentWriter.writeSpillableAndClose(partBatch, statsTrackers)
           needNewWriter = true
         }
       }
@@ -700,17 +697,14 @@ class GpuDynamicPartitionDataSingleWriter(
     }
   }
 
-  private def writeBatchUsingCurrentWriterAndClose(spillableBatch: SpillableColumnarBatch): Unit = {
-    // TODO: make this all work with spillable
-    withResource(spillableBatch) { _ =>
-      withResource(spillableBatch.getColumnarBatch()) { batch =>
-        closeOnExcept(batch) { _ =>
-          statsTrackers.foreach(_.newBatch(currentWriterStatus.outputWriter.path(), batch))
-          currentWriterStatus.recordsInFile += batch.numRows()
-        }
-        currentWriterStatus.outputWriter.writeSpillableAndClose(spillableBatch, statsTrackers)
-      }
+  private def writeBatchUsingCurrentWriterAndClose(
+      spillableBatch: SpillableColumnarBatch): Unit = {
+    closeOnExcept(spillableBatch) { _ =>
+      statsTrackers.foreach(_.newBatch(
+        currentWriterStatus.outputWriter.path(), spillableBatch))
+      currentWriterStatus.recordsInFile += spillableBatch.numRows
     }
+    currentWriterStatus.outputWriter.writeSpillableAndClose(spillableBatch, statsTrackers)
   }
 
   /** Release all resources. */
@@ -1019,10 +1013,9 @@ class GpuDynamicPartitionDataConcurrentWriter(
     val maxRecordsPerFile = description.maxRecordsPerFile
     if (!shouldSplitToFitMaxRecordsPerFile(
       maxRecordsPerFile, status.writerStatus.recordsInFile, spillableToWrite.numRows())) {
-      val batch = spillableToWrite.getColumnarBatch()
-      closeOnExcept(batch) { _ =>
-        statsTrackers.foreach(_.newBatch(status.writerStatus.outputWriter.path(), batch))
-        status.writerStatus.recordsInFile += batch.numRows()
+      closeOnExcept(spillableToWrite) { _ =>
+        statsTrackers.foreach(_.newBatch(status.writerStatus.outputWriter.path(), spillableToWrite))
+        status.writerStatus.recordsInFile += spillableToWrite.numRows
       }
       status.writerStatus.outputWriter.writeSpillableAndClose(spillableToWrite, statsTrackers)
     } else {
@@ -1049,13 +1042,9 @@ class GpuDynamicPartitionDataConcurrentWriter(
           }
           splits(partIndex) = null
           closeOnExcept(split) { _ =>
-            val batch = split.getColumnarBatch()
-            closeOnExcept(batch) { _ =>
-              statsTrackers.foreach(_.newBatch(status.writerStatus.outputWriter.path(), batch))
-              status.writerStatus.recordsInFile += batch.numRows()
-            }
+            statsTrackers.foreach(_.newBatch(status.writerStatus.outputWriter.path(), split))
+            status.writerStatus.recordsInFile += split.numRows
           }
-          // TODO: keep it spillable!!!
           status.writerStatus.outputWriter.writeSpillableAndClose(split, statsTrackers)
           needNewWriter = true
         }

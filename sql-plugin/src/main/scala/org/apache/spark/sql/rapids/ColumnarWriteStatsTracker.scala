@@ -16,8 +16,9 @@
 
 package org.apache.spark.sql.rapids
 
+import com.nvidia.spark.rapids.SpillableColumnarBatch
+
 import org.apache.spark.sql.execution.datasources.WriteTaskStats
-import org.apache.spark.sql.vectorized.ColumnarBatch
 
 /**
  * A trait for classes that are capable of collecting statistics on columnar data that's being
@@ -52,10 +53,11 @@ trait ColumnarWriteTaskStatsTracker {
   /**
    * Process a new column batch to update the tracked statistics accordingly.
    * The batch will be written to the most recently witnessed file (via `newFile`).
+   *
    * @param filePath Path of the file which the batch is written to.
-   * @param batch Current data batch to be processed.
+   * @param spillableBatch Current spillable data batch to be processed.
    */
-  def newBatch(filePath: String, batch: ColumnarBatch): Unit
+  def newBatch(filePath: String, spillableBatch: SpillableColumnarBatch): Unit
 
   /**
    * Returns the final statistics computed so far.
