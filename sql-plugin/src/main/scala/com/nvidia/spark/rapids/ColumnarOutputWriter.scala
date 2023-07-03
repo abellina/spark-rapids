@@ -104,7 +104,7 @@ abstract class ColumnarOutputWriter(context: TaskAttemptContext,
    * GPU processing.
    */
   def writeAndClose(
-      batch: ColumnarBatch,
+      batch: SpillableColumnarBatch,
       statsTrackers: Seq[ColumnarWriteTaskStatsTracker]): Unit = {
     var needToCloseBatch = true
     try {
@@ -148,7 +148,7 @@ abstract class ColumnarOutputWriter(context: TaskAttemptContext,
    * @param batch Columnar batch that needs to be written
    * @return time in ns taken to write the batch
    */
-  private[this] def writeBatch(batch: ColumnarBatch): Long = {
+  private[this] def writeBatch(batch: SpillableColumnarBatch): Long = {
     if (includeRetry) {
       writeBatchWithRetry(batch)
     } else {
@@ -159,9 +159,7 @@ abstract class ColumnarOutputWriter(context: TaskAttemptContext,
   /** Apply any necessary casts before writing batch out */
   def transform(cb: ColumnarBatch): Option[ColumnarBatch] = None
 
-  private[this] def writeBatchWithRetry(batch: ColumnarBatch): Long = {
-    // TODO: if the batch was spillable in the past make sure we don't re-add here....
-    val sb = SpillableColumnarBatch(batch, SpillPriorities.ACTIVE_ON_DECK_PRIORITY)
+  private[this] def writeBatchWithRetry(sb: SpillableColumnarBatch): Long = {
     RmmRapidsRetryIterator.withRetry(sb, RmmRapidsRetryIterator.splitSpillableInHalfByRows) { sb =>
       val cr = new CheckpointRestore {
         override def checkpoint(): Unit = ()
@@ -194,7 +192,8 @@ abstract class ColumnarOutputWriter(context: TaskAttemptContext,
     }.sum
   }
 
-  private[this] def writeBatchNoRetry(batch: ColumnarBatch): Long = {
+  private[this] def writeBatchNoRetry(spillable: SpillableColumnarBatch): Long = {
+    val batch = withResource(spillable) { _.getColumnarBatch() }
     var needToCloseBatch = true
     try {
       val startTimestamp = System.nanoTime
@@ -239,7 +238,9 @@ abstract class ColumnarOutputWriter(context: TaskAttemptContext,
   def close(): Unit = {
     if (!anythingWritten) {
       // This prevents writing out bad files
-      writeBatch(GpuColumnVector.emptyBatch(dataSchema))
+      writeBatch(SpillableColumnarBatch(
+        GpuColumnVector.emptyBatch(dataSchema),
+        SpillPriorities.ACTIVE_ON_DECK_PRIORITY))
     }
     tableWriter.close()
     writeBufferedData()
