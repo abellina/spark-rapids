@@ -94,26 +94,6 @@ abstract class ColumnarOutputWriter(context: TaskAttemptContext,
       true
   }
 
-  /**
-   * Persists a columnar batch. Invoked on the executor side. When writing to dynamically
-   * partitioned tables, dynamic partition columns are not included in columns to be written.
-   *
-   * NOTE: This method will close `batch`. We do this because we want
-   * to free GPU memory after the GPU has finished encoding the data but before
-   * it is written to the distributed filesystem. The GPU semaphore is released
-   * during the distributed filesystem transfer to allow other tasks to start/continue
-   * GPU processing.
-   */
-  def writeSpillableAndClose(
-      batch: SpillableColumnarBatch,
-      statsTrackers: Seq[ColumnarWriteTaskStatsTracker]): Unit = {
-    val writeStartTime = System.nanoTime
-    withResource(new NvtxRange("File write", NvtxColor.YELLOW)) { _ =>
-      val gpuTime = writeBatchAndClose(batch)
-      updateStatistics(writeStartTime, gpuTime, statsTrackers)
-    }
-  }
-
   private[this] def updateStatistics(
       writeStartTime: Long,
       gpuTime: Long,
@@ -133,19 +113,20 @@ abstract class ColumnarOutputWriter(context: TaskAttemptContext,
   }
 
   /**
-   * Writes the columnar batch and returns the time in ns taken to write
+   * Persists a columnar batch. Invoked on the executor side. When writing to dynamically
+   * partitioned tables, dynamic partition columns are not included in columns to be written.
    *
    * NOTE: This method will close `batch`. We do this because we want
    * to free GPU memory after the GPU has finished encoding the data but before
    * it is written to the distributed filesystem. The GPU semaphore is released
    * during the distributed filesystem transfer to allow other tasks to start/continue
    * GPU processing.
-   *
-   * @param batch Columnar batch that needs to be written
-   * @return time in ns taken to write the batch
    */
-  private[this] def writeBatchAndClose(spillableBatch: SpillableColumnarBatch): Long = {
-    if (includeRetry) {
+  def writeSpillableAndClose(
+      spillableBatch: SpillableColumnarBatch,
+      statsTrackers: Seq[ColumnarWriteTaskStatsTracker]): Unit = {
+    val writeStartTime = System.nanoTime
+    val gpuTime = if (includeRetry) {
       withRetry(spillableBatch, splitSpillableInHalfByRows) { sb =>
         //TODO: we should really apply the transformations to cast timestamps
         // to the expected types before spilling but we need a SpillableTable
@@ -158,6 +139,7 @@ abstract class ColumnarOutputWriter(context: TaskAttemptContext,
         writeBatchAndClose(spillableBatch.getColumnarBatch())
       }
     }
+    updateStatistics(writeStartTime, gpuTime, statsTrackers)
   }
 
   private[this] def writeBatchAndClose(batch: ColumnarBatch): Long = {
