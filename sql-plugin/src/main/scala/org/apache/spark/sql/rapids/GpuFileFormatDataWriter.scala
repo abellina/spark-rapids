@@ -248,7 +248,7 @@ class GpuSingleDirectoryDataWriter(
         recordsInFile += batch.numRows()
       }
       val scb = SpillableColumnarBatch(batch, SpillPriorities.ACTIVE_ON_DECK_PRIORITY)
-      currentWriter.writeAndClose(scb, statsTrackers)
+      currentWriter.writeSpillableAndClose(scb, statsTrackers)
     } else {
       val partBatches = splitToFitMaxRecordsAndClose(
         batch, maxRecordsPerFile, recordsInFile)
@@ -270,7 +270,7 @@ class GpuSingleDirectoryDataWriter(
               statsTrackers.foreach(_.newBatch(currentWriter.path(), cb))
             }
             recordsInFile += cb.numRows()
-            currentWriter.writeAndClose(partBatch, statsTrackers)
+            currentWriter.writeSpillableAndClose(partBatch, statsTrackers)
           }
           needNewWriter = true
         }
@@ -708,7 +708,7 @@ class GpuDynamicPartitionDataSingleWriter(
           statsTrackers.foreach(_.newBatch(currentWriterStatus.outputWriter.path(), batch))
           currentWriterStatus.recordsInFile += batch.numRows()
         }
-        currentWriterStatus.outputWriter.writeAndClose(spillableBatch, statsTrackers)
+        currentWriterStatus.outputWriter.writeSpillableAndClose(spillableBatch, statsTrackers)
       }
     }
   }
@@ -1024,7 +1024,7 @@ class GpuDynamicPartitionDataConcurrentWriter(
         statsTrackers.foreach(_.newBatch(status.writerStatus.outputWriter.path(), batch))
         status.writerStatus.recordsInFile += batch.numRows()
       }
-      status.writerStatus.outputWriter.writeAndClose(spillableToWrite, statsTrackers)
+      status.writerStatus.outputWriter.writeSpillableAndClose(spillableToWrite, statsTrackers)
     } else {
       val batchToSplit = withRetryNoSplit(spillableToWrite) { _ =>
         spillableToWrite.getColumnarBatch()
@@ -1056,7 +1056,7 @@ class GpuDynamicPartitionDataConcurrentWriter(
             }
           }
           // TODO: keep it spillable!!!
-          status.writerStatus.outputWriter.writeAndClose(split, statsTrackers)
+          status.writerStatus.outputWriter.writeSpillableAndClose(split, statsTrackers)
           needNewWriter = true
         }
       }
