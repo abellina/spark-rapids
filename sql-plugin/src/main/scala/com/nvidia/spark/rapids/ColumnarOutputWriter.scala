@@ -114,20 +114,6 @@ abstract class ColumnarOutputWriter(context: TaskAttemptContext,
     }
   }
 
-  def writeAndClose(
-      batch: ColumnarBatch,
-      statsTrackers: Seq[ColumnarWriteTaskStatsTracker]): Unit = {
-    val writeStartTime = System.nanoTime
-    withResource(new NvtxRange("File write", NvtxColor.YELLOW)) { _ =>
-      val gpuTime = if (includeRetry) {
-        writeBatch(SpillableColumnarBatch(batch, SpillPriorities.ACTIVE_ON_DECK_PRIORITY))
-      } else {
-        writeBatch(batch)
-      }
-      updateStatistics(writeStartTime, gpuTime, statsTrackers)
-    }
-  }
-
   private[this] def updateStatistics(
       writeStartTime: Long,
       gpuTime: Long,
@@ -168,16 +154,10 @@ abstract class ColumnarOutputWriter(context: TaskAttemptContext,
         writeBatch(sb.getColumnarBatch())
       }.sum
     } else {
-      writeBatch(spillableBatch.getColumnarBatch())
+      withResource(spillableBatch) { _ =>
+        writeBatch(spillableBatch.getColumnarBatch())
+      }
     }
-  }
-
-  /** Apply any necessary casts before writing batch out */
-  def transform(cb: ColumnarBatch): Option[ColumnarBatch] = None
-
-  private val checkpointRestore = new CheckpointRestore {
-    override def checkpoint(): Unit = ()
-    override def restore(): Unit = dropBufferedData()
   }
 
   private[this] def writeBatch(batch: ColumnarBatch): Long = {
@@ -202,6 +182,15 @@ abstract class ColumnarOutputWriter(context: TaskAttemptContext,
       gpuTime
     }
   }
+
+  /** Apply any necessary casts before writing batch out */
+  def transform(cb: ColumnarBatch): Option[ColumnarBatch] = None
+
+  private val checkpointRestore = new CheckpointRestore {
+    override def checkpoint(): Unit = ()
+    override def restore(): Unit = dropBufferedData()
+  }
+
 
   private def scanAndWrite(batch: ColumnarBatch): Unit = {
     withResource(GpuColumnVector.from(batch)) { table =>

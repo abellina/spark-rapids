@@ -247,7 +247,8 @@ class GpuSingleDirectoryDataWriter(
         statsTrackers.foreach(_.newBatch(currentWriter.path(), batch))
         recordsInFile += batch.numRows()
       }
-      currentWriter.writeAndClose(batch, statsTrackers)
+      val scb = SpillableColumnarBatch(batch, SpillPriorities.ACTIVE_ON_DECK_PRIORITY)
+      currentWriter.writeAndClose(scb, statsTrackers)
     } else {
       val partBatches = splitToFitMaxRecordsAndClose(
         batch, maxRecordsPerFile, recordsInFile)
