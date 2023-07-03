@@ -132,17 +132,21 @@ abstract class ColumnarOutputWriter(context: TaskAttemptContext,
         // to the expected types before spilling but we need a SpillableTable
         // rather than a SpillableColumnBatch to be able to do that
         // See https://github.com/NVIDIA/spark-rapids/issues/8262
-        writeBatchAndClose(sb.getColumnarBatch())
+        bufferBatchAndClose(sb.getColumnarBatch())
       }.sum
     } else {
       withResource(spillableBatch) { _ =>
-        writeBatchAndClose(spillableBatch.getColumnarBatch())
+        bufferBatchAndClose(spillableBatch.getColumnarBatch())
       }
     }
+    // we successfully buffered to host memory, release the semaphore and write
+    // the buffered data to the FS
+    GpuSemaphore.releaseIfNecessary(TaskContext.get)
+    writeBufferedData()
     updateStatistics(writeStartTime, gpuTime, statsTrackers)
   }
 
-  private[this] def writeBatchAndClose(batch: ColumnarBatch): Long = {
+  private[this] def bufferBatchAndClose(batch: ColumnarBatch): Long = {
     val startTimestamp = System.nanoTime
     withRestoreOnRetry(checkpointRestore) {
       withResource(new NvtxRange(s"GPU $rangeName write", NvtxColor.BLUE)) { _ =>
@@ -150,11 +154,9 @@ abstract class ColumnarOutputWriter(context: TaskAttemptContext,
           scanAndWrite(maybeTransformed)
         }
       }
-      GpuSemaphore.releaseIfNecessary(TaskContext.get)
-      val gpuTime = System.nanoTime - startTimestamp
-      writeBufferedData()
-      gpuTime
     }
+    // time spent on GPU encoding to the host sink
+    System.nanoTime - startTimestamp
   }
 
   /** Apply any necessary casts before writing batch out */
@@ -164,7 +166,6 @@ abstract class ColumnarOutputWriter(context: TaskAttemptContext,
     override def checkpoint(): Unit = ()
     override def restore(): Unit = dropBufferedData()
   }
-
 
   private def scanAndWrite(batch: ColumnarBatch): Unit = {
     withResource(GpuColumnVector.from(batch)) { table =>
@@ -181,7 +182,8 @@ abstract class ColumnarOutputWriter(context: TaskAttemptContext,
   def close(): Unit = {
     if (!anythingWritten) {
       // This prevents writing out bad files
-      writeBatchAndClose(GpuColumnVector.emptyBatch(dataSchema))
+      bufferBatchAndClose(GpuColumnVector.emptyBatch(dataSchema))
+      GpuSemaphore.releaseIfNecessary(TaskContext.get())
     }
     tableWriter.close()
     writeBufferedData()
