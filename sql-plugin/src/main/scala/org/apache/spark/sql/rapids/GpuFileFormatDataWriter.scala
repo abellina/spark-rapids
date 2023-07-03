@@ -24,12 +24,12 @@ import com.nvidia.spark.TimingUtils
 import com.nvidia.spark.rapids._
 import com.nvidia.spark.rapids.Arm.{closeOnExcept, withResource}
 import com.nvidia.spark.rapids.RapidsPluginImplicits._
-import com.nvidia.spark.rapids.shims.GpuFileFormatDataWriterShim
 import com.nvidia.spark.rapids.RmmRapidsRetryIterator.withRetryNoSplit
+import com.nvidia.spark.rapids.shims.GpuFileFormatDataWriterShim
 import org.apache.hadoop.fs.Path
 import org.apache.hadoop.mapreduce.TaskAttemptContext
-import org.apache.spark.TaskContext
 
+import org.apache.spark.TaskContext
 import org.apache.spark.internal.Logging
 import org.apache.spark.internal.io.FileCommitProtocol
 import org.apache.spark.sql.catalyst.InternalRow
@@ -516,7 +516,6 @@ class GpuDynamicPartitionDataSingleWriter(
         }
       }
     }
-    logInfo(s"Produced ${splits.size} contig tables.")
     val paths = closeOnExcept(splits) { _ =>
       withResource(cbKeys) { _ =>
         // Use the existing code to convert each row into a path. It would be nice to do this
@@ -533,9 +532,6 @@ class GpuDynamicPartitionDataSingleWriter(
       // and the last split point is the number of rows.
       val outDataTypes = description.dataColumns.map(_.dataType).toArray
       splits.zip(paths).zipWithIndex.map { case ((split, path), ix) =>
-        if (ix % 1000 == 0) {
-          logInfo(s"SplitAndPath ${ix} out of ${splits.size}")
-        }
         splits(ix) = null
         SplitAndPath(
           SpillableColumnarBatch(
@@ -744,8 +740,7 @@ class GpuDynamicPartitionDataConcurrentWriter(
     taskAttemptContext: TaskAttemptContext,
     committer: FileCommitProtocol,
     spec: GpuConcurrentOutputWriterSpec)
-    extends GpuDynamicPartitionDataSingleWriter(description, taskAttemptContext, committer)
-        with Logging {
+    extends GpuDynamicPartitionDataSingleWriter(description, taskAttemptContext, committer) {
 
   // Keep all the unclosed writers, key is partition directory string.
   // Note: if fall back to sort-based mode, also use the opened writers in the map.
