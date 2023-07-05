@@ -21,13 +21,13 @@ import java.io.OutputStream
 import scala.collection.mutable
 
 import ai.rapids.cudf.{HostBufferConsumer, HostMemoryBuffer, NvtxColor, NvtxRange, Table, TableWriter}
-import com.nvidia.spark.rapids.Arm.withResource
+import com.nvidia.spark.rapids.Arm.{closeOnExcept, withResource}
 import com.nvidia.spark.rapids.RapidsPluginImplicits._
 import com.nvidia.spark.rapids.RmmRapidsRetryIterator.{splitSpillableInHalfByRows, withRestoreOnRetry, withRetry}
 import org.apache.hadoop.fs.{FSDataOutputStream, Path}
 import org.apache.hadoop.mapreduce.TaskAttemptContext
-
 import org.apache.spark.TaskContext
+
 import org.apache.spark.sql.rapids.{ColumnarWriteTaskStatsTracker, GpuWriteTaskStatsTracker}
 import org.apache.spark.sql.types.StructType
 import org.apache.spark.sql.vectorized.ColumnarBatch
@@ -108,7 +108,7 @@ abstract class ColumnarOutputWriter(context: TaskAttemptContext,
     }
   }
 
-  protected def scanTableBeforeWrite(table: Table): Unit = {
+  protected def performDateTimeRebaseChecks(batch: ColumnarBatch): Unit = {
     // NOOP for now, but allows a child to override this
   }
 
@@ -150,8 +150,14 @@ abstract class ColumnarOutputWriter(context: TaskAttemptContext,
     val startTimestamp = System.nanoTime
     withRestoreOnRetry(checkpointRestore) {
       withResource(new NvtxRange(s"GPU $rangeName write", NvtxColor.BLUE)) { _ =>
+        closeOnExcept(batch) { _ =>
+          performDateTimeRebaseChecks(batch)
+        }
         withResource(transformAndClose(batch)) { maybeTransformed =>
-          scanAndWrite(maybeTransformed)
+          withResource(GpuColumnVector.from(maybeTransformed)) { table =>
+            anythingWritten = true
+            tableWriter.write(table)
+          }
         }
       }
     }
@@ -165,14 +171,6 @@ abstract class ColumnarOutputWriter(context: TaskAttemptContext,
   private val checkpointRestore = new CheckpointRestore {
     override def checkpoint(): Unit = ()
     override def restore(): Unit = dropBufferedData()
-  }
-
-  private def scanAndWrite(batch: ColumnarBatch): Unit = {
-    withResource(GpuColumnVector.from(batch)) { table =>
-      scanTableBeforeWrite(table)
-      anythingWritten = true
-      tableWriter.write(table)
-    }
   }
 
   /**
