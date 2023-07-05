@@ -595,13 +595,14 @@ class GpuDynamicPartitionDataSingleWriter(
     // We have an entire batch that is sorted, so we need to split it up by key
     // to get a batch per path
     withResource(splitBatchByKeyAndClose(batch, partDataTypes)) { splitsAndPaths =>
-      splitsAndPaths.foreach { case SplitAndPath(partBatch, partPath) =>
+      splitsAndPaths.zipWithIndex.foreach { case (SplitAndPath(partBatch, partPath), ix) =>
         // If we fall back from `GpuDynamicPartitionDataConcurrentWriter`, we should get the
         // saved status
         val savedStatus = updateCurrentWriterIfNeeded(partPath, cachesMap)
 
         // combine `partBatch` with any remnants for this partition for the concurrent
         // writer fallback case in `savedStatus`
+        splitsAndPaths(ix) = null
         val batchToWrite = getBatchToWrite(partBatch, savedStatus)
 
         // if the batch fits, write it as is, else split and write it.
@@ -611,7 +612,6 @@ class GpuDynamicPartitionDataSingleWriter(
         } else {
           // materialize an actual batch since we are going to split it
           // on the GPU
-          // TODO: could we logically split on the host or on disk as a spillable?
           val batchToSplit = withRetryNoSplit(batchToWrite) { _ =>
             batchToWrite.getColumnarBatch()
           }
