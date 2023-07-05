@@ -30,7 +30,6 @@ import org.apache.hadoop.fs.Path
 import org.apache.hadoop.mapreduce.TaskAttemptContext
 
 import org.apache.spark.TaskContext
-import org.apache.spark.internal.Logging
 import org.apache.spark.internal.io.FileCommitProtocol
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.catalog.CatalogTypes.TablePartitionSpec
@@ -239,16 +238,19 @@ class GpuSingleDirectoryDataWriter(
     statsTrackers.foreach(_.newFile(currentPath))
   }
 
+  private def doWriteAndClose(scb: SpillableColumnarBatch): Unit = {
+    closeOnExcept(scb) { _ =>
+      statsTrackers.foreach(_.newBatch(currentWriter.path(), scb))
+      recordsInFile += scb.numRows
+    }
+    currentWriter.writeSpillableAndClose(scb, statsTrackers)
+  }
+
   override def write(batch: ColumnarBatch): Unit = {
     val maxRecordsPerFile = description.maxRecordsPerFile
     if (!shouldSplitToFitMaxRecordsPerFile(
         maxRecordsPerFile, recordsInFile, batch.numRows())) {
-      val scb = SpillableColumnarBatch(batch, SpillPriorities.ACTIVE_ON_DECK_PRIORITY)
-      closeOnExcept(scb) { _ =>
-        statsTrackers.foreach(_.newBatch(currentWriter.path(), scb))
-        recordsInFile += scb.numRows
-      }
-      currentWriter.writeSpillableAndClose(scb, statsTrackers)
+      doWriteAndClose(SpillableColumnarBatch(batch, SpillPriorities.ACTIVE_ON_DECK_PRIORITY))
     } else {
       val partBatches = splitToFitMaxRecordsAndClose(
         batch, maxRecordsPerFile, recordsInFile)
@@ -263,12 +265,7 @@ class GpuSingleDirectoryDataWriter(
           }
           // null out the entry so that we don't double close
           partBatches(partIx) = null
-          closeOnExcept(partBatch) { _ =>
-            statsTrackers.foreach(_.newBatch(
-              currentWriter.path(), partBatch))
-            recordsInFile += partBatch.numRows()
-          }
-          currentWriter.writeSpillableAndClose(partBatch, statsTrackers)
+          doWriteAndClose(partBatch)
           needNewWriter = true
         }
       }
@@ -286,7 +283,7 @@ class GpuDynamicPartitionDataSingleWriter(
     description: GpuWriteJobDescription,
     taskAttemptContext: TaskAttemptContext,
     committer: FileCommitProtocol)
-  extends GpuFileFormatDataWriter(description, taskAttemptContext, committer) with Logging {
+  extends GpuFileFormatDataWriter(description, taskAttemptContext, committer) {
 
   /** Wrapper class for status of a unique single output writer. */
   protected class WriterStatus(
@@ -477,7 +474,7 @@ class GpuDynamicPartitionDataSingleWriter(
     write(batch, cachesMap = None)
   }
 
-  private case class SplitAndPath(var split: SpillableColumnarBatch, path: String, partIx: Int)
+  private case class SplitAndPath(var split: SpillableColumnarBatch, path: String)
       extends AutoCloseable {
     override def close(): Unit = {
       split.safeClose()
@@ -536,8 +533,43 @@ class GpuDynamicPartitionDataSingleWriter(
         SplitAndPath(
           SpillableColumnarBatch(
             split, outDataTypes, SpillPriorities.ACTIVE_BATCHING_PRIORITY),
-          path, ix)
+          path)
       }
+    }
+  }
+
+  private def getBatchToWrite(
+      partBatch: SpillableColumnarBatch,
+      savedStatus: Option[WriterStatusWithCaches]): SpillableColumnarBatch = {
+    val outDataTypes = description.dataColumns.map(_.dataType).toArray
+    if (savedStatus.isDefined && savedStatus.get.tableCaches.nonEmpty) {
+      // In the case where the concurrent partition writers fall back, we need to
+      // incorporate into the current part any pieces that are already cached
+      // in the `savedStatus`. Adding `partBatch` to what was saved could make a
+      // concatenated batch with number of rows larger than `maxRecordsPerFile`,
+      // so this concatenated result could be split later, which is not efficient. However,
+      // the concurrent writers are default off in Spark, so it is not clear if this
+      // code path is worth optimizing.
+      val concat =
+        withResource(savedStatus.get.tableCaches) { subSpillableBatches =>
+          val toConcat = subSpillableBatches :+ partBatch
+
+          // clear the caches
+          savedStatus.get.tableCaches.clear()
+
+          withResource(toConcat) { _ =>
+            withResource(toConcat.map(_.getColumnarBatch())) { batches =>
+              withResource(batches.map(GpuColumnVector.from)) { subTables =>
+                Table.concatenate(subTables: _*)
+              }
+            }
+          }
+        }
+      SpillableColumnarBatch(
+        GpuColumnVector.from(concat, outDataTypes),
+        SpillPriorities.ACTIVE_ON_DECK_PRIORITY)
+    } else {
+      partBatch
     }
   }
 
@@ -559,44 +591,23 @@ class GpuDynamicPartitionDataSingleWriter(
 
     val maxRecordsPerFile = description.maxRecordsPerFile
     val partDataTypes = description.partitionColumns.map(_.dataType).toArray
-    val outDataTypes = description.dataColumns.map(_.dataType).toArray
 
     // We have an entire batch that is sorted, so we need to split it up by key
     // to get a batch per path
     withResource(splitBatchByKeyAndClose(batch, partDataTypes)) { splitsAndPaths =>
-      splitsAndPaths.foreach { case SplitAndPath(partContigTable, partPath, partIx) =>
-        // If fall back from for `GpuDynamicPartitionDataConcurrentWriter`, we should get the
+      splitsAndPaths.foreach { case SplitAndPath(partBatch, partPath) =>
+        // If we fall back from `GpuDynamicPartitionDataConcurrentWriter`, we should get the
         // saved status
         val savedStatus = updateCurrentWriterIfNeeded(partPath, cachesMap)
-        val batchToWrite =
-          if (savedStatus.isDefined && savedStatus.get.tableCaches.nonEmpty) {
-            // concat the caches and this `table`
-            // TODO: why are we concatenating all of these
-            val concat = withResource(savedStatus.get.tableCaches) { subSpillableBatches =>
-              // clear the caches
-              savedStatus.get.tableCaches.clear()
-              splitsAndPaths(partIx) = null
-              val toConcat = subSpillableBatches :+ partContigTable
-              withResource(toConcat.map(_.getColumnarBatch())) { batches =>
-                withResource(batches.map(GpuColumnVector.from)) { subTables =>
-                  Table.concatenate(subTables: _*)
-                }
-              }
-            }
-            withResource(concat) { _ =>
-              SpillableColumnarBatch(
-                GpuColumnVector.from(concat, outDataTypes),
-                SpillPriorities.ACTIVE_ON_DECK_PRIORITY)
-            }
-          } else {
-            splitsAndPaths(partIx) = null
-            partContigTable
-          }
+
+        // combine `partBatch` with any remnants for this partition for the concurrent
+        // writer fallback case in `savedStatus`
+        val batchToWrite = getBatchToWrite(partBatch, savedStatus)
 
         // if the batch fits, write it as is, else split and write it.
         if (!shouldSplitToFitMaxRecordsPerFile(maxRecordsPerFile,
           currentWriterStatus.recordsInFile, batchToWrite.numRows())) {
-          writeBatchUsingCurrentWriterAndClose(batchToWrite)
+          doWriteAndClose(currentWriterStatus, batchToWrite)
         } else {
           // materialize an actual batch since we are going to split it
           // on the GPU
@@ -687,20 +698,21 @@ class GpuDynamicPartitionDataSingleWriter(
           currentWriterStatus.recordsInFile = 0
         }
         spillableBatches(partIx) = null
-        writeBatchUsingCurrentWriterAndClose(part)
+        doWriteAndClose(currentWriterStatus, part)
         needNewWriter = true
       }
     }
   }
 
-  private def writeBatchUsingCurrentWriterAndClose(
+  protected def doWriteAndClose(
+      writerStatus: WriterStatus,
       spillableBatch: SpillableColumnarBatch): Unit = {
     closeOnExcept(spillableBatch) { _ =>
       statsTrackers.foreach(_.newBatch(
-        currentWriterStatus.outputWriter.path(), spillableBatch))
-      currentWriterStatus.recordsInFile += spillableBatch.numRows
+        writerStatus.outputWriter.path(), spillableBatch))
+      writerStatus.recordsInFile += spillableBatch.numRows
     }
-    currentWriterStatus.outputWriter.writeSpillableAndClose(spillableBatch, statsTrackers)
+    writerStatus.outputWriter.writeSpillableAndClose(spillableBatch, statsTrackers)
   }
 
   /** Release all resources. */
@@ -816,6 +828,8 @@ class GpuDynamicPartitionDataConcurrentWriter(
       // concat the put back batch and un-coming batches
       val newIterator = Iterator.single(currentFallbackColumnarBatch) ++ iterator
       // sort the all the batches in `iterator`
+
+      // TODO: why sort?
       val sortIterator: GpuOutOfCoreSortIterator = getSorted(newIterator)
       while (sortIterator.hasNext) {
         // write with sort-based single writer
@@ -888,6 +902,7 @@ class GpuDynamicPartitionDataConcurrentWriter(
       val op = colsWithPartitionTbl.groupBy(partitionIndices: _*)
       // return groups and uniq keys table
       // Each row in uniq keys table is corresponding to a group
+      // TODO: put this in a withRetry?
       op.contiguousSplitGroupsAndGenUniqKeys()
     }
 
@@ -1008,11 +1023,7 @@ class GpuDynamicPartitionDataConcurrentWriter(
     val maxRecordsPerFile = description.maxRecordsPerFile
     if (!shouldSplitToFitMaxRecordsPerFile(
       maxRecordsPerFile, status.writerStatus.recordsInFile, spillableToWrite.numRows())) {
-      closeOnExcept(spillableToWrite) { _ =>
-        statsTrackers.foreach(_.newBatch(status.writerStatus.outputWriter.path(), spillableToWrite))
-        status.writerStatus.recordsInFile += spillableToWrite.numRows
-      }
-      status.writerStatus.outputWriter.writeSpillableAndClose(spillableToWrite, statsTrackers)
+      doWriteAndClose(status.writerStatus, spillableToWrite)
     } else {
       val batchToSplit = withRetryNoSplit(spillableToWrite) { _ =>
         spillableToWrite.getColumnarBatch()
@@ -1036,11 +1047,7 @@ class GpuDynamicPartitionDataConcurrentWriter(
             status.writerStatus.recordsInFile = 0L
           }
           splits(partIndex) = null
-          closeOnExcept(split) { _ =>
-            statsTrackers.foreach(_.newBatch(status.writerStatus.outputWriter.path(), split))
-            status.writerStatus.recordsInFile += split.numRows
-          }
-          status.writerStatus.outputWriter.writeSpillableAndClose(split, statsTrackers)
+          doWriteAndClose(status.writerStatus, split)
           needNewWriter = true
         }
       }
