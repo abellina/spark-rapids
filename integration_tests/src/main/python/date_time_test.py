@@ -18,8 +18,9 @@ from data_gen import *
 from datetime import date, datetime, timezone
 from marks import ignore_order, incompat, allow_non_gpu
 from pyspark.sql.types import *
-from spark_session import with_cpu_session, with_spark_session, is_before_spark_330
+from spark_session import with_cpu_session, with_gpu_session, is_before_spark_330
 import pyspark.sql.functions as f
+import pyspark.sql.utils
 
 # We only support literal intervals for TimeSub
 vals = [(-584, 1563), (1943, 1101), (2693, 2167), (2729, 0), (44, 1534), (2635, 3319),
@@ -229,6 +230,15 @@ def test_unix_timestamp(data_gen):
     assert_gpu_and_cpu_are_equal_collect(
             lambda spark : unary_op_df(spark, data_gen).select(f.unix_timestamp(f.col('a'))))
 
+
+@allow_non_gpu("UnixTimestamp", "ProjectExec")
+@pytest.mark.parametrize('data_gen', date_n_time_gens, ids=idfn)
+def test_unix_timestamp_fallback(data_gen):
+    assert_gpu_and_cpu_are_equal_collect(lambda spark: gen_df(
+        spark, [("a", data_gen), ("b", string_gen)], length=10).selectExpr(
+        "unix_timestamp(a, b)"))
+
+
 @pytest.mark.parametrize('ansi_enabled', [True, False], ids=['ANSI_ON', 'ANSI_OFF'])
 @pytest.mark.parametrize('data_gen', date_n_time_gens, ids=idfn)
 def test_to_unix_timestamp(data_gen, ansi_enabled):
@@ -237,18 +247,26 @@ def test_to_unix_timestamp(data_gen, ansi_enabled):
         {'spark.sql.ansi.enabled': ansi_enabled})
 
 
+@allow_non_gpu("ToUnixTimestamp", "ProjectExec")
+@pytest.mark.parametrize('data_gen', date_n_time_gens, ids=idfn)
+def test_to_unix_timestamp_fallback(data_gen):
+    assert_gpu_and_cpu_are_equal_collect(lambda spark: gen_df(
+        spark, [("a", data_gen), ("b", string_gen)], length=10).selectExpr(
+        "to_unix_timestamp(a, b)"))
+
+
 @pytest.mark.parametrize('time_zone', ["UTC", "UTC+0", "UTC-0", "GMT", "GMT+0", "GMT-0"], ids=idfn)
 @pytest.mark.parametrize('data_gen', [timestamp_gen], ids=idfn)
 def test_from_utc_timestamp(data_gen, time_zone):
     assert_gpu_and_cpu_are_equal_collect(
-        lambda spark : unary_op_df(spark, data_gen).select(f.from_utc_timestamp(f.col('a'), time_zone)))
+        lambda spark: unary_op_df(spark, data_gen).select(f.from_utc_timestamp(f.col('a'), time_zone)))
 
 @allow_non_gpu('ProjectExec, FromUTCTimestamp')
 @pytest.mark.parametrize('time_zone', ["PST", "MST", "EST", "VST", "NST", "AST"], ids=idfn)
 @pytest.mark.parametrize('data_gen', [timestamp_gen], ids=idfn)
 def test_from_utc_timestamp_fallback(data_gen, time_zone):
     assert_gpu_fallback_collect(
-        lambda spark : unary_op_df(spark, data_gen).select(f.from_utc_timestamp(f.col('a'), time_zone)),
+        lambda spark: unary_op_df(spark, data_gen).select(f.from_utc_timestamp(f.col('a'), time_zone)),
     'ProjectExec')
 
 
@@ -438,6 +456,27 @@ def test_date_format_mmyyyy_cast_canonicalization(spark_tmp_path):
             .withColumnRenamed("filename", "r_filename")
         return left.join(right, left.monthly_reporting_period == right.r_monthly_reporting_period, how='inner')
     assert_gpu_and_cpu_are_equal_collect(do_join_cast)
+
+
+@allow_non_gpu("DateFormat", "ProjectExec")
+@pytest.mark.parametrize('data_gen', date_n_time_gens, ids=idfn)
+def test_date_format_unsupported_fallback(data_gen):
+    conf = {"spark.rapids.sql.incompatibleDateFormats.enabled": "true"}
+    assert_gpu_and_cpu_are_equal_collect(
+        lambda spark : gen_df(spark, [("a", data_gen)]).selectExpr(
+            "date_format(a, a)"), conf)
+
+
+#TODO: why don't I need to specify GetTimestamp in allow list
+@allow_non_gpu("ProjectExec")
+def test_to_date_unsupported_fallback():
+    date_gen = StringGen(pattern="2023-08-01")
+    pattern_gen = StringGen(pattern="[M]")
+    conf = {"spark.rapids.sql.incompatibleDateFormats.enabled": "true"}
+    assert_gpu_and_cpu_are_equal_collect(
+        lambda spark: gen_df(spark, [("a", date_gen), ("b", pattern_gen)]).selectExpr(
+            "to_date(a, b)"), conf)
+
 
 # (-62135510400, 253402214400) is the range of seconds that can be represented by timestamp_seconds 
 # considering the influence of time zone.
