@@ -93,7 +93,6 @@ def test_concat_string():
                 f.concat(f.lit(''), f.col('b')),
                 f.concat(f.col('a'), f.lit(''))))
 
-
 @pytest.mark.parametrize('data_gen', map_gens_sample + decimal_64_map_gens + decimal_128_map_gens, ids=idfn)
 def test_map_concat(data_gen):
     assert_gpu_and_cpu_are_equal_collect(
@@ -104,7 +103,6 @@ def test_map_concat(data_gen):
                                                 'map_concat(a, b, c)'),
         {"spark.sql.mapKeyDedupPolicy": "LAST_WIN"}
     )
-
 
 @pytest.mark.parametrize('data_gen', map_gens_sample + decimal_64_map_gens + decimal_128_map_gens, ids=idfn)
 def test_map_concat_with_lit(data_gen):
@@ -126,7 +124,6 @@ def test_size_of_array(data_gen, size_of_null):
             lambda spark: unary_op_df(spark, gen).selectExpr('size(a)'),
             conf={'spark.sql.legacy.sizeOfNull': size_of_null})
 
-
 @pytest.mark.parametrize('data_gen', map_gens_sample, ids=idfn)
 @pytest.mark.parametrize('size_of_null', ['true', 'false'], ids=idfn)
 def test_size_of_map(data_gen, size_of_null):
@@ -134,17 +131,15 @@ def test_size_of_map(data_gen, size_of_null):
             lambda spark: unary_op_df(spark, data_gen).selectExpr('size(a)'),
             conf={'spark.sql.legacy.sizeOfNull': size_of_null})
 
-
 @pytest.mark.parametrize('data_gen', array_gens_sample + [string_gen], ids=idfn)
 def test_reverse(data_gen):
     assert_gpu_and_cpu_are_equal_collect(
             lambda spark: unary_op_df(spark, data_gen).selectExpr('reverse(a)'))
 
-
 _sort_array_gens = non_nested_array_gens + [
         ArrayGen(all_basic_struct_gen, max_length=6),
         ArrayGen(StructGen([['b', byte_gen], ['s', StructGen([['c', byte_gen], ['d', byte_gen]])]]), max_length=10)
-]
+        ]
 
 @pytest.mark.parametrize('data_gen', _sort_array_gens, ids=idfn)
 def test_sort_array(data_gen):
