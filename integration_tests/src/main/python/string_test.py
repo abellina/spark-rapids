@@ -703,20 +703,26 @@ def test_like():
 @allow_non_gpu('ProjectExec')
 def test_unsupported_fallback_like():
     gen = StringGen('[a-z]')
-    def do_it(spark):
-        return unary_op_df(spark, gen).selectExpr(
-            "'lit' like a",
-            "a like a")
-    assert_gpu_and_cpu_are_equal_collect(do_it)
+    def assert_gpu_did_fallback(sql_text):
+        assert_gpu_fallback_collect(lambda spark:
+            unary_op_df(spark, gen, length=10).selectExpr(sql_text),
+            'Like')
+
+    assert_gpu_did_fallback("'lit' like a")
+    assert_gpu_did_fallback("a like a")
+
 
 @allow_non_gpu('ProjectExec')
 def test_unsupported_fallback_rlike():
     gen = StringGen('\/lit\/')
-    def do_it(spark):
-        return unary_op_df(spark, gen, length=10).selectExpr(
-            "'lit' rlike a",
-            "a rlike a")
-    assert_gpu_and_cpu_are_equal_collect(do_it)
+
+    def assert_gpu_did_fallback(sql_text):
+        assert_gpu_fallback_collect(lambda spark:
+            unary_op_df(spark, gen, length=10).selectExpr(sql_text),
+            'RLike')
+
+    assert_gpu_did_fallback("'lit' rlike a")
+    assert_gpu_did_fallback("a rlike a")
 
 
 def test_like_simple_escape():

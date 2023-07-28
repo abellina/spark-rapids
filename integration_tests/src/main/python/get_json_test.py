@@ -14,7 +14,7 @@
 
 import pytest
 
-from asserts import assert_gpu_and_cpu_are_equal_collect
+from asserts import assert_gpu_and_cpu_are_equal_collect, assert_gpu_fallback_collect
 from data_gen import *
 from pyspark.sql.types import *
 from marks import *
@@ -39,7 +39,7 @@ def test_get_json_object(json_str_pattern):
         conf={'spark.sql.parser.escapedStringLiterals': 'true'})
 
 
-@allow_non_gpu('GetJsonObject', 'ProjectExec')
+@allow_non_gpu('ProjectExec')
 @pytest.mark.parametrize('json_str_pattern', [r'\{"store": \{"fruit": \[\{"weight":\d,"type":"[a-z]{1,9}"\}\], ' \
                    r'"bicycle":\{"price":[1-9]\d\.\d\d,"color":"[a-z]{0,4}"\}\},' \
                    r'"email":"[a-z]{1,5}\@[a-z]{3,10}\.com","owner":"[a-z]{3,8}"\}',
@@ -48,9 +48,12 @@ def test_unsupported_fallback_get_json_object(json_str_pattern):
     gen = mk_json_str_gen(json_str_pattern)
     scalar_json = '{"store": {"fruit": "test"}}'
     pattern = StringGen(pattern='\$\.[a-z]{1,9}')
-    assert_gpu_and_cpu_are_equal_collect(
-        lambda spark:
-            gen_df(spark, [('a', gen), ('b', pattern)], length=10).selectExpr(
-                'get_json_object(a, b)',
-                'get_json_object(\'%s\', b)' % scalar_json),
+    def assert_gpu_did_fallback(sql_text):
+        assert_gpu_fallback_collect(lambda spark:
+            gen_df(spark, [('a', gen), ('b', pattern)], length=10).selectExpr(sql_text),
+        'GetJsonObject',
         conf={'spark.sql.parser.escapedStringLiterals': 'true'})
+
+    assert_gpu_did_fallback('get_json_object(a, b)')
+    assert_gpu_did_fallback('get_json_object(\'%s\', b)' % scalar_json)
+
