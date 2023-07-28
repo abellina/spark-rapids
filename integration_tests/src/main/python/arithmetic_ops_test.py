@@ -663,34 +663,19 @@ def test_decimal_round(data_gen):
 @approximate_float
 @pytest.mark.parametrize('data_gen', [int_gen], ids=idfn)
 def test_illegal_args_fallback_round(data_gen):
+    def check_analysis_exception(spark, sql_text):
+        try:
+            gen_df(spark, [("a", data_gen), ("b", int_gen)], length=10).selectExpr(sql_text)
+            raise Exception("round/bround should not plan with invalid arguments %s" % sql_text)
+        except pyspark.sql.utils.AnalysisException as e:
+            pass
+
     def doit(spark):
-        try:
-            gen_df(spark, [("b", int_gen)], length=10).selectExpr(
-                "round(1.2345, b)")
-            raise Exception("sort_array with columnar direction should not plan")
-        except pyspark.sql.utils.AnalysisException as e:
-            pass
+        check_analysis_exception(spark, "round(1.2345, b)")
+        check_analysis_exception(spark, "round(a, b)")
+        check_analysis_exception(spark, "bround(1.2345, b)")
+        check_analysis_exception(spark, "bround(a, b)")
 
-        try:
-            gen_df(spark, [("a", data_gen), ("b", int_gen)], length=10).selectExpr(
-                "round(a, b)")
-            raise Exception("sort_array with columnar direction should not plan")
-        except pyspark.sql.utils.AnalysisException as e:
-            pass
-
-        try:
-            gen_df(spark, [("b", int_gen)], length=10).selectExpr(
-                "bround(1.2345, b)")
-            raise Exception("sort_array with columnar direction should not plan")
-        except pyspark.sql.utils.AnalysisException as e:
-            pass
-
-        try:
-            gen_df(spark, [("a", data_gen), ("b", int_gen)], length=10).selectExpr(
-                "bround(a, b)")
-            raise Exception("sort_array with columnar direction should not plan")
-        except pyspark.sql.utils.AnalysisException as e:
-            pass
     with_cpu_session(lambda spark: doit(spark))
     with_gpu_session(lambda spark: doit(spark))
 
