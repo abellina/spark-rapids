@@ -294,17 +294,17 @@ def test_startswith():
                 f.col('a').startswith(None),
                 f.col('a').startswith('A\ud720')))
 
+@allow_non_gpu('ProjectExec')
 def test_unsupported_fallback_startswith():
-    def doit(spark):
-        try:
-            unary_op_df(spark, gen, length=26).select(
-                f.lit('foo').startswith(f.col('a')))
-            raise Exception("Should not have been able to plan")
-        except pyspark.sql.utils.AnalysisException as e:
-            pass
     gen = StringGen(pattern='[a-z]')
-    with_gpu_session(lambda spark: doit(spark))
-    with_cpu_session(lambda spark: doit(spark))
+
+    def assert_gpu_did_fallback(op):
+        assert_gpu_fallback_collect(lambda spark:
+            unary_op_df(spark, gen, length=10).select(op),
+            'StartsWith')
+
+    assert_gpu_did_fallback(f.lit("TEST").startswith(f.col("a")))
+    assert_gpu_did_fallback(f.col("a").startswith(f.col("a")))
 
 
 def test_endswith():
@@ -319,17 +319,17 @@ def test_endswith():
                 f.col('a').endswith('A\ud720')))
 
 
+@allow_non_gpu('ProjectExec')
 def test_unsupported_fallback_endswith():
-    def doit(spark):
-        try:
-            unary_op_df(spark, gen, length=26).select(
-                f.lit('foo').endswith(f.col('a')))
-            raise Exception("Should not have been able to plan")
-        except pyspark.sql.utils.AnalysisException as e:
-            pass
     gen = StringGen(pattern='[a-z]')
-    with_gpu_session(lambda spark: doit(spark))
-    with_cpu_session(lambda spark: doit(spark))
+
+    def assert_gpu_did_fallback(op):
+        assert_gpu_fallback_collect(lambda spark:
+            unary_op_df(spark, gen, length=10).select(op),
+            'EndsWith')
+
+    assert_gpu_did_fallback(f.lit("TEST").endswith(f.col("a")))
+    assert_gpu_did_fallback(f.col("a").endswith(f.col("a")))
 
 
 def test_concat_ws_basic():
@@ -576,12 +576,12 @@ def test_unsupported_fallback_replace():
             unary_op_df(spark, gen, length=10).selectExpr(sql_text),
             'StringReplace')
 
-    assert_gpu_did_fallback('select REPLACE(a, "TEST", a) from t ')
-    assert_gpu_did_fallback('select REPLACE(a, a, "TEST") from t')
-    assert_gpu_did_fallback('select REPLACE(a, a, a) from t')
-    assert_gpu_did_fallback('select REPLACE("TEST", "TEST", a) from t')
-    assert_gpu_did_fallback('select REPLACE("TEST", a, "TEST") from t')
-    assert_gpu_did_fallback('select REPLACE("TEST", a, a) from t')
+    assert_gpu_did_fallback('REPLACE(a, "TEST", a)')
+    assert_gpu_did_fallback('REPLACE(a, a, "TEST")')
+    assert_gpu_did_fallback('REPLACE(a, a, a)')
+    assert_gpu_did_fallback('REPLACE("TEST", "TEST", a)')
+    assert_gpu_did_fallback('REPLACE("TEST", a, "TEST")')
+    assert_gpu_did_fallback('REPLACE("TEST", a, a)')
 
 
 @incompat
@@ -607,12 +607,12 @@ def test_unsupported_fallback_translate():
             unary_op_df(spark, gen, length=10).selectExpr(sql_text),
             'StringTranslate')
 
-    assert_gpu_did_fallback('select TRANSLATE(a, "TEST", a) from t ')
-    assert_gpu_did_fallback('select TRANSLATE(a, a, "TEST") from t')
-    assert_gpu_did_fallback('select TRANSLATE(a, a, a) from t')
-    assert_gpu_did_fallback('select TRANSLATE("TEST", "TEST", a) from t')
-    assert_gpu_did_fallback('select TRANSLATE("TEST", a, "TEST") from t')
-    assert_gpu_did_fallback('select TRANSLATE("TEST", a, a) from t')
+    assert_gpu_did_fallback('TRANSLATE(a, "TEST", a)')
+    assert_gpu_did_fallback('TRANSLATE(a, a, "TEST")')
+    assert_gpu_did_fallback('TRANSLATE(a, a, a)')
+    assert_gpu_did_fallback('TRANSLATE("TEST", "TEST", a)')
+    assert_gpu_did_fallback('TRANSLATE("TEST", a, "TEST")')
+    assert_gpu_did_fallback('TRANSLATE("TEST", a, a)')
 
 
 @incompat
