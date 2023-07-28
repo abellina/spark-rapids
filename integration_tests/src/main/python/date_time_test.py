@@ -270,6 +270,28 @@ def test_from_utc_timestamp_fallback(data_gen, time_zone):
     'ProjectExec')
 
 
+@allow_non_gpu('ProjectExec', 'FromUTCTimestamp')
+@pytest.mark.parametrize('time_zone', ["PST", "MST", "EST", "VST", "NST", "AST"], ids=idfn)
+@pytest.mark.parametrize('data_gen', [timestamp_gen], ids=idfn)
+def test_from_utc_timestamp_unsupported_fallback(data_gen, time_zone):
+    time_zone_gen = StringGen(pattern="UTC")
+    assert_gpu_fallback_collect(
+        lambda spark: gen_df(spark, [("a", data_gen), ("tzone", time_zone_gen)]).selectExpr(
+            "from_utc_timestamp(a, tzone)"),
+        'ProjectExec')
+
+
+@allow_non_gpu('ProjectExec', 'UnixTime')
+@pytest.mark.parametrize('time_zone', ["PST", "MST", "EST", "VST", "NST", "AST"], ids=idfn)
+@pytest.mark.parametrize('data_gen', [long_gen], ids=idfn)
+def test_from_unixtime_fallback(data_gen, time_zone):
+    fmt_gen = StringGen(pattern="[M]")
+    assert_gpu_fallback_collect(
+        lambda spark: gen_df(spark, [("a", data_gen), ("fmt", fmt_gen)]).selectExpr(
+            "from_unixtime(a, fmt)"),
+        'ProjectExec')
+
+
 @pytest.mark.parametrize('invalid,fmt', [
     ('2021-01/01', 'yyyy-MM-dd'),
     ('2021/01-01', 'yyyy/MM/dd'),

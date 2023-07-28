@@ -655,6 +655,18 @@ def test_decimal_round(data_gen):
                 'round(a, 2)',
                 'round(a, 10)'))
 
+
+@incompat
+@approximate_float
+@pytest.mark.parametrize('data_gen', numeric_gens, ids=idfn)
+def test_round_fallback(data_gen):
+    # check for pyspark.sql.utils.AnalysisException:
+    assert_gpu_and_cpu_are_equal_collect(
+        lambda spark: unary_op_df(spark, data_gen).selectExpr(
+            'round(a, a)',
+            'bround(a, a)'))
+
+
 @incompat
 @approximate_float
 def test_non_decimal_round_overflow():
