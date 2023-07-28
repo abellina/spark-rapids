@@ -250,7 +250,6 @@ sequence_normal_integral_gens = [
 sequence_normal_no_step_integral_gens = [(gens[0], gens[1]) for
     gens in sequence_normal_integral_gens]
 
-
 @pytest.mark.parametrize('start_gen,stop_gen', sequence_normal_no_step_integral_gens, ids=idfn)
 def test_sequence_without_step(start_gen, stop_gen):
     assert_gpu_and_cpu_are_equal_collect(
@@ -320,10 +319,9 @@ sequence_too_long_length_gens = [
 def test_sequence_too_long_sequence(stop_gen):
     assert_gpu_and_cpu_error(
         # To avoid OOM, reduce the row number to 1, it is enough to verify this case.
-        lambda spark unary_op_df(spark, stop_gen, 1).selectExpr(
+        lambda spark:unary_op_df(spark, stop_gen, 1).selectExpr(
             "sequence(0, a)").collect(),
         conf = {}, error_message = "Too long sequence")
-
 
 def get_sequence_cases_mixed_df(spark, length=2048):
     # Generate the sequence data following the 3 rules mixed in a single dataset.
@@ -331,7 +329,6 @@ def get_sequence_cases_mixed_df(spark, length=2048):
     #     (step < num.zero && start >= stop) ||
     #     (step == num.zero && start == stop)
     data_gen = IntegerGen(nullable=False, min_val=-10, max_val=10, special_cases=[])
-
     def get_sequence_data(gen, len):
         gen.start(random.Random(0))
         list = []
