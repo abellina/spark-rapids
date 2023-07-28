@@ -662,7 +662,7 @@ def test_decimal_round(data_gen):
 @incompat
 @approximate_float
 @pytest.mark.parametrize('data_gen', [int_gen], ids=idfn)
-def test_illegal_args_fallback_round(data_gen):
+def test_illegal_args_round(data_gen):
     def check_analysis_exception(spark, sql_text):
         try:
             gen_df(spark, [("a", data_gen), ("b", int_gen)], length=10).selectExpr(sql_text)

@@ -158,21 +158,18 @@ def test_sort_array_lit(data_gen):
 
 
 @pytest.mark.parametrize('data_gen', [ArrayGen(IntegerGen())], ids=idfn)
-def test_sort_array_fallback(data_gen):
-    def doit(spark):
+def test_illegal_args_sort_array(data_gen):
+    def check_analysis_exception(spark, sql_text):
         try:
-            gen_df(spark, [("a", data_gen), ("b", boolean_gen)], length=10).selectExpr(
-                "sort_array(a, b)")
-            raise Exception("sort_array with columnar direction should not plan")
+            gen_df(spark, [("a", data_gen), ("b", boolean_gen)], length=10).selectExpr(sql_text)
+            raise Exception("sort_array should not plan with invalid arguments %s" % sql_text)
         except pyspark.sql.utils.AnalysisException as e:
             pass
 
-        try:
-            gen_df(spark, [("a", data_gen), ("b", boolean_gen)], length=10).selectExpr(
-                "sort_array(array(), b)")
-            raise Exception("sort_array with columnar direction should not plan")
-        except pyspark.sql.utils.AnalysisException as e:
-            pass
+    def doit(spark):
+        check_analysis_exception(spark, "sort_array(a, b)")
+        check_analysis_exception(spark, "sort_array(array(), b)")
+
     with_cpu_session(lambda spark: doit(spark))
     with_gpu_session(lambda spark: doit(spark))
 
