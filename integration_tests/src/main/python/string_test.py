@@ -103,8 +103,10 @@ def test_substring_index_fallback(data_gen):
 
     assert_gpu_did_fallback("SUBSTRING_INDEX(a, '_', num)")
     assert_gpu_did_fallback("SUBSTRING_INDEX(a, delim, 0)")
+    assert_gpu_did_fallback("SUBSTRING_INDEX(a, delim, num)")
     assert_gpu_did_fallback("SUBSTRING_INDEX('a_b', '_', num)")
     assert_gpu_did_fallback("SUBSTRING_INDEX('a_b', delim, 0)")
+    assert_gpu_did_fallback("SUBSTRING_INDEX('a_b', delim, num)")
 
 
 # ONLY LITERAL WIDTH AND PAD ARE SUPPORTED
@@ -569,24 +571,17 @@ def test_replace():
 @allow_non_gpu('ProjectExec')
 def test_replace_fallback():
     gen = mk_str_gen('.{0,5}TEST[\ud720 A]{0,5}')
-    assert_gpu_sql_fallback_collect(lambda spark: unary_op_df(spark, gen, length=10),
-                                    'StringReplace', 't',
-                                    'select REPLACE(a, "TEST", a) from t ')
-    assert_gpu_sql_fallback_collect(lambda spark: unary_op_df(spark, gen, length=10),
-                                    'StringReplace', 't',
-                                    'select REPLACE(a, a, "TEST") from t')
-    assert_gpu_sql_fallback_collect(lambda spark: unary_op_df(spark, gen, length=10),
-                                    'StringReplace', 't',
-                                    'select REPLACE(a, a, a) from t')
-    assert_gpu_sql_fallback_collect(lambda spark: unary_op_df(spark, gen, length=10),
-                                    'StringReplace', 't',
-                                    'select REPLACE("TEST", "TEST", a) from t')
-    assert_gpu_sql_fallback_collect(lambda spark: unary_op_df(spark, gen, length=10),
-                                    'StringReplace', 't',
-                                    'select REPLACE("TEST", a, "TEST") from t')
-    assert_gpu_sql_fallback_collect(lambda spark: unary_op_df(spark, gen, length=10),
-                                    'StringReplace', 't',
-                                    'select REPLACE("TEST", a, a) from t')
+    def assert_gpu_did_fallback(sql_text):
+        assert_gpu_sql_fallback_collect(lambda spark:
+            unary_op_df(spark, gen, length=10).selectExpr(sql_text),
+            'StringReplace')
+
+    assert_gpu_did_fallback('select REPLACE(a, "TEST", a) from t ')
+    assert_gpu_did_fallback('select REPLACE(a, a, "TEST") from t')
+    assert_gpu_did_fallback('select REPLACE(a, a, a) from t')
+    assert_gpu_did_fallback('select REPLACE("TEST", "TEST", a) from t')
+    assert_gpu_did_fallback('select REPLACE("TEST", a, "TEST") from t')
+    assert_gpu_did_fallback('select REPLACE("TEST", a, a) from t')
 
 
 @incompat
