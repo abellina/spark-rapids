@@ -125,8 +125,22 @@ def test_locate():
             lambda spark: unary_op_df(spark, gen).selectExpr(
                 'locate("Z", a, -1)',
                 'locate("Z", a, 4)',
+                'locate("abc", "1abcd", 0)',
+                'locate("abc", "1abcd", 10)',
                 'locate("A", a, 500)',
                 'locate("_", a, NULL)'))
+
+
+@allow_non_gpu('ProjectExec')
+def test_locate_fallback():
+    gen = mk_str_gen('.{0,3}Z_Z.{0,3}A.{0,3}')
+    pos_gen = IntegerGen()
+    assert_gpu_and_cpu_are_equal_collect(
+        lambda spark: unary_op_df(spark, gen).selectExpr(
+            'locate(a, a, -1)'))
+    assert_gpu_and_cpu_are_equal_collect(
+        lambda spark: gen_df(spark, [("a", gen), ("pos", pos_gen)]).selectExpr(
+            'locate("a", a, pos)'))
 
 
 def test_instr():
@@ -476,12 +490,38 @@ def test_replace():
     gen = mk_str_gen('.{0,5}TEST[\ud720 A]{0,5}')
     assert_gpu_and_cpu_are_equal_collect(
             lambda spark: unary_op_df(spark, gen).selectExpr(
+                'REPLACE("TEST", "TEST", "PROD")',
+                'REPLACE("NO", "T\ud720", "PROD")',
                 'REPLACE(a, "TEST", "PROD")',
                 'REPLACE(a, "T\ud720", "PROD")',
                 'REPLACE(a, "", "PROD")',
                 'REPLACE(a, "T", NULL)',
                 'REPLACE(a, NULL, "PROD")',
                 'REPLACE(a, "T", "")'))
+
+
+@allow_non_gpu('ProjectExec')
+def test_replace_fallback():
+    gen = mk_str_gen('.{0,5}TEST[\ud720 A]{0,5}')
+    assert_gpu_sql_fallback_collect(lambda spark: unary_op_df(spark, gen, length=10),
+                                    'StringReplace', 't',
+                                    'select REPLACE(a, "TEST", a) from t ')
+    assert_gpu_sql_fallback_collect(lambda spark: unary_op_df(spark, gen, length=10),
+                                    'StringReplace', 't',
+                                    'select REPLACE(a, a, "TEST") from t')
+    assert_gpu_sql_fallback_collect(lambda spark: unary_op_df(spark, gen, length=10),
+                                    'StringReplace', 't',
+                                    'select REPLACE(a, a, a) from t')
+    assert_gpu_sql_fallback_collect(lambda spark: unary_op_df(spark, gen, length=10),
+                                    'StringReplace', 't',
+                                    'select REPLACE("TEST", "TEST", a) from t')
+    assert_gpu_sql_fallback_collect(lambda spark: unary_op_df(spark, gen, length=10),
+                                    'StringReplace', 't',
+                                    'select REPLACE("TEST", a, "TEST") from t')
+    assert_gpu_sql_fallback_collect(lambda spark: unary_op_df(spark, gen, length=10),
+                                    'StringReplace', 't',
+                                    'select REPLACE("TEST", a, a) from t')
+
 
 @incompat
 def test_translate():
@@ -496,6 +536,30 @@ def test_translate():
                 'translate(a, "TEST", NULL)',
                 'translate("AaBbCc", "abc", "123")',
                 'translate("AaBbCc", "abc", "1")'))
+
+@incompat
+@allow_non_gpu('ProjectExec')
+def test_translate_fallback():
+    gen = mk_str_gen('.{0,5}TEST[\ud720 A]{0,5}')
+    assert_gpu_sql_fallback_collect(lambda spark: unary_op_df(spark, gen, length=10),
+                                    'StringTranslate', 't',
+                                    'select TRANSLATE(a, "TEST", a) from t ')
+    assert_gpu_sql_fallback_collect(lambda spark: unary_op_df(spark, gen, length=10),
+                                    'StringTranslate', 't',
+                                    'select TRANSLATE(a, a, "TEST") from t')
+    assert_gpu_sql_fallback_collect(lambda spark: unary_op_df(spark, gen, length=10),
+                                    'StringTranslate', 't',
+                                    'select TRANSLATE(a, a, a) from t')
+    assert_gpu_sql_fallback_collect(lambda spark: unary_op_df(spark, gen, length=10),
+                                    'StringTranslate', 't',
+                                    'select TRANSLATE("TEST", "TEST", a) from t')
+    assert_gpu_sql_fallback_collect(lambda spark: unary_op_df(spark, gen, length=10),
+                                    'StringTranslate', 't',
+                                    'select TRANSLATE("TEST", a, "TEST") from t')
+    assert_gpu_sql_fallback_collect(lambda spark: unary_op_df(spark, gen, length=10),
+                                    'StringTranslate', 't',
+                                    'select TRANSLATE("TEST", a, a) from t')
+
 
 @incompat
 @pytest.mark.skipif(is_before_spark_320(), reason="Only in Spark 3.2+ does translate() support unicode \
