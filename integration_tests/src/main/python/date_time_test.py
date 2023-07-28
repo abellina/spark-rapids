@@ -262,13 +262,13 @@ def test_from_utc_timestamp(data_gen, time_zone):
     assert_gpu_and_cpu_are_equal_collect(
         lambda spark: unary_op_df(spark, data_gen).select(f.from_utc_timestamp(f.col('a'), time_zone)))
 
-@allow_non_gpu('ProjectExec, FromUTCTimestamp')
+@allow_non_gpu('ProjectExec')
 @pytest.mark.parametrize('time_zone', ["PST", "MST", "EST", "VST", "NST", "AST"], ids=idfn)
 @pytest.mark.parametrize('data_gen', [timestamp_gen], ids=idfn)
-def test_from_utc_timestamp_fallback(data_gen, time_zone):
+def test_from_utc_timestamp_unsupported_timezone_fallback(data_gen, time_zone):
     assert_gpu_fallback_collect(
         lambda spark: unary_op_df(spark, data_gen).select(f.from_utc_timestamp(f.col('a'), time_zone)),
-    'ProjectExec')
+    'FromUTCTimestamp')
 
 
 @allow_non_gpu('ProjectExec')
@@ -427,28 +427,30 @@ def test_date_format(data_gen, date_format):
 unsupported_date_formats = ['F']
 @pytest.mark.parametrize('date_format', unsupported_date_formats, ids=idfn)
 @pytest.mark.parametrize('data_gen', date_n_time_gens, ids=idfn)
-@allow_non_gpu('ProjectExec,Alias,DateFormatClass,Literal,Cast')
+@allow_non_gpu('ProjectExec')
 def test_date_format_f(data_gen, date_format):
     assert_gpu_fallback_collect(
-        lambda spark : unary_op_df(spark, data_gen).selectExpr("date_format(a, '{}')".format(date_format)), 'ProjectExec')
+        lambda spark : unary_op_df(spark, data_gen).selectExpr("date_format(a, '{}')".format(date_format)),
+        'DateFormatClass')
 
 @pytest.mark.parametrize('date_format', unsupported_date_formats, ids=idfn)
 @pytest.mark.parametrize('data_gen', date_n_time_gens, ids=idfn)
-@allow_non_gpu('ProjectExec,Alias,DateFormatClass,Literal,Cast')
+@allow_non_gpu('DateFormatClass')
 def test_date_format_f_incompat(data_gen, date_format):
     # note that we can't support it even with incompatibleDateFormats enabled
     conf = {"spark.rapids.sql.incompatibleDateFormats.enabled": "true"}
     assert_gpu_fallback_collect(
-        lambda spark : unary_op_df(spark, data_gen).selectExpr("date_format(a, '{}')".format(date_format)), 'ProjectExec', conf)
+        lambda spark : unary_op_df(spark, data_gen).selectExpr("date_format(a, '{}')".format(date_format)),
+        'DateFormatClass', conf)
 
 maybe_supported_date_formats = ['dd-MM-yyyy', 'yyyy-MM-dd HH:mm:ss.SSS', 'yyyy-MM-dd HH:mm:ss.SSSSSS']
 @pytest.mark.parametrize('date_format', maybe_supported_date_formats, ids=idfn)
 @pytest.mark.parametrize('data_gen', date_n_time_gens, ids=idfn)
-@allow_non_gpu('ProjectExec,Alias,DateFormatClass,Literal,Cast')
+@allow_non_gpu('ProjectExec')
 def test_date_format_maybe(data_gen, date_format):
     assert_gpu_fallback_collect(
         lambda spark : unary_op_df(spark, data_gen).selectExpr("date_format(a, '{}')".format(date_format)),
-        'ProjectExec')
+        'DateFormatClass')
 
 @pytest.mark.parametrize('date_format', maybe_supported_date_formats, ids=idfn)
 @pytest.mark.parametrize('data_gen', date_n_time_gens, ids=idfn)

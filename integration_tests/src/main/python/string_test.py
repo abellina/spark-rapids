@@ -94,26 +94,17 @@ def test_substring_index(data_gen,delim):
 def test_substring_index_fallback(data_gen):
     delim_gen = StringGen(pattern="_")
     num_gen = IntegerGen(min_val=0, max_val=10, special_cases=[])
-    def make_df(spark):
-        return gen_df(spark, [("a", data_gen),
-                              ("delim", delim_gen),
-                              ("num", num_gen)], length=10)
+    def assert_gpu_did_fallback(sql_text):
+        assert_gpu_fallback_collect(lambda spark:
+            gen_df(spark, [("a", data_gen),
+                           ("delim", delim_gen),
+                           ("num", num_gen)], length=10).selectExpr(sql_text),
+            "SubstringIndex")
 
-    assert_gpu_fallback_collect(
-        lambda spark : make_df(spark).selectExpr("SUBSTRING_INDEX(a, '_', num)"),
-        cpu_fallback_class_name='SubstringIndex')
-
-    assert_gpu_fallback_collect(
-        lambda spark : make_df(spark).selectExpr("SUBSTRING_INDEX(a, delim, 0)"),
-        cpu_fallback_class_name='SubstringIndex')
-
-    assert_gpu_fallback_collect(
-        lambda spark : make_df(spark).selectExpr("SUBSTRING_INDEX('a_b', '_', num)"),
-        cpu_fallback_class_name='SubstringIndex')
-
-    assert_gpu_fallback_collect(
-        lambda spark : make_df(spark).selectExpr("SUBSTRING_INDEX('a_b', delim, 0)"),
-        cpu_fallback_class_name='SubstringIndex')
+    assert_gpu_did_fallback("SUBSTRING_INDEX(a, '_', num)")
+    assert_gpu_did_fallback("SUBSTRING_INDEX(a, delim, 0)")
+    assert_gpu_did_fallback("SUBSTRING_INDEX('a_b', '_', num)")
+    assert_gpu_did_fallback("SUBSTRING_INDEX('a_b', delim, 0)")
 
 
 # ONLY LITERAL WIDTH AND PAD ARE SUPPORTED
@@ -134,21 +125,20 @@ def test_lpad_fallback():
     gen = mk_str_gen('.{0,5}')
     pad_gen = StringGen(pattern="G")
     num_gen = IntegerGen(min_val=0, max_val=10, special_cases=[])
-    def make_df(spark):
-        return gen_df(spark, [("a", gen),
-                              ("len", num_gen),
-                              ("pad", pad_gen)], length=10)
-    def check_fallback_lpad(sql_string):
-        assert_gpu_fallback_collect(
-            lambda spark:make_df(spark).selectExpr(sql_string),
+
+    def assert_gpu_did_fallback(sql_string):
+        assert_gpu_fallback_collect(lambda spark:
+            gen_df(spark, [("a", gen),
+                           ("len", num_gen),
+                           ("pad", pad_gen)], length=10).selectExpr(sql_string),
             "StringLPad")
 
-    check_fallback_lpad('LPAD(a, 2, pad)')
-    check_fallback_lpad('LPAD(a, len, " ")')
-    check_fallback_lpad('LPAD(a, len, pad)')
-    check_fallback_lpad('LPAD("foo", 2, pad)')
-    check_fallback_lpad('LPAD("foo", len, " ")')
-    check_fallback_lpad('LPAD("foo", len, pad)')
+    assert_gpu_did_fallback('LPAD(a, 2, pad)')
+    assert_gpu_did_fallback('LPAD(a, len, " ")')
+    assert_gpu_did_fallback('LPAD(a, len, pad)')
+    assert_gpu_did_fallback('LPAD("foo", 2, pad)')
+    assert_gpu_did_fallback('LPAD("foo", len, " ")')
+    assert_gpu_did_fallback('LPAD("foo", len, pad)')
 
 
 # ONLY LITERAL WIDTH AND PAD ARE SUPPORTED
@@ -168,21 +158,20 @@ def test_rpad_fallback():
     gen = mk_str_gen('.{0,5}')
     pad_gen = StringGen(pattern="G")
     num_gen = IntegerGen(min_val=0, max_val=10, special_cases=[])
-    def make_df(spark):
-        return gen_df(spark, [("a", gen),
-                              ("len", num_gen),
-                              ("pad", pad_gen)], length=10)
-    def check_fallback_rpad(sql_string):
-        assert_gpu_fallback_collect(
-            lambda spark:make_df(spark).selectExpr(sql_string),
+
+    def assert_gpu_did_fallback(sql_string):
+        assert_gpu_fallback_collect(lambda spark:
+            gen_df(spark, [("a", gen),
+                           ("len", num_gen),
+                           ("pad", pad_gen)], length=10).selectExpr(sql_string),
             "StringRPad")
 
-    check_fallback_rpad('RPAD(a, 2, pad)')
-    check_fallback_rpad('RPAD(a, len, " ")')
-    check_fallback_rpad('RPAD(a, len, pad)')
-    check_fallback_rpad('RPAD("foo", 2, pad)')
-    check_fallback_rpad('RPAD("foo", len, " ")')
-    check_fallback_rpad('RPAD("foo", len, pad)')
+    assert_gpu_did_fallback('RPAD(a, 2, pad)')
+    assert_gpu_did_fallback('RPAD(a, len, " ")')
+    assert_gpu_did_fallback('RPAD(a, len, pad)')
+    assert_gpu_did_fallback('RPAD("foo", 2, pad)')
+    assert_gpu_did_fallback('RPAD("foo", len, " ")')
+    assert_gpu_did_fallback('RPAD("foo", len, pad)')
 
 
 # ONLY LITERAL SEARCH PARAMS ARE SUPPORTED
