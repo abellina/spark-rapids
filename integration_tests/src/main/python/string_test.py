@@ -255,11 +255,14 @@ def test_contains():
 
 @allow_non_gpu('ProjectExec')
 def test_unsupported_fallback_contains():
-    def doit(spark):
-        return unary_op_df(spark, gen, length=26).select(
-            f.lit('Z').contains(f.col('a')))
     gen = StringGen(pattern='[a-z]')
-    assert_gpu_and_cpu_are_equal_collect(doit)
+    def assert_gpu_did_fallback(op):
+        assert_gpu_fallback_collect(lambda spark:
+            unary_op_df(spark, gen, length=10).select(op),
+            'Contains')
+
+    assert_gpu_did_fallback(f.lit('Z').contains(f.col('a')))
+    assert_gpu_did_fallback(f.col('a').contains(f.col('a')))
 
 
 @pytest.mark.parametrize('data_gen', [mk_str_gen('[Ab \ud720]{0,3}A.{0,3}Z[ Ab]{0,3}'), StringGen('')])
