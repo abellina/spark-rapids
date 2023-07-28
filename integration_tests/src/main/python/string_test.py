@@ -91,7 +91,7 @@ def test_substring_index(data_gen,delim):
 
 @allow_non_gpu('ProjectExec')
 @pytest.mark.parametrize('data_gen', [mk_str_gen('([ABC]{0,3}_?){0,7}')], ids=idfn)
-def test_substring_index_fallback(data_gen):
+def test_unsupported_fallback_substring_index(data_gen):
     delim_gen = StringGen(pattern="_")
     num_gen = IntegerGen(min_val=0, max_val=10, special_cases=[])
     def assert_gpu_did_fallback(sql_text):
@@ -123,7 +123,7 @@ def test_lpad():
 
 
 @allow_non_gpu('ProjectExec')
-def test_lpad_fallback():
+def test_unsupported_fallback_lpad():
     gen = mk_str_gen('.{0,5}')
     pad_gen = StringGen(pattern="G")
     num_gen = IntegerGen(min_val=0, max_val=10, special_cases=[])
@@ -156,7 +156,7 @@ def test_rpad():
 
 
 @allow_non_gpu('ProjectExec')
-def test_rpad_fallback():
+def test_unsupported_fallback_rpad():
     gen = mk_str_gen('.{0,5}')
     pad_gen = StringGen(pattern="G")
     num_gen = IntegerGen(min_val=0, max_val=10, special_cases=[])
@@ -200,7 +200,7 @@ def test_locate():
 
 
 @allow_non_gpu('ProjectExec')
-def test_locate_fallback():
+def test_unsupported_fallback_locate():
     gen = mk_str_gen('.{0,3}Z_Z.{0,3}A.{0,3}')
     pos_gen = IntegerGen()
     assert_gpu_and_cpu_are_equal_collect(
@@ -226,7 +226,7 @@ def test_instr():
 
 
 @allow_non_gpu('ProjectExec')
-def test_instr_fallback():
+def test_unsupported_fallback_instr():
     gen = mk_str_gen('.{0,3}Z_Z.{0,3}A.{0,3}')
     assert_gpu_and_cpu_are_equal_collect(
         lambda spark: unary_op_df(spark, gen).selectExpr(
@@ -245,7 +245,7 @@ def test_contains():
                 f.col('a').contains(None)))
 
 @allow_non_gpu('ProjectExec')
-def test_contains_fallback():
+def test_unsupported_fallback_contains():
     def doit(spark):
         return unary_op_df(spark, gen, length=26).select(
             f.lit('Z').contains(f.col('a')))
@@ -294,7 +294,7 @@ def test_startswith():
                 f.col('a').startswith(None),
                 f.col('a').startswith('A\ud720')))
 
-def test_startswith_fallback():
+def test_unsupported_fallback_startswith():
     def doit(spark):
         try:
             unary_op_df(spark, gen, length=26).select(
@@ -319,7 +319,7 @@ def test_endswith():
                 f.col('a').endswith('A\ud720')))
 
 
-def test_endswith_fallback():
+def test_unsupported_fallback_endswith():
     def doit(spark):
         try:
             unary_op_df(spark, gen, length=26).select(
@@ -701,7 +701,7 @@ def test_like():
                 f.col('a').like('%a{3}%')))
 
 @allow_non_gpu('ProjectExec')
-def test_like_fallback():
+def test_unsupported_fallback_like():
     gen = StringGen('[a-z]')
     def do_it(spark):
         return unary_op_df(spark, gen).selectExpr(
@@ -710,7 +710,7 @@ def test_like_fallback():
     assert_gpu_and_cpu_are_equal_collect(do_it)
 
 @allow_non_gpu('ProjectExec')
-def test_rlike_fallback():
+def test_unsupported_fallback_rlike():
     gen = StringGen('\/lit\/')
     def do_it(spark):
         return unary_op_df(spark, gen, length=10).selectExpr(
