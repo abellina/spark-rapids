@@ -21,8 +21,9 @@ from conftest import is_databricks_runtime
 from data_gen import *
 from marks import *
 from pyspark.sql.types import *
+import pyspark.sql.utils
 import pyspark.sql.functions as f
-from spark_session import is_databricks104_or_later, is_before_spark_320
+from spark_session import with_cpu_session, with_gpu_session, is_databricks104_or_later, is_before_spark_320
 
 _regexp_conf = { 'spark.rapids.sql.regexp.enabled': 'true' }
 
@@ -127,10 +128,13 @@ def test_locate():
                 'locate("A", a, 500)',
                 'locate("_", a, NULL)'))
 
+
 def test_instr():
     gen = mk_str_gen('.{0,3}Z_Z.{0,3}A.{0,3}')
     assert_gpu_and_cpu_are_equal_collect(
             lambda spark: unary_op_df(spark, gen).selectExpr(
+                'instr("A", "A")',
+                'instr("a", "A")',
                 'instr(a, "Z")',
                 'instr(a, "A")',
                 'instr(a, "_")',
@@ -138,15 +142,34 @@ def test_instr():
                 'instr(NULL, "A")',
                 'instr(NULL, NULL)'))
 
+
+@allow_non_gpu('ProjectExec')
+def test_instr_fallback():
+    gen = mk_str_gen('.{0,3}Z_Z.{0,3}A.{0,3}')
+    assert_gpu_and_cpu_are_equal_collect(
+        lambda spark: unary_op_df(spark, gen).selectExpr(
+            'instr(a, a)'))
+
+
 def test_contains():
     gen = mk_str_gen('.{0,3}Z?_Z?.{0,3}A?.{0,3}')
     assert_gpu_and_cpu_are_equal_collect(
             lambda spark: unary_op_df(spark, gen).select(
+                f.lit('Z').contains('Z'),
+                f.lit('foo').contains('Z_'),
                 f.col('a').contains('Z'),
                 f.col('a').contains('Z_'),
                 f.col('a').contains(''),
-                f.col('a').contains(None)
-                ))
+                f.col('a').contains(None)))
+
+@allow_non_gpu('ProjectExec')
+def test_contains_fallback():
+    def doit(spark):
+        return unary_op_df(spark, gen, length=26).select(
+            f.lit('Z').contains(f.col('a')))
+    gen = StringGen(pattern='[a-z]')
+    assert_gpu_and_cpu_are_equal_collect(doit)
+
 
 @pytest.mark.parametrize('data_gen', [mk_str_gen('[Ab \ud720]{0,3}A.{0,3}Z[ Ab]{0,3}'), StringGen('')])
 def test_trim(data_gen):
@@ -182,20 +205,50 @@ def test_startswith():
     gen = mk_str_gen('[Ab\ud720]{3}A.{0,3}Z[Ab\ud720]{3}')
     assert_gpu_and_cpu_are_equal_collect(
             lambda spark: unary_op_df(spark, gen).select(
+                f.lit('foo').startswith('f'),
+                f.lit('bar').startswith('1'),
                 f.col('a').startswith('A'),
                 f.col('a').startswith(''),
                 f.col('a').startswith(None),
                 f.col('a').startswith('A\ud720')))
+
+def test_startswith_fallback():
+    def doit(spark):
+        try:
+            unary_op_df(spark, gen, length=26).select(
+                f.lit('foo').startswith(f.col('a')))
+            raise Exception("Should not have been able to plan")
+        except pyspark.sql.utils.AnalysisException as e:
+            pass
+    gen = StringGen(pattern='[a-z]')
+    with_gpu_session(lambda spark: doit(spark))
+    with_cpu_session(lambda spark: doit(spark))
 
 
 def test_endswith():
     gen = mk_str_gen('[Ab\ud720]{3}A.{0,3}Z[Ab\ud720]{3}')
     assert_gpu_and_cpu_are_equal_collect(
             lambda spark: unary_op_df(spark, gen).select(
+                f.lit('foo').startswith('f'),
+                f.lit('bar').startswith('1'),
                 f.col('a').endswith('A'),
                 f.col('a').endswith(''),
                 f.col('a').endswith(None),
                 f.col('a').endswith('A\ud720')))
+
+
+def test_endswith_fallback():
+    def doit(spark):
+        try:
+            unary_op_df(spark, gen, length=26).select(
+                f.lit('foo').endswith(f.col('a')))
+            raise Exception("Should not have been able to plan")
+        except pyspark.sql.utils.AnalysisException as e:
+            pass
+    gen = StringGen(pattern='[a-z]')
+    with_gpu_session(lambda spark: doit(spark))
+    with_cpu_session(lambda spark: doit(spark))
+
 
 def test_concat_ws_basic():
     gen = StringGen(nullable=True)
@@ -509,6 +562,8 @@ def test_like():
             .with_special_case('%SystemDrive%\\Users\\John')
     assert_gpu_and_cpu_are_equal_collect(
             lambda spark: unary_op_df(spark, gen).select(
+                f.lit('_oo_').like('_oo_'),
+                f.lit('_aa_').like('_oo_'),
                 f.col('a').like('%o%'), # turned into contains
                 f.col('a').like('%a%'), # turned into contains
                 f.col('a').like(''), #turned into equals
@@ -525,7 +580,26 @@ def test_like():
                 f.col('a').like('_$%'),
                 f.col('a').like('_._'),
                 f.col('a').like('_?|}{_%'),
-                f.col('a').like('%a{3}%'))) 
+                f.col('a').like('%a{3}%')))
+
+@allow_non_gpu('ProjectExec')
+def test_like_fallback():
+    gen = StringGen('[a-z]')
+    def do_it(spark):
+        return unary_op_df(spark, gen).selectExpr(
+            "'lit' like a",
+            "a like a")
+    assert_gpu_and_cpu_are_equal_collect(do_it)
+
+@allow_non_gpu('ProjectExec')
+def test_rlike_fallback():
+    gen = StringGen('\/lit\/')
+    def do_it(spark):
+        return unary_op_df(spark, gen, length=10).selectExpr(
+            "'lit' rlike a",
+            "a rlike a")
+    assert_gpu_and_cpu_are_equal_collect(do_it)
+
 
 def test_like_simple_escape():
     gen = mk_str_gen('(\u20ac|\\w){0,3}a[|b*.$\r\n]{0,2}c\\w{0,3}')\
