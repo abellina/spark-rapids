@@ -173,6 +173,7 @@ def test_illegal_args_sort_array(data_gen):
     with_cpu_session(lambda spark: doit(spark))
     with_gpu_session(lambda spark: doit(spark))
 
+
 def test_sort_array_normalize_nans():
     """
     When the average length of array is > 100,

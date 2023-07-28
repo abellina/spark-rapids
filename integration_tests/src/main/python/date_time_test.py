@@ -18,9 +18,8 @@ from data_gen import *
 from datetime import date, datetime, timezone
 from marks import ignore_order, incompat, allow_non_gpu
 from pyspark.sql.types import *
-from spark_session import with_cpu_session, with_gpu_session, is_before_spark_330
+from spark_session import with_cpu_session, is_before_spark_330
 import pyspark.sql.functions as f
-import pyspark.sql.utils
 
 # We only support literal intervals for TimeSub
 vals = [(-584, 1563), (1943, 1101), (2693, 2167), (2729, 0), (44, 1534), (2635, 3319),
@@ -231,12 +230,13 @@ def test_unix_timestamp(data_gen):
             lambda spark : unary_op_df(spark, data_gen).select(f.unix_timestamp(f.col('a'))))
 
 
-@allow_non_gpu("UnixTimestamp", "ProjectExec")
+@allow_non_gpu('ProjectExec')
 @pytest.mark.parametrize('data_gen', date_n_time_gens, ids=idfn)
-def test_unix_timestamp_fallback(data_gen):
-    assert_gpu_and_cpu_are_equal_collect(lambda spark: gen_df(
+def test_unsupported_fallback_unix_timestamp(data_gen):
+    assert_gpu_fallback_collect(lambda spark: gen_df(
         spark, [("a", data_gen), ("b", string_gen)], length=10).selectExpr(
-        "unix_timestamp(a, b)"))
+        "unix_timestamp(a, b)"),
+        "UnixTimestamp")
 
 
 @pytest.mark.parametrize('ansi_enabled', [True, False], ids=['ANSI_ON', 'ANSI_OFF'])
@@ -247,12 +247,13 @@ def test_to_unix_timestamp(data_gen, ansi_enabled):
         {'spark.sql.ansi.enabled': ansi_enabled})
 
 
-@allow_non_gpu("ToUnixTimestamp", "ProjectExec")
+@allow_non_gpu('ProjectExec')
 @pytest.mark.parametrize('data_gen', date_n_time_gens, ids=idfn)
-def test_to_unix_timestamp_fallback(data_gen):
-    assert_gpu_and_cpu_are_equal_collect(lambda spark: gen_df(
+def test_unsupported_fallback_to_unix_timestamp(data_gen):
+    assert_gpu_fallback_collect(lambda spark: gen_df(
         spark, [("a", data_gen), ("b", string_gen)], length=10).selectExpr(
-        "to_unix_timestamp(a, b)"))
+        "to_unix_timestamp(a, b)"),
+        "ToUnixTimestamp")
 
 
 @pytest.mark.parametrize('time_zone', ["UTC", "UTC+0", "UTC-0", "GMT", "GMT+0", "GMT-0"], ids=idfn)
@@ -270,26 +271,24 @@ def test_from_utc_timestamp_fallback(data_gen, time_zone):
     'ProjectExec')
 
 
-@allow_non_gpu('ProjectExec', 'FromUTCTimestamp')
-@pytest.mark.parametrize('time_zone', ["PST", "MST", "EST", "VST", "NST", "AST"], ids=idfn)
+@allow_non_gpu('ProjectExec')
 @pytest.mark.parametrize('data_gen', [timestamp_gen], ids=idfn)
-def test_from_utc_timestamp_unsupported_fallback(data_gen, time_zone):
+def test_unsupported_fallback_from_utc_timestamp(data_gen):
     time_zone_gen = StringGen(pattern="UTC")
     assert_gpu_fallback_collect(
         lambda spark: gen_df(spark, [("a", data_gen), ("tzone", time_zone_gen)]).selectExpr(
             "from_utc_timestamp(a, tzone)"),
-        'ProjectExec')
+        'FromUTCTimestamp')
 
 
-@allow_non_gpu('ProjectExec', 'UnixTime')
-@pytest.mark.parametrize('time_zone', ["PST", "MST", "EST", "VST", "NST", "AST"], ids=idfn)
+@allow_non_gpu('ProjectExec')
 @pytest.mark.parametrize('data_gen', [long_gen], ids=idfn)
-def test_from_unixtime_fallback(data_gen, time_zone):
+def test_unsupported_fallback_from_unixtime(data_gen):
     fmt_gen = StringGen(pattern="[M]")
     assert_gpu_fallback_collect(
         lambda spark: gen_df(spark, [("a", data_gen), ("fmt", fmt_gen)]).selectExpr(
             "from_unixtime(a, fmt)"),
-        'ProjectExec')
+        'FromUnixTime')
 
 
 @pytest.mark.parametrize('invalid,fmt', [
@@ -480,24 +479,27 @@ def test_date_format_mmyyyy_cast_canonicalization(spark_tmp_path):
     assert_gpu_and_cpu_are_equal_collect(do_join_cast)
 
 
-@allow_non_gpu("DateFormat", "ProjectExec")
+@allow_non_gpu('ProjectExec')
 @pytest.mark.parametrize('data_gen', date_n_time_gens, ids=idfn)
-def test_date_format_unsupported_fallback(data_gen):
+def test_unsupported_fallback_date_format(data_gen):
     conf = {"spark.rapids.sql.incompatibleDateFormats.enabled": "true"}
-    assert_gpu_and_cpu_are_equal_collect(
+    assert_gpu_fallback_collect(
         lambda spark : gen_df(spark, [("a", data_gen)]).selectExpr(
-            "date_format(a, a)"), conf)
+            "date_format(a, a)"),
+        "DateFormatClass",
+        conf)
 
 
-#TODO: why don't I need to specify GetTimestamp in allow list
-@allow_non_gpu("ProjectExec")
-def test_to_date_unsupported_fallback():
+@allow_non_gpu('ProjectExec')
+def test_unsupported_fallback_to_date():
     date_gen = StringGen(pattern="2023-08-01")
     pattern_gen = StringGen(pattern="[M]")
     conf = {"spark.rapids.sql.incompatibleDateFormats.enabled": "true"}
-    assert_gpu_and_cpu_are_equal_collect(
+    assert_gpu_fallback_collect(
         lambda spark: gen_df(spark, [("a", date_gen), ("b", pattern_gen)]).selectExpr(
-            "to_date(a, b)"), conf)
+            "to_date(a, b)"),
+        'GetTimestamp',
+        conf)
 
 
 # (-62135510400, 253402214400) is the range of seconds that can be represented by timestamp_seconds 
