@@ -44,7 +44,7 @@ def test_get_json_object(json_str_pattern):
                    r'"bicycle":\{"price":[1-9]\d\.\d\d,"color":"[a-z]{0,4}"\}\},' \
                    r'"email":"[a-z]{1,5}\@[a-z]{3,10}\.com","owner":"[a-z]{3,8}"\}',
                    r'\{"a": "[a-z]{1,3}"\}'], ids=idfn)
-def test_get_json_object_fallback(json_str_pattern):
+def test_unsupported_fallback_get_json_object(json_str_pattern):
     gen = mk_json_str_gen(json_str_pattern)
     scalar_json = '{"store": {"fruit": "test"}}'
     pattern = StringGen(pattern='\$\.[a-z]{1,9}')
