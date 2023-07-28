@@ -878,6 +878,11 @@ def test_regexp_extract_fallback():
         cpu_fallback_class_name='RegExpExtract')
 
     assert_gpu_fallback_collect(
+        lambda spark: gen_df(spark, [("a", gen), ("reg_ex", regex_gen), ("num", num_gen)]).selectExpr(
+            'REGEXP_EXTRACT(a, reg_ex, num)'),
+        cpu_fallback_class_name='RegExpExtract')
+
+    assert_gpu_fallback_collect(
         lambda spark: gen_df(spark, [("num", num_gen)]).selectExpr(
             'REGEXP_EXTRACT("PROD", "[a-z]+", num)'),
         cpu_fallback_class_name='RegExpExtract')
@@ -885,6 +890,11 @@ def test_regexp_extract_fallback():
     assert_gpu_fallback_collect(
         lambda spark: gen_df(spark, [("a", gen), ("reg_ex", regex_gen)]).selectExpr(
             'REGEXP_EXTRACT("PROD", reg_ex, 0)'),
+        cpu_fallback_class_name='RegExpExtract')
+
+    assert_gpu_fallback_collect(
+        lambda spark: gen_df(spark, [("a", gen), ("reg_ex", regex_gen), ("num", num_gen)]).selectExpr(
+            'REGEXP_EXTRACT("PROD", reg_ex, num)'),
         cpu_fallback_class_name='RegExpExtract')
 
 
@@ -895,25 +905,34 @@ def test_regexp_extract_all_fallback():
     num_gen = IntegerGen(min_val=0, max_val=0, special_cases=[])
 
     assert_gpu_fallback_collect(
-        lambda spark: gen_df(spark, [("a", gen), ("num", num_gen)]).selectExpr(
+        lambda spark: gen_df(spark, [("a", gen), ("num", num_gen)], length=10).selectExpr(
             'REGEXP_EXTRACT_ALL(a, "[a-z]+", num)'),
         cpu_fallback_class_name='RegExpExtractAll')
 
     assert_gpu_fallback_collect(
-        lambda spark: gen_df(spark, [("a", gen), ("reg_ex", regex_gen)]).selectExpr(
+        lambda spark: gen_df(spark, [("a", gen), ("reg_ex", regex_gen)], length=10).selectExpr(
             'REGEXP_EXTRACT_ALL(a, reg_ex, 0)'),
         cpu_fallback_class_name='RegExpExtractAll')
 
     assert_gpu_fallback_collect(
-        lambda spark: gen_df(spark, [("num", num_gen)]).selectExpr(
+        lambda spark: gen_df(spark, [("a", gen), ("reg_ex", regex_gen), ("num", num_gen)], length=10).selectExpr(
+            'REGEXP_EXTRACT_ALL(a, reg_ex, num)'),
+        cpu_fallback_class_name='RegExpExtractAll')
+
+    assert_gpu_fallback_collect(
+        lambda spark: gen_df(spark, [("num", num_gen)], length=10).selectExpr(
             'REGEXP_EXTRACT_ALL("PROD", "[a-z]+", num)'),
         cpu_fallback_class_name='RegExpExtractAll')
 
     assert_gpu_fallback_collect(
-        lambda spark: gen_df(spark, [("a", gen), ("reg_ex", regex_gen)]).selectExpr(
+        lambda spark: gen_df(spark, [("a", gen), ("reg_ex", regex_gen)], length=10).selectExpr(
             'REGEXP_EXTRACT_ALL("PROD", reg_ex, 0)'),
         cpu_fallback_class_name='RegExpExtractAll')
 
+    assert_gpu_fallback_collect(
+        lambda spark: gen_df(spark, [("a", gen), ("reg_ex", regex_gen), ("num", num_gen)], length=10).selectExpr(
+            'REGEXP_EXTRACT_ALL("PROD", reg_ex, num)'),
+        cpu_fallback_class_name='RegExpExtractAll')
 
 
 @allow_non_gpu('ProjectExec', 'RegExpReplace')
