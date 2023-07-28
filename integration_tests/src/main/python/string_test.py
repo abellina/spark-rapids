@@ -203,12 +203,16 @@ def test_locate():
 def test_unsupported_fallback_locate():
     gen = mk_str_gen('.{0,3}Z_Z.{0,3}A.{0,3}')
     pos_gen = IntegerGen()
-    assert_gpu_and_cpu_are_equal_collect(
-        lambda spark: unary_op_df(spark, gen).selectExpr(
-            'locate(a, a, -1)'))
-    assert_gpu_and_cpu_are_equal_collect(
-        lambda spark: gen_df(spark, [("a", gen), ("pos", pos_gen)]).selectExpr(
-            'locate("a", a, pos)'))
+
+    def assert_gpu_did_fallback(sql_text):
+        assert_gpu_fallback_collect(lambda spark:
+            gen_df(spark, [("a", gen), ("pos", pos_gen)], length=10).selectExpr(sql_text),
+            'StringLocate')
+
+    assert_gpu_did_fallback('locate(a, a, -1)')
+    assert_gpu_did_fallback('locate("a", a, pos)')
+    assert_gpu_did_fallback('locate(a, a, pos)')
+    assert_gpu_did_fallback('locate(a, "a", pos)')
 
 
 def test_instr():
@@ -228,9 +232,14 @@ def test_instr():
 @allow_non_gpu('ProjectExec')
 def test_unsupported_fallback_instr():
     gen = mk_str_gen('.{0,3}Z_Z.{0,3}A.{0,3}')
-    assert_gpu_and_cpu_are_equal_collect(
-        lambda spark: unary_op_df(spark, gen).selectExpr(
-            'instr(a, a)'))
+
+    def assert_gpu_did_fallback(sql_text):
+        assert_gpu_fallback_collect(lambda spark:
+            unary_op_df(spark, gen, length=10).selectExpr(sql_text),
+            'StringInstr')
+
+    assert_gpu_did_fallback('instr(a, a)')
+    assert_gpu_did_fallback('instr("a", a)')
 
 
 def test_contains():
