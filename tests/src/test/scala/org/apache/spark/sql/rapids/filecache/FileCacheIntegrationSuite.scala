@@ -16,7 +16,7 @@
 
 package org.apache.spark.sql.rapids.filecache
 
-import com.nvidia.spark.rapids.{RapidsBufferCatalog, RapidsDeviceMemoryStore, SparkQueryCompareTestSuite}
+import com.nvidia.spark.rapids.SparkQueryCompareTestSuite
 import com.nvidia.spark.rapids.shims.GpuBatchScanExec
 import org.scalatest.BeforeAndAfterEach
 
@@ -31,17 +31,6 @@ class FileCacheIntegrationSuite extends SparkQueryCompareTestSuite with BeforeAn
   private val FILE_SPLITS_ORC = "file-splits.orc"
   private val MAP_OF_STRINGS_PARQUET = "map_of_strings.snappy.parquet"
   private val SCHEMA_CANT_PRUNE_ORC = "schema-cant-prune.orc"
-
-  override def beforeEach(): Unit = {
-    val deviceStorage = new RapidsDeviceMemoryStore()
-    val catalog = new RapidsBufferCatalog(deviceStorage)
-    RapidsBufferCatalog.setDeviceStorage(deviceStorage)
-    RapidsBufferCatalog.setCatalog(catalog)
-  }
-
-  override def afterEach(): Unit = {
-    RapidsBufferCatalog.close()
-  }
 
   def isFileCacheEnabled(conf: SparkConf): Boolean = {
     // File cache only supported on Spark 3.2+
