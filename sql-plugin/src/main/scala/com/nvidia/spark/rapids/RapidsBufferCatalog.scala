@@ -559,7 +559,8 @@ class RapidsBufferCatalog(
            // A more performant implementation would be to synchronize on the thread that read
            // the buffer via events.
             // https://github.com/NVIDIA/spark-rapids/issues/8610
-            Cuda.deviceSynchronize()
+            //Cuda.deviceSynchronize()
+            logWarning(s"Freeing ${buffersToFree.size} buffers")
             buffersToFree.safeFree()
           }
         }

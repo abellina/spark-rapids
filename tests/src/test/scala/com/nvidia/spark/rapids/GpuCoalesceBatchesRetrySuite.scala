@@ -211,6 +211,8 @@ class GpuCoalesceBatchesRetrySuite
 
   class SpillableColumnarBatchThatThrows(batch: ColumnarBatch)
       extends SpillableColumnarBatch {
+
+    override def getId(): RapidsBufferHandle = null
     override def numRows(): Int = 0
     override def setSpillPriority(priority: Long): Unit = {}
     override def getColumnarBatch(): ColumnarBatch = {

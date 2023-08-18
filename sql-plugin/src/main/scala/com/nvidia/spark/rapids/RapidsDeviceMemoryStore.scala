@@ -477,6 +477,7 @@ class RapidsDeviceMemoryStore(chunkedPackBounceBufferSize: Long = 128L*1024*1024
     override def free(): Unit = synchronized {
       if (isValid) {
         // it is going to be invalid when calling super.free()
+        logWarning(s"unsetting event handler for ${id}. ${contigBuffer}")
         contigBuffer.setEventHandler(null)
       }
       super.free()

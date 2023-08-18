@@ -32,6 +32,8 @@ trait SpillableColumnarBatch extends AutoCloseable {
    */
   def numRows(): Int
 
+  def getId(): RapidsBufferHandle
+
   /**
    * Set a new spill priority.
    */
@@ -59,6 +61,9 @@ trait SpillableColumnarBatch extends AutoCloseable {
 class JustRowsColumnarBatch(numRows: Int)
     extends SpillableColumnarBatch {
   override def numRows(): Int = numRows
+
+  override def getId(): RapidsBufferHandle = null
+
   override def setSpillPriority(priority: Long): Unit = () // NOOP nothing to spill
 
   def getColumnarBatch(): ColumnarBatch = {
@@ -83,6 +88,8 @@ class SpillableColumnarBatchImpl (
     rowCount: Int,
     sparkTypes: Array[DataType])
     extends SpillableColumnarBatch {
+
+  override def getId(): RapidsBufferHandle = handle
 
   override def dataTypes: Array[DataType] = sparkTypes
   /**

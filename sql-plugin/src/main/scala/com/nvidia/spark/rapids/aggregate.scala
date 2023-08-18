@@ -178,7 +178,7 @@ class AggHelper(
     aggregateExpressions: Seq[GpuAggregateExpression],
     forceMerge: Boolean,
     isSorted: Boolean = false,
-    useTieredProject: Boolean = true) extends Serializable {
+    useTieredProject: Boolean = true) extends Serializable with  Logging {
 
   private var doSortAgg = isSorted
 
@@ -279,12 +279,18 @@ class AggHelper(
     val inputBatch = SpillableColumnarBatch(toAggregateBatch,
       SpillPriorities.ACTIVE_ON_DECK_PRIORITY)
 
+    logInfo(s"Added aggregate batch ${inputBatch.getId().id}.")
+
     val projectedCb = withResource(new NvtxRange("pre-process", NvtxColor.DARK_GREEN)) { _ =>
       preStepBound.projectAndCloseWithRetrySingleBatch(inputBatch)
     }
-    SpillableColumnarBatch(
+
+    val projected = SpillableColumnarBatch(
       projectedCb,
       SpillPriorities.ACTIVE_BATCHING_PRIORITY)
+
+    logInfo(s"projected batch ${projected.getId().id}.")
+    projected
   }
 
   def aggregate(preProcessed: ColumnarBatch, numAggs: GpuMetric): ColumnarBatch = {

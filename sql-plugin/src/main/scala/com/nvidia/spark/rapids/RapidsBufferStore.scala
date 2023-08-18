@@ -390,9 +390,13 @@ abstract class RapidsBufferStore(val tier: StorageTier)
      */
     override def free(): Unit = synchronized {
       if (isValid) {
+        logWarning(s"Marking ${id} as not valid")
         isValid = false
+        logWarning(s"Removing ${id} from buffers")
         buffers.remove(id)
+        logWarning(s"refcount for ${id} is ${refcount}")
         if (refcount == 0) {
+          logWarning(s"calling freeBuffer on ${id}")
           freeBuffer()
         }
       } else {
