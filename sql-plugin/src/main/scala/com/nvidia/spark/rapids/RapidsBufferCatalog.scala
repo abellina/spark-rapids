@@ -533,8 +533,12 @@ class RapidsBufferCatalog(
                   // we have a buffer (nextSpillable) to spill
                   // spill it and store it in `buffersToFree` to
                   // free all in one go after a synchronize.
-                  spillBuffer(nextSpillable, spillStore, stream)
-                    .foreach(buffersToFree.append(_))
+                  val itemToFree= spillBuffer(nextSpillable, spillStore, stream)
+                  itemToFree.foreach { i =>
+                    Cuda.deviceSynchronize()
+                    i.free()
+                  }
+                  //.foreach(buffersToFree.append(_))
                   totalSpilled += nextSpillable.getMemoryUsedBytes
                 }
               } else {
