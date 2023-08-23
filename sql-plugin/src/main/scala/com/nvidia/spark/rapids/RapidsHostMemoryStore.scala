@@ -42,7 +42,7 @@ class RapidsHostMemoryStore(
   override def spillableOnAdd: Boolean = false
 
   override protected def setSpillable(buffer: RapidsBufferBase, spillable: Boolean): Unit = {
-    doSetSpillable(buffer, spillable)
+    buffers.setSpillable(buffer, isSpillable)
   }
 
   override def getMaxSize: Option[Long] = Some(maxSize)
@@ -343,7 +343,7 @@ class RapidsHostMemoryStore(
      * all columns are spillable.
      */
     override def updateSpillability(): Unit = {
-      doSetSpillable(this, columnSpillability.size == numDistinctColumns)
+      setSpillable(this, columnSpillability.size == numDistinctColumns)
     }
 
     override def getColumnarBatch(sparkTypes: Array[DataType]): ColumnarBatch = {
@@ -353,7 +353,7 @@ class RapidsHostMemoryStore(
 
     override def getHostColumnarBatch(sparkTypes: Array[DataType]): ColumnarBatch = {
       columnSpillability.clear()
-      doSetSpillable(this, false)
+      setSpillable(this, false)
       RapidsHostColumnVector.incRefCounts(hostCb)
     }
 

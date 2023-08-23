@@ -146,7 +146,7 @@ class RapidsDeviceMemoryStore(chunkedPackBounceBufferSize: Long = 128L*1024*1024
    * or not.
    */
   override protected def setSpillable(buffer: RapidsBufferBase, spillable: Boolean): Unit = {
-    doSetSpillable(buffer, spillable)
+    buffers.setSpillable(buffer, isSpillable)
   }
 
   /**
@@ -293,7 +293,7 @@ class RapidsDeviceMemoryStore(chunkedPackBounceBufferSize: Long = 128L*1024*1024
      * all columns are spillable.
      */
     override def updateSpillability(): Unit = {
-      doSetSpillable(this, columnSpillability.size == numDistinctColumns)
+      setSpillable(this, columnSpillability.size == numDistinctColumns)
     }
 
     /**
@@ -304,7 +304,7 @@ class RapidsDeviceMemoryStore(chunkedPackBounceBufferSize: Long = 128L*1024*1024
      */
     override def getColumnarBatch(sparkTypes: Array[DataType]): ColumnarBatch = {
       columnSpillability.clear()
-      doSetSpillable(this, false)
+      setSpillable(this, false)
       GpuColumnVector.from(table, sparkTypes)
     }
 

@@ -208,10 +208,6 @@ abstract class RapidsBufferStore(val tier: StorageTier)
     }
   }
 
-  protected def doSetSpillable(buffer: RapidsBufferBase, isSpillable: Boolean): Unit = {
-    buffers.setSpillable(buffer, isSpillable)
-  }
-
   protected def setSpillable(buffer: RapidsBufferBase, isSpillable: Boolean): Unit = {
     throw new NotImplementedError(s"This store ${this} does not implement setSpillable")
   }
