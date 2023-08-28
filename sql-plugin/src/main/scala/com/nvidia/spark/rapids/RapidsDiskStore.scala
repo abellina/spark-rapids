@@ -49,22 +49,10 @@ class RapidsDiskStore(diskBlockManager: RapidsDiskBlockManager)
     val (fileOffset, diskLength) = if (id.canShareDiskPaths) {
       // only one writer at a time for now when using shared files
       path.synchronized {
-        if (incoming.needsSerialization) {
-          // only shuffle buffers share paths, and adding host-backed ColumnarBatch is
-          // not the shuffle case, so this is not supported and is never exercised.
-          throw new IllegalStateException(
-            s"Attempted spilling to disk a RapidsBuffer $incoming that needs serialization " +
-              s"while sharing spill paths.")
-        } else {
-          copyBufferToPath(incoming, path, append = true)
-        }
+        writeToFile(incoming, path, append = true)
       }
     } else {
-      if (incoming.needsSerialization) {
-        serializeBufferToStream(incoming, path)
-      } else {
-        copyBufferToPath(incoming, path, append = false)
-      }
+      writeToFile(incoming, path, append = false)
     }
 
     logDebug(s"Spilled to $path $fileOffset:$diskLength")
@@ -108,13 +96,14 @@ class RapidsDiskStore(diskBlockManager: RapidsDiskBlockManager)
     }
   }
 
-  private def serializeBufferToStream(
+  private def writeToFile(
       incoming: RapidsBuffer,
-      path: File): (Long, Long) = {
-    withResource(new FileOutputStream(path, false /*append not supported*/)) { fos =>
+      path: File,
+      append: Boolean): (Long, Long) = {
+    withResource(new FileOutputStream(path, append)) { fos =>
       withResource(fos.getChannel) { outputChannel =>
         val startOffset = outputChannel.position()
-        incoming.serializeToStream(fos)
+        incoming.writeToChannel(outputChannel)
         val endingOffset = outputChannel.position()
         val writtenBytes = endingOffset - startOffset
         (startOffset, writtenBytes)

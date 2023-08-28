@@ -17,6 +17,7 @@
 package com.nvidia.spark.rapids
 
 import java.io.OutputStream
+import java.nio.channels.{Channels, WritableByteChannel}
 import java.util.concurrent.ConcurrentHashMap
 
 import scala.collection.mutable
@@ -293,8 +294,6 @@ class RapidsHostMemoryStore(
 
     override val storageTier: StorageTier = StorageTier.HOST
 
-    override val needsSerialization: Boolean = true
-
     // This is the current size in batch form. It is to be used while this
     // batch hasn't migrated to another store.
     private val hostSizeInByes: Long = RapidsHostColumnVector.getTotalHostMemoryUsed(hostCb)
@@ -367,9 +366,11 @@ class RapidsHostMemoryStore(
         "RapidsHostColumnarBatch does not support getCopyIterator")
     }
 
-    override def serializeToStream(outputStream: OutputStream): Unit = {
-      val columns = RapidsHostColumnVector.extractBases(hostCb)
-      JCudfSerialization.writeToStream(columns, outputStream, 0, hostCb.numRows())
+    override def writeToChannel(outputChannel: WritableByteChannel): Unit = {
+      withResource(Channels.newOutputStream(outputChannel)) { outputStream =>
+        val columns = RapidsHostColumnVector.extractBases(hostCb)
+        JCudfSerialization.writeToStream(columns, outputStream, 0, hostCb.numRows())
+      }
     }
 
     override def free(): Unit = {
