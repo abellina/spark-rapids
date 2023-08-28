@@ -19,15 +19,13 @@ package com.nvidia.spark.rapids
 import java.io.OutputStream
 import java.nio.channels.{Channels, WritableByteChannel}
 import java.util.concurrent.ConcurrentHashMap
-
 import scala.collection.mutable
-
 import ai.rapids.cudf.{Cuda, DeviceMemoryBuffer, HostColumnVector, HostMemoryBuffer, JCudfSerialization, MemoryBuffer, NvtxColor, NvtxRange, PinnedMemoryPool}
 import com.nvidia.spark.rapids.Arm.{closeOnExcept, freeOnExcept, withResource}
-import com.nvidia.spark.rapids.SpillPriorities.{applyPriorityOffset, HOST_MEMORY_BUFFER_SPILL_OFFSET}
+import com.nvidia.spark.rapids.SpillPriorities.{HOST_MEMORY_BUFFER_SPILL_OFFSET, applyPriorityOffset}
 import com.nvidia.spark.rapids.StorageTier.StorageTier
 import com.nvidia.spark.rapids.format.TableMeta
-
+import org.apache.spark.sql.rapids.storage.RapidsStorageUtils
 import org.apache.spark.sql.types.DataType
 import org.apache.spark.sql.vectorized.ColumnarBatch
 
@@ -159,6 +157,19 @@ class RapidsHostMemoryStore(
         setSpillable(this, false)
         buffer.incRefCount()
         buffer
+      }
+    }
+
+    override def writeToChannel(outputChannel: WritableByteChannel): Unit = {
+      val iter = new HostByteBufferIterator(buffer)
+      iter.foreach { bb =>
+        try {
+          while (bb.hasRemaining) {
+            outputChannel.write(bb)
+          }
+        } finally {
+          RapidsStorageUtils.dispose(bb)
+        }
       }
     }
 
