@@ -1929,12 +1929,17 @@ class MultiFileParquetPartitionReader(
       TrampolineUtil.setTaskContext(taskContext)
       try {
         val startBytesRead = fileSystemBytesRead()
+        val startBytesTime = System.currentTimeMillis()
         val outputBlocks = withResource(outhmb) { _ =>
           withResource(new HostMemoryOutputStream(outhmb)) { out =>
             copyBlocksData(file, out, blocks, offset, metrics)
           }
         }
+        val bytesTimeEnd = System.currentTimeMillis()
+        val diff = bytesTimeEnd - startBytesTime
         val bytesRead = fileSystemBytesRead() - startBytesRead
+        val eff = Math.ceil((bytesRead / (diff.toDouble / 1000))/1024.0/1024.0).toLong
+        logInfo(s"Read ${bytesRead} in ${diff} ms for an effective bw of $eff MB/sec ")
         (outputBlocks, bytesRead)
       } catch {
         case e: FileNotFoundException if ignoreMissingFiles =>
@@ -2413,13 +2418,15 @@ class MultiFileCloudParquetPartitionReader(
       val hostBuffers = new ArrayBuffer[SingleHMBAndMeta]
       var filterTime = 0L
       var bufferStartTime = 0L
+      val startTime = System.currentTimeMillis()
+      var bytesRead = 0L
       val result = try {
         val filterStartTime = System.nanoTime()
         val fileBlockMeta = filterFunc(file)
         filterTime = System.nanoTime() - filterStartTime
         bufferStartTime = System.nanoTime()
         if (fileBlockMeta.blocks.isEmpty) {
-          val bytesRead = fileSystemBytesRead() - startingBytesRead
+          bytesRead = fileSystemBytesRead() - startingBytesRead
           // no blocks so return null buffer and size 0
           HostMemoryEmptyMetaData(file, origPartitionedFile, 0, bytesRead,
             fileBlockMeta.isCorrectedRebaseMode, fileBlockMeta.isCorrectedInt96RebaseMode,
@@ -2427,14 +2434,14 @@ class MultiFileCloudParquetPartitionReader(
         } else {
           blockChunkIter = fileBlockMeta.blocks.iterator.buffered
           if (isDone) {
-            val bytesRead = fileSystemBytesRead() - startingBytesRead
+            bytesRead = fileSystemBytesRead() - startingBytesRead
             // got close before finishing
             HostMemoryEmptyMetaData(file, origPartitionedFile, 0, bytesRead,
               fileBlockMeta.isCorrectedRebaseMode, fileBlockMeta.isCorrectedInt96RebaseMode,
               fileBlockMeta.hasInt96Timestamps, fileBlockMeta.schema, fileBlockMeta.readSchema, 0)
           } else {
             if (fileBlockMeta.schema.getFieldCount == 0) {
-              val bytesRead = fileSystemBytesRead() - startingBytesRead
+              bytesRead = fileSystemBytesRead() - startingBytesRead
               val numRows = fileBlockMeta.blocks.map(_.getRowCount).sum.toInt
               HostMemoryEmptyMetaData(file, origPartitionedFile, 0, bytesRead,
                 fileBlockMeta.isCorrectedRebaseMode, fileBlockMeta.isCorrectedInt96RebaseMode,
@@ -2451,7 +2458,7 @@ class MultiFileCloudParquetPartitionReader(
                 hostBuffers += SingleHMBAndMeta(dataBuffer, dataSize,
                   numRows, blockMeta)
               }
-              val bytesRead = fileSystemBytesRead() - startingBytesRead
+              bytesRead = fileSystemBytesRead() - startingBytesRead
               if (isDone) {
                 // got close before finishing
                 hostBuffers.foreach(_.hmb.safeClose())
@@ -2465,6 +2472,7 @@ class MultiFileCloudParquetPartitionReader(
                   fileBlockMeta.isCorrectedInt96RebaseMode, fileBlockMeta.hasInt96Timestamps,
                   fileBlockMeta.schema, fileBlockMeta.readSchema, None)
               }
+
             }
           }
         }
@@ -2474,6 +2482,9 @@ class MultiFileCloudParquetPartitionReader(
           throw e
       }
       val bufferTime = System.nanoTime() - bufferStartTime
+      val diff = System.currentTimeMillis() - startTime
+      val eff = Math.ceil((bytesRead / (diff.toDouble / 1000)) / 1024.0 / 1024.0).toLong
+      logInfo(s"Read ${bytesRead} in ${diff} ms for an effective bw of $eff MB/sec ")
       result.setMetrics(filterTime, bufferTime)
       result
     }
