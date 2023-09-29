@@ -24,8 +24,8 @@ import com.nvidia.spark.rapids.RapidsPluginImplicits._
 import com.nvidia.spark.rapids.RmmRapidsRetryIterator.{withRetry, withRetryNoSplit}
 import com.nvidia.spark.rapids.ScalableTaskCompletion.onTaskCompletion
 import com.nvidia.spark.rapids.shims.{ShimExpression, ShimUnaryExecNode}
-
 import org.apache.spark.TaskContext
+
 import org.apache.spark.internal.Logging
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.catalyst.InternalRow
@@ -39,7 +39,7 @@ import org.apache.spark.sql.vectorized.ColumnarBatch
  * Consumes an Iterator of ColumnarBatches and concatenates them into a single ColumnarBatch.
  * The batches will be closed when this operation is done.
  */
-object ConcatAndConsumeAll {
+object ConcatAndConsumeAll extends Logging {
   /**
    * Build a single batch from the batches collected so far. If array is empty this will likely
    * blow up.
@@ -68,13 +68,22 @@ object ConcatAndConsumeAll {
     } else {
       val tables = arrayOfBatches.map(GpuColumnVector.from)
       try {
+        logInfo(s"Calling concat on ${tables.mkString(",")}")
+        //Cuda.DEFAULT_STREAM.sync()
+        //tables.foreach { t =>
+        //  val filePrefix = UUID.randomUUID().toString
+        //  logInfo(s"Dumped ${t} to ${filePrefix}")
+        //  DumpUtils.dumpToParquetFile(t, filePrefix)
+        //}
         val combined = Table.concatenate(tables: _*)
+        Cuda.DEFAULT_STREAM.sync()
         try {
           GpuColumnVector.from(combined, dataTypes)
         } finally {
           combined.close()
         }
       } finally {
+        logInfo(s"DONE: calling concat on ${tables.mkString(",")}")
         tables.foreach(_.close())
         arrayOfBatches.foreach(_.close())
       }

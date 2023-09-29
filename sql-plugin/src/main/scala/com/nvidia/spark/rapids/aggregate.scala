@@ -426,6 +426,7 @@ class AggHelper(
     input.map { aggregated =>
       withResource(new NvtxWithMetrics("post-process", NvtxColor.ORANGE, computeAggTime,
         opTime)) { _ =>
+
         val postProcessed = postStepBound.projectAndCloseWithRetrySingleBatch(aggregated)
         SpillableColumnarBatch(
           postProcessed,

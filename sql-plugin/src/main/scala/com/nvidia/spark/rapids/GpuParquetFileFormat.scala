@@ -393,6 +393,8 @@ class GpuParquetWriter(
         parquetFieldIdEnabled)
       .withMetadata(writeContext.getExtraMetaData)
       .withCompressionType(compressionType)
+      .withRowGroupSizeRows(200000000L)
+      .withUncompressedRowGroupSizeBytes(2L*1024*1024*1024)
     Table.writeParquetChunked(builder.build(), this)
   }
 }
