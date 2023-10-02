@@ -1,18 +1,28 @@
 package com.nvidia.spark.rapids
 
+import java.io.OutputStream
 import java.nio.ByteBuffer
 import java.nio.channels.ReadableByteChannel
+import java.util.concurrent.atomic.{AtomicLong, AtomicReference}
 
 import scala.collection.mutable
 import scala.collection.mutable.ArrayBuffer
 
+import ai.rapids.cudf.ast.UnaryOperator
+import alluxio.collections.ConcurrentHashSet
+import com.nvidia.spark.rapids.Arm.withResource
+import com.nvidia.spark.rapids.ScalableTaskCompletion.onTaskCompletion
+import org.apache.spark.TaskContext
+
+import org.apache.spark.internal.Logging
+
 class MetricBucket extends AutoCloseable {
-  var metric: Long = 0L
+  var metric = new AtomicLong(0L)
   var refCount: Int = 0
   var pos: Int = 0
   var buckets: MetricBuckets = null
-  def addMetric(m: Long): Unit = synchronized { metric += m }
-  def getValue: Long = synchronized { metric }
+  def addMetric(m: Long): Unit = { metric.addAndGet(m) }
+  def getValue: Long = { metric.get() }
   def addReference(sz: Int): Unit = synchronized { refCount += sz }
   def setPosition(i: Int, bs: MetricBuckets): Unit = {
     pos = i
@@ -28,20 +38,34 @@ class MetricBucket extends AutoCloseable {
 
 class MetricBuckets {
   val buckets = new ArrayBuffer[MetricBucket]()
+  var last = new AtomicReference[MetricBucket](new MetricBucket())
   var minBucket: Int = 0
 
   def addBucket(b: MetricBucket): Unit = synchronized {
     b.setPosition(buckets.size, this)
     buckets.append(b)
+    last.set(buckets.last)
   }
 
   def removeAt(ix: Int): Unit = synchronized {
     buckets.remove(ix)
-    minBucket = buckets.head.pos
+    if (buckets.nonEmpty) {
+      last.set(buckets.last)
+    } else {
+      last.set(new MetricBucket())
+    }
+    minBucket = if (buckets.size == 0) {
+      0
+    } else {
+      buckets.head.pos
+    }
   }
 
-  def addBytesToLast(bytes: Long): Unit = synchronized {
-    buckets.last.addMetric(bytes)
+  def addBytesToLast(bytes: Long): Unit = {
+    val l = last.get()
+    if (l != null) {
+      l.addMetric(bytes)
+    }
   }
 
   def closeLast(): Unit = synchronized {
@@ -53,11 +77,12 @@ class MetricBuckets {
   }
 }
 
-trait BWListener extends AutoCloseable {
+abstract class BWListener(val name: String) extends AutoCloseable {
   var bytes = 0L
   var _startingBucket: Int = 0
   val startTime = System.currentTimeMillis()
   var endTime = 0L
+  var closed: Boolean = false
 
   def startingBucket(i: Int): Unit = {
     _startingBucket = i
@@ -70,50 +95,45 @@ trait BWListener extends AutoCloseable {
   def getBW(): Double = synchronized {
     (bytes.toDouble / ((endTime - startTime).toDouble / 1000)) / 1024.0 / 1024.0
   }
-}
-
-class InputBWListener(os: MeteredOutStream) extends BWListener {
-  var closed = false
-  os.register(this)
-
-  override def close(): Unit = {
+  override def close(): Unit = synchronized {
     if (!closed) {
       closed = true
       endTime = System.currentTimeMillis()
       IOMetrics.deregister(this)
     }
   }
+}
 
-  def addBytes(newBytes: Long): Unit = {
+class InputBWListener(name: String, os: RegisterableStream)
+    extends BWListener(name) {
+  os.register(this)
+
+  def addBytes(newBytes: Long): Unit = synchronized {
     IOMetrics.addBytesToLatest(newBytes)
   }
 }
 
-class ComputeBWListener extends BWListener {
-  var closed = false
-  override def close(): Unit = {
-    if (!closed) {
-      closed = true
-      endTime = System.currentTimeMillis()
-      IOMetrics.deregister(this)
-    }
-  }
-
-  def addBytes(newBytes: Long): Unit = {
+class ComputeBWListener(name: String) extends BWListener(name) {
+  def addBytes(newBytes: Long): Unit = synchronized {
     IOMetrics.addBytesToLatestCompute(newBytes)
   }
 }
 
+trait RegisterableStream {
+  def register(listener: InputBWListener): Unit
+}
+
 class MeteredOutStream(os: HostMemoryOutputStream)
-    extends HostMemoryOutputStream(os.buffer) {
+    extends HostMemoryOutputStream(os.buffer)
+        with RegisterableStream {
   var _listener: InputBWListener = null
-  def register(listener: InputBWListener): Unit = {
+  override def register(listener: InputBWListener): Unit = {
     _listener = listener
   }
 
   override def write(i: Int): Unit = {
     super.write(i)
-    _listener.addBytes(4)
+    _listener.addBytes(1)
   }
 
   override def write(bytes: Array[Byte]): Unit = {
@@ -138,8 +158,49 @@ class MeteredOutStream(os: HostMemoryOutputStream)
   }
 }
 
-class IOMetrics {
+class MeteredRegularOutStream(os: OutputStream)
+    extends OutputStream
+        with RegisterableStream  {
+  var _listener: InputBWListener = null
+
+  override def register(listener: InputBWListener): Unit = {
+    _listener = listener
+  }
+
+  override def write(i: Int): Unit = {
+    os.write(i)
+    _listener.addBytes(1)
+  }
+}
+
+class CompleteListeners {
+  val completeInOrder = new ArrayBuffer[BWListener]()
+
+  def add(listener: BWListener): Unit = {
+    completeInOrder.append(listener)
+  }
+
+  override def toString: String = {
+    val sb = new StringBuffer()
+    val l = completeInOrder.length
+    completeInOrder.zipWithIndex.foreach { case (c, ix) =>
+      sb.append(
+        s"    ${c.name}: [" +
+          s"bandwidth: ${c.getBW()} MB/sec, " +
+          s"size: ${c.bytes} B, " +
+          s"time: ${c.endTime - c.startTime} ms" +
+        s"]\n")
+      if (ix < l) {
+        sb.append(", ")
+      }
+    }
+    sb.toString
+  }
+}
+
+class IOMetrics extends Logging {
   val listeners = new mutable.HashSet[BWListener]()
+
   private val _buckets: MetricBuckets = new MetricBuckets()
   def register(listener: BWListener): Unit = synchronized {
     listeners.add(listener)
@@ -147,7 +208,6 @@ class IOMetrics {
     newBucket.addReference(listeners.size)
     listener.startingBucket(_buckets.buckets.size)
     addBucket(newBucket)
-    println(s"registered ${listeners}")
   }
 
   def unregister(listener: BWListener): Unit = synchronized {
@@ -155,21 +215,22 @@ class IOMetrics {
     listener.addBytesNoCallback(_buckets.getSumFrom(starting))
     listeners.remove(listener)
     _buckets.closeLast()
-    println(s"unregistered ${listeners}")
   }
 
-  def addBucket(newBucket: MetricBucket): Unit = synchronized {
+  def addBucket(newBucket: MetricBucket): Unit = {
     _buckets.addBucket(newBucket)
   }
 
-  def addBytesToLatest(bytes: Long): Unit = synchronized {
+  def addBytesToLatest(bytes: Long): Unit = {
     _buckets.addBytesToLast(bytes)
   }
 }
 
-object IOMetrics {
+object IOMetrics extends Logging {
   private var _io: IOMetrics = null
   private var _compute: IOMetrics = null
+  val completePerTask = new mutable.HashMap[Long, CompleteListeners]()
+
   def io(): IOMetrics = {
     if (_io == null) {
       synchronized {
@@ -192,24 +253,39 @@ object IOMetrics {
     _compute
   }
 
-  def registerInputBW(os: MeteredOutStream): InputBWListener = {
-    val newListener = new InputBWListener(os)
+  def withInputBWMetric[T](name: String, os: RegisterableStream)(body: InputBWListener => T): T = {
+    val newListener = new InputBWListener(name, os)
     io().register(newListener)
-    newListener
+    withResource(newListener) { _ => body(newListener) }
   }
 
-  def computeMetric(): ComputeBWListener = {
-    val newListener = new ComputeBWListener()
+  def withComputeMetric[T](name: String)(body: ComputeBWListener => T): T = {
+    val newListener = new ComputeBWListener(name)
     compute().register(newListener)
-    newListener
+    withResource(newListener) { _ => body(newListener) }
   }
 
-  def deregister(l: InputBWListener): Unit = {
-    io().unregister(l)
-  }
-
-  def deregister(l: ComputeBWListener): Unit = {
-    compute().unregister(l)
+  def deregister(l: BWListener): Unit = {
+    l match {
+      case cbl: ComputeBWListener =>
+        compute().unregister(cbl)
+      case iol: InputBWListener =>
+        io().unregister(iol)
+      case _ =>
+        throw new IllegalStateException(s"Unknown listener ${l}")
+    }
+    synchronized {
+      val tc = TaskContext.get()
+      val attempt = tc.taskAttemptId()
+      if (!completePerTask.contains(attempt)) {
+        onTaskCompletion(tc) {
+          val completed = completePerTask.remove(attempt)
+          logInfo(s"Task ${attempt} metrics:\n${completed}")
+        }
+        completePerTask.put(attempt, new CompleteListeners)
+      }
+      completePerTask(attempt).add(l)
+    }
   }
 
   def addBytesToLatest(bytes: Long): Unit = {

@@ -134,8 +134,8 @@ class GpuColumnarBatchSerializer(dataSize: GpuMetric)
 private class GpuColumnarBatchSerializerInstance(dataSize: GpuMetric) extends SerializerInstance {
 
   override def serializeStream(out: OutputStream): SerializationStream = new SerializationStream {
-    private[this] val dOut: DataOutputStream =
-      new DataOutputStream(new BufferedOutputStream(out))
+    private[this] val dOut =
+      new MeteredRegularOutStream(new DataOutputStream(new BufferedOutputStream(out)))
 
     override def writeValue[T: ClassTag](value: T): SerializationStream = {
       val batch = value.asInstanceOf[ColumnarBatch]
@@ -166,20 +166,23 @@ private class GpuColumnarBatchSerializerInstance(dataSize: GpuMetric) extends Se
               }
             }
           }
-
-          dataSize += JCudfSerialization.getSerializedSizeInBytes(columns, startRow, numRows)
-          val range = new NvtxRange("Serialize Batch", NvtxColor.YELLOW)
-          try {
-            JCudfSerialization.writeToStream(columns, dOut, startRow, numRows)
-          } finally {
-            range.close()
+          IOMetrics.withInputBWMetric("writeShuffleBatch", dOut) { _ =>
+            dataSize += JCudfSerialization.getSerializedSizeInBytes(columns, startRow, numRows)
+            val range = new NvtxRange("Serialize Batch", NvtxColor.YELLOW)
+            try {
+              JCudfSerialization.writeToStream(columns, dOut, startRow, numRows)
+            } finally {
+              range.close()
+            }
           }
         } else {
-          val range = new NvtxRange("Serialize Row Only Batch", NvtxColor.YELLOW)
-          try {
-            JCudfSerialization.writeRowsToStream(dOut, numRows)
-          } finally {
-            range.close()
+          IOMetrics.withInputBWMetric("writeShuffleBatch", dOut) { _ =>
+            val range = new NvtxRange("Serialize Row Only Batch", NvtxColor.YELLOW)
+            try {
+              JCudfSerialization.writeRowsToStream(dOut, numRows)
+            } finally {
+              range.close()
+            }
           }
         }
       } finally {

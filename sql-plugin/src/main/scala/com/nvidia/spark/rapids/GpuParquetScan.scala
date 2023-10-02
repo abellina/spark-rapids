@@ -1696,21 +1696,20 @@ trait ParquetPartitionReaderBase extends Logging with ScanWithMetrics
       val estTotalSize = calculateParquetOutputSize(blocks, clippedSchema, false)
       closeOnExcept(HostMemoryBuffer.allocate(estTotalSize)) { hmb =>
         val out = new MeteredOutStream(new HostMemoryOutputStream(hmb))
-        val inputListener = IOMetrics.registerInputBW(out)
-        out.write(ParquetPartitionReader.PARQUET_MAGIC)
-        val outputBlocks = copyBlocksData(filePath, out, blocks, out.getPos, metrics)
-        val footerPos = out.getPos
-        writeFooter(out, outputBlocks, clippedSchema)
-        BytesUtils.writeIntLittleEndian(out, (out.getPos - footerPos).toInt)
-        out.write(ParquetPartitionReader.PARQUET_MAGIC)
-        // check we didn't go over memory
-        if (out.getPos > estTotalSize) {
-          throw new QueryExecutionException(s"Calculated buffer size $estTotalSize is to " +
-              s"small, actual written: ${out.getPos}")
+        IOMetrics.withInputBWMetric("readPartFile", out) { _ =>
+          out.write(ParquetPartitionReader.PARQUET_MAGIC)
+          val outputBlocks = copyBlocksData(filePath, out, blocks, out.getPos, metrics)
+          val footerPos = out.getPos
+          writeFooter(out, outputBlocks, clippedSchema)
+          BytesUtils.writeIntLittleEndian(out, (out.getPos - footerPos).toInt)
+          out.write(ParquetPartitionReader.PARQUET_MAGIC)
+          // check we didn't go over memory
+          if (out.getPos > estTotalSize) {
+            throw new QueryExecutionException(s"Calculated buffer size $estTotalSize is to " +
+                s"small, actual written: ${out.getPos}")
+          }
+          (hmb, out.getPos, outputBlocks)
         }
-        inputListener.close()
-        logInfo(s"Bandwidth seen by task ${inputListener.getBW} MB/sec")
-        (hmb, out.getPos, outputBlocks)
       }
     }
   }
@@ -1932,17 +1931,14 @@ class MultiFileParquetPartitionReader(
       TrampolineUtil.setTaskContext(taskContext)
       try {
         val startBytesRead = fileSystemBytesRead()
-        val startBytesTime = System.currentTimeMillis()
         val outputBlocks = withResource(outhmb) { _ =>
-          withResource(new HostMemoryOutputStream(outhmb)) { out =>
-            copyBlocksData(file, out, blocks, offset, metrics)
+          withResource(new MeteredOutStream(new HostMemoryOutputStream(outhmb))) { out =>
+            IOMetrics.withInputBWMetric("copyBlocksData", out) { _ =>
+              copyBlocksData(file, out, blocks, offset, metrics)
+            }
           }
         }
-        val bytesTimeEnd = System.currentTimeMillis()
-        val diff = bytesTimeEnd - startBytesTime
         val bytesRead = fileSystemBytesRead() - startBytesRead
-        val eff = Math.ceil((bytesRead / (diff.toDouble / 1000))/1024.0/1024.0).toLong
-        logInfo(s"Read ${bytesRead} in ${diff} ms for an effective bw of $eff MB/sec ")
         (outputBlocks, bytesRead)
       } catch {
         case e: FileNotFoundException if ignoreMissingFiles =>
@@ -2658,12 +2654,11 @@ object MakeParquetTableProducer extends Logging {
           RmmRapidsRetryIterator.withRetryNoSplit[Table] {
             withResource(new NvtxWithMetrics("Parquet decode", NvtxColor.DARK_GREEN,
               metrics(GPU_DECODE_TIME))) { _ =>
-              val computeMetric = IOMetrics.computeMetric()
-              val res = Table.readParquet(opts, buffer, offset, len)
-              computeMetric.addBytes(buffer.getLength)
-              computeMetric.close()
-              logInfo(s"Parquet read bandwidth seen by task ${computeMetric.getBW} MB/sec")
-              res
+              IOMetrics.withComputeMetric("readParquet") { computeMetric =>
+                val res = Table.readParquet(opts, buffer, offset, len)
+                computeMetric.addBytes(buffer.getLength)
+                res
+              }
             }
           }
         } catch {
@@ -2725,12 +2720,13 @@ case class ParquetTableReader(
     val table = withResource(new NvtxWithMetrics("Parquet decode", NvtxColor.DARK_GREEN,
       metrics(GPU_DECODE_TIME))) { _ =>
       try {
-        val computeMetric = IOMetrics.computeMetric()
-        val res = reader.readChunk()
-        computeMetric.addBytes(res.getDeviceMemorySize)
-        computeMetric.close()
-        logInfo(s"Parquet compute output bandwidth seen ${computeMetric.getBW()} MB/sec")
-        res
+        IOMetrics.withComputeMetric("readChunkOutBW") { computeMetric =>
+          val res = reader.readChunk()
+          // TODO: we need the reader to say how much input read each time we call
+          //   readChunk.
+          computeMetric.addBytes(res.getDeviceMemorySize)
+          res
+        }
       } catch {
         case e: Exception =>
           val dumpMsg = debugDumpPrefix.map { prefix =>
