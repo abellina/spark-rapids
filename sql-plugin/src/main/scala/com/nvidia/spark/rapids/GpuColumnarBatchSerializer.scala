@@ -134,8 +134,7 @@ class GpuColumnarBatchSerializer(dataSize: GpuMetric)
 private class GpuColumnarBatchSerializerInstance(dataSize: GpuMetric) extends SerializerInstance {
 
   override def serializeStream(out: OutputStream): SerializationStream = new SerializationStream {
-    private[this] val dOut =
-      new MeteredRegularOutStream(new DataOutputStream(new BufferedOutputStream(out)))
+    private[this] val dOut = new DataOutputStream(new BufferedOutputStream(out))
 
     override def writeValue[T: ClassTag](value: T): SerializationStream = {
       val batch = value.asInstanceOf[ColumnarBatch]
@@ -166,8 +165,11 @@ private class GpuColumnarBatchSerializerInstance(dataSize: GpuMetric) extends Se
               }
             }
           }
-          IOMetrics.withInputBWMetric("writeShuffleBatch", dOut) { _ =>
-            dataSize += JCudfSerialization.getSerializedSizeInBytes(columns, startRow, numRows)
+          IOMetrics.withOutputBWMetric("writeShuffleBatch") { metric =>
+            val serializedLen =
+              JCudfSerialization.getSerializedSizeInBytes(columns, startRow, numRows)
+            dataSize += serializedLen
+            metric.addBytes(serializedLen)
             val range = new NvtxRange("Serialize Batch", NvtxColor.YELLOW)
             try {
               JCudfSerialization.writeToStream(columns, dOut, startRow, numRows)
@@ -176,13 +178,11 @@ private class GpuColumnarBatchSerializerInstance(dataSize: GpuMetric) extends Se
             }
           }
         } else {
-          IOMetrics.withInputBWMetric("writeShuffleBatch", dOut) { _ =>
-            val range = new NvtxRange("Serialize Row Only Batch", NvtxColor.YELLOW)
-            try {
-              JCudfSerialization.writeRowsToStream(dOut, numRows)
-            } finally {
-              range.close()
-            }
+          val range = new NvtxRange("Serialize Row Only Batch", NvtxColor.YELLOW)
+          try {
+            JCudfSerialization.writeRowsToStream(dOut, numRows)
+          } finally {
+            range.close()
           }
         }
       } finally {

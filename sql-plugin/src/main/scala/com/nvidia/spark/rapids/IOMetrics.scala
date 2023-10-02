@@ -4,6 +4,7 @@ import java.io.OutputStream
 import java.nio.ByteBuffer
 import java.nio.channels.ReadableByteChannel
 import java.util.concurrent.atomic.{AtomicLong, AtomicReference}
+import java.util.concurrent.ConcurrentHashMap
 
 import scala.collection.mutable
 import scala.collection.mutable.ArrayBuffer
@@ -109,13 +110,13 @@ class InputBWListener(name: String, os: RegisterableStream)
   os.register(this)
 
   def addBytes(newBytes: Long): Unit = synchronized {
-    IOMetrics.addBytesToLatest(newBytes)
+    IOMetrics.addBytesToLatest(name, newBytes)
   }
 }
 
 class ComputeBWListener(name: String) extends BWListener(name) {
   def addBytes(newBytes: Long): Unit = synchronized {
-    IOMetrics.addBytesToLatestCompute(newBytes)
+    IOMetrics.addBytesToLatestCompute(name, newBytes)
   }
 }
 
@@ -201,32 +202,36 @@ class CompleteListeners {
 class IOMetrics extends Logging {
   val listeners = new mutable.HashSet[BWListener]()
 
-  private val _buckets: MetricBuckets = new MetricBuckets()
+  private val _buckets: ConcurrentHashMap[String, MetricBuckets] =
+    new ConcurrentHashMap[String, MetricBuckets]()
+
   def register(listener: BWListener): Unit = synchronized {
     listeners.add(listener)
     val newBucket = new MetricBucket()
+    val myBuckets = _buckets.computeIfAbsent(listener.name, _ => {
+      new MetricBuckets()
+    })
     newBucket.addReference(listeners.size)
-    listener.startingBucket(_buckets.buckets.size)
-    addBucket(newBucket)
+    listener.startingBucket(myBuckets.buckets.size)
+    myBuckets.addBucket(newBucket)
   }
 
   def unregister(listener: BWListener): Unit = synchronized {
     val starting = listener._startingBucket
-    listener.addBytesNoCallback(_buckets.getSumFrom(starting))
+    val myBuckets = _buckets.get(listener.name)
+    listener.addBytesNoCallback(myBuckets.getSumFrom(starting))
     listeners.remove(listener)
-    _buckets.closeLast()
+    myBuckets.closeLast()
   }
 
-  def addBucket(newBucket: MetricBucket): Unit = {
-    _buckets.addBucket(newBucket)
-  }
-
-  def addBytesToLatest(bytes: Long): Unit = {
-    _buckets.addBytesToLast(bytes)
+  def addBytesToLatest(name: String, bytes: Long): Unit = {
+    val myBuckets = _buckets.get(name)
+    myBuckets.addBytesToLast(bytes)
   }
 }
 
 object IOMetrics extends Logging {
+
   private var _io: IOMetrics = null
   private var _compute: IOMetrics = null
   val completePerTask = new mutable.HashMap[Long, CompleteListeners]()
@@ -254,17 +259,21 @@ object IOMetrics extends Logging {
   }
 
   def withInputBWMetric[T](name: String, os: RegisterableStream)(body: InputBWListener => T): T = {
-    body(new InputBWListener("foo", os))
-    //val newListener = new InputBWListener(name, os)
-    //io().register(newListener)
-    //withResource(newListener) { _ => body(newListener) }
+    val newListener = new InputBWListener(name, os)
+    io().register(newListener)
+    withResource(newListener) { _ => body(newListener) }
+  }
+
+  def withOutputBWMetric[T](str: String)(body: ComputeBWListener => T): T = {
+    val newListener = new ComputeBWListener(str)
+    compute().register(newListener)
+    withResource(newListener) { _ => body(newListener) }
   }
 
   def withComputeMetric[T](name: String)(body: ComputeBWListener => T): T = {
-    body(new ComputeBWListener("bar"))
-    //val newListener = new ComputeBWListener(name)
-    //compute().register(newListener)
-    //withResource(newListener) { _ => body(newListener) }
+    val newListener = new ComputeBWListener(name)
+    compute().register(newListener)
+    withResource(newListener) { _ => body(newListener) }
   }
 
   def deregister(l: BWListener): Unit = {
@@ -290,11 +299,11 @@ object IOMetrics extends Logging {
     }
   }
 
-  def addBytesToLatest(bytes: Long): Unit = {
-    io().addBytesToLatest(bytes)
+  def addBytesToLatest(name: String, bytes: Long): Unit = {
+    io().addBytesToLatest(name, bytes)
   }
 
-  def addBytesToLatestCompute(bytes: Long): Unit = {
-    compute().addBytesToLatest(bytes)
+  def addBytesToLatestCompute(name: String, bytes: Long): Unit = {
+    compute().addBytesToLatest(name, bytes)
   }
 }
