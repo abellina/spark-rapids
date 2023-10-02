@@ -493,7 +493,7 @@ object RapidsConf {
       "just passes through to CUDA memory allocation directly.")
     .startupOnly()
     .stringConf
-    .createWithDefault("ARENA")
+    .createWithDefault("ASYNC")
 
   val CONCURRENT_GPU_TASKS = conf("spark.rapids.sql.concurrentGpuTasks")
       .doc("Set the number of tasks that can execute concurrently per GPU. " +

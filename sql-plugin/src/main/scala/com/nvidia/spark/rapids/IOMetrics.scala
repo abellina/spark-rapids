@@ -254,15 +254,17 @@ object IOMetrics extends Logging {
   }
 
   def withInputBWMetric[T](name: String, os: RegisterableStream)(body: InputBWListener => T): T = {
-    val newListener = new InputBWListener(name, os)
-    io().register(newListener)
-    withResource(newListener) { _ => body(newListener) }
+    body(new InputBWListener("foo", os))
+    //val newListener = new InputBWListener(name, os)
+    //io().register(newListener)
+    //withResource(newListener) { _ => body(newListener) }
   }
 
   def withComputeMetric[T](name: String)(body: ComputeBWListener => T): T = {
-    val newListener = new ComputeBWListener(name)
-    compute().register(newListener)
-    withResource(newListener) { _ => body(newListener) }
+    body(new ComputeBWListener("bar"))
+    //val newListener = new ComputeBWListener(name)
+    //compute().register(newListener)
+    //withResource(newListener) { _ => body(newListener) }
   }
 
   def deregister(l: BWListener): Unit = {
