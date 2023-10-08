@@ -165,18 +165,18 @@ private class GpuColumnarBatchSerializerInstance(dataSize: GpuMetric) extends Se
               }
             }
           }
-          IOMetrics.withOutputBWMetric("writeShuffleBatch") { metric =>
+          //IOMetrics.withOutputBWMetric("writeShuffleBatchToStream") { metric =>
             val serializedLen =
               JCudfSerialization.getSerializedSizeInBytes(columns, startRow, numRows)
             dataSize += serializedLen
-            metric.addBytes(serializedLen)
+            //metric.addBytes(serializedLen)
             val range = new NvtxRange("Serialize Batch", NvtxColor.YELLOW)
             try {
               JCudfSerialization.writeToStream(columns, dOut, startRow, numRows)
             } finally {
               range.close()
             }
-          }
+          //}
         } else {
           val range = new NvtxRange("Serialize Row Only Batch", NvtxColor.YELLOW)
           try {

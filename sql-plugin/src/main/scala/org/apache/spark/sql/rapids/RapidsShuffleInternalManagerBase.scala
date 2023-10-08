@@ -328,10 +328,19 @@ abstract class RapidsShuffleThreadedWriterBase[K, V](
                     case _ =>
                       null
                   }
+                  val szTotal = value match {
+                    case columnarBatch: ColumnarBatch =>
+                      SlicedGpuColumnVector.getTotalHostMemoryUsed(columnarBatch)
+                    case _ => 0L
+                  }
+                  val tc = TaskContext.get()
                   writeFutures += RapidsShuffleInternalManagerBase.queueWriteTask(slotNum, () => {
                     withResource(cb) { _ =>
                       val recordWriteTimeStart = System.nanoTime()
-                      myWriter.write(key, value)
+                      IOMetrics.withOutputBWMetric("writeShuffleBatchToStream", tc) { metric =>
+                        myWriter.write(key, value)
+                        metric.addBytes(szTotal)
+                      }
                       recordWriteTime.getAndAdd(System.nanoTime() - recordWriteTimeStart)
                     }
                   })
@@ -366,7 +375,7 @@ abstract class RapidsShuffleThreadedWriterBase[K, V](
             val writeTimeNs = (System.nanoTime() - writeTimeStart) - computeTime
 
             val combineTimeStart = System.nanoTime()
-            val pl = writePartitionedData(mapOutputWriter)
+            val pl = writePartitionedData(mapOutputWriter, TaskContext.get())
             val combineTimeNs = System.nanoTime() - combineTimeStart
 
             // add openTime which is also done by Spark, and we are counting
@@ -414,40 +423,44 @@ abstract class RapidsShuffleThreadedWriterBase[K, V](
     }
   }
 
-  def writePartitionedData(mapOutputWriter: ShuffleMapOutputWriter): Array[Long] = {
-    // after all temporary shuffle writes are done, we need to produce a single
-    // file (shuffle_[map_id]_0) which is done during this commit phase
-    withResource(new NvtxRange("CommitShuffle", NvtxColor.RED)) { _ =>
-      // per reduce partition
-      val segments = (0 until numPartitions).map {
-        reducePartitionId =>
-          withResource(diskBlockObjectWriters(reducePartitionId)._2) { writer =>
-            val segment = writer.commitAndGet()
-            (reducePartitionId, segment.file)
-          }
-      }
+  def writePartitionedData(mapOutputWriter: ShuffleMapOutputWriter, tc: TaskContext): Array[Long] = {
+    IOMetrics.withOutputBWMetric("commitShuffle", tc) { metric =>
+      // after all temporary shuffle writes are done, we need to produce a single
+      // file (shuffle_[map_id]_0) which is done during this commit phase
+      withResource(new NvtxRange("CommitShuffle", NvtxColor.RED)) { _ =>
+        // per reduce partition
+        val segments = (0 until numPartitions).map {
+          reducePartitionId =>
+            withResource(diskBlockObjectWriters(reducePartitionId)._2) { writer =>
+              val segment = writer.commitAndGet()
+              (reducePartitionId, segment.file)
+            }
+        }
 
-      val writeStartTime = System.nanoTime()
-      segments.foreach { case (reducePartitionId, file) =>
-        val partWriter = mapOutputWriter.getPartitionWriter(reducePartitionId)
-        if (file.exists()) {
-          if (transferToEnabled) {
-            val maybeOutputChannel: Optional[WritableByteChannelWrapper] =
-              partWriter.openChannelWrapper()
-            if (maybeOutputChannel.isPresent) {
-              writePartitionedDataWithChannel(file, maybeOutputChannel.get())
+        val writeStartTime = System.nanoTime()
+        segments.foreach { case (reducePartitionId, file) =>
+          val partWriter = mapOutputWriter.getPartitionWriter(reducePartitionId)
+          if (file.exists()) {
+            if (transferToEnabled) {
+              val maybeOutputChannel: Optional[WritableByteChannelWrapper] =
+                partWriter.openChannelWrapper()
+              if (maybeOutputChannel.isPresent) {
+                writePartitionedDataWithChannel(file, maybeOutputChannel.get())
+              } else {
+                writePartitionedDataWithStream(file, partWriter)
+              }
             } else {
               writePartitionedDataWithStream(file, partWriter)
             }
-          } else {
-            writePartitionedDataWithStream(file, partWriter)
+            file.delete()
           }
-          file.delete()
         }
+        writeMetrics.incWriteTime(System.nanoTime() - writeStartTime)
       }
-      writeMetrics.incWriteTime(System.nanoTime() - writeStartTime)
+      val lengths = commitAllPartitions(mapOutputWriter, false /*non-empty checksums*/)
+      metric.addBytes(lengths.sum)
+      lengths
     }
-    commitAllPartitions(mapOutputWriter, false /*non-empty checksums*/)
   }
 
   // taken from BypassMergeSortShuffleWriter

@@ -126,44 +126,52 @@ trait GpuPartitioning extends Partitioning {
     val mightNeedToSplit = totalInputSize > GpuPartitioning.MaxCpuBatchSize
 
     val hostPartColumns = withResource(partitionColumns) { _ =>
-      partitionColumns.map(_.copyToHost())
+      IOMetrics.withOutputBWMetric("copyShuffleToHost") { metric =>
+        val res = partitionColumns.map(_.copyToHost())
+        metric.addBytes(totalInputSize)
+        res
+      }
     }
     try {
       // Leaving the GPU for a while
       GpuSemaphore.releaseIfNecessary(TaskContext.get())
 
-      val origParts = new Array[ColumnarBatch](numPartitions)
-      var start = 0
-      for (i <- 1 until Math.min(numPartitions, partitionIndexes.length)) {
-        val idx = partitionIndexes(i)
-        origParts(i - 1) = sliceBatch(hostPartColumns, start, idx)
-        start = idx
-      }
-      origParts(numPartitions - 1) = sliceBatch(hostPartColumns, start, numRows)
-      val tmp = origParts.zipWithIndex.filter(_._1 != null)
-      // Spark CPU shuffle in some cases has limits on the size of the data a single
-      //  row can have. It is a little complicated because the limit is on the compressed
-      //  and encrypted buffer, but for now we are just going to assume it is about the same
-      // size.
-      if (mightNeedToSplit) {
-        tmp.flatMap {
-          case (batch, part) =>
-            val totalSize = SlicedGpuColumnVector.getTotalHostMemoryUsed(batch)
-            val numOutputBatches =
-              math.ceil(totalSize.toDouble / GpuPartitioning.MaxCpuBatchSize).toInt
-            if (numOutputBatches > 1) {
-              // For now we are going to slice it on number of rows instead of looking
-              // at each row to try and decide. If we get in trouble we can probably
-              // make this recursive and keep splitting more until it is small enough.
-              reslice(batch, numOutputBatches).map { subBatch =>
-                (subBatch, part)
-              }
-            } else {
-              Seq((batch, part))
-            }
+      IOMetrics.withComputeMetric("hostPartition") { metric =>
+        val origParts = new Array[ColumnarBatch](numPartitions)
+        var start = 0
+        for (i <- 1 until Math.min(numPartitions, partitionIndexes.length)) {
+          val idx = partitionIndexes(i)
+          origParts(i - 1) = sliceBatch(hostPartColumns, start, idx)
+          start = idx
         }
-      } else {
-        tmp
+        origParts(numPartitions - 1) = sliceBatch(hostPartColumns, start, numRows)
+        val tmp = origParts.zipWithIndex.filter(_._1 != null)
+        // Spark CPU shuffle in some cases has limits on the size of the data a single
+        //  row can have. It is a little complicated because the limit is on the compressed
+        //  and encrypted buffer, but for now we are just going to assume it is about the same
+        // size.
+        val res = if (mightNeedToSplit) {
+          tmp.flatMap {
+            case (batch, part) =>
+              val totalSize = SlicedGpuColumnVector.getTotalHostMemoryUsed(batch)
+              val numOutputBatches =
+                math.ceil(totalSize.toDouble / GpuPartitioning.MaxCpuBatchSize).toInt
+              if (numOutputBatches > 1) {
+                // For now we are going to slice it on number of rows instead of looking
+                // at each row to try and decide. If we get in trouble we can probably
+                // make this recursive and keep splitting more until it is small enough.
+                reslice(batch, numOutputBatches).map { subBatch =>
+                  (subBatch, part)
+                }
+              } else {
+                Seq((batch, part))
+              }
+          }
+        } else {
+          tmp
+        }
+        metric.addBytes(totalInputSize)
+        res
       }
     } finally {
       hostPartColumns.safeClose()
