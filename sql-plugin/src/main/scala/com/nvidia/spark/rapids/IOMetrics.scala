@@ -87,6 +87,7 @@ class MetricBuckets extends Logging {
 
 abstract class BWListener(val name: String, val tc: TaskContext) extends AutoCloseable {
   var bytes = 0L
+  var myBytes = 0L
   var _startingBucket: Int = 0
   val startTime = System.nanoTime()
   var endTime = 0L
@@ -108,6 +109,10 @@ abstract class BWListener(val name: String, val tc: TaskContext) extends AutoClo
     (bytes.toDouble / ((endTime - startTime).toDouble / 1000000000.0D)) / 1024.0 / 1024.0
   }
 
+  def getMyBW(): Double = synchronized {
+    (myBytes.toDouble / ((endTime - startTime).toDouble / 1000000000.0D)) / 1024.0 / 1024.0
+  }
+
   override def close(): Unit = synchronized {
     if (!closed) {
       closed = true
@@ -122,6 +127,7 @@ class InputBWListener(name: String, os: RegisterableStream, tc: TaskContext)
   os.register(this)
 
   override def addBytes(newBytes: Long): Unit = synchronized {
+    myBytes += newBytes
     IOMetrics.addBytesToLatest(name, newBytes)
   }
 }
@@ -130,12 +136,14 @@ class BWListenerPerTask(name: String, tc: TaskContext)
     extends BWListener(name, tc) {
 
   override def addBytes(newBytes: Long): Unit = synchronized {
+    myBytes += newBytes
     IOMetrics.addBytesToLatest(name, newBytes)
   }
 }
 
 class ComputeBWListener(name: String, tc: TaskContext) extends BWListener(name, tc) {
   override def addBytes(newBytes: Long): Unit = synchronized {
+    myBytes += newBytes
     IOMetrics.addBytesToLatestCompute(name, newBytes)
   }
 }
@@ -465,15 +473,16 @@ object IOMetrics extends Logging {
       if (addCallback) {
         onTaskCompletion(tc) {
           val completed = completePerTask.remove(attempt)
-          val taskBW = completed.map { c =>
+          val (taskBW, myTaskBW) = completed.map { c =>
             if (c.listener != null) {
               c.listener.close()
-              c.listener.getBW()
+              (c.listener.getBW(), c.listener.getMyBW())
             } else  {
-              -1
+              (-1, -1)
             }
-          }
-          logInfo(s"Task ${attempt} taskBW: ${taskBW} MB/sec. Metrics:\n${completed}")
+          }.getOrElse((-1, -1))
+          logInfo(s"Task ${attempt}. System task bw: ${taskBW} MB/sec. My task bw: ${myTaskBW} " +
+            s"Metrics:\n${completed}")
         }
         if (!completePerTask.contains(attempt)) {
           completePerTask.put(attempt, new CompleteListeners)
