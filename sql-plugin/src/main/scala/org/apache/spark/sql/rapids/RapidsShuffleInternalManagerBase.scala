@@ -261,6 +261,7 @@ abstract class RapidsShuffleThreadedWriterBase[K, V](
   private val serializer = dep.serializer.newInstance()
   private val transferToEnabled = sparkConf.getBoolean("spark.file.transferTo", true)
   private val fileBufferSize = sparkConf.get(config.SHUFFLE_FILE_BUFFER_SIZE).toInt * 1024
+  private val limiter = new BytesInFlightLimiter(128L*1024*1024)
   /**
    * Are we in the process of stopping? Because map tasks can call stop() with success = true
    * and then call stop() with success = false if they get an exception, we want to make sure
@@ -322,17 +323,20 @@ abstract class RapidsShuffleThreadedWriterBase[K, V](
                 } else {
                   // we close batches actively in the `records` iterator as we get the next batch
                   // this makes sure it is kept alive while a task is able to handle it.
-                  val cb = value match {
+                  val (cb, size) = value match {
                     case columnarBatch: ColumnarBatch =>
-                      SlicedGpuColumnVector.incRefCount(columnarBatch)
+                      (SlicedGpuColumnVector.incRefCount(columnarBatch),
+                        RapidsHostColumnVector.getTotalHostMemoryUsed(columnarBatch))
                     case _ =>
                       null
                   }
+                  limiter.acquireOrBlock(size)
                   writeFutures += RapidsShuffleInternalManagerBase.queueWriteTask(slotNum, () => {
                     withResource(cb) { _ =>
                       val recordWriteTimeStart = System.nanoTime()
                       myWriter.write(key, value)
                       recordWriteTime.getAndAdd(System.nanoTime() - recordWriteTimeStart)
+                      limiter.release(size)
                     }
                   })
                 }
@@ -514,6 +518,44 @@ abstract class RapidsShuffleThreadedWriterBase[K, V](
   }
 }
 
+class BytesInFlightLimiter(maxBytesInFlight: Long) {
+  private var inFlight: Long = 0L
+
+  def acquire(sz: Long): Boolean = {
+    if (sz == 0) {
+      true
+    } else {
+      synchronized {
+        if (inFlight == 0 || sz + inFlight < maxBytesInFlight) {
+          inFlight += sz
+          true
+        } else {
+          false
+        }
+      }
+    }
+  }
+
+  def acquireOrBlock(sz: Long): Unit = {
+    var acquired = acquire(sz)
+    if (!acquired) {
+      synchronized {
+        while (!acquired) {
+          acquired = acquire(sz)
+          if (!acquired) {
+            wait()
+          }
+        }
+      }
+    }
+  }
+
+  def release(sz: Long): Unit = synchronized {
+    inFlight -= sz
+    notifyAll()
+  }
+}
+
 abstract class RapidsShuffleThreadedReaderBase[K, C](
     handle: ShuffleHandleWithMetrics[K, C, C],
     context: TaskContext,
@@ -584,28 +626,6 @@ abstract class RapidsShuffleThreadedReaderBase[K, C](
     doBatchFetch
   }
 
-  class BytesInFlightLimiter(maxBytesInFlight: Long) {
-    private var inFlight: Long = 0L
-
-    def acquire(sz: Long): Boolean = {
-      if (sz == 0) {
-        true
-      } else {
-        synchronized {
-          if (inFlight == 0 || sz + inFlight < maxBytesInFlight) {
-            inFlight += sz
-            true
-          } else {
-            false
-          }
-        }
-      }
-    }
-
-    def release(sz: Long): Unit = synchronized {
-      inFlight -= sz
-    }
-  }
 
   class RapidsShuffleThreadedBlockIterator(
       fetcherIterator: RapidsShuffleBlockFetcherIterator,
