@@ -326,7 +326,7 @@ abstract class RapidsShuffleThreadedWriterBase[K, V](
                   val (cb, size) = value match {
                     case columnarBatch: ColumnarBatch =>
                       (SlicedGpuColumnVector.incRefCount(columnarBatch),
-                        RapidsHostColumnVector.getTotalHostMemoryUsed(columnarBatch))
+                        SlicedGpuColumnVector.getTotalHostMemoryUsed(columnarBatch))
                     case _ =>
                       null
                   }
