@@ -142,6 +142,8 @@ class RapidsDiskStore(diskBlockManager: RapidsDiskBlockManager)
     // FIXME: Need to be clean up. Tracked in https://github.com/NVIDIA/spark-rapids/issues/9496
     override val memoryUsedBytes: Long = uncompressedSize
 
+    override def getCompressedSizeBytes: Long = onDiskSizeInBytes
+
     override val storageTier: StorageTier = StorageTier.DISK
 
     override def getMemoryBuffer: MemoryBuffer = synchronized {

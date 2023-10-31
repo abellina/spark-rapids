@@ -228,6 +228,8 @@ trait RapidsBuffer extends AutoCloseable {
    */
   val memoryUsedBytes: Long
 
+  def getCompressedSizeBytes: Long = memoryUsedBytes
+
   /**
    * The size of this buffer if it has already gone through contiguous_split.
    *

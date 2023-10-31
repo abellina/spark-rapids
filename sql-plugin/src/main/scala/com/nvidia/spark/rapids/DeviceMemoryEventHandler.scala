@@ -25,7 +25,6 @@ import com.sun.management.HotSpotDiagnosticMXBean
 
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.rapids.GpuTaskMetrics
-import org.apache.spark.sql.rapids.execution.TrampolineUtil
 
 /**
  * RMM event handler to trigger spilling from the device memory store.
@@ -157,7 +156,6 @@ class DeviceMemoryEventHandler(
             catalog.synchronousSpill(store, targetSize, Cuda.DEFAULT_STREAM)
           maybeAmountSpilled.foreach { amountSpilled =>
             logInfo(s"Spilled $amountSpilled bytes from the device store")
-            TrampolineUtil.incTaskMetricsMemoryBytesSpilled(amountSpilled)
           }
           true
         }

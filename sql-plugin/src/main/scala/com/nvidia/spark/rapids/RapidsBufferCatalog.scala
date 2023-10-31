@@ -329,7 +329,9 @@ class RapidsBufferCatalog(
           s"Cannot call addBuffer with buffer $buffer")
     }
     registerNewBuffer(rapidsBuffer)
-    makeNewHandle(id, initialSpillPriority)
+    val res = makeNewHandle(id, initialSpillPriority)
+    synchronousSpill(deviceStorage, 0)
+    res
   }
 
   /**
@@ -403,7 +405,9 @@ class RapidsBufferCatalog(
       initialSpillPriority,
       needsSync)
     registerNewBuffer(rapidsBuffer)
-    makeNewHandle(id, initialSpillPriority)
+    val res = makeNewHandle(id, initialSpillPriority)
+    synchronousSpill(deviceStorage, 0)
+    res
   }
 
 

@@ -29,6 +29,7 @@ import com.nvidia.spark.rapids.format.TableMeta
 
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.rapids.GpuTaskMetrics
+import org.apache.spark.sql.rapids.execution.TrampolineUtil
 import org.apache.spark.sql.types.DataType
 import org.apache.spark.sql.vectorized.ColumnarBatch
 
@@ -368,6 +369,17 @@ abstract class RapidsBufferStore(val tier: StorageTier)
       // if it didn't fit, we can try a lower tier that has more space
       if (maybeNewBuffer.isEmpty) {
         nextSpillStore = nextSpillStore.spillStore
+      } else {
+        // we spilled, update metrics
+        logInfo(
+          s"Spilled ${buffer.memoryUsedBytes} bytes from ${buffer.storageTier} " +
+              s"to make room for ${buffer.id} to ${maybeNewBuffer.get.storageTier}")
+        if (maybeNewBuffer.get.storageTier == StorageTier.DISK) {
+          val compressedSize = maybeNewBuffer.get.getCompressedSizeBytes
+          TrampolineUtil.incTaskMetricsDiskBytesSpilled(compressedSize)
+        } else {
+          TrampolineUtil.incTaskMetricsMemoryBytesSpilled(maybeNewBuffer.get.memoryUsedBytes)
+        }
       }
     }
     if (maybeNewBuffer.isEmpty) {
