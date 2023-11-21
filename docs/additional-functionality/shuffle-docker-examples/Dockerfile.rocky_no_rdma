@@ -23,7 +23,7 @@
 #   - ROCKY_VER: Rocky Linux OS version
 
 ARG CUDA_VER=11.8.0
-ARG UCX_VER=1.14.0
+ARG UCX_VER=1.15.0
 ARG UCX_CUDA_VER=11
 ARG ROCKY_VER=8
 FROM nvidia/cuda:${CUDA_VER}-runtime-rockylinux${ROCKY_VER}
