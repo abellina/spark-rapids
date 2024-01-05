@@ -816,6 +816,13 @@ case class GpuGenerateExec(
   }
 }
 
+case class BatchToGenerate(fixUpOffset: Long, spillable: SpillableColumnarBatch)
+  extends AutoCloseable {
+  override def close(): Unit = {
+    spillable.close()
+  }
+}
+
 class GpuGenerateIterator(
     inputs: Seq[SpillableColumnarBatch],
     generator: GpuGenerator,
@@ -827,11 +834,16 @@ class GpuGenerateIterator(
   // Need to ensure these are closed in case of failure.
   inputs.foreach(scb => use(scb))
 
-  def generateSplitSpillableInHalfByRows: SpillableColumnarBatch => Seq[SpillableColumnarBatch] = {
-    (spillable: SpillableColumnarBatch) => {
-      withResource(spillable) { _ =>
+  def generateSplitSpillableInHalfByRows: BatchToGenerate => Seq[BatchToGenerate] = {
+    (batchToGenerate: BatchToGenerate) => {
+      withResource(batchToGenerate) { _ =>
+        val spillable = batchToGenerate.spillable
         val toSplitRows = spillable.numRows()
-        if (toSplitRows == 1) {
+        val enable = generator match {
+          case e: GpuExplodeBase => !e.position
+          case _ => false
+        }
+        if (toSplitRows == 1 && enable) {
           // single row, we need to actually add row duplicates, then split
           val tbl = withResource(spillable.getColumnarBatch()) { src =>
             GpuColumnVector.from(src)
@@ -847,12 +859,12 @@ class GpuGenerateIterator(
             // borrow the column to explode, in order to split it as a table
             // explodedTbl is 1 row per element of the list
             val explodedTbl =
-            withResource(new Table(tbl.getColumn(generatorOffset))) { generatorTmpTable =>
-              // we use regular `explode` because we know we have 1 list column
-              // and it isn't null => this operation will produce N rows, 1 row per element
-              // of the column at `generatorOffset`
-              generatorTmpTable.explode(0)
-            }
+              withResource(new Table(tbl.getColumn(generatorOffset))) { generatorTmpTable =>
+                // we use regular `explode` because we know we have 1 list column
+                // and it isn't null => this operation will produce N rows, 1 row per element
+                // of the column at `generatorOffset`
+                generatorTmpTable.explode(0)
+              }
 
             // Because we are likely to be here solving a cuDF column length limit
             // we are just going to split in half blindly until we can fit it.
@@ -866,9 +878,10 @@ class GpuGenerateIterator(
               val splitIx = Seq(explodedTbl.getRowCount.toInt / 2)
               explodedTbl.contiguousSplit(splitIx: _*)
             }
-            val result = new Array[SpillableColumnarBatch](splits.size)
+            val result = new Array[BatchToGenerate](splits.size)
             closeOnExcept(result) { _ =>
               closeOnExcept(splits) { _ =>
+                var offset = batchToGenerate.fixUpOffset
                 (0 until splits.length).foreach { split =>
                   val explodedTblToConvertBack = splits(split)
                   val cols = new Array[ColumnVector](tbl.getNumberOfColumns)
@@ -895,9 +908,10 @@ class GpuGenerateIterator(
                     new Table(cols: _*)
                   }
                   withResource(finalTbl) { _ =>
-                    result(split) = SpillableColumnarBatch(
+                    result(split) = BatchToGenerate(offset, SpillableColumnarBatch(
                       GpuColumnVector.from(finalTbl, spillable.dataTypes),
-                      SpillPriorities.ACTIVE_BATCHING_PRIORITY)
+                      SpillPriorities.ACTIVE_BATCHING_PRIORITY))
+                    offset += finalTbl.getRowCount // we keep track of the rows so far, so we can fix it later
                   }
                 }
               }
@@ -905,20 +919,24 @@ class GpuGenerateIterator(
             result
           }
         } else {
-          // more than 1 rows, we just do the regular split-by-rows
+          // more than 1 rows, we just do the regular split-by-rows,
+          // we need to keep track of the fixup offset
           RmmRapidsRetryIterator.splitSpillableInHalfByRows(spillable)
+            .map(BatchToGenerate(batchToGenerate.fixUpOffset, _))
         }
       }
     }
   }
 
   // apply generation on each (sub)batch
-  private val retryIter =
-    withRetry(inputs.toIterator, generateSplitSpillableInHalfByRows) { attempt =>
-      withResource(attempt.getColumnarBatch()) { batch =>
+  private val retryIter = {
+    val inputBatchesToGenerate = inputs.map(BatchToGenerate(0, _)).toIterator
+    withRetry(inputBatchesToGenerate, generateSplitSpillableInHalfByRows) { attempt =>
+      withResource(attempt.spillable.getColumnarBatch()) { batch =>
         generator.generate(batch, generatorOffset, outer)
       }
     }
+  }
 
   override def hasNext: Boolean = retryIter.hasNext
   override def next(): ColumnarBatch = {

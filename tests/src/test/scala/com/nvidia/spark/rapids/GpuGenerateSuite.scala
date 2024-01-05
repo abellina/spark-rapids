@@ -177,33 +177,58 @@ class GpuGenerateSuite
     }
   }
 
-  test("on splitAndRetry try to split by rows else split the exploding column") {
-    class MyExplode(child: Expression) extends GpuExplode(child) {
-      private var forceNumOOMs: Int = 0
-      override def generate(
-        inputBatch: ColumnarBatch,
-        generatorOffset: Int,
-        outer: Boolean): ColumnarBatch = {
-        if (forceNumOOMs > 0) {
-          forceNumOOMs -= 1
-          throw new GpuSplitAndRetryOOM(s"mock split and retry. ${forceNumOOMs} pending.")
-        }
-        super.generate(inputBatch, generatorOffset, outer)
-      }
+  class MyExplode(child: Expression) extends GpuExplode(child) with MyGenerator {
+    private var forceNumOOMs: Int = 0
 
-      def doForceSplitAndRetry(numOOMs: Int) = {
-        forceNumOOMs = numOOMs
+    override def generate(
+                           inputBatch: ColumnarBatch,
+                           generatorOffset: Int,
+                           outer: Boolean): ColumnarBatch = {
+      if (forceNumOOMs > 0) {
+        forceNumOOMs -= 1
+        throw new GpuSplitAndRetryOOM(s"mock split and retry. ${forceNumOOMs} pending.")
       }
+      super.generate(inputBatch, generatorOffset, outer)
     }
+
+    override def doForceSplitAndRetry(numOOMs: Int) = {
+      forceNumOOMs = numOOMs
+    }
+  }
+  trait MyGenerator extends GpuExplodeBase {
+    def doForceSplitAndRetry(numOOMs: Int): Unit
+  }
+
+  class MyPosExplode(child: Expression) extends GpuPosExplode(child) with MyGenerator {
+    private var forceNumOOMs: Int = 0
+
+    override def generate(
+                           inputBatch: ColumnarBatch,
+                           generatorOffset: Int,
+                           outer: Boolean): ColumnarBatch = {
+      if (forceNumOOMs > 0) {
+        forceNumOOMs -= 1
+        throw new GpuSplitAndRetryOOM(s"mock split and retry. ${forceNumOOMs} pending.")
+      }
+      super.generate(inputBatch, generatorOffset, outer)
+    }
+
+    override def doForceSplitAndRetry(numOOMs: Int) = {
+      forceNumOOMs = numOOMs
+    }
+  }
+
+
+  def doGenerateWithSplitAndRetry(generate: GpuGenerator,
+                                  failingGenerate: MyGenerator) = {
     // numRows = 1: exercises the split code trying to save a 1-row scenario where
     // we are running OOM.
     // numRows = 2: is the regular split code
     (1 until 3).foreach { numRows =>
       val (expected, _) = makeBatch(numRows)
-      val e = GpuExplode(AttributeReference("foo", ArrayType(IntegerType))())
       val itNoFailures = new GpuGenerateIterator(
         Seq(SpillableColumnarBatch(expected, SpillPriorities.ACTIVE_ON_DECK_PRIORITY)),
-        generator = e,
+        generator = generate,
         generatorOffset = 1,
         outer = false,
         NoopMetric,
@@ -226,17 +251,17 @@ class GpuGenerateSuite
           val (actual, _) = makeBatch(numRows)
           val actualSpillable =
             SpillableColumnarBatch(actual, SpillPriorities.ACTIVE_ON_DECK_PRIORITY)
-          val failingGenerator = new MyExplode(AttributeReference("foo", ArrayType(IntegerType))())
+
           val it = new GpuGenerateIterator(
             Seq(actualSpillable),
-            generator = failingGenerator,
+            generator = failingGenerate,
             generatorOffset = 1,
             outer = false,
             NoopMetric,
             NoopMetric,
             NoopMetric)
 
-          failingGenerator.doForceSplitAndRetry(numOOMs)
+          failingGenerate.doForceSplitAndRetry(numOOMs)
 
           // this should return 2 batches, each with half the output
           val results = new ArrayBuffer[ColumnarBatch]()
@@ -258,6 +283,20 @@ class GpuGenerateSuite
         }
       }
     }
+  }
+
+  test("explode: on splitAndRetry try to split by rows else split the exploding column") {
+    doGenerateWithSplitAndRetry(
+      GpuExplode(AttributeReference("foo", ArrayType(IntegerType))()),
+      new MyExplode(AttributeReference("foo", ArrayType(IntegerType))())
+    )
+  }
+
+  test("posexplode: on splitAndRetry try to split by rows else split the exploding column") {
+    doGenerateWithSplitAndRetry(
+      GpuPosExplode(AttributeReference("foo", ArrayType(IntegerType))()),
+      new MyPosExplode(AttributeReference("foo", ArrayType(IntegerType))())
+    )
   }
 
   test("2-row batches split in half") {
