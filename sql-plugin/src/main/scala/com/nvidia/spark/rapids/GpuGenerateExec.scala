@@ -839,11 +839,7 @@ class GpuGenerateIterator(
       withResource(batchToGenerate) { _ =>
         val spillable = batchToGenerate.spillable
         val toSplitRows = spillable.numRows()
-        val enable = generator match {
-          case e: GpuExplodeBase => !e.position
-          case _ => false
-        }
-        if (toSplitRows == 1 && enable) {
+        if (toSplitRows == 1) {
           // single row, we need to actually add row duplicates, then split
           val tbl = withResource(spillable.getColumnarBatch()) { src =>
             GpuColumnVector.from(src)
