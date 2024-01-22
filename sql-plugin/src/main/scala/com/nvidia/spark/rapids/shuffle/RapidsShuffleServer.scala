@@ -20,13 +20,12 @@ import java.util.concurrent.{ConcurrentLinkedQueue, Executor}
 
 import scala.collection.mutable.ArrayBuffer
 
-import ai.rapids.cudf.{Cuda, MemoryBuffer, NvtxColor, NvtxRange}
+import ai.rapids.cudf.{Cuda, NvtxColor, NvtxRange}
 import com.nvidia.spark.rapids.{RapidsBuffer, RapidsConf, ShuffleMetadata}
 import com.nvidia.spark.rapids.Arm.{closeOnExcept, withResource}
 import com.nvidia.spark.rapids.format.TableMeta
 
 import org.apache.spark.internal.Logging
-import org.apache.spark.shuffle.rapids.RapidsShuffleSendPrepareException
 import org.apache.spark.sql.rapids.execution.TrampolineUtil
 import org.apache.spark.storage.{BlockManagerId, ShuffleBlockBatchId}
 
