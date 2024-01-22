@@ -348,13 +348,14 @@ class RapidsShuffleIterator(
     // thread to schedule the fetches for us, it may be something we consider in the future, given
     // memory pressure.
     // No good way to get a metric in here for semaphore time.
-    taskContext.foreach(GpuSemaphore.acquireIfNecessary(_))
+    //taskContext.foreach(GpuSemaphore.acquireIfNecessary(_))
 
-    if (!started) {
-      // kick off if we haven't already
-      start()
-      started = true
-    }
+    //if (!started) {
+    //  // kick off if we haven't already
+    //  start()
+    //  started = true
+    //}
+    TaskRegistryTracker.registerThreadForRetry()
 
     val blockedStart = System.currentTimeMillis()
     var result: Option[ShuffleClientResult] = None
