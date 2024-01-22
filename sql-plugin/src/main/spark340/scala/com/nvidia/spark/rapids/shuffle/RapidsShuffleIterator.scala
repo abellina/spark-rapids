@@ -33,6 +33,7 @@ import ai.rapids.cudf.{NvtxColor, NvtxRange}
 import com.nvidia.spark.rapids.{GpuSemaphore, RapidsBuffer, RapidsBufferHandle, RapidsConf, ShuffleReceivedBufferCatalog}
 import com.nvidia.spark.rapids.Arm.withResource
 import com.nvidia.spark.rapids.ScalableTaskCompletion.onTaskCompletion
+import com.nvidia.spark.rapids.TaskRegistryTracker
 import com.nvidia.spark.rapids.jni.RmmSpark
 
 import org.apache.spark.TaskContext
@@ -152,7 +153,6 @@ class RapidsShuffleIterator(
 
   private val localHost = localBlockManagerId.host
 
-  private var started: Boolean = false
 
   // NOTE: `mapIndex` is utilized by the `FetchFailedException` to reference
   // a map output by index from the statuses collection in `MapOutputTracker`.
