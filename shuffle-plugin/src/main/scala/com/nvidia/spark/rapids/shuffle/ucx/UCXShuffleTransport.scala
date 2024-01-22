@@ -449,7 +449,7 @@ class UCXShuffleTransport(shuffleServerId: BlockManagerId, rapidsConf: RapidsCon
                   requestIx += 1
                 } else {
                   // TODO: make this a metric => "blocked while waiting on bounce buffers"
-                  logTrace("Can't acquire bounce buffers for receive.")
+                  logInfo("Can't acquire bounce buffers for receive.")
                   hasBounceBuffers = false
                   putBack.append(reqToHandle)
                   requestIx += 1
