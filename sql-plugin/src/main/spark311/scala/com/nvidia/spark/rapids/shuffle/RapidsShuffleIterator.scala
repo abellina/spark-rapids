@@ -360,13 +360,14 @@ class RapidsShuffleIterator(
     // fetches and so it could produce device memory. Note this is not allowing for some external
     // thread to schedule the fetches for us, it may be something we consider in the future, given
     // memory pressure.
-    taskContext.foreach(GpuSemaphore.acquireIfNecessary)
+    //taskContext.foreach(GpuSemaphore.acquireIfNecessary)
+    TaskRegistryTracker.registerThreadForRetry()
 
-    if (!started) {
-      // kick off if we haven't already
-      start()
-      started = true
-    }
+    //if (!started) {
+    //  // kick off if we haven't already
+    //  start()
+    //  started = true
+    //}
 
     val blockedStart = System.currentTimeMillis()
     var result: Option[ShuffleClientResult] = None
