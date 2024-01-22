@@ -195,7 +195,7 @@ class RapidsShuffleServer(transport: RapidsShuffleTransport,
               serverStream))
           } else {
             // TODO: make this a metric => "blocked while waiting on bounce buffers"
-            logTrace(s"Can't acquire send bounce buffers")
+            logInfo(s"Can't acquire send bounce buffers")
             continue = false
           }
         }

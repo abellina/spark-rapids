@@ -356,6 +356,9 @@ class RapidsShuffleIterator(
     //  started = true
     //}
     TaskRegistryTracker.registerThreadForRetry()
+    if (resolvedBatches.size() == 0) {
+      taskContext.foreach(GpuSemaphore.releaseIfNecessary(_))
+    }
 
     val blockedStart = System.currentTimeMillis()
     var result: Option[ShuffleClientResult] = None
