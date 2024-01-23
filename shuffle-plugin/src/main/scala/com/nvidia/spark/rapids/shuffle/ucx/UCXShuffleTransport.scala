@@ -226,7 +226,7 @@ class UCXShuffleTransport(shuffleServerId: BlockManagerId, rapidsConf: RapidsCon
     new CallerRunsAndLogs())
 
   // This executor handles any task that would block (e.g. wait for spill synchronously due to OOM)
-  private[this] val clientCopyExecutor = Executors.newFixedThreadPool(15,
+  private[this] val clientCopyExecutor = Executors.newSingleThreadExecutor(
     GpuDeviceManager.wrapThreadFactory(new ThreadFactoryBuilder()
       .setNameFormat("shuffle-client-copy-thread-%d")
       .setDaemon(true)

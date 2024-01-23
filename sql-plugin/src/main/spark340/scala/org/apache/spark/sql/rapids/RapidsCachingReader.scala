@@ -56,6 +56,31 @@ trait ShuffleMetricsUpdater {
     rowsFetched: Long): Unit
 }
 
+class RapidsBufferCoalesceIterator(
+    rapidsBufferHandleIt: Iterator[RapidsBufferHandle],
+    sparkTypes: Array[DataType],
+    metrics: ShuffleReadMetricsReporter): Iterator[ColumnarBatch] {
+  override def hasNext(): Boolean = rapidsBufferHandleIt.hasNext
+  override def next(): ColumnarBatch = {
+    val toConcat = new ArrayBuffer[ColumnarBatch]()
+    var numBytes = 0L
+    withResource(new NvtxRange("new concat", NvtxColor.DARK_GREEN)) { _ =>
+      while (rapidsBufferHandleIt.hasNext && numBytes < 2L * 1024 * 1024 * 1024) {
+        val handle = rapidsBufferHandleIt.next()
+        withResource(catalog.acquireBuffer(bufferHandle)) { buffer: RapidsBuffer =>
+          numBytes += buffer.memoryUsedBytes
+          toConcat.append(buffer.getColumnarBatch(sparkTypes))
+        }
+      }
+      val res = ConcatAndConsumeAll.buildNonEmptyBatchFromTypes(toConcat, sparkTypes)
+      val cachedBytesRead = GpuColumnVector.getTotalDeviceMemoryUsed(cb)
+      metrics.incLocalBytesRead(numBytes)
+      metrics.incRecordsRead(res.numRows())
+    }
+    res
+  }
+}
+
 class RapidsCachingReader[K, C](
     rapidsConf: RapidsConf,
     localId: BlockManagerId,
@@ -152,17 +177,10 @@ class RapidsCachingReader[K, C](
 
       val itRange = new NvtxRange("Shuffle Iterator prep", NvtxColor.BLUE)
       try {
-        val cachedIt = cachedBufferHandles.iterator.map(bufferHandle => {
-          // No good way to get a metric in here for semaphore wait time
-          GpuSemaphore.acquireIfNecessary(context)
-          val cb = withResource(catalog.acquireBuffer(bufferHandle)) { buffer =>
-            buffer.getColumnarBatch(sparkTypes)
-          }
-          val cachedBytesRead = GpuColumnVector.getTotalDeviceMemoryUsed(cb)
-          metrics.incLocalBytesRead(cachedBytesRead)
-          metrics.incRecordsRead(cb.numRows())
-          (0, cb)
-        }).asInstanceOf[Iterator[(K, C)]]
+        val cachedIt = new RapidsBufferCoalesceIterator(
+          cachedBufferHandles.iterator,
+          sparkTypes,
+          metrics).asInstanceOf[Iterator[(K, C)]]
 
         val cbArrayFromUcx: Iterator[(K, C)] = if (blocksForRapidsTransport.nonEmpty) {
           val rapidsShuffleIterator = new RapidsShuffleIterator(localId, rapidsConf, transport.get,
