@@ -175,10 +175,12 @@ class RapidsShuffleServer(transport: RapidsShuffleTransport,
   bssExec.execute(() => {
     while (started) {
       closeOnExcept(new ArrayBuffer[BufferSendState]()) { bssToIssue =>
-        var bssContinue = bssContinueQueue.poll()
-        while (bssContinue != null) {
-          bssToIssue.append(bssContinue)
-          bssContinue = bssContinueQueue.poll()
+        withResource(new NvtxRange("polling BSS", NvtxColor.YELLOW)) { _ =>
+          var bssContinue = bssContinueQueue.poll()
+          while (bssContinue != null) {
+            bssToIssue.append(bssContinue)
+            bssContinue = bssContinueQueue.poll()
+          }
         }
 
         var continue = true
