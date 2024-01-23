@@ -36,6 +36,7 @@ import org.apache.spark.{InterruptibleIterator, TaskContext}
 import org.apache.spark.internal.Logging
 import org.apache.spark.shuffle.{ShuffleReader, ShuffleReadMetricsReporter}
 import org.apache.spark.sql.types.DataType
+import org.apache.spark.sql.vectorized.ColumnarBatch
 import org.apache.spark.storage.{BlockId, BlockManagerId, ShuffleBlockBatchId, ShuffleBlockId}
 import org.apache.spark.util.CompletionIterator
 
@@ -57,9 +58,10 @@ trait ShuffleMetricsUpdater {
 }
 
 class RapidsBufferCoalesceIterator(
+    catalog: ShuffleBufferCatalog,
     rapidsBufferHandleIt: Iterator[RapidsBufferHandle],
     sparkTypes: Array[DataType],
-    metrics: ShuffleReadMetricsReporter): Iterator[ColumnarBatch] {
+    metrics: ShuffleReadMetricsReporter) extends Iterator[ColumnarBatch] {
   override def hasNext(): Boolean = rapidsBufferHandleIt.hasNext
   override def next(): ColumnarBatch = {
     val toConcat = new ArrayBuffer[ColumnarBatch]()
@@ -67,17 +69,16 @@ class RapidsBufferCoalesceIterator(
     withResource(new NvtxRange("new concat", NvtxColor.DARK_GREEN)) { _ =>
       while (rapidsBufferHandleIt.hasNext && numBytes < 2L * 1024 * 1024 * 1024) {
         val handle = rapidsBufferHandleIt.next()
-        withResource(catalog.acquireBuffer(bufferHandle)) { buffer: RapidsBuffer =>
+        withResource(catalog.acquireBuffer(handle)) { buffer: RapidsBuffer =>
           numBytes += buffer.memoryUsedBytes
           toConcat.append(buffer.getColumnarBatch(sparkTypes))
         }
       }
-      val res = ConcatAndConsumeAll.buildNonEmptyBatchFromTypes(toConcat, sparkTypes)
-      val cachedBytesRead = GpuColumnVector.getTotalDeviceMemoryUsed(cb)
+      val res = ConcatAndConsumeAll.buildNonEmptyBatchFromTypes(toConcat.toArray, sparkTypes)
       metrics.incLocalBytesRead(numBytes)
       metrics.incRecordsRead(res.numRows())
+      res
     }
-    res
   }
 }
 
@@ -178,6 +179,7 @@ class RapidsCachingReader[K, C](
       val itRange = new NvtxRange("Shuffle Iterator prep", NvtxColor.BLUE)
       try {
         val cachedIt = new RapidsBufferCoalesceIterator(
+          catalog,
           cachedBufferHandles.iterator,
           sparkTypes,
           metrics).asInstanceOf[Iterator[(K, C)]]
