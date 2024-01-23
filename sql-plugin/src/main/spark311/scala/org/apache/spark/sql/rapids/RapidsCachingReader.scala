@@ -166,11 +166,11 @@ class RapidsCachingReader[K, C](
         val cachedIt = cachedBufferHandles.iterator.map(bufferHandle => {
           // No good way to get a metric in here for semaphore wait time
           GpuSemaphore.acquireIfNecessary(context)
-          val cb = withResource(catalog.acquireBuffer(bufferHandle)) { buffer =>
-            buffer.getColumnarBatch(sparkTypes)
+          val (size, cb) = withResource(catalog.acquireBuffer(bufferHandle)) { buffer =>
+            (buffer.memoryUsedBytes,
+             buffer.getColumnarBatch(sparkTypes))
           }
-          val cachedBytesRead = GpuColumnVector.getTotalDeviceMemoryUsed(cb)
-          metrics.incLocalBytesRead(cachedBytesRead)
+          metrics.incLocalBytesRead(size)
           metrics.incRecordsRead(cb.numRows())
           (0, cb)
         }).asInstanceOf[Iterator[(K, C)]]
