@@ -182,7 +182,7 @@ class RapidsCachingReader[K, C](
           catalog,
           cachedBufferHandles.iterator,
           sparkTypes,
-          metrics).asInstanceOf[Iterator[(K, C)]]
+          metrics).map(cb => (0, cb)).asInstanceOf[Iterator[(K, C)]]
 
         val cbArrayFromUcx: Iterator[(K, C)] = if (blocksForRapidsTransport.nonEmpty) {
           val rapidsShuffleIterator = new RapidsShuffleIterator(localId, rapidsConf, transport.get,
