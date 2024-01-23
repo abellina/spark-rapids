@@ -126,7 +126,13 @@ class BounceBufferManager[T <: MemoryBuffer](
       // would block
       return null
     }
-    allocate(sz)
+    try {
+      allocate(sz)
+    } catch {
+      case _: Throwable =>
+        logWarning(s"pool ${poolName} exhausted avail: ${pool.available} attept: ${sz}")
+        null
+    }
   }
 
   /**
