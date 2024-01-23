@@ -310,6 +310,8 @@ trait RapidsShuffleTransport extends AutoCloseable {
    */
   def makeClient(blockManagerId: BlockManagerId): RapidsShuffleClient
 
+  def bounceBufferSize: Long
+
   /**
    * Connect to peer given a `BlockManagerId`
    *

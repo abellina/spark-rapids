@@ -92,7 +92,7 @@ class BufferSendState(
   }
   val overallSize = blocksToSend.map(_.size).sum
 
-  val windowSize = Math.min(overallSize, 4L*1024*1024)
+  val windowSize = Math.min(overallSize, transport.bounceBufferSize)
 
   val sendBounceBuffers = transport.tryGetSendBounceBuffers(windowSize).get
 

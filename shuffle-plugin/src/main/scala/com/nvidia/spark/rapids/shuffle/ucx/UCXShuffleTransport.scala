@@ -57,7 +57,7 @@ class UCXShuffleTransport(shuffleServerId: BlockManagerId, rapidsConf: RapidsCon
   private[this] val shuffleMetadataPool = new DirectByteBufferPool(
     rapidsConf.shuffleMaxMetadataSize)
 
-  private[this] val bounceBufferSize = rapidsConf.shuffleUcxBounceBuffersSize
+  override def bounceBufferSize: Long = rapidsConf.shuffleUcxBounceBuffersSize
   private[this] val bounceBufferPoolSize = rapidsConf.shuffleUcxBounceBuffersPoolSize
 
   private[this] var deviceSendBuffMgr: BounceBufferManager[BaseDeviceMemoryBuffer] = null
