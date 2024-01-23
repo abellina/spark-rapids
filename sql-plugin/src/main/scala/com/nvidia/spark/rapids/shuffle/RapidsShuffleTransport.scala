@@ -301,8 +301,6 @@ trait Transaction extends AutoCloseable {
  * needed.
  */
 trait RapidsShuffleTransport extends AutoCloseable {
-  def sendBounceBufferSize(): Long
-
   /**
    * This function will connect (if not connected already) to a peer
    * described by `blockManagerId`. Connections are cached.
