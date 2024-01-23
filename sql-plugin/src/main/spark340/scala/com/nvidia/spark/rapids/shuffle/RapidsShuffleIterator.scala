@@ -69,7 +69,7 @@ class RapidsShuffleIterator(
     taskAttemptId: Long,
     catalog: ShuffleReceivedBufferCatalog = GpuShuffleEnv.getReceivedCatalog,
     timeoutSeconds: Long = GpuShuffleEnv.shuffleFetchTimeoutSeconds)
-  extends Iterator[ColumnarBatch]
+  extends Iterator[RapidsBufferHandle]
     with Logging {
 
   /**
@@ -327,7 +327,7 @@ class RapidsShuffleIterator(
     Option(resolvedBatches.poll(timeoutSeconds, TimeUnit.SECONDS))
   }
 
-  override def next(): ColumnarBatch = {
+  override def next(): RapidsBufferHandle = {
     var cb: ColumnarBatch = null
     var sb: RapidsBuffer = null
     val range = new NvtxRange(s"RapidshuffleIterator.next", NvtxColor.RED)
@@ -372,20 +372,21 @@ class RapidsShuffleIterator(
 
     result match {
       case Some(BufferReceived(handle)) =>
-        val nvtxRangeAfterGettingBatch = new NvtxRange("RapidsShuffleIterator.gotBatch",
-          NvtxColor.PURPLE)
-        try {
-          sb = catalog.acquireBuffer(handle)
-          cb = sb.getColumnarBatch(sparkTypes)
-          metricsUpdater.update(blockedTime, 1, sb.memoryUsedBytes, cb.numRows())
-        } finally {
-          nvtxRangeAfterGettingBatch.close()
-          range.close()
-          if (sb != null) {
-            sb.close()
-          }
-          catalog.removeBuffer(handle)
-        }
+       withResource(new NvtxRange("RapidsShuffleIterator.gotBatch", NvtxColor.PURPLE)) { _ =>
+         handle
+       }
+       //try {
+       //  sb = catalog.acquireBuffer(handle)
+       //  cb = sb.getColumnarBatch(sparkTypes)
+       //  metricsUpdater.update(blockedTime, 1, sb.memoryUsedBytes, cb.numRows())
+       //} finally {
+       //  nvtxRangeAfterGettingBatch.close()
+       //  range.close()
+       //  if (sb != null) {
+       //    sb.close()
+       //  }
+       //  catalog.removeBuffer(handle)
+       //}
       case Some(
         TransferError(blockManagerId, shuffleBlockBatchId, mapIndex, errorMessage, throwable)) =>
         taskContext.foreach(GpuSemaphore.releaseIfNecessary)

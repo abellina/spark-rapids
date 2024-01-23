@@ -188,6 +188,11 @@ class RapidsCachingReader[K, C](
           val rapidsShuffleIterator = new RapidsShuffleIterator(localId, rapidsConf, transport.get,
             blocksForRapidsTransport.toArray, metricsUpdater, sparkTypes, context.taskAttemptId())
           rapidsShuffleIterator.start()
+          new RapidsBufferCoalesceIterator(
+            GpuShuffleEnv.getReceivedCatalog,
+            rapidsShuffleIterator,
+            sparkTypes,
+            metrics)
           rapidsShuffleIterator.map(cb => {
             (0, cb)
           }).asInstanceOf[Iterator[(K, C)]]
