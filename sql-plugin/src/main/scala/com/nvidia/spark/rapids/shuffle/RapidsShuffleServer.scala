@@ -16,14 +16,15 @@
 
 package com.nvidia.spark.rapids.shuffle
 
-import java.util.concurrent.{ConcurrentLinkedQueue, Executor}
+import java.util.concurrent.{ConcurrentLinkedQueue, Executor, Executors}
 
 import scala.collection.mutable.ArrayBuffer
 
 import ai.rapids.cudf.{Cuda, NvtxColor, NvtxRange}
-import com.nvidia.spark.rapids.{RapidsBuffer, RapidsConf, ShuffleMetadata}
+import com.nvidia.spark.rapids.{GpuDeviceManager, RapidsBuffer, RapidsConf, ShuffleMetadata, ThreadFactoryBuilder}
 import com.nvidia.spark.rapids.Arm.{closeOnExcept, withResource}
 import com.nvidia.spark.rapids.format.TableMeta
+import com.nvidia.spark.rapids.jni.RmmSpark
 
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.rapids.execution.TrampolineUtil
@@ -168,6 +169,14 @@ class RapidsShuffleServer(transport: RapidsShuffleTransport,
   private[this] val pendingTransfersQueue = new ConcurrentLinkedQueue[PendingTransferResponse]()
   private[this] val bssContinueQueue = new ConcurrentLinkedQueue[BufferSendState]()
 
+  private[this] val bssExecutorOffload = Executors.newFixedThreadPool(15,
+    GpuDeviceManager.wrapThreadFactory(new ThreadFactoryBuilder()
+        .setNameFormat(s"ss-off-%d")
+        .setDaemon(true)
+        .build,
+      null,
+      () => RmmSpark.removeAllCurrentThreadAssociation()))
+
   /**
    * Executor that loops until it finds bounce buffers for [[BufferSendState]],
    * and when it does it hands them off to a thread pool for handling.
@@ -202,7 +211,9 @@ class RapidsShuffleServer(transport: RapidsShuffleTransport,
           }
         }
         if (bssToIssue.nonEmpty) {
-          doHandleTransferRequest(bssToIssue.toSeq)
+          bssExecutorOffload.execute(() => {
+            doHandleTransferRequest(bssToIssue.toSeq)
+          })
         }
       }
 
