@@ -328,7 +328,7 @@ class RapidsShuffleIterator(
   }
 
   override def next(): RapidsBufferHandle = {
-    var cb: ColumnarBatch = null
+    val res: RapidsBufferHandle = null
     var sb: RapidsBuffer = null
     val range = new NvtxRange(s"RapidshuffleIterator.next", NvtxColor.RED)
 
@@ -373,7 +373,7 @@ class RapidsShuffleIterator(
     result match {
       case Some(BufferReceived(handle)) =>
        withResource(new NvtxRange("RapidsShuffleIterator.gotBatch", NvtxColor.PURPLE)) { _ =>
-         handle
+         res = handle
        }
        //try {
        //  sb = catalog.acquireBuffer(handle)
@@ -411,6 +411,6 @@ class RapidsShuffleIterator(
       case _ =>
         throw new IllegalStateException(s"Invalid result type $result")
     }
-    cb
+    res
   }
 }
