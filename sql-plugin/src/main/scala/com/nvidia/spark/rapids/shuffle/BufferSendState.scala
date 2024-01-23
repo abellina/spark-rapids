@@ -103,7 +103,7 @@ class BufferSendState(
   }
 
   private[this] val windowedBlockIterator =
-    new WindowedBlockIterator[SendBlock](blocksToSend, overallSize)
+    new WindowedBlockIterator[SendBlock](blocksToSend, windowSize)
 
   // when the window has been exhausted
   private[this] var hasMoreBlocks = windowedBlockIterator.hasNext
