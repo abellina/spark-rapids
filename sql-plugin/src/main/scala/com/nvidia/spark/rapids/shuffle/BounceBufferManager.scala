@@ -17,10 +17,10 @@
 package com.nvidia.spark.rapids.shuffle
 
 import java.util
-
 import scala.collection.mutable
 
-import ai.rapids.cudf.MemoryBuffer
+import ai.rapids.cudf.{MemoryBuffer, NvtxColor, NvtxRange}
+import com.nvidia.spark.rapids.internal.Arm.withResource
 
 import org.apache.spark.internal.Logging
 
@@ -122,16 +122,20 @@ class BounceBufferManager[T <: MemoryBuffer](
    * @return a sequence of `BounceBuffer`s, or empty if the request can't be satisfied
    */
   def acquireBuffersNonBlocking(sz: Long): BounceBuffer = synchronized {
-    if (pool.available < sz) {
-      // would block
-      return null
-    }
-    try {
-      allocate(sz)
-    } catch {
-      case _: Throwable =>
-        logWarning(s"pool ${poolName} exhausted avail: ${pool.available} attept: ${sz}")
-        null
+    withResource(new NvtxRange(s"${poolName} acquire", NvtxColor.GREEN)) { _ =>
+      if (pool.available < sz) {
+        // would block
+        return null
+      }
+      try {
+        allocate(sz)
+      } catch {
+        case _: Throwable =>
+          withResource(new NvtxRange(s"${poolName} exhausted", NvtxColor.RED)) { _ =>
+            logWarning(s"pool ${poolName} exhausted avail: ${pool.available} attept: ${sz}")
+          }
+          null
+      }
     }
   }
 
