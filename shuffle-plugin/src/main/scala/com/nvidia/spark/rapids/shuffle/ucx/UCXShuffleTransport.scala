@@ -339,7 +339,7 @@ class UCXShuffleTransport(shuffleServerId: BlockManagerId, rapidsConf: RapidsCon
 
   // helper class to hold transfer requests that have a bounce buffer
   // and should be ready to be handled by a `BufferReceiveState`
-  class PerClientReadyRequests(val bounceBuffer: BounceBuffer) {
+  class PerClientReadyRequests(var bounceBuffer: BounceBuffer) {
     val transferRequests = new ArrayBuffer[PendingTransferRequest]()
     var runningSize = 0L
     def addRequest(req: PendingTransferRequest): Unit = {
@@ -411,8 +411,7 @@ class UCXShuffleTransport(shuffleServerId: BlockManagerId, rapidsConf: RapidsCon
           while (requestIx < requestsToHandle.size && fitsInFlight) {
             reqToHandle = requestsToHandle(requestIx)
             if (wouldFitInFlightLimit(reqToHandle.getLength)) {
-              val existingReq =
-                perClientReq.get(reqToHandle.client)
+              val existingReq = perClientReq.get(reqToHandle.client)
               if (existingReq.isEmpty) {
                 // need to get bounce buffers
                 val windowSize =
@@ -435,8 +434,24 @@ class UCXShuffleTransport(shuffleServerId: BlockManagerId, rapidsConf: RapidsCon
                 // bounce buffers already acquired, and the requested amount so far
                 // is less than 1 bounce buffer lengths, therefore the pending request
                 // is added to the `PerClientReadyRequests`.
-                markBytesInFlight(reqToHandle.getLength)
-                existingReq.foreach(_.addRequest(reqToHandle))
+                val newSize = existingReq.get.runningSize + reqToHandle.getLength
+                if (newSize < rapidsConf.shuffleUcxBounceBuffersSize) {
+                  existingReq.get.bounceBuffer.close()
+                  existingReq.get.bounceBuffer = null
+                  val newWindowSize=
+                    Math.min(rapidsConf.shuffleUcxBounceBuffersSize, newSize)
+                  val bbs = tryGetReceiveBounceBuffer(newWindowSize)
+                  if (bbs.isDefined) {
+                    existingReq.get.bounceBuffer = bbs.get
+                    markBytesInFlight(reqToHandle.getLength)
+                    existingReq.foreach(_.addRequest(reqToHandle))
+                  } else {
+                    // hacky, get the old allocation back
+                    existingReq.get.bounceBuffer =
+                      tryGetReceiveBounceBuffer(existingReq.get.runningSize).get
+                    putBack.append(reqToHandle) // doesn't fit
+                  }
+                }
                 requestIx += 1
               } else {
                 requestIx += 1
