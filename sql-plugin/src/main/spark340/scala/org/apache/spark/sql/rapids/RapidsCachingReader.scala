@@ -59,17 +59,27 @@ trait ShuffleMetricsUpdater {
 
 class RapidsBufferCoalesceIterator(
     catalog: ShuffleBufferCatalog,
-    rapidsBufferHandleIt: Iterator[RapidsBufferHandle],
+    receiveCatalog: ShuffleReceivedBufferCatalog,
+    rapidsBufferCacheIt: Iterator[RapidsBufferHandle],
+    rapidsBufferUcxIt: Iterator[RapidsBufferHandle],
     sparkTypes: Array[DataType],
     metrics: ShuffleReadMetricsReporter) extends Iterator[ColumnarBatch] {
-  override def hasNext(): Boolean = rapidsBufferHandleIt.hasNext
+  override def hasNext(): Boolean = rapidsBufferCacheIt.hasNext || rapidsBufferUcxIt.hasNext
+
   override def next(): ColumnarBatch = {
     val toConcat = new ArrayBuffer[ColumnarBatch]()
     var numBytes = 0L
     withResource(new NvtxRange("new concat", NvtxColor.DARK_GREEN)) { _ =>
-      while (rapidsBufferHandleIt.hasNext && numBytes < 2L * 1024 * 1024 * 1024) {
-        val handle = rapidsBufferHandleIt.next()
+      while (rapidsBufferCacheIt.hasNext && numBytes < 2L * 1024 * 1024 * 1024) {
+        val handle = rapidsBufferCacheIt.next()
         withResource(catalog.acquireBuffer(handle)) { buffer: RapidsBuffer =>
+          numBytes += buffer.memoryUsedBytes
+          toConcat.append(buffer.getColumnarBatch(sparkTypes))
+        }
+      }
+      while (rapidsBufferUcxIt.hasNext && numBytes < 2L * 1024 * 1024 * 1024) {
+        val handle = rapidsBufferUcxIt.next()
+        withResource(receiveCatalog.acquireBuffer(handle)) { buffer: RapidsBuffer =>
           numBytes += buffer.memoryUsedBytes
           toConcat.append(buffer.getColumnarBatch(sparkTypes))
         }
@@ -178,30 +188,25 @@ class RapidsCachingReader[K, C](
 
       val itRange = new NvtxRange("Shuffle Iterator prep", NvtxColor.BLUE)
       try {
-        val cachedIt = new RapidsBufferCoalesceIterator(
-          catalog,
-          cachedBufferHandles.iterator,
-          sparkTypes,
-          metrics).map(cb => (0, cb)).asInstanceOf[Iterator[(K, C)]]
-
-        val cbArrayFromUcx: Iterator[(K, C)] = if (blocksForRapidsTransport.nonEmpty) {
+        val cbArrayFromUcx = if (blocksForRapidsTransport.nonEmpty) {
           val rapidsShuffleIterator = new RapidsShuffleIterator(localId, rapidsConf, transport.get,
             blocksForRapidsTransport.toArray, metricsUpdater, sparkTypes, context.taskAttemptId())
           rapidsShuffleIterator.start()
-          new RapidsBufferCoalesceIterator(
-            GpuShuffleEnv.getReceivedCatalog,
-            rapidsShuffleIterator,
-            sparkTypes,
-            metrics)
-          rapidsShuffleIterator.map(cb => {
-            (0, cb)
-          }).asInstanceOf[Iterator[(K, C)]]
+          rapidsShuffleIterator
         } else {
           Iterator.empty
         }
 
+        val combinedIt = new RapidsBufferCoalesceIterator(
+          catalog,
+          GpuShuffleEnv.getReceivedCatalog,
+          cachedBufferHandles.iterator,
+          rapidsShuffleIterator,
+          sparkTypes,
+          metrics)
+
         val completionIter = CompletionIterator[(K, C), Iterator[(K, C)]](
-          cachedIt ++ cbArrayFromUcx, {
+          combinedIt.map{cb => (0, cb)}.asInstanceOf[Iterator[(K, C)]], {
             context.taskMetrics().mergeShuffleReadMetrics()
           })
 
