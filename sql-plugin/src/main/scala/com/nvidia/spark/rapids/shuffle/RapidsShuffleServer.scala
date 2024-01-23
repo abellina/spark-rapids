@@ -211,9 +211,11 @@ class RapidsShuffleServer(transport: RapidsShuffleTransport,
           }
         }
         if (bssToIssue.nonEmpty) {
-          bssExecutorOffload.execute(() => {
-            doHandleTransferRequest(bssToIssue.toSeq)
-          })
+          bssToIssue.foreach { bss =>
+            bssExecutorOffload.execute(() => {
+              doHandleTransferRequest(Seq(bss))
+            })
+          }
         }
       }
 
