@@ -55,8 +55,8 @@ import org.apache.spark.shuffle.rapids.RapidsShuffleSendPrepareException
  */
 class BufferSendState(
     transaction: Transaction,
-    sendBounceBuffers: SendBounceBuffers,
     requestHandler: RapidsShuffleRequestHandler,
+    transport: RapidsShuffleTransport,
     serverStream: Cuda.Stream = Cuda.DEFAULT_STREAM)
     extends AutoCloseable with Logging {
 
@@ -90,6 +90,11 @@ class BufferSendState(
       (peerBufferReceiveHeader, bufferMetas, blocksToSend)
     }
   }
+  val overallSize = blocksToSend.map(_.size).sum
+
+  val windowSize = Math.min(overallSize, 4L*1024*1024)
+
+  val sendBounceBuffers = transport.tryGetSendBounceBuffers(windowSize).get
 
   // the header to use for all sends in this `BufferSendState` (sent to us
   // by the peer)
@@ -98,7 +103,7 @@ class BufferSendState(
   }
 
   private[this] val windowedBlockIterator =
-    new WindowedBlockIterator[SendBlock](blocksToSend, sendBounceBuffers.bounceBufferSize)
+    new WindowedBlockIterator[SendBlock](blocksToSend, overallSize)
 
   // when the window has been exhausted
   private[this] var hasMoreBlocks = windowedBlockIterator.hasNext

@@ -22,7 +22,7 @@ import java.util.concurrent._
 import scala.collection.mutable
 import scala.collection.mutable.ArrayBuffer
 
-import ai.rapids.cudf.{BaseDeviceMemoryBuffer, CudaMemoryBuffer, DeviceMemoryBuffer, HostMemoryBuffer, MemoryBuffer}
+import ai.rapids.cudf.{BaseDeviceMemoryBuffer, CudaMemoryBuffer, DeviceMemoryBuffer, HostMemoryBuffer, MemoryBuffer, RmmCudaMemoryResource, RmmPoolMemoryResource}
 import com.nvidia.spark.rapids.{GpuDeviceManager, HashedPriorityQueue, RapidsConf}
 import com.nvidia.spark.rapids.ThreadFactoryBuilder
 import com.nvidia.spark.rapids.jni.RmmSpark
@@ -58,22 +58,21 @@ class UCXShuffleTransport(shuffleServerId: BlockManagerId, rapidsConf: RapidsCon
     rapidsConf.shuffleMaxMetadataSize)
 
   private[this] val bounceBufferSize = rapidsConf.shuffleUcxBounceBuffersSize
-  private[this] val deviceNumBuffers = rapidsConf.shuffleUcxDeviceBounceBuffersCount
-  private[this] val hostNumBuffers = rapidsConf.shuffleUcxHostBounceBuffersCount
+  private[this] val bounceBufferPoolSize = rapidsConf.shuffleUcxBounceBuffersPoolSize
 
   private[this] var deviceSendBuffMgr: BounceBufferManager[BaseDeviceMemoryBuffer] = null
   private[this] var hostSendBuffMgr: BounceBufferManager[HostMemoryBuffer] = null
   private[this] var deviceReceiveBuffMgr: BounceBufferManager[BaseDeviceMemoryBuffer] = null
 
   private[this] val clients = new ConcurrentHashMap[Long, RapidsShuffleClient]()
+  def sendBounceBufferSize(): Long = deviceSendBuffMgr.remaining()
 
   private[this] lazy val ucx = {
     logWarning("UCX Shuffle Transport Enabled")
     val ucxImpl = new UCX(this, shuffleServerId, rapidsConf)
     ucxImpl.init()
 
-    initBounceBufferPools(bounceBufferSize,
-      deviceNumBuffers, hostNumBuffers)
+    initBounceBufferPools(bounceBufferPoolSize)
 
     // Perform transport (potentially IB) registration early
     // NOTE: on error we log and close things, which should fail other parts of the job in a bad
@@ -125,10 +124,12 @@ class UCXShuffleTransport(shuffleServerId: BlockManagerId, rapidsConf: RapidsCon
    * @param deviceNumBuffers number of buffers to allocate for the device
    * @param hostNumBuffers   number of buffers to allocate for the host
    */
-  def initBounceBufferPools(
-      bounceBufferSize: Long,
-      deviceNumBuffers: Int,
-      hostNumBuffers: Int): Unit = {
+  def initBounceBufferPools(bounceBufferPoolSize: Long) = {
+    val chunkedPackPool =
+      new RmmPoolMemoryResource(
+        new RmmCudaMemoryResource(),
+        bounceBufferPoolSize,
+        bounceBufferPoolSize)
 
     val deviceAllocator: Long => BaseDeviceMemoryBuffer = (size: Long) => {
       // CUDA async allocator is not compatible with GPUDirectRDMA, so need to use `cudaMalloc`.
@@ -142,22 +143,19 @@ class UCXShuffleTransport(shuffleServerId: BlockManagerId, rapidsConf: RapidsCon
     deviceSendBuffMgr =
       new BounceBufferManager[BaseDeviceMemoryBuffer](
         "device-send",
-        bounceBufferSize,
-        deviceNumBuffers,
+        bounceBufferPoolSize,
         deviceAllocator)
 
     deviceReceiveBuffMgr =
       new BounceBufferManager[BaseDeviceMemoryBuffer](
         "device-receive",
-        bounceBufferSize,
-        deviceNumBuffers,
+        bounceBufferPoolSize,
         deviceAllocator)
 
     hostSendBuffMgr =
       new BounceBufferManager[HostMemoryBuffer](
         "host-send",
-        bounceBufferSize,
-        hostNumBuffers,
+        bounceBufferPoolSize,
         (size: Long) => HostMemoryBuffer.allocate(size))
   }
 
@@ -165,47 +163,24 @@ class UCXShuffleTransport(shuffleServerId: BlockManagerId, rapidsConf: RapidsCon
     Seq(deviceSendBuffMgr, deviceReceiveBuffMgr, hostSendBuffMgr).foreach(_.close())
   }
 
-  private def getNumBounceBuffers(remaining: Long, totalRequired: Int): Int = {
-    val numBuffers = (remaining + bounceBufferSize - 1) / bounceBufferSize
-    Math.min(numBuffers, totalRequired).toInt
+  override def tryGetReceiveBounceBuffer(sz: Long): Option[BounceBuffer] = {
+    tryAcquireBounceBuffers(deviceReceiveBuffMgr, sz)
   }
 
-  override def tryGetSendBounceBuffers(
-      remaining: Long,
-      totalRequired: Int): Seq[SendBounceBuffers] = {
-    val numBuffs = getNumBounceBuffers(remaining, totalRequired)
-    val deviceBuffer = tryAcquireBounceBuffers(deviceSendBuffMgr, numBuffs)
-    if (deviceBuffer.nonEmpty) {
-      val hostBuffer = tryAcquireBounceBuffers(hostSendBuffMgr, numBuffs)
-      if (hostBuffer.nonEmpty) {
-        deviceBuffer.zip(hostBuffer).map { case (d, h) =>
-          SendBounceBuffers(d, Some(h))
-        }
-      } else {
-        deviceBuffer.map(d => SendBounceBuffers(d, None))
-      }
+  def tryGetSendBounceBuffers(sz: Long): Option[SendBounceBuffers] = {
+    val sendBB = tryAcquireBounceBuffers(deviceSendBuffMgr, sz)
+    if (sendBB.isDefined) {
+      Some(
+        SendBounceBuffers(sendBB.get, tryAcquireBounceBuffers(hostSendBuffMgr, sz)))
     } else {
-      Seq.empty
+      None
     }
-  }
-
-  override def tryGetReceiveBounceBuffers(
-      remaining: Long, totalRequired: Int): Seq[BounceBuffer] = {
-    val numBuffs = getNumBounceBuffers(remaining, totalRequired)
-    tryAcquireBounceBuffers(deviceReceiveBuffMgr, numBuffs)
   }
 
   private def tryAcquireBounceBuffers[T <: MemoryBuffer](
       bounceBuffMgr: BounceBufferManager[T],
-      numBuffs: Integer): Seq[BounceBuffer] = {
-    // if the # of buffers requested is more than what the pool has, we would deadlock
-    // this ensures we only get as many buffers as the pool could possibly give us.
-    val possibleNumBuffers = Math.min(bounceBuffMgr.numBuffers, numBuffs)
-    val bounceBuffers =
-      bounceBuffMgr.acquireBuffersNonBlocking(possibleNumBuffers)
-    logTrace(s"Got ${bounceBuffers.size} bounce buffers from pool " +
-      s"out of ${numBuffs} requested.")
-    bounceBuffers
+      sz: Long): Option[BounceBuffer] = {
+    Option(bounceBuffMgr.acquireBuffersNonBlocking(sz))
   }
 
   override def connect(peerBlockManagerId: BlockManagerId): ClientConnection = {
@@ -440,8 +415,10 @@ class UCXShuffleTransport(shuffleServerId: BlockManagerId, rapidsConf: RapidsCon
                 perClientReq.get(reqToHandle.client)
               if (existingReq.isEmpty) {
                 // need to get bounce buffers
-                val bbs = tryGetReceiveBounceBuffers(1, 1)
-                if (bbs.nonEmpty) {
+                val windowSize =
+                  Math.min(rapidsConf.shuffleUcxBounceBuffersSize, reqToHandle.getLength)
+                val bbs = tryGetReceiveBounceBuffer(windowSize)
+                if (bbs.isDefined) {
                   markBytesInFlight(reqToHandle.getLength)
                   val perClientReadyRequests = new PerClientReadyRequests(bbs.head)
                   perClientReadyRequests.addRequest(reqToHandle)
@@ -499,7 +476,7 @@ class UCXShuffleTransport(shuffleServerId: BlockManagerId, rapidsConf: RapidsCon
             }
           } else if (!hasBounceBuffers) {
             deviceReceiveBuffMgr.synchronized {
-              while (deviceReceiveBuffMgr.numFree() == 0){
+              while (deviceReceiveBuffMgr.remaining() < rapidsConf.shuffleUcxBounceBuffersSize){
                 deviceReceiveBuffMgr.wait(100)
               }
             }

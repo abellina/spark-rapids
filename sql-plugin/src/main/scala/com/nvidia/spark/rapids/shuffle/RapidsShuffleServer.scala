@@ -184,14 +184,12 @@ class RapidsShuffleServer(transport: RapidsShuffleTransport,
         var continue = true
         while (!pendingTransfersQueue.isEmpty && continue) {
           // TODO: throttle on too big a send total so we don't acquire the world (in flight limit)
-          val sendBounceBuffers =
-            transport.tryGetSendBounceBuffers(1, 1)
-          if (sendBounceBuffers.nonEmpty) {
-            val pendingTransfer = pendingTransfersQueue.poll()
+          val pendingTransfer: PendingTransferResponse = pendingTransfersQueue.peek()
+          if (transport.sendBounceBufferSize() > rapidsConf.shuffleUcxBounceBuffersSize) {
             bssToIssue.append(new BufferSendState(
               pendingTransfer.tx,
-              sendBounceBuffers.head, // there's only one bounce buffer here for now
               pendingTransfer.requestHandler,
+              transport,
               serverStream))
           } else {
             // TODO: make this a metric => "blocked while waiting on bounce buffers"

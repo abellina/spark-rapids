@@ -301,6 +301,7 @@ trait Transaction extends AutoCloseable {
  * needed.
  */
 trait RapidsShuffleTransport extends AutoCloseable {
+  def sendBounceBufferSize(): Long
 
   /**
    * This function will connect (if not connected already) to a peer
@@ -373,7 +374,7 @@ trait RapidsShuffleTransport extends AutoCloseable {
    * @param totalRequired maximum no. of buffers that should be returned
    * @return a sequence of bounce buffers, or empty if the request can't be satisfied
    */
-  def tryGetReceiveBounceBuffers(remaining: Long, totalRequired: Int): Seq[BounceBuffer]
+  def tryGetReceiveBounceBuffer(sz: Long): Option[BounceBuffer]
 
   /**
    * Get send bounce buffers needed for a receive, limited by the amount of bytes
@@ -389,7 +390,7 @@ trait RapidsShuffleTransport extends AutoCloseable {
    * @note the send bounce buffer object most likely includes both a device buffer and a host
    *       memory buffer, since sends can come from the device or the host.
    */
-  def tryGetSendBounceBuffers(remaining: Long, totalRequired: Int): Seq[SendBounceBuffers]
+  def tryGetSendBounceBuffers(sz: Long): Option[SendBounceBuffers]
 }
 
 /**

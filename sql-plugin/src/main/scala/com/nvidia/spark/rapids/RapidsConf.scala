@@ -1619,21 +1619,14 @@ val GPU_COREDUMP_PIPE_PATTERN = conf("spark.rapids.gpu.coreDump.pipePattern")
     .bytesConf(ByteUnit.BYTE)
     .createWithDefault(4 * 1024  * 1024)
 
-  val SHUFFLE_UCX_BOUNCE_BUFFERS_DEVICE_COUNT =
-    conf("spark.rapids.shuffle.ucx.bounceBuffers.device.count")
-    .doc("The number of bounce buffers to pre-allocate from device memory")
-    .internal()
-    .startupOnly()
-    .integerConf
-    .createWithDefault(32)
-
-  val SHUFFLE_UCX_BOUNCE_BUFFERS_HOST_COUNT =
-    conf("spark.rapids.shuffle.ucx.bounceBuffers.host.count")
-    .doc("The number of bounce buffers to pre-allocate from host memory")
-    .internal()
-    .startupOnly()
-    .integerConf
-    .createWithDefault(32)
+  val SHUFFLE_UCX_BOUNCE_BUFFERS_POOL_SIZE =
+    conf("spark.rapids.shuffle.ucx.bounceBuffers.pool.size")
+      .doc("The size of bounce buffer to use in bytes. Note that this size will be the same " +
+          "for device and host memory")
+      .internal()
+      .startupOnly()
+      .bytesConf(ByteUnit.BYTE)
+      .createWithDefault(512L * 1024 * 1024)
 
   val SHUFFLE_MAX_CLIENT_THREADS = conf("spark.rapids.shuffle.maxClientThreads")
     .doc("The maximum number of threads that the shuffle client should be allowed to start")
@@ -2685,10 +2678,7 @@ class RapidsConf(conf: Map[String, String]) extends Logging {
   lazy val shuffleUcxMgmtConnTimeout: Int = get(SHUFFLE_UCX_MGMT_CONNECTION_TIMEOUT)
 
   lazy val shuffleUcxBounceBuffersSize: Long = get(SHUFFLE_UCX_BOUNCE_BUFFERS_SIZE)
-
-  lazy val shuffleUcxDeviceBounceBuffersCount: Int = get(SHUFFLE_UCX_BOUNCE_BUFFERS_DEVICE_COUNT)
-
-  lazy val shuffleUcxHostBounceBuffersCount: Int = get(SHUFFLE_UCX_BOUNCE_BUFFERS_HOST_COUNT)
+  lazy val shuffleUcxBounceBuffersPoolSize: Long = get(SHUFFLE_UCX_BOUNCE_BUFFERS_POOL_SIZE)
 
   lazy val shuffleMaxClientThreads: Int = get(SHUFFLE_MAX_CLIENT_THREADS)
 

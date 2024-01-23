@@ -18,6 +18,8 @@ package com.nvidia.spark.rapids.shuffle
 
 import java.util
 
+import scala.collection.mutable
+
 import ai.rapids.cudf.MemoryBuffer
 
 import org.apache.spark.internal.Logging
@@ -30,7 +32,7 @@ import org.apache.spark.internal.Logging
  *
  * @param buffer - cudf MemoryBuffer to be used as a bounce buffer
  */
-abstract class BounceBuffer(val buffer: MemoryBuffer) extends AutoCloseable {
+abstract class BounceBuffer(val buffer: MemoryBuffer, val offset: Long) extends AutoCloseable {
   var isClosed = false
 
   def free(bb: BounceBuffer): Unit
@@ -79,23 +81,23 @@ case class SendBounceBuffers(
  */
 class BounceBufferManager[T <: MemoryBuffer](
     poolName: String,
-    val bufferSize: Long,
-    val numBuffers: Int,
+    val poolSize: Long,
     allocator: Long => T)
   extends AutoCloseable
   with Logging {
 
-  class BounceBufferImpl(buff: MemoryBuffer) extends BounceBuffer(buff) {
+  val pool = new AddressSpaceAllocator(poolSize)
+
+  def remaining(): Long = pool.available
+
+  class BounceBufferImpl(buff: MemoryBuffer, offset: Long)
+      extends BounceBuffer(buff, offset) {
     override def free(bb: BounceBuffer): Unit = {
       freeBuffer(bb)
     }
   }
 
-  private[this] val freeBufferMap = new util.BitSet(numBuffers)
-
-  private[this] val rootBuffer = allocator(bufferSize * numBuffers)
-
-  freeBufferMap.set(0, numBuffers)
+  private[this] val rootBuffer = allocator(poolSize)
 
   /**
    * Acquires a [[BounceBuffer]] from the pool. Blocks if the pool is empty.
@@ -103,20 +105,15 @@ class BounceBufferManager[T <: MemoryBuffer](
    * @note calls to this function should have a lock on this [[BounceBufferManager]]
    * @return the acquired `BounceBuffer`
    */
-  private def acquireBuffer(): BounceBuffer = {
-    val bufferIndex = freeBufferMap.nextSetBit(0)
-    while (bufferIndex < 0) {
+  private def allocate(sz: Long): BounceBuffer = {
+    val allocation = pool.allocate(sz)
+    if (allocation.isEmpty) {
       throw new IllegalStateException(s"Buffer pool $poolName has exhausted!")
     }
 
-    logDebug(s"$poolName: Buffer index: ${bufferIndex}")
-    freeBufferMap.clear(bufferIndex)
-    val res = rootBuffer.slice(bufferIndex * bufferSize, bufferSize)
-    new BounceBufferImpl(res)
-  }
-
-  def numFree(): Int = synchronized {
-    freeBufferMap.cardinality()
+    logDebug(s"$poolName: Buffer offset: ${allocation.get}")
+    val res = rootBuffer.slice(allocation.get, sz)
+    new BounceBufferImpl(res, allocation.get)
   }
 
   /**
@@ -124,16 +121,12 @@ class BounceBufferManager[T <: MemoryBuffer](
    * @param possibleNumBuffers number of buffers to acquire
    * @return a sequence of `BounceBuffer`s, or empty if the request can't be satisfied
    */
-  def acquireBuffersNonBlocking(possibleNumBuffers: Int): Seq[BounceBuffer] = synchronized {
-    if (numFree < possibleNumBuffers) {
+  def acquireBuffersNonBlocking(sz: Long): BounceBuffer = synchronized {
+    if (pool.available < sz) {
       // would block
-      logTrace(s"$poolName at capacity. numFree: ${numFree}, " +
-        s"buffers required ${possibleNumBuffers}")
-      return Seq.empty
+      return null
     }
-    val res = (0 until possibleNumBuffers).map(_ => acquireBuffer())
-    logDebug(s"$poolName at acquire. Has numFree ${numFree}")
-    res
+    allocate(sz)
   }
 
   /**
@@ -141,17 +134,10 @@ class BounceBufferManager[T <: MemoryBuffer](
    * @param bounceBuffer the memory buffer to free
    */
   def freeBuffer(bounceBuffer: BounceBuffer): Unit = synchronized {
+    pool.free(bounceBuffer.offset)
     val buffer = bounceBuffer.buffer
-    require(buffer.getAddress >= rootBuffer.getAddress
-        && (buffer.getAddress - rootBuffer.getAddress) % bufferSize == 0,
-      s"$poolName: foreign buffer being freed")
-    val bufferIndex = (buffer.getAddress - rootBuffer.getAddress) / bufferSize
-    require(bufferIndex < numBuffers,
-      s"$poolName: buffer index invalid $bufferIndex should be less than $numBuffers")
-
-    logDebug(s"$poolName: Free buffer index ${bufferIndex}")
+    logDebug(s"$poolName: Free buffer index ${bounceBuffer.offset}")
     buffer.close()
-    freeBufferMap.set(bufferIndex.toInt)
     notifyAll() // notify any waiters that are checking the state of this manager
   }
 
@@ -163,4 +149,135 @@ class BounceBufferManager[T <: MemoryBuffer](
   def getRootBuffer(): MemoryBuffer = rootBuffer
 
   override def close(): Unit = rootBuffer.close()
+}
+
+/** Allocates blocks from an address space using a best-fit algorithm. */
+class AddressSpaceAllocator(addressSpaceSize: Long) {
+  /** Free blocks mapped by size of block for efficient size matching.  */
+  private[this] val freeBlocks = new mutable.TreeMap[Long, mutable.Set[Block]]
+
+  /** Allocated blocks mapped by block address. */
+  private[this] val allocatedBlocks = new mutable.HashMap[Long, Block]
+
+  /** Amount of memory allocated */
+  private[this] var allocatedBytes: Long = 0L
+
+  addFreeBlock(new Block(0, addressSpaceSize, allocated = false))
+
+  private def addFreeBlock(block: Block): Unit = {
+    val set = freeBlocks.getOrElseUpdate(block.blockSize, new mutable.HashSet[Block])
+    val added = set.add(block)
+    assert(added, "block was already in free map")
+  }
+
+  private def removeFreeBlock(block: Block): Unit = {
+    val set = freeBlocks.getOrElse(block.blockSize,
+      throw new IllegalStateException("block not in free map"))
+    val removed = set.remove(block)
+    assert(removed, "block not in free map")
+    if (set.isEmpty) {
+      freeBlocks.remove(block.blockSize)
+    }
+  }
+
+  def allocate(size: Long): Option[Long] = synchronized {
+    if (size <= 0) {
+      return None
+    }
+    val it = freeBlocks.valuesIteratorFrom(size)
+    if (it.hasNext) {
+      val blockSet = it.next()
+      val block = blockSet.head
+      removeFreeBlock(block)
+      allocatedBytes += size
+      Some(block.allocate(size))
+    } else {
+      None
+    }
+  }
+
+  def free(address: Long): Unit = synchronized {
+    val block = allocatedBlocks.remove(address).getOrElse(
+      throw new IllegalArgumentException(s"$address not allocated"))
+    allocatedBytes -= block.blockSize
+    block.free()
+  }
+
+  def allocatedSize: Long = synchronized {
+    allocatedBytes
+  }
+
+  def available: Long = synchronized {
+    addressSpaceSize - allocatedBytes
+  }
+
+  def numAllocatedBlocks: Long = synchronized {
+    allocatedBlocks.size
+  }
+
+  def numFreeBlocks: Long = synchronized {
+    freeBlocks.valuesIterator.map(_.size).sum
+  }
+
+  private class Block(
+      val address: Long,
+      var blockSize: Long,
+      var lowerBlock: Option[Block] = None,
+      var upperBlock: Option[Block] = None,
+      var allocated: Boolean = false) {
+    def allocate(amount: Long): Long = {
+      assert(!allocated, "block being allocated already allocated")
+      assert(amount <= blockSize, "allocating beyond block")
+      if (amount != blockSize) {
+        // split into an allocated and unallocated block
+        val unallocated = new Block(
+          address + amount,
+          blockSize - amount,
+          Some(this),
+          upperBlock,
+          allocated = false)
+        addFreeBlock(unallocated)
+        upperBlock.foreach { b =>
+          assert(b.lowerBlock.get == this, "block linkage broken")
+          assert(address + blockSize == b.address, "block adjacency broken")
+          b.lowerBlock = Some(unallocated)
+        }
+        upperBlock = Some(unallocated)
+        blockSize = amount
+      }
+      allocated = true
+      allocatedBlocks.put(address, this)
+      this.address
+    }
+
+    def free(): Unit = {
+      assert(allocated, "block being freed not allocated")
+      allocated = false
+      upperBlock.foreach { b =>
+        if (!b.allocated) {
+          removeFreeBlock(b)
+          coalesceUpper()
+        }
+      }
+      var freeBlock = this
+      lowerBlock.foreach { b =>
+        if (!b.allocated) {
+          removeFreeBlock(b)
+          b.coalesceUpper()
+          freeBlock = b
+        }
+      }
+      addFreeBlock(freeBlock)
+    }
+
+    /** Coalesce the upper block into this block. Does not update freeBlocks. */
+    private def coalesceUpper(): Unit = {
+      val upper = upperBlock.getOrElse(throw new IllegalStateException("no upper block"))
+      assert(upper.lowerBlock.orNull == this, "block linkage broken")
+      assert(address + blockSize == upper.address, "block adjacency broken")
+      blockSize += upper.blockSize
+      upperBlock = upper.upperBlock
+      upperBlock.foreach(_.lowerBlock = Some(this))
+    }
+  }
 }
