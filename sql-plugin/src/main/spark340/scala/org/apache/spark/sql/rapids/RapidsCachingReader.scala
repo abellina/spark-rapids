@@ -27,7 +27,9 @@ package org.apache.spark.sql.rapids
 import scala.collection
 import scala.collection.mutable.ArrayBuffer
 
-import ai.rapids.cudf.{NvtxColor, NvtxRange}
+import java.nio.ByteBuffer
+
+import ai.rapids.cudf.{DeviceMemoryBuffer, NvtxColor, NvtxRange}
 import com.nvidia.spark.rapids._
 import com.nvidia.spark.rapids.Arm.withResource
 import com.nvidia.spark.rapids.shuffle.{RapidsShuffleIterator, RapidsShuffleTransport}
@@ -196,11 +198,11 @@ class RapidsCachingReader[K, C](
 
       val itRange = new NvtxRange("Shuffle Iterator prep", NvtxColor.BLUE)
       try {
-        val cbArrayFromUcx = if (blocksForRapidsTransport.nonEmpty) {
-          val rapidsShuffleIterator = new RapidsShuffleIterator(localId, rapidsConf, transport.get,
+        val rapidsShuffleIterator = if (blocksForRapidsTransport.nonEmpty) {
+          val res = new RapidsShuffleIterator(localId, rapidsConf, transport.get,
             blocksForRapidsTransport.toArray, metricsUpdater, sparkTypes, context.taskAttemptId())
-          rapidsShuffleIterator.start()
-          rapidsShuffleIterator
+          res.start()
+          res 
         } else {
           Iterator.empty
         }

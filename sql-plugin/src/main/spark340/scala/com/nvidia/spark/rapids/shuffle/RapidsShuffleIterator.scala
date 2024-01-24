@@ -328,7 +328,7 @@ class RapidsShuffleIterator(
   }
 
   override def next(): RapidsBufferHandle = {
-    val res: RapidsBufferHandle = null
+    var res: RapidsBufferHandle = null
     var sb: RapidsBuffer = null
     val range = new NvtxRange(s"RapidshuffleIterator.next", NvtxColor.RED)
 
