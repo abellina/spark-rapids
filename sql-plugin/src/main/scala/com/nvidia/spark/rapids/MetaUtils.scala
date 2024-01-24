@@ -181,9 +181,11 @@ object MetaUtils {
    * @return table that must be closed by the caller
    */
   def getTableFromMeta(deviceBuffer: DeviceMemoryBuffer, meta: TableMeta): Table = {
-    val packedMeta = meta.packedMetaAsByteBuffer
-    require(packedMeta != null, "Missing packed table metadata")
-    Table.fromPackedTable(packedMeta, deviceBuffer)
+    withResource(new NvtxRange("getTableFromMeta", NvtxColor.CYAN)) { _ => 
+      val packedMeta = meta.packedMetaAsByteBuffer
+      require(packedMeta != null, "Missing packed table metadata")
+      Table.fromPackedTable(packedMeta, deviceBuffer)
+    }
   }
 
   /**
@@ -196,8 +198,10 @@ object MetaUtils {
    */
   def getBatchFromMeta(deviceBuffer: DeviceMemoryBuffer, meta: TableMeta,
       sparkTypes: Array[DataType]): ColumnarBatch = {
-    withResource(getTableFromMeta(deviceBuffer, meta)) { table =>
-      GpuColumnVectorFromBuffer.from(table, deviceBuffer, meta, sparkTypes)
+    withResource(new NvtxRange("getBatchFromMeta", NvtxColor.YELLOW)) { _ => 
+      withResource(getTableFromMeta(deviceBuffer, meta)) { table =>
+        GpuColumnVectorFromBuffer.from(table, deviceBuffer, meta, sparkTypes)
+      }
     }
   }
 
