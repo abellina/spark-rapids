@@ -375,6 +375,7 @@ class RapidsShuffleIterator(
        withResource(new NvtxRange("RapidsShuffleIterator.gotBatch", NvtxColor.PURPLE)) { _ =>
          res = handle
        }
+       range.close()
        //try {
        //  sb = catalog.acquireBuffer(handle)
        //  cb = sb.getColumnarBatch(sparkTypes)

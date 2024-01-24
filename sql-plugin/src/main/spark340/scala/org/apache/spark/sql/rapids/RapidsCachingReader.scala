@@ -83,6 +83,7 @@ class RapidsBufferCoalesceIterator(
           numBytes += buffer.memoryUsedBytes
           toConcat.append(buffer.getColumnarBatch(sparkTypes))
         }
+        receiveCatalog.removeBuffer(handle)
       }
       val res = ConcatAndConsumeAll.buildNonEmptyBatchFromTypes(toConcat.toArray, sparkTypes)
       metrics.incLocalBytesRead(numBytes)
