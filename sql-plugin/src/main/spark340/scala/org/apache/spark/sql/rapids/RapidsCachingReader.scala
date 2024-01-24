@@ -66,38 +66,57 @@ class RapidsBufferCoalesceIterator(
     rapidsBufferUcxIt: Iterator[RapidsBufferHandle],
     sparkTypes: Array[DataType],
     metrics: ShuffleReadMetricsReporter) extends Iterator[ColumnarBatch] {
-  override def hasNext(): Boolean = rapidsBufferCacheIt.hasNext || rapidsBufferUcxIt.hasNext
+  val degenerate = new ArrayBuffer[ColumnarBatch]()
+  override def hasNext(): Boolean =
+    rapidsBufferCacheIt.hasNext || rapidsBufferUcxIt.hasNext || degenerate.size > 0
 
   override def next(): ColumnarBatch = {
-    val toConcat = new ArrayBuffer[(ByteBuffer, DeviceMemoryBuffer)]()
-    val acquired = new ArrayBuffer[RapidsBuffer]()
-    val toRemove = new ArrayBuffer[RapidsBuffer]()
-    var numBytes = 0L
-    withResource(new NvtxRange("new concat", NvtxColor.DARK_GREEN)) { _ =>
-      while (rapidsBufferCacheIt.hasNext && numBytes < 2L * 1024 * 1024 * 1024) {
-        val handle = rapidsBufferCacheIt.next()
-        val buffer = catalog.acquireBuffer(handle)
-        numBytes += buffer.memoryUsedBytes
-        toConcat.append(buffer.getMetaAndBuffer)
-        acquired.append(buffer)
+    if (degenerate.nonEmpty) {
+      degenerate.remove(0)
+    } else {
+      val toConcat = new ArrayBuffer[(ByteBuffer, DeviceMemoryBuffer)]()
+      val acquired = new ArrayBuffer[RapidsBuffer]()
+      val toRemove = new ArrayBuffer[RapidsBuffer]()
+      var numBytes = 0L
+      withResource(new NvtxRange("new concat", NvtxColor.DARK_GREEN)) { _ =>
+        while (rapidsBufferCacheIt.hasNext && numBytes < 2L * 1024 * 1024 * 1024) {
+          val handle = rapidsBufferCacheIt.next()
+          val buffer = catalog.acquireBuffer(handle)
+          numBytes += buffer.memoryUsedBytes
+          val (meta, dmb) = buffer.getMetaAndBuffer
+          if (meta == null) {
+            logInfo(s"hope this is a degenerate buffer ${buffer}.  ${buffer.id}")
+            degenerate.append(buffer.getColumnarBatch(sparkTypes))
+          } else {
+            logInfo(s"got a meta!! ${buffer} ${buffer.id}")
+            toConcat.append(buffer.getMetaAndBuffer)
+          }
+          acquired.append(buffer)
+        }
+        while (rapidsBufferUcxIt.hasNext && numBytes < 2L * 1024 * 1024 * 1024) {
+          val handle = rapidsBufferUcxIt.next()
+          val buffer = receiveCatalog.acquireBuffer(handle)
+          numBytes += buffer.memoryUsedBytes
+          if (meta == null) {
+            logInfo(s"hope this is a degenerate buffer ${buffer}.  ${buffer.id}")
+            degenerate.append(buffer.getColumnarBatch(sparkTypes))
+          } else {
+            logInfo(s"got a meta!! ${buffer} ${buffer.id}")
+            toConcat.append(buffer.getMetaAndBuffer)
+          }
+          toRemove.append(handle)
+          acquired.append(buffer)
+        }
+        val concatenated = ai.rapids.cudf.Table.concatenatePacked(
+          toConcat.map(_._1).toArray,
+          toConcat.map(_._2).toArray)
+        acquired.foreach(_.close())
+        toRemove.foreach(h => receiveCatalog.removeBuffer(h))
+        val res = GpuColumnVector.from(concatenated, sparkTypes)
+        metrics.incLocalBytesRead(numBytes)
+        metrics.incRecordsRead(res.numRows())
+        res
       }
-      while (rapidsBufferUcxIt.hasNext && numBytes < 2L * 1024 * 1024 * 1024) {
-        val handle = rapidsBufferUcxIt.next()
-        val buffer = receiveCatalog.acquireBuffer(handle)
-        numBytes += buffer.memoryUsedBytes
-        toConcat.append(buffer.getMetaAndBuffer)
-        toRemove.append(handle)
-        acquired.append(buffer)
-      }
-      val concatenated = ai.rapids.cudf.Table.concatenatePacked(
-        toConcat.map(_._1).toArray,
-        toConcat.map(_._2).toArray)
-      acquired.foreach(_.close())
-      toRemove.foreach(h => receiveCatalog.removeBuffer(h))
-      val res = GpuColumnVector.from(concatenated, sparkTypes)
-      metrics.incLocalBytesRead(numBytes)
-      metrics.incRecordsRead(res.numRows())
-      res
     }
   }
 }
