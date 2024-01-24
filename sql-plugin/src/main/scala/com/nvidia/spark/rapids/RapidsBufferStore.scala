@@ -16,6 +16,7 @@
 
 package com.nvidia.spark.rapids
 
+import java.nio.ByteBuffer
 import java.util.Comparator
 import java.util.concurrent.locks.ReentrantReadWriteLock
 
@@ -462,6 +463,9 @@ abstract class RapidsBufferStore(val tier: StorageTier)
       } else {
         GpuCompressedColumnVector.from(devBuffer, meta)
       }
+    }
+    def getMetaAndBuffer: (ByteBuffer, DeviceMemoryBuffer) = {
+      (meta.packedMetaAsByteBuffer(), getDeviceMemoryBuffer)
     }
 
     override def copyToMemoryBuffer(srcOffset: Long, dst: MemoryBuffer, dstOffset: Long,

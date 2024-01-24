@@ -17,6 +17,7 @@
 package com.nvidia.spark.rapids
 
 import java.nio.channels.WritableByteChannel
+import java.nio.ByteBuffer
 import java.util.concurrent.ConcurrentHashMap
 
 import scala.collection.mutable
@@ -474,6 +475,7 @@ class RapidsDeviceMemoryStore(
         columnarBatchFromDeviceBuffer(buff, sparkTypes)
       }
     }
+
 
     /**
      * We overwrite free to make sure we don't have a handler for the underlying
