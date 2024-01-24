@@ -65,7 +65,7 @@ class RapidsBufferCoalesceIterator(
     rapidsBufferCacheIt: Iterator[RapidsBufferHandle],
     rapidsBufferUcxIt: Iterator[RapidsBufferHandle],
     sparkTypes: Array[DataType],
-    metrics: ShuffleReadMetricsReporter) extends Iterator[ColumnarBatch] {
+    metrics: ShuffleReadMetricsReporter) extends Iterator[ColumnarBatch] with Logging {
   val degenerate = new ArrayBuffer[ColumnarBatch]()
   override def hasNext(): Boolean =
     rapidsBufferCacheIt.hasNext || rapidsBufferUcxIt.hasNext || degenerate.size > 0
@@ -76,7 +76,7 @@ class RapidsBufferCoalesceIterator(
     } else {
       val toConcat = new ArrayBuffer[(ByteBuffer, DeviceMemoryBuffer)]()
       val acquired = new ArrayBuffer[RapidsBuffer]()
-      val toRemove = new ArrayBuffer[RapidsBuffer]()
+      val toRemove = new ArrayBuffer[RapidsBufferHandle]()
       var numBytes = 0L
       withResource(new NvtxRange("new concat", NvtxColor.DARK_GREEN)) { _ =>
         while (rapidsBufferCacheIt.hasNext && numBytes < 2L * 1024 * 1024 * 1024) {
@@ -89,7 +89,7 @@ class RapidsBufferCoalesceIterator(
             degenerate.append(buffer.getColumnarBatch(sparkTypes))
           } else {
             logInfo(s"got a meta!! ${buffer} ${buffer.id}")
-            toConcat.append(buffer.getMetaAndBuffer)
+            toConcat.append((meta, dmb))
           }
           acquired.append(buffer)
         }
@@ -97,12 +97,13 @@ class RapidsBufferCoalesceIterator(
           val handle = rapidsBufferUcxIt.next()
           val buffer = receiveCatalog.acquireBuffer(handle)
           numBytes += buffer.memoryUsedBytes
+          val (meta, dmb) = buffer.getMetaAndBuffer
           if (meta == null) {
             logInfo(s"hope this is a degenerate buffer ${buffer}.  ${buffer.id}")
             degenerate.append(buffer.getColumnarBatch(sparkTypes))
           } else {
             logInfo(s"got a meta!! ${buffer} ${buffer.id}")
-            toConcat.append(buffer.getMetaAndBuffer)
+            toConcat.append((meta, dmb))
           }
           toRemove.append(handle)
           acquired.append(buffer)
