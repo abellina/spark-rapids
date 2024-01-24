@@ -464,7 +464,7 @@ abstract class RapidsBufferStore(val tier: StorageTier)
         GpuCompressedColumnVector.from(devBuffer, meta)
       }
     }
-    def getMetaAndBuffer: (ByteBuffer, DeviceMemoryBuffer) = {
+    override def getMetaAndBuffer: (ByteBuffer, DeviceMemoryBuffer) = {
       (meta.packedMetaAsByteBuffer(), getDeviceMemoryBuffer)
     }
 

@@ -18,6 +18,7 @@ package com.nvidia.spark.rapids
 
 import java.io.File
 import java.nio.channels.WritableByteChannel
+import java.nio.ByteBuffer
 
 import scala.collection.mutable.ArrayBuffer
 
@@ -278,6 +279,10 @@ trait RapidsBuffer extends AutoCloseable {
    */
   def getHostColumnarBatch(sparkTypes: Array[DataType]): ColumnarBatch = {
     throw new IllegalStateException(s"$this does not support host columnar batches.")
+  }
+
+  def getMetaAndBuffer: (ByteBuffer, DeviceMemoryBuffer) = {
+    (null, null)
   }
 
   /**

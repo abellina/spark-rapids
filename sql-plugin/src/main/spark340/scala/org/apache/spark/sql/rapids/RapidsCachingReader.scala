@@ -86,8 +86,8 @@ class RapidsBufferCoalesceIterator(
         val buffer = receiveCatalog.acquireBuffer(handle)
         numBytes += buffer.memoryUsedBytes
         toConcat.append(buffer.getMetaAndBuffer)
-        toRemove.append(buffer)
-        acquired.append(handle)
+        toRemove.append(handle)
+        acquired.append(buffer)
       }
       val concatenated = ai.rapids.cudf.Table.concatenatePacked(
         toConcat.map(_._1).toArray,
