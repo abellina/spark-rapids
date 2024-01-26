@@ -143,6 +143,7 @@ rapids_shuffle_smoke_test() {
     # so that IPC regions are obtained using SysV API instead. This was done because of
     # itermittent test failures. See: https://github.com/NVIDIA/spark-rapids/issues/6572
     PYSP_TEST_spark_rapids_shuffle_mode=UCX \
+    PYSP_TEST_spark_executorEnv_UCX_MEMTYPE_CACHE=n \
     PYSP_TEST_spark_executorEnv_UCX_ERROR_SIGNALS="" \
     PYSP_TEST_spark_executorEnv_UCX_TLS="^posix" \
         invoke_shuffle_integration_test
