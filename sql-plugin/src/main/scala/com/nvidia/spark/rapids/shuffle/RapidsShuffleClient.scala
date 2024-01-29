@@ -387,14 +387,16 @@ class RapidsShuffleClient(
               var numBatchesRejected = 0
 
               // hand buffer off to the catalog
+              var consumedLength = 0L
               buffMetas.foreach { consumed: ConsumedBatchFromBounceBuffer =>
                 val handle = track(consumed.contigBuffer, consumed.meta)
                 if (!consumed.handler.batchReceived(handle)) {
                   catalog.removeBuffer(handle)
                   numBatchesRejected += 1
                 }
-                transport.doneBytesInFlight(consumed.contigBuffer.getLength)
+                consumedLength += consumed.contigBuffer.getLength
               }
+              transport.doneBytesInFlight(consumedLength)
 
               if (numBatchesRejected > 0) {
                 logDebug(s"Removed ${numBatchesRejected} batches that were received after " +
@@ -435,21 +437,22 @@ class RapidsShuffleClient(
    */
   private[shuffle] def track(
       buffer: DeviceMemoryBuffer, meta: TableMeta): RapidsBufferHandle = {
-    if (buffer != null) {
-      // add the buffer to the catalog so it is available for spill
-      catalog.addBuffer(
-        buffer,
-        meta,
-        SpillPriorities.INPUT_FROM_SHUFFLE_PRIORITY,
-        // set needsSync to false because we already have stream synchronized after
-        // consuming the bounce buffer, so we know these buffers are synchronized
-        // w.r.t. the CPU
-        needsSync = false)
-    } else {
-      // no device data, just tracking metadata
-      catalog.addDegenerateRapidsBuffer(
-        meta)
-
+    withResource(new NvtxRange("track buffer", NvtxColor.ORANGE)) { _ =>
+      if (buffer != null) {
+        // add the buffer to the catalog so it is available for spill
+        catalog.addBuffer(
+          buffer,
+          meta,
+          SpillPriorities.INPUT_FROM_SHUFFLE_PRIORITY,
+          // set needsSync to false because we already have stream synchronized after
+          // consuming the bounce buffer, so we know these buffers are synchronized
+          // w.r.t. the CPU
+          needsSync = false)
+      } else {
+        // no device data, just tracking metadata
+        catalog.addDegenerateRapidsBuffer(
+          meta)
+      }
     }
   }
 
