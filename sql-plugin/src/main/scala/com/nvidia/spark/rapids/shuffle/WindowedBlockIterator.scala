@@ -85,8 +85,8 @@ case class BlockRange[T <: BlockWithSize](
  * @note this class does not own `transferBlocks`
  * @note this class is not thread safe
  */
-class WindowedBlockIterator[T <: BlockWithSize](blocks: Seq[T], windowSize: Long)
-    extends Iterator[Seq[BlockRange[T]]] {
+class WindowedBlockIterator[T <: BlockWithSize](blocks: Array[T], windowSize: Long)
+    extends Iterator[Array[BlockRange[T]]] {
 
   require(windowSize > 0, s"Invalid window size specified $windowSize")
 
@@ -122,7 +122,7 @@ class WindowedBlockIterator[T <: BlockWithSize](blocks: Seq[T], windowSize: Long
   private[this] var lastSeenBlock = 0
 
   case class BlocksForWindow(lastBlockIndex: Option[Int],
-      blockRanges: Seq[BlockRange[T]],
+      blockRanges: Array[BlockRange[T]],
       hasMoreBlocks: Boolean)
 
   private def getBlocksForWindow(
@@ -154,11 +154,11 @@ class WindowedBlockIterator[T <: BlockWithSize](blocks: Seq[T], windowSize: Long
     }
     val lastBlock = blockRangesInWindow.last
     BlocksForWindow(lastBlockIndex,
-      blockRangesInWindow.toSeq,
+      blockRangesInWindow.toArray,
       !continue || !lastBlock.isComplete())
   }
 
-  def next(): Seq[BlockRange[T]] = {
+  def next(): Array[BlockRange[T]] = {
     if (!hasNext) {
       throw new NoSuchElementException(s"BounceBufferWindow $window has been exhausted.")
     }

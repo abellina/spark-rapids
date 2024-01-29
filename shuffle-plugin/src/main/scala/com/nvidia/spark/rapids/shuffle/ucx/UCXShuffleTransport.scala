@@ -478,7 +478,7 @@ class UCXShuffleTransport(shuffleServerId: BlockManagerId, rapidsConf: RapidsCon
                 client.connection.getPeerExecutorId, ucx.assignUniqueId())
               val brs = new BufferReceiveState(brsId,
                 perClientRequests.bounceBuffer,
-                perClientRequests.transferRequests.toSeq,
+                perClientRequests.transferRequests.toArray,
                 () => bufferReceiveStateComplete(brsId))
               pendingBrs.put(brs.id, ClientAndBufferReceiveState(client, brs))
               client.issueBufferReceives(brs)

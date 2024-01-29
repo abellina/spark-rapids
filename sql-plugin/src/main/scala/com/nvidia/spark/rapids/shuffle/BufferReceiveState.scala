@@ -55,7 +55,7 @@ case class ConsumedBatchFromBounceBuffer(
 class BufferReceiveState(
     val id: Long,
     bounceBuffer: BounceBuffer,
-    requests: Seq[PendingTransferRequest],
+    requests: Array[PendingTransferRequest],
     transportOnClose: () => Unit,
     stream: Cuda.Stream = Cuda.DEFAULT_STREAM)
     extends AutoCloseable with Logging {
@@ -79,10 +79,10 @@ class BufferReceiveState(
   private[this] var iterated = false
 
   // block ranges we'll work on next
-  private[this] var nextBlocks: Seq[BlockRange[ReceiveBlock]] = Seq.empty
+  private[this] var nextBlocks: Array[BlockRange[ReceiveBlock]] = Array.empty
 
   // ranges we are working on now
-  private[this] var currentBlocks: Seq[BlockRange[ReceiveBlock]] = Seq.empty
+  private[this] var currentBlocks: Array[BlockRange[ReceiveBlock]] = Array.empty
 
   // if a block overshoots a window, it will be in `workingOn`. This happens if the
   // block is larger than window also.
@@ -156,7 +156,7 @@ class BufferReceiveState(
     if (windowedBlockIterator.hasNext) {
       nextBlocks = windowedBlockIterator.next()
     } else {
-      nextBlocks = Seq.empty
+      nextBlocks = Array.empty
       hasMoreBuffers_ = false
     }
   }

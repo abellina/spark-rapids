@@ -70,7 +70,7 @@ class BufferSendState(
 
   private[this] val (peerBufferReceiveHeader: Long,
       bufferMetas: Array[BufferMeta],
-      blocksToSend: Seq[SendBlock]) = {
+      blocksToSend: Array[SendBlock]) = {
     withResource(transaction.releaseMessage()) { mtb =>
       val transferRequest = ShuffleMetadata.getTransferRequest(mtb.getBuffer())
       val peerBufferReceiveHeader = transferRequest.id()
@@ -85,7 +85,7 @@ class BufferSendState(
           bufferMetas(ix) = table.meta.bufferMeta()
           new SendBlock(bufferTransferRequest.bufferId(), table.getPackedSizeBytes)
         }
-      }
+      }.toArray
 
       (peerBufferReceiveHeader, bufferMetas, blocksToSend)
     }
