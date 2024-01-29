@@ -175,13 +175,15 @@ class BufferReceiveState(
     toConsume -= 1
     withResource(new NvtxRange("consumeWindow", NvtxColor.PURPLE)) { _ =>
       advance()
-      closeOnExcept(new ArrayBuffer[DeviceMemoryBuffer]()) { toClose =>
-        val srcAddresses = new ArrayBuffer[Long]()
-        val dstAddresses = new ArrayBuffer[Long]()
-        val bufferSizes = new ArrayBuffer[Long]()
-        val results = currentBlocks.flatMap { b =>
+      closeOnExcept(new ArrayBuffer[DeviceMemoryBuffer](currentBlocks.size)) { toClose =>
+        val srcAddresses = new Array[Long](currentBlocks.size)
+        val dstAddresses = new Array[Long](currentBlocks.size)
+        val bufferSizes = new Array[Long](currentBlocks.size)
+        RmmSpark.shuffleThreadWorkingOnTasks(
+          currentBlocks.flatMap(_.block.request.handler.getTaskIds).toArray)
+
+        val results = currentBlocks.zipWithIndex.flatMap { case (b, ix) =>
           val pendingTransferRequest = b.block.request
-          RmmSpark.shuffleThreadWorkingOnTasks(pendingTransferRequest.handler.getTaskIds)
           val fullSize = pendingTransferRequest.tableMeta.bufferMeta().size()
 
           var contigBuffer: DeviceMemoryBuffer = null
@@ -194,9 +196,9 @@ class BufferReceiveState(
             // we have the full buffer!
             contigBuffer = Rmm.alloc(b.rangeSize(), stream)
             toClose.append(contigBuffer)
-            srcAddresses.append(bounceBufferByteOffset + deviceBounceBuffer.getAddress())
-            dstAddresses.append(contigBuffer.getAddress())
-            bufferSizes.append(b.rangeSize())
+            srcAddresses(ix) = bounceBufferByteOffset + deviceBounceBuffer.getAddress()
+            dstAddresses(ix) = contigBuffer.getAddress()
+            bufferSizes(ix) = b.rangeSize()
 
            //contigBuffer.copyFromDeviceBufferAsync(0, deviceBounceBuffer,
            //  bounceBufferByteOffset, b.rangeSize(), stream)
@@ -205,9 +207,9 @@ class BufferReceiveState(
               //workingOn.copyFromDeviceBufferAsync(workingOnOffset, deviceBounceBuffer,
               //  bounceBufferByteOffset, b.rangeSize(), stream)
 
-              srcAddresses.append(bounceBufferByteOffset + deviceBounceBuffer.getAddress())
-              dstAddresses.append(workingOnOffset + workingOn.getAddress())
-              bufferSizes.append(b.rangeSize())
+              srcAddresses(ix) = bounceBufferByteOffset + deviceBounceBuffer.getAddress()
+              dstAddresses(ix) = workingOnOffset + workingOn.getAddress()
+              bufferSizes(ix) = b.rangeSize()
 
               workingOnOffset += b.rangeSize()
               if (workingOnOffset == fullSize) {
@@ -221,9 +223,9 @@ class BufferReceiveState(
               toClose.append(workingOn)
               //workingOn.copyFromDeviceBufferAsync(0, deviceBounceBuffer,
               //  bounceBufferByteOffset, b.rangeSize(), stream)
-              srcAddresses.append(bounceBufferByteOffset + deviceBounceBuffer.getAddress())
-              dstAddresses.append(workingOnOffset + workingOn.getAddress())
-              bufferSizes.append(b.rangeSize())
+              srcAddresses(ix) = bounceBufferByteOffset + deviceBounceBuffer.getAddress()
+              dstAddresses(ix) = workingOnOffset + workingOn.getAddress()
+              bufferSizes(ix) = b.rangeSize()
               workingOnOffset += b.rangeSize()
             }
           }
