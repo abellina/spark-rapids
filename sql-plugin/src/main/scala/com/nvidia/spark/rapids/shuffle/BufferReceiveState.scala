@@ -181,10 +181,12 @@ class BufferReceiveState(
         val srcAddresses = new Array[Long](currentBlocks.size)
         val dstAddresses = new Array[Long](currentBlocks.size)
         val bufferSizes = new Array[Long](currentBlocks.size)
-        RmmSpark.shuffleThreadWorkingOnTasks(
-          currentBlocks.flatMap(_.block.request.handler.getTaskIds).toArray)
+        val taskIds = currentBlocks.flatMap(_.block.request.handler.getTaskIds)
+        RmmSpark.shuffleThreadWorkingOnTasks(taskIds)
 
-        val results = currentBlocks.zipWithIndex.flatMap { case (b, ix) =>
+        val results = new Array[ConsumedBatchFromBounceBuffer](currentBlocks.length)
+        var resultCount = -1
+        currentBlocks.zipWithIndex.foreach { case (b, ix) =>
           val pendingTransferRequest = b.block.request
           val fullSize = pendingTransferRequest.getLength
 
@@ -231,10 +233,9 @@ class BufferReceiveState(
           }
 
           if (contigBuffer != null) {
-            Some(ConsumedBatchFromBounceBuffer(
-              contigBuffer, pendingTransferRequest.tableMeta, pendingTransferRequest.handler))
-          } else {
-            None
+            resultCount += 1
+            results(resultCount) = ConsumedBatchFromBounceBuffer(
+              contigBuffer, pendingTransferRequest.tableMeta, pendingTransferRequest.handler)
           }
         }
         if (srcAddresses.size > 0) {
@@ -255,9 +256,7 @@ class BufferReceiveState(
         // unless all that data has truly moved to our final buffer in our stream
         stream.sync()
 
-        results.foreach { result =>
-          RmmSpark.poolThreadFinishedForTasks(result.handler.getTaskIds)
-        }
+        RmmSpark.poolThreadFinishedForTasks(taskIds)
 
         // cpu is in sync, we can recycle the bounce buffer
         if (!toFinalize.isEmpty) {
@@ -265,7 +264,11 @@ class BufferReceiveState(
           firstCb(transportBuffer)
         }
 
-        results
+        if (resultCount == -1) {
+          Seq.empty
+        } else {
+          results.slice(0, resultCount + 1)
+        }
       }
     }
   }
