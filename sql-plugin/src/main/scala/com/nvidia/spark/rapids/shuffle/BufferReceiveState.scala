@@ -217,7 +217,9 @@ class BufferReceiveState(
               }
             } else {
               // need to keep it around
-              workingOn = Rmm.alloc(fullSize, stream)
+              workingOn = withResource(new NvtxRange("call alloc", NvtxColor.BLUE)) { _ =>
+                Rmm.alloc(fullSize, stream)
+              }
               toClose(ix) = workingOn
               //workingOn.copyFromDeviceBufferAsync(0, deviceBounceBuffer,
               //  bounceBufferByteOffset, b.rangeSize(), stream)
