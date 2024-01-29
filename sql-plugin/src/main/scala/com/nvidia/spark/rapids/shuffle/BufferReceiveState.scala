@@ -186,7 +186,7 @@ class BufferReceiveState(
 
         val results = currentBlocks.zipWithIndex.flatMap { case (b, ix) =>
           val pendingTransferRequest = b.block.request
-          val fullSize = pendingTransferRequest.tableMeta.bufferMeta().size()
+          val fullSize = pendingTransferRequest.getLength
 
           var contigBuffer: DeviceMemoryBuffer = null
 
