@@ -176,6 +176,9 @@ class BufferReceiveState(
     withResource(new NvtxRange("consumeWindow", NvtxColor.PURPLE)) { _ =>
       advance()
       closeOnExcept(new ArrayBuffer[DeviceMemoryBuffer]()) { toClose =>
+        val srcAddresses = new ArrayBuffer[Long]()
+        val dstAddresses = new ArrayBuffer[Long]()
+        val bufferSizes = new ArrayBuffer[Long]()
         val results = currentBlocks.flatMap { b =>
           val pendingTransferRequest = b.block.request
           RmmSpark.shuffleThreadWorkingOnTasks(pendingTransferRequest.handler.getTaskIds)
@@ -191,13 +194,20 @@ class BufferReceiveState(
             // we have the full buffer!
             contigBuffer = Rmm.alloc(b.rangeSize(), stream)
             toClose.append(contigBuffer)
+            srcAddresses.append(bounceBufferByteOffset + deviceBounceBuffer.getAddress())
+            dstAddresses.append(contigBuffer.getAddress())
+            bufferSizes.append(b.rangeSize())
 
-            contigBuffer.copyFromDeviceBufferAsync(0, deviceBounceBuffer,
-              bounceBufferByteOffset, b.rangeSize(), stream)
+           //contigBuffer.copyFromDeviceBufferAsync(0, deviceBounceBuffer,
+           //  bounceBufferByteOffset, b.rangeSize(), stream)
           } else {
             if (workingOn != null) {
-              workingOn.copyFromDeviceBufferAsync(workingOnOffset, deviceBounceBuffer,
-                bounceBufferByteOffset, b.rangeSize(), stream)
+              //workingOn.copyFromDeviceBufferAsync(workingOnOffset, deviceBounceBuffer,
+              //  bounceBufferByteOffset, b.rangeSize(), stream)
+
+              srcAddresses.append(bounceBufferByteOffset + deviceBounceBuffer.getAddress())
+              dstAddresses.append(workingOnOffset + workingOn.getAddress())
+              bufferSizes.append(b.rangeSize())
 
               workingOnOffset += b.rangeSize()
               if (workingOnOffset == fullSize) {
@@ -209,10 +219,11 @@ class BufferReceiveState(
               // need to keep it around
               workingOn = Rmm.alloc(fullSize, stream)
               toClose.append(workingOn)
-
-              workingOn.copyFromDeviceBufferAsync(0, deviceBounceBuffer,
-                bounceBufferByteOffset, b.rangeSize(), stream)
-
+              //workingOn.copyFromDeviceBufferAsync(0, deviceBounceBuffer,
+              //  bounceBufferByteOffset, b.rangeSize(), stream)
+              srcAddresses.append(bounceBufferByteOffset + deviceBounceBuffer.getAddress())
+              dstAddresses.append(workingOnOffset + workingOn.getAddress())
+              bufferSizes.append(b.rangeSize())
               workingOnOffset += b.rangeSize()
             }
           }
@@ -227,6 +238,18 @@ class BufferReceiveState(
           } else {
             None
           }
+        }
+        if (srcAddresses.size > 0) {
+          logInfo(s"Issuing multiCopy for src=${srcAddresses.mkString(",")} " +
+              s"dst=${dstAddresses.mkString(",")} " +
+              s"buffSizes=${bufferSizes.mkString(",")} ")
+
+          ai.rapids.cudf.Cuda.multiCopy(
+            srcAddresses.toArray,
+            dstAddresses.toArray,
+            bufferSizes.toArray,
+            bufferSizes.size,
+            stream.getStream())
         }
 
         // Sync once, instead of for each copy.
