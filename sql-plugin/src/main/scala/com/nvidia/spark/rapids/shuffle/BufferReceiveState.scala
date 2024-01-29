@@ -141,23 +141,25 @@ class BufferReceiveState(
   def hasMoreBlocks: Boolean = synchronized { hasMoreBuffers_ }
 
   private def advance(): Unit = {
-    if (!hasMoreBuffers_) {
-      throw new NoSuchElementException(
-        s"BufferReceiveState is done for ${TransportUtils.toHex(id)}, yet " +
-          s"received a call to next")
-    }
+    withResource(new NvtxRange("advance", NvtxColor.YELLOW)) { _ =>
+      if (!hasMoreBuffers_) {
+        throw new NoSuchElementException(
+          s"BufferReceiveState is done for ${TransportUtils.toHex(id)}, yet " +
+              s"received a call to next")
+      }
 
-    if (!iterated) {
-      nextBlocks = windowedBlockIterator.next()
-      iterated = true
-    }
-    currentBlocks = nextBlocks
+      if (!iterated) {
+        nextBlocks = windowedBlockIterator.next()
+        iterated = true
+      }
+      currentBlocks = nextBlocks
 
-    if (windowedBlockIterator.hasNext) {
-      nextBlocks = windowedBlockIterator.next()
-    } else {
-      nextBlocks = Array.empty
-      hasMoreBuffers_ = false
+      if (windowedBlockIterator.hasNext) {
+        nextBlocks = windowedBlockIterator.next()
+      } else {
+        nextBlocks = Array.empty
+        hasMoreBuffers_ = false
+      }
     }
   }
 
@@ -175,7 +177,7 @@ class BufferReceiveState(
     toConsume -= 1
     withResource(new NvtxRange("consumeWindow", NvtxColor.PURPLE)) { _ =>
       advance()
-      closeOnExcept(new ArrayBuffer[DeviceMemoryBuffer](currentBlocks.size)) { toClose =>
+      closeOnExcept(new Array[DeviceMemoryBuffer](currentBlocks.size)) { toClose =>
         val srcAddresses = new Array[Long](currentBlocks.size)
         val dstAddresses = new Array[Long](currentBlocks.size)
         val bufferSizes = new Array[Long](currentBlocks.size)
@@ -195,18 +197,12 @@ class BufferReceiveState(
           if (fullSize == b.rangeSize()) {
             // we have the full buffer!
             contigBuffer = Rmm.alloc(b.rangeSize(), stream)
-            toClose.append(contigBuffer)
+            toClose(ix) = contigBuffer
             srcAddresses(ix) = bounceBufferByteOffset + deviceBounceBuffer.getAddress()
             dstAddresses(ix) = contigBuffer.getAddress()
             bufferSizes(ix) = b.rangeSize()
-
-           //contigBuffer.copyFromDeviceBufferAsync(0, deviceBounceBuffer,
-           //  bounceBufferByteOffset, b.rangeSize(), stream)
           } else {
             if (workingOn != null) {
-              //workingOn.copyFromDeviceBufferAsync(workingOnOffset, deviceBounceBuffer,
-              //  bounceBufferByteOffset, b.rangeSize(), stream)
-
               srcAddresses(ix) = bounceBufferByteOffset + deviceBounceBuffer.getAddress()
               dstAddresses(ix) = workingOnOffset + workingOn.getAddress()
               bufferSizes(ix) = b.rangeSize()
@@ -220,7 +216,7 @@ class BufferReceiveState(
             } else {
               // need to keep it around
               workingOn = Rmm.alloc(fullSize, stream)
-              toClose.append(workingOn)
+              toClose(ix) = workingOn
               //workingOn.copyFromDeviceBufferAsync(0, deviceBounceBuffer,
               //  bounceBufferByteOffset, b.rangeSize(), stream)
               srcAddresses(ix) = bounceBufferByteOffset + deviceBounceBuffer.getAddress()
