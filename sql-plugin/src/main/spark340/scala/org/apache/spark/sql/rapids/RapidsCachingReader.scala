@@ -108,12 +108,16 @@ class RapidsBufferCoalesceIterator(
           toRemove.append(handle)
           acquired.append(buffer)
         }
-        val concatenated = ai.rapids.cudf.Table.concatenatePacked(
-          toConcat.map(_._1).toArray,
-          toConcat.map(_._2).toArray)
+
+        val concatenated = withResource(toConcat.map(_._1)) { metas =>
+          ai.rapids.cudf.Table.concatenatePacked(
+            metas.toArray, toConcat.map(_._2).toArray)
+        }
         acquired.foreach(_.close())
         toRemove.foreach(h => receiveCatalog.removeBuffer(h))
-        val res = GpuColumnVector.from(concatenated, sparkTypes)
+        val res = withResource(concatenated) { _ =>
+          GpuColumnVector.from(concatenated, sparkTypes)
+        }
         metrics.incLocalBytesRead(numBytes)
         metrics.incRecordsRead(res.numRows())
         res
