@@ -109,10 +109,9 @@ class RapidsBufferCoalesceIterator(
           acquired.append(buffer)
         }
 
-        val concatenated = withResource(toConcat.map(_._1)) { metas =>
+        val concatenated =
           ai.rapids.cudf.Table.concatenatePacked(
-            metas.toArray, toConcat.map(_._2).toArray)
-        }
+            toConcat.map(_._1).toArray, toConcat.map(_._2).toArray)
         acquired.foreach(_.close())
         toRemove.foreach(h => receiveCatalog.removeBuffer(h))
         val res = withResource(concatenated) { _ =>
