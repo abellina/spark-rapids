@@ -163,6 +163,15 @@ class BufferReceiveState(
     }
   }
 
+  case class MultiCopyAction(
+      srcBase: DeviceMemoryBuffer,
+      var dstBase: DeviceMemoryBuffer,
+      srcOffset: Long,
+      dstOffset: Long,
+      copySize: Long,
+      complete: Boolean,
+      pendingTransferRequest: PendingTransferRequest)
+
   /**
    * When a receive is complete, the client calls `consumeWindow` to copy out
    * of the bounce buffer in this `BufferReceiveState` any complete batches, or to
@@ -178,41 +187,40 @@ class BufferReceiveState(
     withResource(new NvtxRange("consumeWindow", NvtxColor.PURPLE)) { _ =>
       advance()
       closeOnExcept(new Array[DeviceMemoryBuffer](currentBlocks.size)) { toClose =>
-        val srcAddresses = new Array[Long](currentBlocks.size)
-        val dstAddresses = new Array[Long](currentBlocks.size)
-        val bufferSizes = new Array[Long](currentBlocks.size)
+
         val taskIds = currentBlocks.flatMap(_.block.request.handler.getTaskIds)
         RmmSpark.shuffleThreadWorkingOnTasks(taskIds)
 
-        val results = new Array[ConsumedBatchFromBounceBuffer](currentBlocks.length)
-        var resultCount = -1
+        val multiCopyActions = new Array[MultiCopyAction](currentBlocks.length)
+
+        // Receive buffers are always in the device, and so it is safe to assume
+        // that they are `BaseDeviceMemoryBuffer`s here.
+        val deviceBounceBuffer = bounceBuffer.buffer.asInstanceOf[DeviceMemoryBuffer]
         currentBlocks.zipWithIndex.foreach { case (b, ix) =>
           val pendingTransferRequest = b.block.request
           val fullSize = pendingTransferRequest.getLength
-
-          var contigBuffer: DeviceMemoryBuffer = null
-
-          // Receive buffers are always in the device, and so it is safe to assume
-          // that they are `BaseDeviceMemoryBuffer`s here.
-          val deviceBounceBuffer = bounceBuffer.buffer.asInstanceOf[BaseDeviceMemoryBuffer]
-
           if (fullSize == b.rangeSize()) {
             // we have the full buffer!
-            contigBuffer = Rmm.alloc(b.rangeSize(), stream)
-            toClose(ix) = contigBuffer
-            srcAddresses(ix) = bounceBufferByteOffset + deviceBounceBuffer.getAddress()
-            dstAddresses(ix) = contigBuffer.getAddress()
-            bufferSizes(ix) = b.rangeSize()
+            multiCopyActions(ix) = MultiCopyAction(
+              srcBase = deviceBounceBuffer,
+              dstBase = null,
+              srcOffset = bounceBufferByteOffset,
+              dstOffset = 0,
+              copySize = b.rangeSize(),
+              complete = true,
+              pendingTransferRequest)
           } else {
-            if (workingOn != null) {
-              srcAddresses(ix) = bounceBufferByteOffset + deviceBounceBuffer.getAddress()
-              dstAddresses(ix) = workingOnOffset + workingOn.getAddress()
-              bufferSizes(ix) = b.rangeSize()
-
+            if (workingOnOffset != 0) {
+              multiCopyActions(ix) = MultiCopyAction(
+                srcBase = deviceBounceBuffer,
+                dstBase = workingOn,
+                srcOffset = bounceBufferByteOffset,
+                dstOffset = workingOnOffset,
+                copySize = b.rangeSize(),
+                complete = workingOnOffset + b.rangeSize() == fullSize,
+                pendingTransferRequest)
               workingOnOffset += b.rangeSize()
               if (workingOnOffset == fullSize) {
-                contigBuffer = workingOn
-                workingOn = null
                 workingOnOffset = 0
               }
             } else {
@@ -220,12 +228,14 @@ class BufferReceiveState(
               workingOn = withResource(new NvtxRange("call alloc", NvtxColor.BLUE)) { _ =>
                 Rmm.alloc(fullSize, stream)
               }
-              toClose(ix) = workingOn
-              //workingOn.copyFromDeviceBufferAsync(0, deviceBounceBuffer,
-              //  bounceBufferByteOffset, b.rangeSize(), stream)
-              srcAddresses(ix) = bounceBufferByteOffset + deviceBounceBuffer.getAddress()
-              dstAddresses(ix) = workingOnOffset + workingOn.getAddress()
-              bufferSizes(ix) = b.rangeSize()
+              multiCopyActions(ix) = MultiCopyAction(
+                srcBase = deviceBounceBuffer,
+                dstBase = workingOn,
+                srcOffset = bounceBufferByteOffset,
+                dstOffset = workingOnOffset,
+                copySize = b.rangeSize(),
+                complete = workingOnOffset + b.rangeSize() == fullSize,
+                pendingTransferRequest)
               workingOnOffset += b.rangeSize()
             }
           }
@@ -233,24 +243,45 @@ class BufferReceiveState(
           if (bounceBufferByteOffset >= deviceBounceBuffer.getLength) {
             bounceBufferByteOffset = 0
           }
-
-          if (contigBuffer != null) {
-            resultCount += 1
-            results(resultCount) = ConsumedBatchFromBounceBuffer(
-              contigBuffer, pendingTransferRequest.tableMeta, pendingTransferRequest.handler)
-          }
         }
-        if (srcAddresses.size > 0) {
+
+        var results: Array[ConsumedBatchFromBounceBuffer] = Array.empty
+
+        if (multiCopyActions.length > 0) {
+          val toAlloc = multiCopyActions.filter { _.dstBase == null }
+          val buffs =
+            withResource(new NvtxRange("call batch alloc", NvtxColor.GREEN)) { _ =>
+              Rmm.alloc(toAlloc.map {_.copySize }, stream)
+            }
+          toAlloc.zip(buffs).foreach { case (a,b) => a.dstBase = b }
+          val srcAddresses = new Array[Long](multiCopyActions.length)
+          val dstAddresses = new Array[Long](multiCopyActions.length)
+          val bufferSizes = new Array[Long](multiCopyActions.length)
+
+          multiCopyActions.zipWithIndex.foreach { case (mca, ix) =>
+            srcAddresses(ix) = mca.srcBase.getAddress + mca.srcOffset
+            dstAddresses(ix) = mca.dstBase.getAddress + mca.dstOffset
+            bufferSizes(ix) = mca.copySize
+          }
+
           logInfo(s"Issuing multiCopy for src=${srcAddresses.mkString(",")} " +
               s"dst=${dstAddresses.mkString(",")} " +
               s"buffSizes=${bufferSizes.mkString(",")} ")
 
           ai.rapids.cudf.Cuda.multiCopy(
-            srcAddresses.toArray,
-            dstAddresses.toArray,
-            bufferSizes.toArray,
-            bufferSizes.size,
-            stream.getStream())
+            srcAddresses,
+            dstAddresses,
+            bufferSizes,
+            bufferSizes.length,
+            stream.getStream)
+
+          val complete = multiCopyActions.filter(_.complete)
+          results = complete.map { c =>
+            ConsumedBatchFromBounceBuffer(
+              c.dstBase,
+              c.pendingTransferRequest.tableMeta,
+              c.pendingTransferRequest.handler)
+          }
         }
 
         // Sync once, instead of for each copy.
@@ -266,11 +297,7 @@ class BufferReceiveState(
           firstCb(transportBuffer)
         }
 
-        if (resultCount == -1) {
-          Seq.empty
-        } else {
-          results.slice(0, resultCount + 1)
-        }
+        results
       }
     }
   }
