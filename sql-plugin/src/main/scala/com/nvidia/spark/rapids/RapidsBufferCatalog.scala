@@ -19,15 +19,15 @@ package com.nvidia.spark.rapids
 import java.util.concurrent.ConcurrentHashMap
 import java.util.function.BiFunction
 
-import ai.rapids.cudf.{ContiguousTable, Cuda, DeviceMemoryBuffer, HostMemoryBuffer, MemoryBuffer, Rmm, Table}
+import ai.rapids.cudf.{ContiguousTable, Cuda, DeviceMemoryBuffer, HostMemoryBuffer, MemoryBuffer, NvtxColor, NvtxRange, Rmm, Table}
 import com.nvidia.spark.rapids.Arm.{closeOnExcept, withResource}
 import com.nvidia.spark.rapids.RapidsBufferCatalog.getExistingRapidsBufferAndAcquire
 import com.nvidia.spark.rapids.RapidsPluginImplicits._
 import com.nvidia.spark.rapids.StorageTier.StorageTier
 import com.nvidia.spark.rapids.format.TableMeta
 import com.nvidia.spark.rapids.jni.RmmSpark
-
 import org.apache.spark.{SparkConf, SparkEnv}
+
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.rapids.{RapidsDiskBlockManager, TempSpillBufferId}
 import org.apache.spark.sql.vectorized.ColumnarBatch
@@ -338,27 +338,31 @@ class RapidsBufferCatalog(
       initialSpillPriority: Long,
       needsSync: Boolean): Array[RapidsBufferHandle] = synchronized {
     bufferMetas.zip(ids).map { case ((buffer, tableMeta), id) =>
-      val rapidsBuffer = buffer match {
-        case gpuBuffer: DeviceMemoryBuffer =>
-          deviceStorage.addBuffer(
-            id,
-            gpuBuffer,
-            tableMeta,
-            initialSpillPriority,
-            needsSync)
-        case hostBuffer: HostMemoryBuffer =>
-          hostStorage.addBuffer(
-            id,
-            hostBuffer,
-            tableMeta,
-            initialSpillPriority,
-            needsSync)
-        case _ =>
-          throw new IllegalArgumentException(
-            s"Cannot call addBuffer with buffer $buffer")
+      withResource(new NvtxRange("addBuffer", NvtxColor.PURPLE)) { _ =>
+        val rapidsBuffer = buffer match {
+          case gpuBuffer: DeviceMemoryBuffer =>
+            deviceStorage.addBuffer(
+              id,
+              gpuBuffer,
+              tableMeta,
+              initialSpillPriority,
+              needsSync)
+          case hostBuffer: HostMemoryBuffer =>
+            hostStorage.addBuffer(
+              id,
+              hostBuffer,
+              tableMeta,
+              initialSpillPriority,
+              needsSync)
+          case _ =>
+            throw new IllegalArgumentException(
+              s"Cannot call addBuffer with buffer $buffer")
+        }
+        withResource(new NvtxRange("register", NvtxColor.DARK_GREEN)) { _ =>
+          registerNewBuffer(rapidsBuffer)
+          makeNewHandle(id, initialSpillPriority)
+        }
       }
-      registerNewBuffer(rapidsBuffer)
-      makeNewHandle(id, initialSpillPriority)
     }
   }
 
