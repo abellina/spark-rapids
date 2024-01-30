@@ -65,7 +65,11 @@ class RapidsBufferCatalog(
   extends AutoCloseable with Logging {
 
   /** Map of buffer IDs to buffers sorted by storage tier */
-  private[this] val bufferMap = new ConcurrentHashMap[RapidsBufferId, Seq[RapidsBuffer]]
+  private[this] val bufferMap = new java.util.HashMap[RapidsBufferId, Seq[RapidsBuffer]]
+
+  def getBuffer(bufferId: RapidsBufferId): Seq[RapidsBuffer] = bufferMap.synchronized {
+    bufferMap.get(bufferId)
+  }
 
   /** Map of buffer IDs to buffer handles in insertion order */
   private[this] val bufferIdToHandles =
@@ -337,32 +341,17 @@ class RapidsBufferCatalog(
       bufferMetas: Array[(MemoryBuffer, TableMeta)],
       initialSpillPriority: Long,
       needsSync: Boolean): Array[RapidsBufferHandle] = synchronized {
-    bufferMetas.zip(ids).map { case ((buffer, tableMeta), id) =>
-      withResource(new NvtxRange("addBuffer", NvtxColor.PURPLE)) { _ =>
-        val rapidsBuffer = buffer match {
-          case gpuBuffer: DeviceMemoryBuffer =>
-            deviceStorage.addBuffer(
-              id,
-              gpuBuffer,
-              tableMeta,
-              initialSpillPriority,
-              needsSync)
-          case hostBuffer: HostMemoryBuffer =>
-            hostStorage.addBuffer(
-              id,
-              hostBuffer,
-              tableMeta,
-              initialSpillPriority,
-              needsSync)
-          case _ =>
-            throw new IllegalArgumentException(
-              s"Cannot call addBuffer with buffer $buffer")
-        }
-        withResource(new NvtxRange("register", NvtxColor.DARK_GREEN)) { _ =>
-          registerNewBuffer(rapidsBuffer)
-          makeNewHandle(id, initialSpillPriority)
-        }
+    val rapidsBuffers =
+      withResource(new NvtxRange("addBuffers", NvtxColor.PURPLE)) { _ =>
+        deviceStorage.addBuffers(
+          ids,
+          bufferMetas,
+          initialSpillPriority,
+          needsSync)
       }
+    withResource(new NvtxRange("register", NvtxColor.DARK_GREEN)) { _ =>
+      registerNewBuffers(rapidsBuffers)
+      ids.map(id => makeNewHandle(id, initialSpillPriority))
     }
   }
 
@@ -495,7 +484,7 @@ class RapidsBufferCatalog(
   def acquireBuffer(handle: RapidsBufferHandle): RapidsBuffer = {
     val id = handle.id
     def lookupAndReturn: Option[RapidsBuffer] = {
-      val buffers = bufferMap.get(id)
+      val buffers = getBuffer(id)
       if (buffers == null || buffers.isEmpty) {
         throw new NoSuchElementException(
           s"Cannot locate buffers associated with ID: $id")
@@ -553,7 +542,7 @@ class RapidsBufferCatalog(
    * @return buffer that has been acquired, None if not found
    */
   def acquireBuffer(id: RapidsBufferId, tier: StorageTier): Option[RapidsBuffer] = {
-    val buffers = bufferMap.get(id)
+    val buffers = getBuffer(id)
     if (buffers != null) {
       buffers.find(_.storageTier == tier).foreach(buffer =>
         if (buffer.addReference()) {
@@ -574,13 +563,13 @@ class RapidsBufferCatalog(
    * @return true if the buffer is stored in multiple tiers
    */
   def isBufferSpilled(id: RapidsBufferId, tier: StorageTier): Boolean = {
-    val buffers = bufferMap.get(id)
+    val buffers = getBuffer(id)
     buffers != null && buffers.exists(_.storageTier > tier)
   }
 
   /** Get the table metadata corresponding to a buffer ID. */
   def getBufferMeta(id: RapidsBufferId): TableMeta = {
-    val buffers = bufferMap.get(id)
+    val buffers = getBuffer(id)
     if (buffers == null || buffers.isEmpty) {
       throw new NoSuchElementException(s"Cannot locate buffer associated with ID: $id")
     }
@@ -593,23 +582,39 @@ class RapidsBufferCatalog(
    * @note public for testing
    */
   def registerNewBuffer(buffer: RapidsBuffer): Unit = {
-    val updater = new BiFunction[RapidsBufferId, Seq[RapidsBuffer], Seq[RapidsBuffer]] {
-      override def apply(key: RapidsBufferId, value: Seq[RapidsBuffer]): Seq[RapidsBuffer] = {
-        if (value == null) {
-          Seq(buffer)
+    bufferMap.synchronized {
+      val bs = bufferMap.get(buffer.id)
+      if (bs == null) {
+        bufferMap.put(buffer.id, Seq(buffer))
+      } else {
+        val (first, second) = bs.partition(_.storageTier < buffer.storageTier)
+        if (second.nonEmpty && second.head.storageTier == buffer.storageTier) {
+          throw new DuplicateBufferException(
+            s"Buffer ID ${buffer.id} at tier ${buffer.storageTier} already registered " +
+                s"${second.head}")
+        }
+        bufferMap.put(buffer.id, first ++ Seq(buffer) ++ second)
+      }
+    }
+  }
+
+  def registerNewBuffers(buffers: Array[RapidsBuffer]): Unit = {
+    bufferMap.synchronized {
+      buffers.foreach { buffer =>
+        val bs = bufferMap.get(buffer.id)
+        if (bs == null) {
+          bufferMap.put(buffer.id, Seq(buffer))
         } else {
-          val(first, second) = value.partition(_.storageTier < buffer.storageTier)
+          val (first, second) = bs.partition(_.storageTier < buffer.storageTier)
           if (second.nonEmpty && second.head.storageTier == buffer.storageTier) {
             throw new DuplicateBufferException(
               s"Buffer ID ${buffer.id} at tier ${buffer.storageTier} already registered " +
                   s"${second.head}")
           }
-          first ++ Seq(buffer) ++ second
+          bufferMap.put(buffer.id, first ++ Seq(buffer) ++ second)
         }
       }
     }
-
-    bufferMap.compute(buffer.id, updater)
   }
 
   /**
@@ -722,17 +727,19 @@ class RapidsBufferCatalog(
    * @note public for testing
    */
   def removeBufferTier(id: RapidsBufferId, tier: StorageTier): Unit = synchronized {
-    val updater = new BiFunction[RapidsBufferId, Seq[RapidsBuffer], Seq[RapidsBuffer]] {
-      override def apply(key: RapidsBufferId, value: Seq[RapidsBuffer]): Seq[RapidsBuffer] = {
-        val updated = value.filter(_.storageTier != tier)
-        if (updated.isEmpty) {
-          null
-        } else {
-          updated
+    bufferMap.synchronized {
+      val updater = new BiFunction[RapidsBufferId, Seq[RapidsBuffer], Seq[RapidsBuffer]] {
+        override def apply(key: RapidsBufferId, value: Seq[RapidsBuffer]): Seq[RapidsBuffer] = {
+          val updated = value.filter(_.storageTier != tier)
+          if (updated.isEmpty) {
+            null
+          } else {
+            updated
+          }
         }
       }
+      bufferMap.computeIfPresent(id, updater)
     }
-    bufferMap.computeIfPresent(id, updater)
   }
 
   /**
@@ -747,7 +754,9 @@ class RapidsBufferCatalog(
     // if this is the last handle, remove the buffer
     if (stopTrackingHandle(handle)) {
       logDebug(s"Removing buffer ${handle.id}")
-      bufferMap.remove(handle.id).safeFree()
+      bufferMap.synchronized {
+        bufferMap.remove(handle.id)
+      }.safeFree()
       true
     } else {
       false
@@ -755,7 +764,7 @@ class RapidsBufferCatalog(
   }
 
   /** Return the number of buffers currently in the catalog. */
-  def numBuffers: Int = bufferMap.size()
+  def numBuffers: Int = bufferMap.synchronized { bufferMap.size }
 
   override def close(): Unit = {
     bufferIdToHandles.values.forEach { handles =>

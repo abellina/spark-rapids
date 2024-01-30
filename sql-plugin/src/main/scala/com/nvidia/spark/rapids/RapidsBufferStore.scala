@@ -97,6 +97,28 @@ abstract class RapidsBufferStore(val tier: StorageTier)
       }
     }
 
+    def add(bs: Array[RapidsBufferBase]): Unit = synchronized {
+      bs.foreach { buffer =>
+        val old = buffers.put(buffer.id, buffer)
+        // it is unlikely that the buffer was in this collection, but removing
+        // anyway. We assume the buffer is safe in this tier, and is not spilling
+        spilling.remove(buffer.id)
+        if (old != null) {
+          throw new DuplicateBufferException(s"duplicate buffer registered: ${buffer.id}")
+        }
+        totalBytesStored += buffer.memoryUsedBytes
+
+        // device buffers "spillability" is handled via DeviceMemoryBuffer ref counting
+        // so spillableOnAdd should be false, all other buffer tiers are spillable at
+        // all times.
+        if (spillableOnAdd && buffer.memoryUsedBytes > 0) {
+          if (spillable.offer(buffer)) {
+            totalBytesSpillable += buffer.memoryUsedBytes
+          }
+        }
+      }
+    }
+
     def remove(id: RapidsBufferId): Unit = synchronized {
       // when removing a buffer we no longer need to know if it was spilling
       spilling.remove(id)
@@ -257,6 +279,11 @@ abstract class RapidsBufferStore(val tier: StorageTier)
     buffer.updateSpillability()
   }
 
+  protected def addBuffers(_buffers: Array[RapidsBufferBase]): Unit = {
+    buffers.add(_buffers)
+    _buffers.foreach(_.updateSpillability())
+  }
+
   /**
    * Adds a buffer to the spill framework, stream synchronizing with the producer
    * stream to ensure that the buffer is fully materialized, and can be safely copied
@@ -269,6 +296,13 @@ abstract class RapidsBufferStore(val tier: StorageTier)
       Cuda.DEFAULT_STREAM.sync()
     }
     addBuffer(buffer)
+  }
+
+  protected def addBuffersInternal(buffers: Array[RapidsBufferBase], needsSync: Boolean): Unit = {
+    if (needsSync) {
+      Cuda.DEFAULT_STREAM.sync()
+    }
+    addBuffers(buffers)
   }
 
   override def close(): Unit = {

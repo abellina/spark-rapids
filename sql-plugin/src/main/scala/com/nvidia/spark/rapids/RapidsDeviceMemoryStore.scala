@@ -17,7 +17,6 @@
 package com.nvidia.spark.rapids
 
 import java.nio.channels.WritableByteChannel
-import java.nio.ByteBuffer
 import java.util.concurrent.ConcurrentHashMap
 
 import scala.collection.mutable
@@ -116,16 +115,40 @@ class RapidsDeviceMemoryStore(
           buffer,
           initialSpillPriority)
       }
-      withResource(new NvtxRange("add buffer", NvtxColor.YELLOW)) { _ =>
-        freeOnExcept(rapidsBuffer) { _ =>
-          logDebug(s"Adding receive side table for: [id=$id, size=${buffer.getLength}, " +
-              s"uncompressed=${rapidsBuffer.meta.bufferMeta.uncompressedSize}, " +
-              s"meta_id=${tableMeta.bufferMeta.id}, " +
-              s"meta_size=${tableMeta.bufferMeta.size}]")
-          addBuffer(rapidsBuffer, needsSync)
-          rapidsBuffer
+    }
+    withResource(new NvtxRange("add buffer", NvtxColor.YELLOW)) { _ =>
+      freeOnExcept(rapidsBuffer) { _ =>
+        logDebug(s"Adding receive side table for: [id=$id, size=${buffer.getLength}, " +
+            s"uncompressed=${rapidsBuffer.meta.bufferMeta.uncompressedSize}, " +
+            s"meta_id=${tableMeta.bufferMeta.id}, " +
+            s"meta_size=${tableMeta.bufferMeta.size}]")
+        addBuffer(rapidsBuffer, needsSync)
+        rapidsBuffer
+      }
+    }
+  }
+
+  def addBuffers(
+      ids: Array[RapidsBufferId],
+      bufferMeta: Array[(MemoryBuffer, TableMeta)],
+      initialSpillPriority: Long,
+      needsSync: Boolean): Array[RapidsBuffer] = {
+    bufferMeta.foreach(_._1.incRefCount())
+    val rapidsBuffers = {
+      withResource(new NvtxRange("new rapids buffers", NvtxColor.ORANGE)) { _ =>
+        bufferMeta.zip(ids).map { case ((b, tm), id) =>
+          new RapidsDeviceMemoryBuffer(
+            id,
+            b.getLength,
+            tm,
+            b.asInstanceOf[DeviceMemoryBuffer],
+            initialSpillPriority).asInstanceOf[RapidsBufferBase]
         }
       }
+    }
+    withResource(new NvtxRange("add buffers", NvtxColor.YELLOW)) { _ =>
+      addBuffersInternal(rapidsBuffers, needsSync)
+      rapidsBuffers.map(_.asInstanceOf[RapidsBuffer])
     }
   }
 
