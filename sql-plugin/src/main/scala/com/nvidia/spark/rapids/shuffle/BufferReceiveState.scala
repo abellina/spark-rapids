@@ -282,6 +282,9 @@ class BufferReceiveState(
               c.pendingTransferRequest.tableMeta,
               c.pendingTransferRequest.handler)
           }
+          if (workingOnOffset == 0) {
+            workingOn = null
+          }
         }
 
         // Sync once, instead of for each copy.
