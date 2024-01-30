@@ -21,7 +21,7 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.function.IntUnaryOperator
 
-import ai.rapids.cudf.DeviceMemoryBuffer
+import ai.rapids.cudf.{DeviceMemoryBuffer, MemoryBuffer}
 import com.nvidia.spark.rapids.Arm.withResource
 import com.nvidia.spark.rapids.format.TableMeta
 
@@ -91,13 +91,13 @@ class ShuffleReceivedBufferCatalog(
   }
 
   def addBuffers(
-      bufferMetas: Array[(DeviceMemoryBuffer, TableMeta)],
+      bufferMetas: Array[(MemoryBuffer, TableMeta)],
       initialSpillPriority: Long,
       needsSync: Boolean): Array[RapidsBufferHandle] = {
     val bufferIds = bufferMetas.map { bm =>
       val bufferId = nextShuffleReceivedBufferId()
       bm._2.bufferMeta.mutateId(bufferId.tableId)
-      bufferId
+      bufferId.asInstanceOf[RapidsBufferId]
     }
     withResource(bufferMetas.map(_._1)) { _ =>
       catalog.addBuffers(

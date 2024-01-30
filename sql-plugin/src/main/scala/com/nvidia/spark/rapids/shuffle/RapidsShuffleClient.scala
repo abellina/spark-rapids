@@ -20,7 +20,7 @@ import java.util.concurrent.{ConcurrentHashMap, Executor}
 
 import scala.collection.mutable.ArrayBuffer
 
-import ai.rapids.cudf.{DeviceMemoryBuffer, NvtxColor, NvtxRange}
+import ai.rapids.cudf.{DeviceMemoryBuffer, MemoryBuffer, NvtxColor, NvtxRange}
 import com.nvidia.spark.rapids._
 import com.nvidia.spark.rapids.Arm.withResource
 import com.nvidia.spark.rapids.format.{MetadataResponse, TableMeta, TransferState}
@@ -438,8 +438,7 @@ class RapidsShuffleClient(
    */
   private[shuffle] def track(
       buffer: DeviceMemoryBuffer, meta: TableMeta): RapidsBufferHandle = {
-    withResource(new NvtxRange("track buffer", NvtxColor.ORANGE)) { _ =
-    >
+    withResource(new NvtxRange("track buffer", NvtxColor.ORANGE)) { _ =>
       if (buffer != null) {
         // add the buffer to the catalog so it is available for spill
         catalog.addBuffer(
@@ -461,7 +460,7 @@ class RapidsShuffleClient(
   private[shuffle] def track(
       consumed: Array[ConsumedBatchFromBounceBuffer]): Array[RapidsBufferHandle] = {
     withResource(new NvtxRange("track all buffers", NvtxColor.ORANGE)) { _ =>
-      val bufferMetas = consumed.map(c => (c.contigBuffer, c.meta))
+      val bufferMetas = consumed.map(c => (c.contigBuffer.asInstanceOf[MemoryBuffer], c.meta))
       val (regular, degenerate) = bufferMetas.partition(_._1 != null)
       degenerate.foreach(d => catalog.addDegenerateRapidsBuffer(d._2))
       catalog.addBuffers(regular, SpillPriorities.INPUT_FROM_SHUFFLE_PRIORITY, needsSync=false)
