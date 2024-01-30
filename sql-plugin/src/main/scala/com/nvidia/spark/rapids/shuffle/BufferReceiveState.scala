@@ -164,7 +164,7 @@ class BufferReceiveState(
   }
 
   case class MultiCopyAction(
-      srcBase: DeviceMemoryBuffer,
+      srcBase: BaseDeviceMemoryBuffer,
       var dstBase: DeviceMemoryBuffer,
       srcOffset: Long,
       dstOffset: Long,
@@ -195,7 +195,7 @@ class BufferReceiveState(
 
         // Receive buffers are always in the device, and so it is safe to assume
         // that they are `BaseDeviceMemoryBuffer`s here.
-        val deviceBounceBuffer = bounceBuffer.buffer.asInstanceOf[DeviceMemoryBuffer]
+        val deviceBounceBuffer = bounceBuffer.buffer.asInstanceOf[BaseDeviceMemoryBuffer]
         currentBlocks.zipWithIndex.foreach { case (b, ix) =>
           val pendingTransferRequest = b.block.request
           val fullSize = pendingTransferRequest.getLength
