@@ -90,6 +90,24 @@ class ShuffleReceivedBufferCatalog(
     }
   }
 
+  def addBuffers(
+      bufferMetas: Array[(DeviceMemoryBuffer, TableMeta)],
+      initialSpillPriority: Long,
+      needsSync: Boolean): Array[RapidsBufferHandle] = {
+    val bufferIds = bufferMetas.map { bm =>
+      val bufferId = nextShuffleReceivedBufferId()
+      bm._2.bufferMeta.mutateId(bufferId.tableId)
+      bufferId
+    }
+    withResource(bufferMetas.map(_._1)) { _ =>
+      catalog.addBuffers(
+        bufferIds,
+        bufferMetas,
+        initialSpillPriority,
+        needsSync)
+    }
+  }
+
   /**
    * Adds a degenerate buffer (zero rows or columns)
    *

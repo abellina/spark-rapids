@@ -180,14 +180,12 @@ class BufferReceiveState(
    * @return - a sequence of batches that were successfully consumed, or an empty
    *         sequence if still working on a batch.
    */
-  def consumeWindow(): Seq[ConsumedBatchFromBounceBuffer] = synchronized {
+  def consumeWindow(): Array[ConsumedBatchFromBounceBuffer] = synchronized {
     // once we reach 0 here the transport will be allowed to reuse the bounce buffer
     // e.g. after the synchronized block, or after we sync with GPU in this function.
     toConsume -= 1
     withResource(new NvtxRange("consumeWindow", NvtxColor.PURPLE)) { _ =>
       advance()
-      closeOnExcept(new Array[DeviceMemoryBuffer](currentBlocks.size)) { toClose =>
-
         val taskIds = currentBlocks.flatMap(_.block.request.handler.getTaskIds)
         RmmSpark.shuffleThreadWorkingOnTasks(taskIds)
 
@@ -303,5 +301,4 @@ class BufferReceiveState(
         results
       }
     }
-  }
 }

@@ -332,6 +332,36 @@ class RapidsBufferCatalog(
     makeNewHandle(id, initialSpillPriority)
   }
 
+  def addBuffers(
+      ids: Array[RapidsBufferId],
+      bufferMetas: Array[(MemoryBuffer, TableMeta)],
+      initialSpillPriority: Long,
+      needsSync: Boolean): Array[RapidsBufferHandle] = synchronized {
+    bufferMetas.zip(ids).map { case ((buffer, tableMeta), id) =>
+      val rapidsBuffer = buffer match {
+        case gpuBuffer: DeviceMemoryBuffer =>
+          deviceStorage.addBuffer(
+            id,
+            gpuBuffer,
+            tableMeta,
+            initialSpillPriority,
+            needsSync)
+        case hostBuffer: HostMemoryBuffer =>
+          hostStorage.addBuffer(
+            id,
+            hostBuffer,
+            tableMeta,
+            initialSpillPriority,
+            needsSync)
+        case _ =>
+          throw new IllegalArgumentException(
+            s"Cannot call addBuffer with buffer $buffer")
+      }
+      registerNewBuffer(rapidsBuffer)
+      makeNewHandle(id, initialSpillPriority)
+    }
+  }
+
   /**
    * Adds a batch to the device storage. This does NOT take ownership of the
    * batch, so it is the responsibility of the caller to close it.
