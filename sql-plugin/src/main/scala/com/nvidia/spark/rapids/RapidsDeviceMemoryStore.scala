@@ -22,7 +22,7 @@ import java.util.concurrent.ConcurrentHashMap
 
 import scala.collection.mutable
 
-import ai.rapids.cudf.{ColumnVector, Cuda, DeviceMemoryBuffer, HostMemoryBuffer, MemoryBuffer, Table}
+import ai.rapids.cudf.{ColumnVector, Cuda, DeviceMemoryBuffer, HostMemoryBuffer, MemoryBuffer, NvtxColor, NvtxRange, Table}
 import com.nvidia.spark.rapids.Arm._
 import com.nvidia.spark.rapids.RapidsPluginImplicits.AutoCloseableSeq
 import com.nvidia.spark.rapids.StorageTier.StorageTier
@@ -107,19 +107,25 @@ class RapidsDeviceMemoryStore(
       initialSpillPriority: Long,
       needsSync: Boolean): RapidsBuffer = {
     buffer.incRefCount()
-    val rapidsBuffer = new RapidsDeviceMemoryBuffer(
-      id,
-      buffer.getLength,
-      tableMeta,
-      buffer,
-      initialSpillPriority)
-    freeOnExcept(rapidsBuffer) { _ =>
-      logDebug(s"Adding receive side table for: [id=$id, size=${buffer.getLength}, " +
-        s"uncompressed=${rapidsBuffer.meta.bufferMeta.uncompressedSize}, " +
-        s"meta_id=${tableMeta.bufferMeta.id}, " +
-        s"meta_size=${tableMeta.bufferMeta.size}]")
-      addBuffer(rapidsBuffer, needsSync)
-      rapidsBuffer
+    val rapidsBuffer = {
+      withResource(new NvtxRange("new rapids buffer", NvtxColor.ORANGE)) { _ =>
+        new RapidsDeviceMemoryBuffer(
+          id,
+          buffer.getLength,
+          tableMeta,
+          buffer,
+          initialSpillPriority)
+      }
+      withResource(new NvtxRange("add buffer", NvtxColor.YELLOW)) { _ =>
+        freeOnExcept(rapidsBuffer) { _ =>
+          logDebug(s"Adding receive side table for: [id=$id, size=${buffer.getLength}, " +
+              s"uncompressed=${rapidsBuffer.meta.bufferMeta.uncompressedSize}, " +
+              s"meta_id=${tableMeta.bufferMeta.id}, " +
+              s"meta_size=${tableMeta.bufferMeta.size}]")
+          addBuffer(rapidsBuffer, needsSync)
+          rapidsBuffer
+        }
+      }
     }
   }
 

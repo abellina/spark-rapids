@@ -21,9 +21,10 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.function.IntUnaryOperator
 
-import ai.rapids.cudf.{DeviceMemoryBuffer, MemoryBuffer}
-import com.nvidia.spark.rapids.Arm.withResource
+import ai.rapids.cudf.{DeviceMemoryBuffer, MemoryBuffer, NvtxColor, NvtxRange}
+import com.nvidia.spark.rapids.Arm.{closeOnExcept, withResource}
 import com.nvidia.spark.rapids.format.TableMeta
+import com.nvidia.spark.rapids.RapidsPluginImplicits.AutoCloseableArray
 
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.rapids.RapidsDiskBlockManager
@@ -99,13 +100,18 @@ class ShuffleReceivedBufferCatalog(
       bm._2.bufferMeta.mutateId(bufferId.tableId)
       bufferId.asInstanceOf[RapidsBufferId]
     }
-    withResource(bufferMetas.map(_._1)) { _ =>
+    val buffs = bufferMetas.map(_._1)
+    val handles = closeOnExcept(buffs) { _ =>
       catalog.addBuffers(
         bufferIds,
         bufferMetas,
         initialSpillPriority,
         needsSync)
     }
+    withResource(new NvtxRange("closing buffs", NvtxColor.CYAN)) { _ =>
+      buffs.safeClose()
+    }
+    handles
   }
 
   /**
