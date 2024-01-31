@@ -29,9 +29,10 @@ import scala.collection.mutable.ArrayBuffer
 
 import java.nio.ByteBuffer
 
-import ai.rapids.cudf.{DeviceMemoryBuffer, NvtxColor, NvtxRange}
+import ai.rapids.cudf.{DeviceMemoryBuffer, NvtxColor, NvtxRange, Table}
 import com.nvidia.spark.rapids._
 import com.nvidia.spark.rapids.Arm.withResource
+import com.nvidia.spark.rapids.format.TableMeta
 import com.nvidia.spark.rapids.shuffle.{RapidsShuffleIterator, RapidsShuffleTransport}
 
 import org.apache.spark.{InterruptibleIterator, TaskContext}
