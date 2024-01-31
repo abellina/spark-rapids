@@ -69,7 +69,7 @@ class RapidsShuffleIterator(
     taskAttemptId: Long,
     catalog: ShuffleReceivedBufferCatalog = GpuShuffleEnv.getReceivedCatalog,
     timeoutSeconds: Long = GpuShuffleEnv.shuffleFetchTimeoutSeconds)
-  extends Iterator[RapidsBufferHandle]
+  extends Iterator[(DeviceMemoryBuffer, TableMeta)]
     with Logging {
 
   /**
@@ -82,7 +82,7 @@ class RapidsShuffleIterator(
    * A result for a successful buffer received
    * @param handle - the shuffle received buffer handle as tracked in the catalog
    */
-  case class BufferReceived(handle: RapidsBufferHandle) extends ShuffleClientResult
+  case class BufferReceived(buffer: DeviceMemoryBuffer, meta: TableMeta) extends ShuffleClientResult
 
   /**
    * A result for a failed attempt at receiving block metadata, or corresponding batches.
@@ -236,7 +236,7 @@ class RapidsShuffleIterator(
           def clientDone: Boolean = clientExpectedBatches > 0 &&
             clientExpectedBatches == clientResolvedBatches
 
-          def batchReceived(handle: RapidsBufferHandle): Boolean = {
+          def batchReceived(buffer: DeviceMemoryBuffer, meta: TableMeta): Boolean = {
             resolvedBatches.synchronized {
               if (taskComplete) {
                 false
@@ -249,7 +249,7 @@ class RapidsShuffleIterator(
                   }
                   totalBatchesResolved = totalBatchesResolved + 1
                   clientResolvedBatches = clientResolvedBatches + 1
-                  resolvedBatches.offer(BufferReceived(handle))
+                  resolvedBatches.offer(BufferReceived(buffer, meta))
 
                   if (clientDone) {
                     logDebug(s"Task: $taskAttemptIdStr Client $blockManagerId is " +
@@ -300,11 +300,12 @@ class RapidsShuffleIterator(
     if (hasNext) {
       logWarning(s"Iterator for task ${taskAttemptIdStr} closing, " +
           s"but it is not done. Closing ${resolvedBatches.size()} resolved batches!!")
-      resolvedBatches.forEach {
-        case BufferReceived(handle) =>
-          GpuShuffleEnv.getReceivedCatalog.removeBuffer(handle)
-        case _ =>
-      }
+      // TODO:
+      //resolvedBatches.forEach {
+      //  case BufferReceived(handle) =>
+      //    GpuShuffleEnv.getReceivedCatalog.removeBuffer(handle)
+      //  case _ =>
+      //}
       // tell the client to cancel pending requests
       clientAndHandlers.foreach {
         case (client, handler) => client.cancelPending(handler)
@@ -327,8 +328,8 @@ class RapidsShuffleIterator(
     Option(resolvedBatches.poll(timeoutSeconds, TimeUnit.SECONDS))
   }
 
-  override def next(): RapidsBufferHandle = {
-    var res: RapidsBufferHandle = null
+  override def next(): (DeviceMemoryBuffer, TableMeta) = {
+    var res: (DeviceMemoryBuffer, TableMeta) = null
     var sb: RapidsBuffer = null
     val range = new NvtxRange(s"RapidshuffleIterator.next", NvtxColor.RED)
 
@@ -371,9 +372,9 @@ class RapidsShuffleIterator(
     val blockedTime = System.currentTimeMillis() - blockedStart
 
     result match {
-      case Some(BufferReceived(handle)) =>
+      case Some(BufferReceived(buffer, meta)) =>
        withResource(new NvtxRange("RapidsShuffleIterator.gotBatch", NvtxColor.PURPLE)) { _ =>
-         res = handle
+         res = (buffer, meta)
        }
        range.close()
        //try {

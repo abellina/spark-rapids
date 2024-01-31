@@ -63,7 +63,7 @@ class RapidsBufferCoalesceIterator(
     catalog: ShuffleBufferCatalog,
     receiveCatalog: ShuffleReceivedBufferCatalog,
     rapidsBufferCacheIt: Iterator[RapidsBufferHandle],
-    rapidsBufferUcxIt: Iterator[RapidsBufferHandle],
+    rapidsBufferUcxIt: Iterator[(DeviceMemoryBuffer, TableMeta)],
     sparkTypes: Array[DataType],
     metrics: ShuffleReadMetricsReporter) extends Iterator[ColumnarBatch] with Logging {
   val degenerate = new ArrayBuffer[ColumnarBatch]()
@@ -85,24 +85,29 @@ class RapidsBufferCoalesceIterator(
           numBytes += buffer.memoryUsedBytes
           val (meta, dmb) = buffer.getMetaAndBuffer
           if (meta == null) {
-            logInfo(s"hope this is a degenerate buffer ${buffer}.  ${buffer.id}")
             degenerate.append(buffer.getColumnarBatch(sparkTypes))
           } else {
-            logInfo(s"got a meta!! ${buffer} ${buffer.id}")
             toConcat.append((meta, dmb))
           }
           acquired.append(buffer)
         }
         while (rapidsBufferUcxIt.hasNext && numBytes < 2L * 1024 * 1024 * 1024) {
-          val handle = rapidsBufferUcxIt.next()
-          val buffer = receiveCatalog.acquireBuffer(handle)
-          numBytes += buffer.memoryUsedBytes
-          val (meta, dmb) = buffer.getMetaAndBuffer
+          val (dmb, meta) = rapidsBufferUcxIt.next()
+          numBytes += dmb.getLength
           if (meta == null) {
-            logInfo(s"hope this is a degenerate buffer ${buffer}.  ${buffer.id}")
-            degenerate.append(buffer.getColumnarBatch(sparkTypes))
+            val rowCount = meta.rowCount
+            val packedMeta = meta.packedMetaAsByteBuffer()
+            degenerate.append(if (packedMeta != null) {
+              withResource(DeviceMemoryBuffer.allocate(0)) { deviceBuffer =>
+                withResource(Table.fromPackedTable(meta.packedMetaAsByteBuffer(), deviceBuffer)) { table =>
+                  GpuColumnVectorFromBuffer.from(table, deviceBuffer, meta, sparkTypes)
+                }
+              }
+            } else {
+              // no packed metadata, must be a table with zero columns
+              new ColumnarBatch(Array.empty, rowCount.toInt)
+            })
           } else {
-            logInfo(s"got a meta!! ${buffer} ${buffer.id}")
             toConcat.append((meta, dmb))
           }
           toRemove.append(handle)

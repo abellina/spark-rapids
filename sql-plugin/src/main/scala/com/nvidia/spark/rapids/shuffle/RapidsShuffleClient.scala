@@ -47,7 +47,7 @@ trait RapidsShuffleFetchHandler {
    * @return a boolean that lets the caller know the batch was accepted (true), or
    *         rejected (false), in which case the caller should dispose of the batch.
    */
-  def batchReceived(handle: RapidsBufferHandle): Boolean
+  def batchReceived(buffer: DeviceMemoryBuffer, tableMeta: TableMeta): Boolean
 
   /**
    * Called when the transport layer is not able to handle a fetch error for metadata
@@ -345,7 +345,7 @@ class RapidsShuffleClient(
       } else {
         // Degenerate buffer (no device data) so no more data to request.
         // We need to trigger call in iterator, otherwise this batch is never handled.
-        handler.batchReceived(track(null, tableMeta))
+        handler.batchReceived(null, tableMeta)
       }
     }
 
@@ -384,25 +384,15 @@ class RapidsShuffleClient(
 
               // the number of batches successfully received that the requesting iterator
               // rejected (limit case)
-              var numBatchesRejected = 0
-
               // hand buffer off to the catalog
               var consumedLength = 0L
-              val handles = track(buffMetas)
-              buffMetas.zip(handles).foreach {
-                case (consumed: ConsumedBatchFromBounceBuffer, handle: RapidsBufferHandle) =>
-                if (!consumed.handler.batchReceived(handle)) {
-                  catalog.removeBuffer(handle)
-                  numBatchesRejected += 1
-                }
+              // TODO: buffMetas are already native spillable, and are
+              // really just handles
+              buffMetas.foreach { consumed =>
+                consumed.handler.batchReceived(consumed.contigBuffer, consumed.meta)
                 consumedLength += consumed.contigBuffer.getLength
               }
               transport.doneBytesInFlight(consumedLength)
-
-              if (numBatchesRejected > 0) {
-                logDebug(s"Removed ${numBatchesRejected} batches that were received after " +
-                  s"tasks completed.")
-              }
 
               if (!bufferReceiveState.hasMoreBlocks) {
                 logDebug(s"BufferReceiveState: " +
