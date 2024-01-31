@@ -29,7 +29,7 @@ ARG CUDA_VER=11.0.3
 ARG UBUNTU_VER=20.04
 ARG UCX_VER=1.16.0-rc1
 ARG UCX_CUDA_VER=11
-FROM nvidia/cuda:${CUDA_VER}-runtime-ubuntu${UBUNTU_VER}
+FROM nvidia/cuda:${CUDA_VER}-devel-ubuntu${UBUNTU_VER}
 ARG CUDA_VER
 ARG UBUNTU_VER
 ARG UCX_VER
@@ -41,9 +41,8 @@ RUN UB_VER=$(echo ${UBUNTU_VER} | tr -d '.') && \
     apt-key adv --fetch-keys https://developer.download.nvidia.com/compute/cuda/repos/ubuntu${UB_VER}/x86_64/3bf863cc.pub || true
 
 # Install jdk-8, jdk-11, maven, docker image
-RUN apt-get update -y && \
-    apt-get install -y software-properties-common rsync
-
+RUN DEBIAN_FRONTEND=noninteractive TZ=Etc/UTC apt-get update -y && \
+    DEBIAN_FRONTEND=noninteractive TZ=Etc/UTC apt-get install -y software-properties-common rsync
 RUN add-apt-repository ppa:deadsnakes/ppa && \
     apt-get update -y && \
     DEBIAN_FRONTEND="noninteractive" apt-get install -y maven \
@@ -62,13 +61,14 @@ RUN ln -sfn /usr/bin/python3.8 /usr/bin/python3
 RUN python -m pip install pytest sre_yield requests pandas pyarrow findspark pytest-xdist pre-commit pytest-order fastparquet==0.8.3
 
 # libnuma1 and libgomp1 are required by ucx packaging
-RUN apt install -y inetutils-ping expect wget libnuma1 libgomp1
+RUN apt update && apt install -y inetutils-ping expect wget libnuma1 libgomp1 autoconf libtool-bin g++
 
 RUN mkdir -p /tmp/ucx && \
     cd /tmp/ucx && \
-    wget https://github.com/openucx/ucx/releases/download/v${UCX_VER}/ucx-${UCX_VER}-ubuntu${UBUNTU_VER}-mofed5-cuda${UCX_CUDA_VER}-${UCX_ARCH}.tar.bz2 && \
-    tar -xvf *.bz2 && \
-    dpkg -i *.deb && \
+    git clone --depth 1 --branch v1.16.0-rc1 https://github.com/openucx/ucx && \
+    cd ucx && ./autogen.sh && \
+    ./contrib/configure-devel --with-cuda=/usr/local/cuda --without-java --without-valgrind && \
+    make install && \
     rm -rf /tmp/ucx
 
 # export JAVA_HOME for mvn option 'source-javadoc'
