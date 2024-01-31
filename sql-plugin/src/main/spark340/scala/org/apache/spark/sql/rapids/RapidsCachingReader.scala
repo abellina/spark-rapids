@@ -109,10 +109,8 @@ class RapidsBufferCoalesceIterator(
               new ColumnarBatch(Array.empty, rowCount.toInt)
             })
           } else {
-            toConcat.append((meta, dmb))
+            toConcat.append((meta.packedMetaAsByteBuffer(), dmb))
           }
-          toRemove.append(handle)
-          acquired.append(buffer)
         }
 
         val concatenated =
