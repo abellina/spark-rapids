@@ -29,12 +29,13 @@ import java.util.concurrent.{LinkedBlockingQueue, TimeUnit}
 import scala.collection
 import scala.collection.mutable
 
-import ai.rapids.cudf.{NvtxColor, NvtxRange}
+import ai.rapids.cudf.{DeviceMemoryBuffer, NvtxRange}
 import com.nvidia.spark.rapids.{GpuSemaphore, RapidsBuffer, RapidsBufferHandle, RapidsConf, ShuffleReceivedBufferCatalog}
 import com.nvidia.spark.rapids.Arm.withResource
 import com.nvidia.spark.rapids.ScalableTaskCompletion.onTaskCompletion
 import com.nvidia.spark.rapids.TaskRegistryTracker
 import com.nvidia.spark.rapids.jni.RmmSpark
+import com.nvidia.spark.rapids.format.TableMeta
 
 import org.apache.spark.TaskContext
 import org.apache.spark.internal.Logging
