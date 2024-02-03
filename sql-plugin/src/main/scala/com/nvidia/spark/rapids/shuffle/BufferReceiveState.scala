@@ -28,7 +28,8 @@ import com.nvidia.spark.rapids.jni.RmmSpark
 import org.apache.spark.internal.Logging
 
 case class ConsumedBatchFromBounceBuffer(
-    contigBuffer: DeviceMemoryBuffer,
+    contigBufferAddr: Long,
+    contigBufferSize: Long,
     meta: TableMeta,
     handler: RapidsShuffleFetchHandler)
 
@@ -60,18 +61,32 @@ class BufferReceiveState(
     stream: Cuda.Stream = Cuda.DEFAULT_STREAM)
     extends AutoCloseable with Logging {
 
+  val transportBuffer = new CudfTransportBuffer(bounceBuffer.buffer)
   // we use this to keep a list (should be depth 1) of "requests for receives"
   //  => the transport is ready to receive again, but we are not done consuming the
   //     buffers from the previous receive, so we must delay the transport.
   var toFinalize = new util.ArrayDeque[TransportBuffer => Unit]()
+
+  var blockSizes = new Array[Long](requests.size)
+
+  var blockToData = new Array[(TableMeta, RapidsShuffleFetchHandler)](requests.size)
+
+  val blocks = requests.zipWithIndex.map { case (r, i) =>
+    blockSizes(i) = r.tableMeta.bufferMeta.size
+    blockToData(i) = (r.tableMeta, r.handler)
+  }
+
+  def getMetaAndHandler(blockId: Int): (TableMeta, RapidsShuffleFetchHandler) = {
+      blockToData(blockId)
+  }
 
   val dmb = bounceBuffer.buffer.asInstanceOf[BaseDeviceMemoryBuffer]
   val brs =
     Cuda.createBufferReceiveState(
       dmb.getAddress,
       dmb.getLength,
-      Seq(10L, 512L, 512L).toArray,
-      Seq(1,2,3).toArray,
+      blockSizes,
+      blockSizes.indices.toArray,
       stream.getStream())
 
   def getRequests: Seq[PendingTransferRequest] = requests
@@ -108,13 +123,13 @@ class BufferReceiveState(
     // once we reach 0 here the transport will be allowed to reuse the bounce buffer
     // e.g. after the synchronized block, or after we sync with GPU in this function.
     withResource(new NvtxRange("consumeWindow", NvtxColor.PURPLE)) { _ =>
-      val taskIds = currentBlocks.flatMap(_.block.request.handler.getTaskIds)
+      val taskIds = requests.flatMap(_.handler.getTaskIds)
       RmmSpark.shuffleThreadWorkingOnTasks(taskIds)
       val results = Cuda.bufferReceiveStateConsume(brs)
       val resultsWithMeta = results.map { r =>
         val (meta, handler)  = getMetaAndHandler(r.blockId)
         ConsumedBatchFromBounceBuffer(
-          r.packedAddress,
+          r.packedBuffer,
           r.size,
           meta,
           handler)

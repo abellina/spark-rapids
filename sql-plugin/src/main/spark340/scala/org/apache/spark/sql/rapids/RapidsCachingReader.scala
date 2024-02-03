@@ -29,7 +29,7 @@ import scala.collection.mutable.ArrayBuffer
 
 import java.nio.ByteBuffer
 
-import ai.rapids.cudf.{DeviceMemoryBuffer, NvtxColor, NvtxRange, Table}
+import ai.rapids.cudf.{Cuda, DeviceMemoryBuffer, NvtxColor, NvtxRange, Rmm, Table}
 import com.nvidia.spark.rapids._
 import com.nvidia.spark.rapids.Arm.withResource
 import com.nvidia.spark.rapids.format.TableMeta
@@ -64,7 +64,7 @@ class RapidsBufferCoalesceIterator(
     catalog: ShuffleBufferCatalog,
     receiveCatalog: ShuffleReceivedBufferCatalog,
     rapidsBufferCacheIt: Iterator[RapidsBufferHandle],
-    rapidsBufferUcxIt: Iterator[(DeviceMemoryBuffer, TableMeta)],
+    rapidsBufferUcxIt: Iterator[(Long, Long, TableMeta)],
     sparkTypes: Array[DataType],
     metrics: ShuffleReadMetricsReporter) extends Iterator[ColumnarBatch] with Logging {
   val degenerate = new ArrayBuffer[ColumnarBatch]()
@@ -75,7 +75,9 @@ class RapidsBufferCoalesceIterator(
     if (degenerate.nonEmpty) {
       degenerate.remove(0)
     } else {
-      val toConcat = new ArrayBuffer[(ByteBuffer, DeviceMemoryBuffer)]()
+      val toConcat = new ArrayBuffer[(ByteBuffer, Long)]()
+      val toClose = new ArrayBuffer[DeviceMemoryBuffer]()
+      val toCloseRaw = new ArrayBuffer[(Long, Long)]()
       val acquired = new ArrayBuffer[RapidsBuffer]()
       val toRemove = new ArrayBuffer[RapidsBufferHandle]()
       var numBytes = 0L
@@ -88,13 +90,14 @@ class RapidsBufferCoalesceIterator(
           if (meta == null) {
             degenerate.append(buffer.getColumnarBatch(sparkTypes))
           } else {
-            toConcat.append((meta, dmb))
+            toConcat.append((meta, dmb.getAddress))
+            toClose.append(dmb)
           }
           acquired.append(buffer)
         }
         while (rapidsBufferUcxIt.hasNext && numBytes < 2L * 1024 * 1024 * 1024) {
-          val (dmb, meta) = rapidsBufferUcxIt.next()
-          numBytes += dmb.getLength
+          val (addr, length, meta) = rapidsBufferUcxIt.next()
+          numBytes += length
           if (meta == null) {
             val rowCount = meta.rowCount
             val packedMeta = meta.packedMetaAsByteBuffer()
@@ -109,14 +112,17 @@ class RapidsBufferCoalesceIterator(
               new ColumnarBatch(Array.empty, rowCount.toInt)
             })
           } else {
-            toConcat.append((meta.packedMetaAsByteBuffer(), dmb))
+            toCloseRaw.append((addr, length))
+            toConcat.append((meta.packedMetaAsByteBuffer(), addr))
           }
         }
 
         val concatenated =
-          ai.rapids.cudf.Table.concatenatePacked(
-            toConcat.map(_._1).toArray, toConcat.map(_._2).toArray)
-        toConcat.map(_._2).foreach(_.close())
+          ai.rapids.cudf.Table.concatenatePackedRaw(
+            toConcat.map(_._1).toArray,
+            toConcat.map(_._2).toArray)
+        toClose.foreach(_.close())
+        toCloseRaw.foreach(r => Rmm.free(r._1, r._2, Cuda.DEFAULT_STREAM.getStream()))
         acquired.foreach(_.close())
         toRemove.foreach(h => receiveCatalog.removeBuffer(h))
         val res = withResource(concatenated) { _ =>
