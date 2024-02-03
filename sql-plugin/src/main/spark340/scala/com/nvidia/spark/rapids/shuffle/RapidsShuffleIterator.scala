@@ -70,7 +70,7 @@ class RapidsShuffleIterator(
     taskAttemptId: Long,
     catalog: ShuffleReceivedBufferCatalog = GpuShuffleEnv.getReceivedCatalog,
     timeoutSeconds: Long = GpuShuffleEnv.shuffleFetchTimeoutSeconds)
-  extends Iterator[(DeviceMemoryBuffer, TableMeta)]
+  extends Iterator[(Long, Long, TableMeta)]
     with Logging {
 
   /**
@@ -83,7 +83,8 @@ class RapidsShuffleIterator(
    * A result for a successful buffer received
    * @param handle - the shuffle received buffer handle as tracked in the catalog
    */
-  case class BufferReceived(buffer: DeviceMemoryBuffer, meta: TableMeta) extends ShuffleClientResult
+  case class BufferReceived(
+    bufferAddr: Long, bufferSize: Long, meta: TableMeta) extends ShuffleClientResult
 
   /**
    * A result for a failed attempt at receiving block metadata, or corresponding batches.
@@ -237,7 +238,7 @@ class RapidsShuffleIterator(
           def clientDone: Boolean = clientExpectedBatches > 0 &&
             clientExpectedBatches == clientResolvedBatches
 
-          def batchReceived(buffer: DeviceMemoryBuffer, meta: TableMeta): Boolean = {
+          def batchReceived(bufferAddr: Long, buffSize: Long, meta: TableMeta): Boolean = {
             resolvedBatches.synchronized {
               if (taskComplete) {
                 false
@@ -250,7 +251,7 @@ class RapidsShuffleIterator(
                   }
                   totalBatchesResolved = totalBatchesResolved + 1
                   clientResolvedBatches = clientResolvedBatches + 1
-                  resolvedBatches.offer(BufferReceived(buffer, meta))
+                  resolvedBatches.offer(BufferReceived(bufferAddr, buffSize, meta))
 
                   if (clientDone) {
                     logDebug(s"Task: $taskAttemptIdStr Client $blockManagerId is " +
@@ -329,8 +330,8 @@ class RapidsShuffleIterator(
     Option(resolvedBatches.poll(timeoutSeconds, TimeUnit.SECONDS))
   }
 
-  override def next(): (DeviceMemoryBuffer, TableMeta) = {
-    var res: (DeviceMemoryBuffer, TableMeta) = null
+  override def next(): (Long, Long, TableMeta) = {
+    var res: (Long, Long, TableMeta) = null
     var sb: RapidsBuffer = null
     val range = new NvtxRange(s"RapidshuffleIterator.next", NvtxColor.RED)
 
@@ -373,9 +374,9 @@ class RapidsShuffleIterator(
     val blockedTime = System.currentTimeMillis() - blockedStart
 
     result match {
-      case Some(BufferReceived(buffer, meta)) =>
+      case Some(BufferReceived(bufferAddr, bufferSize, meta)) =>
        withResource(new NvtxRange("RapidsShuffleIterator.gotBatch", NvtxColor.PURPLE)) { _ =>
-         res = (buffer, meta)
+         res = (bufferAddr, bufferSize, meta)
        }
        range.close()
        //try {

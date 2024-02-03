@@ -111,6 +111,25 @@ class BufferReceiveState(
 
   def hasMoreBlocks: Boolean = synchronized { Cuda.bufferReceiveStateHasNext(brs) }
 
+  var toConsume: Int = 0
+
+  def getBufferWhenReady(finalizeCb: TransportBuffer => Unit, size: Long): Unit =
+    synchronized {
+      require(transportBuffer.getLength() >= size,
+        "Asked to receive a buffer greater than the available bounce buffer.")
+
+      if (toConsume == 0) {
+        logDebug(s"Calling callback immediately for ${TransportUtils.toHex(id)}")
+        finalizeCb(transportBuffer)
+      } else {
+        // have pending and haven't consumed it yet, consume will call the callback
+        logDebug(s"Deferring callback for ${TransportUtils.toHex(id)}, " +
+          s"have ${toFinalize.size} pending")
+        toFinalize.add(finalizeCb)
+      }
+      toConsume += 1
+    }
+
   /**
    * When a receive is complete, the client calls `consumeWindow` to copy out
    * of the bounce buffer in this `BufferReceiveState` any complete batches, or to
@@ -122,6 +141,7 @@ class BufferReceiveState(
   def consumeWindow(): Array[ConsumedBatchFromBounceBuffer] = synchronized {
     // once we reach 0 here the transport will be allowed to reuse the bounce buffer
     // e.g. after the synchronized block, or after we sync with GPU in this function.
+    toConsume -= 1
     withResource(new NvtxRange("consumeWindow", NvtxColor.PURPLE)) { _ =>
       val taskIds = requests.flatMap(_.handler.getTaskIds)
       RmmSpark.shuffleThreadWorkingOnTasks(taskIds)

@@ -47,7 +47,7 @@ trait RapidsShuffleFetchHandler {
    * @return a boolean that lets the caller know the batch was accepted (true), or
    *         rejected (false), in which case the caller should dispose of the batch.
    */
-  def batchReceived(buffer: DeviceMemoryBuffer, tableMeta: TableMeta): Boolean
+  def batchReceived(buffer: Long, size: Long, tableMeta: TableMeta): Boolean
 
   /**
    * Called when the transport layer is not able to handle a fetch error for metadata
@@ -345,7 +345,7 @@ class RapidsShuffleClient(
       } else {
         // Degenerate buffer (no device data) so no more data to request.
         // We need to trigger call in iterator, otherwise this batch is never handled.
-        handler.batchReceived(null, tableMeta)
+        handler.batchReceived(0, 0, tableMeta)
       }
     }
 
@@ -389,8 +389,8 @@ class RapidsShuffleClient(
               // TODO: buffMetas are already native spillable, and are
               // really just handles
               buffMetas.foreach { consumed =>
-                consumed.handler.batchReceived(consumed.contigBuffer, consumed.meta)
-                consumedLength += consumed.contigBuffer.getLength
+                consumed.handler.batchReceived(consumed.contigBufferAddr, consumed.contigBufferSize, consumed.meta)
+                consumedLength += consumed.contigBufferSize
               }
               transport.doneBytesInFlight(consumedLength)
 
@@ -426,36 +426,36 @@ class RapidsShuffleClient(
    * @param meta [[TableMeta]] describing [[buffer]]
    * @return the [[RapidsBufferId]] to be used to look up the buffer from catalog
    */
-  private[shuffle] def track(
-      buffer: DeviceMemoryBuffer, meta: TableMeta): RapidsBufferHandle = {
-    withResource(new NvtxRange("track buffer", NvtxColor.ORANGE)) { _ =>
-      if (buffer != null) {
-        // add the buffer to the catalog so it is available for spill
-        catalog.addBuffer(
-          buffer,
-          meta,
-          SpillPriorities.INPUT_FROM_SHUFFLE_PRIORITY,
-          // set needsSync to false because we already have stream synchronized after
-          // consuming the bounce buffer, so we know these buffers are synchronized
-          // w.r.t. the CPU
-          needsSync = false)
-      } else {
-        // no device data, just tracking metadata
-        catalog.addDegenerateRapidsBuffer(
-          meta)
-      }
-    }
-  }
+  // private[shuffle] def track(
+  //     buffer: DeviceMemoryBuffer, meta: TableMeta): RapidsBufferHandle = {
+  //   withResource(new NvtxRange("track buffer", NvtxColor.ORANGE)) { _ =>
+  //     if (buffer != null) {
+  //       // add the buffer to the catalog so it is available for spill
+  //       catalog.addBuffer(
+  //         buffer,
+  //         meta,
+  //         SpillPriorities.INPUT_FROM_SHUFFLE_PRIORITY,
+  //         // set needsSync to false because we already have stream synchronized after
+  //         // consuming the bounce buffer, so we know these buffers are synchronized
+  //         // w.r.t. the CPU
+  //         needsSync = false)
+  //     } else {
+  //       // no device data, just tracking metadata
+  //       catalog.addDegenerateRapidsBuffer(
+  //         meta)
+  //     }
+  //   }
+  // }
 
-  private[shuffle] def track(
-      consumed: Array[ConsumedBatchFromBounceBuffer]): Array[RapidsBufferHandle] = {
-    withResource(new NvtxRange("track all buffers", NvtxColor.ORANGE)) { _ =>
-      val bufferMetas = consumed.map(c => (c.contigBuffer.asInstanceOf[MemoryBuffer], c.meta))
-      val (regular, degenerate) = bufferMetas.partition(_._1 != null)
-      degenerate.foreach(d => catalog.addDegenerateRapidsBuffer(d._2))
-      catalog.addBuffers(regular, SpillPriorities.INPUT_FROM_SHUFFLE_PRIORITY, needsSync=false)
-    }
-  }
+  // private[shuffle] def track(
+  //     consumed: Array[ConsumedBatchFromBounceBuffer]): Array[RapidsBufferHandle] = {
+  //   withResource(new NvtxRange("track all buffers", NvtxColor.ORANGE)) { _ =>
+  //     val bufferMetas = consumed.map(c => (c.contigBuffer.asInstanceOf[MemoryBuffer], c.meta))
+  //     val (regular, degenerate) = bufferMetas.partition(_._1 != null)
+  //     degenerate.foreach(d => catalog.addDegenerateRapidsBuffer(d._2))
+  //     catalog.addBuffers(regular, SpillPriorities.INPUT_FROM_SHUFFLE_PRIORITY, needsSync=false)
+  //   }
+  // }
 
 
   override def close(): Unit = {
