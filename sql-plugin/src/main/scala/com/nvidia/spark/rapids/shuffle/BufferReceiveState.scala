@@ -76,6 +76,9 @@ class BufferReceiveState(
     blockToData(i) = (r.tableMeta, r.handler)
   }
 
+  logDebug(s"BufferReceiveState ${TransportUtils.toHex(id)} with ${blockSizes.size} blocks: "+
+    s"blockSizes: ${blockSizes.mkString(",")}")
+
   def getMetaAndHandler(blockId: Int): (TableMeta, RapidsShuffleFetchHandler) = {
       blockToData(blockId)
   }
@@ -92,6 +95,7 @@ class BufferReceiveState(
   def getRequests: Seq[PendingTransferRequest] = requests
 
   override def close(): Unit = synchronized {
+    logDebug(s"Closing ${TransportUtils.toHex(id)}")
     if (bounceBuffer != null) {
       bounceBuffer.close()
     }
@@ -109,7 +113,9 @@ class BufferReceiveState(
     //  .foreach(_.block.request.handler.transferError(errMsg, throwable))
   }
 
-  def hasMoreBlocks: Boolean = synchronized { Cuda.bufferReceiveStateHasNext(brs) }
+  var brsHasNext: Boolean = Cuda.bufferReceiveStateHasNext(brs)
+
+  def hasMoreBlocks: Boolean = synchronized { brsHasNext }
 
   var toConsume: Int = 0
 
@@ -146,19 +152,33 @@ class BufferReceiveState(
       val taskIds = requests.flatMap(_.handler.getTaskIds)
       RmmSpark.shuffleThreadWorkingOnTasks(taskIds)
       val results = Cuda.bufferReceiveStateConsume(brs)
-      val resultsWithMeta = results.map { r =>
-        val (meta, handler)  = getMetaAndHandler(r.blockId)
-        ConsumedBatchFromBounceBuffer(
-          r.packedBuffer,
-          r.size,
-          meta,
-          handler)
+      if (results.isEmpty) {
+        logDebug(
+          s"BufferReceiveState hasNext: ${brsHasNext} " +
+            s"${TransportUtils.toHex(id)} no results")
+      } else {
+        brsHasNext = Cuda.bufferReceiveStateHasNext(brs)
+      }
+      val resultsWithMeta = withResource(new NvtxRange("create results", NvtxColor.ORANGE)) { _ =>
+        results.map { r =>
+          val (meta, handler) = getMetaAndHandler(r.blockId)
+          logDebug(
+            s"BufferReceiveState hasNext: ${brsHasNext} " +
+              s"${TransportUtils.toHex(id)} consumed: ${r.blockId} len: ${r.size}")
+          ConsumedBatchFromBounceBuffer(
+            r.packedBuffer,
+            r.size,
+            meta,
+            handler)
+        }
       }
       RmmSpark.poolThreadFinishedForTasks(taskIds)
       // cpu is in sync, we can recycle the bounce buffer
       if (!toFinalize.isEmpty) {
-        val firstCb = toFinalize.pop()
-        firstCb(transportBuffer)
+        withResource(new NvtxRange("transport_cb", NvtxColor.BLUE)) { _ =>
+          val firstCb = toFinalize.pop()
+          firstCb(transportBuffer)
+        }
       }
       resultsWithMeta
     }
