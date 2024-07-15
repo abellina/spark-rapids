@@ -347,6 +347,13 @@ object RapidsConf {
     .booleanConf
     .createWithDefault(true)
 
+  val KERNEL_PINNED_COPY_THRESHOLD = conf("spark.rapids.memory.kernelPinnedCopyThreshold")
+    .doc("If set to a number larger than 0, a threshold used to decide if a device copy from " +
+      "or to pinned host memory should use SMs or cudaMemcpyAsync to satisfy")
+    .startupOnly()
+    .bytesConf(ByteUnit.BYTE)
+    .createWithDefault(10L * 1024 * 1024)
+
   val OFF_HEAP_LIMIT_ENABLED = conf("spark.rapids.memory.host.offHeapLimit.enabled")
       .doc("Should the off heap limit be enforced or not.")
       .startupOnly()
@@ -2589,6 +2596,8 @@ class RapidsConf(conf: Map[String, String]) extends Logging {
   lazy val pinnedPoolSize: Long = get(PINNED_POOL_SIZE)
 
   lazy val pinnedPoolCuioDefault: Boolean = get(PINNED_POOL_SET_CUIO_DEFAULT)
+
+  lazy val kernelPinnedCopyThreshold: Long = get(KERNEL_PINNED_COPY_THRESHOLD)
 
   lazy val offHeapLimitEnabled: Boolean = get(OFF_HEAP_LIMIT_ENABLED)
 

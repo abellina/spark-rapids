@@ -453,6 +453,8 @@ object GpuDeviceManager extends Logging {
       // library, and in prod it would be nice to know about it.
       logWarning("The default cuDF host pool was already configured")
     }
+    // configure cuDF's kernel pinned copy feature
+    Rmm.setKernelPinnedCopyThreshold(conf.kernelPinnedCopyThreshold)
     if (!PinnedMemoryPool.isInitialized && pinnedSize > 0) {
       logInfo(s"Initializing pinned memory pool (${pinnedSize / 1024 / 1024.0} MiB)")
       PinnedMemoryPool.initialize(pinnedSize, gpuId, setCuioDefaultResource)
