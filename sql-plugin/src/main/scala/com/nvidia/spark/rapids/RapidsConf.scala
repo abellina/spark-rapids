@@ -354,6 +354,13 @@ object RapidsConf {
     .bytesConf(ByteUnit.BYTE)
     .createWithDefault(10L * 1024 * 1024)
 
+  val PINNED_ALLOCATION_THRESHOLD = conf("spark.rapids.memory.pinnedAllocationThreshold")
+    .doc("If set to a number larger than 0, a threshold used to decide if a host allocation in cuDF " +
+      "should use pinned memory or pageable memory")
+    .startupOnly()
+    .bytesConf(ByteUnit.BYTE)
+    .createWithDefault(10L * 1024 * 1024)
+
   val OFF_HEAP_LIMIT_ENABLED = conf("spark.rapids.memory.host.offHeapLimit.enabled")
       .doc("Should the off heap limit be enforced or not.")
       .startupOnly()
@@ -2598,6 +2605,8 @@ class RapidsConf(conf: Map[String, String]) extends Logging {
   lazy val pinnedPoolCuioDefault: Boolean = get(PINNED_POOL_SET_CUIO_DEFAULT)
 
   lazy val kernelPinnedCopyThreshold: Long = get(KERNEL_PINNED_COPY_THRESHOLD)
+
+  lazy val pinnedAllocationThreshold: Long = get(PINNED_ALLOCATION_THRESHOLD)
 
   lazy val offHeapLimitEnabled: Boolean = get(OFF_HEAP_LIMIT_ENABLED)
 
