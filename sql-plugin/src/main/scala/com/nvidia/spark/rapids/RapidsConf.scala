@@ -352,14 +352,14 @@ object RapidsConf {
       "or to pinned host memory should use SMs or cudaMemcpyAsync to satisfy")
     .startupOnly()
     .bytesConf(ByteUnit.BYTE)
-    .createWithDefault(10L * 1024 * 1024)
+    .createWithDefault(2L * 1024 * 1024)
 
   val PINNED_ALLOCATION_THRESHOLD = conf("spark.rapids.memory.pinnedAllocationThreshold")
     .doc("If set to a number larger than 0, a threshold used to decide if a host allocation in cuDF " +
       "should use pinned memory or pageable memory")
     .startupOnly()
     .bytesConf(ByteUnit.BYTE)
-    .createWithDefault(10L * 1024 * 1024)
+    .createWithDefault(2L * 1024 * 1024)
 
   val OFF_HEAP_LIMIT_ENABLED = conf("spark.rapids.memory.host.offHeapLimit.enabled")
       .doc("Should the off heap limit be enforced or not.")
