@@ -780,15 +780,17 @@ case class GpuCheckOverflowAfterSum(
         val isEmptyBase = isEmptyCol.getBase
         if (!nullOnOverflow) {
           // ANSI mode
-          val problem = withResource(dataBase.isNull) { isNull =>
-            withResource(isEmptyBase.not()) { notEmpty =>
-              isNull.and(notEmpty)
+          withResource(new NvtxRange("ANSI: checkoverflowinsum", NvtxColor.PURPLE)) { _ =>
+            val problem = withResource(dataBase.isNull) { isNull =>
+              withResource(isEmptyBase.not()) { notEmpty =>
+                isNull.and(notEmpty)
+              }
             }
-          }
-          withResource(problem) { problem =>
-            withResource(problem.any()) { anyProblem =>
-              if (anyProblem.isValid && anyProblem.getBoolean) {
-                throw new ArithmeticException("Overflow in sum of decimals.")
+            withResource(problem) { problem =>
+              withResource(problem.any()) { anyProblem =>
+                if (anyProblem.isValid && anyProblem.getBoolean) {
+                  throw new ArithmeticException("Overflow in sum of decimals.")
+                }
               }
             }
           }

@@ -16,9 +16,8 @@
 
 package com.nvidia.spark.rapids
 
-import ai.rapids.cudf.{ContiguousTable, DeviceMemoryBuffer, HostMemoryBuffer}
+import ai.rapids.cudf.{ContiguousTable, DeviceMemoryBuffer, HostMemoryBuffer, NvtxColor, NvtxRange}
 import com.nvidia.spark.rapids.Arm.{closeOnExcept, withResource}
-
 import org.apache.spark.TaskContext
 import org.apache.spark.sql.types.DataType
 import org.apache.spark.sql.vectorized.ColumnarBatch
@@ -245,18 +244,20 @@ object SpillableColumnarBatch {
    */
   def apply(batch: ColumnarBatch,
       priority: Long): SpillableColumnarBatch = {
-    val numRows = batch.numRows()
-    if (batch.numCols() <= 0) {
-      // We consumed it
-      batch.close()
-      new JustRowsColumnarBatch(numRows)
-    } else {
-      val types = GpuColumnVector.extractTypes(batch)
-      val handle = addBatch(batch, priority)
-      new SpillableColumnarBatchImpl(
-        handle,
-        numRows,
-        types)
+    withResource(new NvtxRange("make spillable batch", NvtxColor.RED)) { _ =>
+      val numRows = batch.numRows()
+      if (batch.numCols() <= 0) {
+        // We consumed it
+        batch.close()
+        new JustRowsColumnarBatch(numRows)
+      } else {
+        val types = GpuColumnVector.extractTypes(batch)
+        val handle = addBatch(batch, priority)
+        new SpillableColumnarBatchImpl(
+          handle,
+          numRows,
+          types)
+      }
     }
   }
 

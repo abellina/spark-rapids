@@ -32,6 +32,8 @@ import org.apache.spark.sql.vectorized.ColumnarBatch
 object GpuPartitioning {
   // The maximum size of an Array minus a bit for overhead for metadata
   val MaxCpuBatchSize = 2147483639L - 2048L
+
+  val largeCopyLock = new Object()
 }
 
 trait GpuPartitioning extends Partitioning {
@@ -122,13 +124,28 @@ trait GpuPartitioning extends Partitioning {
       partitionColumns: Array[GpuColumnVector]): Array[(ColumnarBatch, Int)] = {
     // We need to make sure that we have a null count calculated ahead of time.
     // This should be a temp work around.
-    partitionColumns.foreach(_.getBase.getNullCount)
-    val totalInputSize = GpuColumnVector.getTotalDeviceMemoryUsed(partitionColumns)
+
+    withResource(new NvtxRange("get null count", NvtxColor.RED)) { _ =>
+      partitionColumns.foreach(_.getBase.getNullCount)
+    }
+    val totalInputSize = withResource(
+      new NvtxRange("getTotalDeviceMemoryUsage", NvtxColor.BLUE)) { _ =>
+      GpuColumnVector.getTotalDeviceMemoryUsed(partitionColumns)
+    }
     val mightNeedToSplit = totalInputSize > GpuPartitioning.MaxCpuBatchSize
 
     val hostPartColumns = withResource(partitionColumns) { _ =>
       withRetryNoSplit {
-        partitionColumns.safeMap(_.copyToHost())
+        if (totalInputSize > 100L*1024*1024) {
+          withResource(new NvtxRange("large copy",  NvtxColor.PURPLE)) { _ => 
+            //GpuPartitioning.largeCopyLock.synchronized {
+              partitionColumns.safeMap(_.copyToHost())
+            //}
+          }
+        } else {
+          partitionColumns.safeMap(_.copyToHost())
+        }
+
       }
     }
     try {

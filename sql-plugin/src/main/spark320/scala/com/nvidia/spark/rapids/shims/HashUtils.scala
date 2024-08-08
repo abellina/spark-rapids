@@ -51,21 +51,23 @@ object HashUtils {
    * @return the result
    */
   def normalizeInput(in: cudf.ColumnVector): cudf.ColumnVector = {
-    // This looks really stupid, but -0.0 in cudf is equal to  0.0 so we can check if they are
-    // equal and replace it with the same thing to normalize it.
-    ColumnCastUtil.deepTransform(in) {
-      case (cv, _) if cv.getType == cudf.DType.FLOAT32 =>
-        withResource(cudf.Scalar.fromFloat(0.0f)) { zero =>
-          withResource(cv.equalTo(zero)) { areEqual =>
-            areEqual.ifElse(zero, cv)
+    withResource(new ai.rapids.cudf.NvtxRange("normalizeInput", ai.rapids.cudf.NvtxColor.RED)) { _ =>
+      // This looks really stupid, but -0.0 in cudf is equal to  0.0 so we can check if they are
+      // equal and replace it with the same thing to normalize it.
+      ColumnCastUtil.deepTransform(in) {
+        case (cv, _) if cv.getType == cudf.DType.FLOAT32 =>
+          withResource(cudf.Scalar.fromFloat(0.0f)) { zero =>
+            withResource(cv.equalTo(zero)) { areEqual =>
+              areEqual.ifElse(zero, cv)
+            }
           }
-        }
-      case (cv, _) if cv.getType == cudf.DType.FLOAT64 =>
-        withResource(cudf.Scalar.fromDouble(0.0)) { zero =>
-          withResource(cv.equalTo(zero)) { areEqual =>
-            areEqual.ifElse(zero, cv)
+        case (cv, _) if cv.getType == cudf.DType.FLOAT64 =>
+          withResource(cudf.Scalar.fromDouble(0.0)) { zero =>
+            withResource(cv.equalTo(zero)) { areEqual =>
+              areEqual.ifElse(zero, cv)
+            }
           }
-        }
+      }
     }
   }
 }

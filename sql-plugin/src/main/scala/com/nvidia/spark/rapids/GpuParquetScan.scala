@@ -24,12 +24,10 @@ import java.nio.charset.StandardCharsets
 import java.util
 import java.util.{Collections, Locale}
 import java.util.concurrent._
-
 import scala.annotation.tailrec
 import scala.collection.JavaConverters._
 import scala.collection.mutable.ArrayBuffer
 import scala.language.implicitConversions
-
 import ai.rapids.cudf._
 import com.nvidia.spark.rapids.Arm.{closeOnExcept, withResource}
 import com.nvidia.spark.rapids.GpuMetric._
@@ -54,7 +52,6 @@ import org.apache.parquet.hadoop.metadata._
 import org.apache.parquet.io.{InputFile, SeekableInputStream}
 import org.apache.parquet.schema.{DecimalMetadata, GroupType, MessageType, OriginalType, PrimitiveType, Type}
 import org.apache.parquet.schema.PrimitiveType.PrimitiveTypeName
-
 import org.apache.spark.TaskContext
 import org.apache.spark.broadcast.Broadcast
 import org.apache.spark.internal.Logging
@@ -666,6 +663,17 @@ private case class GpuParquetFileFilterHandler(
     }
   }
 
+  //class MyHadoopInputFile(
+  //    system: FileSystem,
+  //    status: FileStatus,
+  //    configuration: Configuration) extends InputFile {
+  //  override def getConfiguration() = { configuration }
+  //  override def getPath(): Path = { null }
+  //  override def getLength(): Long = { -1 }
+  //  override def newStream(): SeekableInputStream = { null }
+  //  override def toString(): String = { null }
+  //}
+
   @scala.annotation.nowarn
   def filterBlocks(
       footerReader: ParquetFooterReaderType.Value,
@@ -675,6 +683,7 @@ private case class GpuParquetFileFilterHandler(
       readDataSchema: StructType): ParquetFileInfoWithBlockMeta = {
     withResource(new NvtxRange("filterBlocks", NvtxColor.PURPLE)) { _ =>
       val filePath = new Path(new URI(file.filePath.toString()))
+
       // Make sure we aren't trying to read encrypted files. For now, remove the related
       // parquet confs from the hadoop configuration and try to catch the resulting
       // exception and print a useful message
@@ -734,11 +743,18 @@ private case class GpuParquetFileFilterHandler(
         None
       }
 
+     //def fromPath(path: Path, conf: Configuration) = {
+     //  val fs = path.getFileSystem(conf)
+     //  new MyHadoopInputFile(fs, fs.getFileStatus(path), conf)
+     //}
+
       val blocks = if (pushedFilters.isDefined) {
         withResource(new NvtxRange("getBlocksWithFilter", NvtxColor.CYAN)) { _ =>
           // Use the ParquetFileReader to perform dictionary-level filtering
           ParquetInputFormat.setFilterPredicate(conf, pushedFilters.get)
           //noinspection ScalaDeprecation
+          //   public ParquetFileReader(InputFile file, ParquetReadOptions options) throws IOException {
+          //new ParquetFileReader(fromPath(filePath, conf), conf)
           withResource(new ParquetFileReader(conf, footer.getFileMetaData, filePath,
             footer.getBlocks, Collections.emptyList[ColumnDescriptor])) { parquetReader =>
             parquetReader.getRowGroups

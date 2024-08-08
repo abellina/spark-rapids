@@ -122,6 +122,20 @@ class RapidsDeviceMemoryStore(
     }
   }
 
+  def addDeviceAutoCloseable(
+    id: RapidsBufferId,
+    obj: AutoCloseable,
+    length: Long,
+    initialSpillPriority: Long,
+    needsSync: Boolean): RapidsBuffer = {
+    val deviceAC = new RapidsDeviceAutoCloseable(id, length, obj, initialSpillPriority)
+    freeOnExcept(deviceAC) { _ =>
+      logDebug(s"Adding device autocloseable for: [id=$id, size=${length}]")
+      addBuffer(deviceAC , needsSync)
+      deviceAC
+    }
+  }
+
   /**
    * Adds a table to the device storage.
    *
@@ -400,6 +414,39 @@ class RapidsDeviceMemoryStore(
       }
     }
 
+  }
+
+  class RapidsDeviceAutoCloseable(
+      id: RapidsBufferId,
+      size: Long,
+      obj: AutoCloseable,
+      spillPriority: Long)
+    extends RapidsBufferBase(id, null, spillPriority) {
+
+    /** Release the underlying resources for this buffer. */
+    override protected def releaseResources(): Unit = {}
+
+    /**
+     * The size of this buffer in bytes in its _current_ store. As the buffer goes through
+     * contiguous split (either added as a contiguous table already, or spilled to host),
+     * its size changes because contiguous_split adds its own alignment padding.
+     *
+     * @note Do not use this size to allocate a target buffer to copy, always use `getPackedSize.`
+     */
+    override val memoryUsedBytes: Long = size
+
+    /** The storage tier for this buffer */
+    override val storageTier: StorageTier = StorageTier.DEVICE
+
+    /**
+     * Get the underlying memory buffer. This may be either a HostMemoryBuffer or a DeviceMemoryBuffer
+     * depending on where the buffer currently resides.
+     * The caller must have successfully acquired the buffer beforehand.
+     *
+     * @see [[addReference]]
+     * @note It is the responsibility of the caller to close the buffer.
+     */
+    override def getMemoryBuffer: MemoryBuffer = null
   }
 
   class RapidsDeviceMemoryBuffer(

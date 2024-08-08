@@ -38,25 +38,27 @@ object AddOverflowChecks {
       lhs: BinaryOperable,
       rhs: BinaryOperable,
       ret: ColumnVector): Unit = {
-    // Check overflow. It is true if the arguments have different signs and
-    // the sign of the result is different from the sign of x.
-    // Which is equal to "((x ^ r) & (y ^ r)) < 0" in the form of arithmetic.
-    val signCV = withResource(ret.bitXor(lhs)) { lXor =>
-      withResource(ret.bitXor(rhs)) { rXor =>
-        lXor.bitAnd(rXor)
+    withResource(new NvtxRange("ANSI: basicOpOverflowCheck2", NvtxColor.PURPLE)) { _ =>
+      // Check overflow. It is true if the arguments have different signs and
+      // the sign of the result is different from the sign of x.
+      // Which is equal to "((x ^ r) & (y ^ r)) < 0" in the form of arithmetic.
+      val signCV = withResource(ret.bitXor(lhs)) { lXor =>
+        withResource(ret.bitXor(rhs)) { rXor =>
+          lXor.bitAnd(rXor)
+        }
       }
-    }
-    val signDiffCV = withResource(signCV) { sign =>
-      withResource(Scalar.fromInt(0)) { zero =>
-        sign.lessThan(zero)
+      val signDiffCV = withResource(signCV) { sign =>
+        withResource(Scalar.fromInt(0)) { zero =>
+          sign.lessThan(zero)
+        }
       }
-    }
-    withResource(signDiffCV) { signDiff =>
-      withResource(signDiff.any()) { any =>
-        if (any.isValid && any.getBoolean) {
-          throw RapidsErrorUtils.arithmeticOverflowError(
-          "One or more rows overflow for Add operation."
-          )
+      withResource(signDiffCV) { signDiff =>
+        withResource(signDiff.any()) { any =>
+          if (any.isValid && any.getBoolean) {
+            throw RapidsErrorUtils.arithmeticOverflowError(
+              "One or more rows overflow for Add operation."
+            )
+          }
         }
       }
     }
@@ -93,17 +95,20 @@ object AddOverflowChecks {
       rhs: BinaryOperable,
       ret: ColumnVector,
       failOnError: Boolean): ColumnVector = {
-    withResource(didDecimalOverflow(lhs, rhs, ret)) { overflow =>
-      if (failOnError) {
-        withResource(overflow.any()) { any =>
-          if (any.isValid && any.getBoolean) {
-            throw new ArithmeticException("One or more rows overflow for Add operation.")
+    withResource(new NvtxRange("ANSI: decimalOpOverflowCheck", NvtxColor.PURPLE)) { _ =>
+      withResource(didDecimalOverflow(lhs, rhs, ret)) { overflow =>
+        if (failOnError) {
+          withResource(overflow.any()) { any =>
+            if (any.isValid && any.getBoolean) {
+              throw new ArithmeticException("One or more rows overflow for Add operation.")
+            }
           }
-        }
-        ret.incRefCount()
-      } else {
-        withResource(Scalar.fromNull(ret.getType)) { nullVal =>
-          overflow.ifElse(nullVal, ret)
+
+          ret.incRefCount()
+        } else {
+          withResource(Scalar.fromNull(ret.getType)) { nullVal =>
+            overflow.ifElse(nullVal, ret)
+          }
         }
       }
     }
@@ -115,24 +120,26 @@ object SubtractOverflowChecks {
       lhs: BinaryOperable,
       rhs: BinaryOperable,
       ret: ColumnVector): Unit = {
-    // Check overflow. It is true if the arguments have different signs and
-    // the sign of the result is different from the sign of x.
-    // Which is equal to "((x ^ y) & (x ^ r)) < 0" in the form of arithmetic.
-    val signCV = withResource(lhs.bitXor(rhs)) { xyXor =>
-      withResource(lhs.bitXor(ret)) { xrXor =>
-        xyXor.bitAnd(xrXor)
+    withResource(new NvtxRange("ANSI: basicOpOverflowCheck", NvtxColor.PURPLE)) { _ =>
+      // Check overflow. It is true if the arguments have different signs and
+      // the sign of the result is different from the sign of x.
+      // Which is equal to "((x ^ y) & (x ^ r)) < 0" in the form of arithmetic.
+      val signCV = withResource(lhs.bitXor(rhs)) { xyXor =>
+        withResource(lhs.bitXor(ret)) { xrXor =>
+          xyXor.bitAnd(xrXor)
+        }
       }
-    }
-    val signDiffCV = withResource(signCV) { sign =>
-      withResource(Scalar.fromInt(0)) { zero =>
-        sign.lessThan(zero)
+      val signDiffCV = withResource(signCV) { sign =>
+        withResource(Scalar.fromInt(0)) { zero =>
+          sign.lessThan(zero)
+        }
       }
-    }
-    withResource(signDiffCV) { signDiff =>
-      withResource(signDiff.any()) { any =>
-        if (any.isValid && any.getBoolean) {
-          throw RapidsErrorUtils.
-            arithmeticOverflowError("One or more rows overflow for Subtract operation.")
+      withResource(signDiffCV) { signDiff =>
+        withResource(signDiff.any()) { any =>
+          if (any.isValid && any.getBoolean) {
+            throw RapidsErrorUtils.
+              arithmeticOverflowError("One or more rows overflow for Subtract operation.")
+          }
         }
       }
     }
@@ -326,37 +333,39 @@ abstract class GpuSubtractBase extends CudfBinaryArithmetic with Serializable {
       lhs: BinaryOperable,
       rhs: BinaryOperable,
       ret: ColumnVector): ColumnVector = {
-    // We need a special overflow check for decimal because CUDF does not support INT128 so we
-    // cannot reuse the same code for the other types.
-    // Overflow happens if the arguments have different signs and the sign of the result is
-    // different from the sign of subtractend (RHS).
-    val numRows = ret.getRowCount.toInt
-    val zero = BigDecimal(0).bigDecimal
-    val overflow = withResource(DecimalUtils.lessThan(rhs, zero, numRows)) { rhsLz =>
-      val argsSignDifferent = withResource(DecimalUtils.lessThan(lhs, zero, numRows)) { lhsLz =>
-        lhsLz.notEqualTo(rhsLz)
-      }
-      withResource(argsSignDifferent) { argsSignDifferent =>
-        val resultAndSubtrahendSameSign =
-          withResource(DecimalUtils.lessThan(ret, zero)) { resultLz =>
-            rhsLz.equalTo(resultLz)
-          }
-        withResource(resultAndSubtrahendSameSign) { resultAndSubtrahendSameSign =>
-          resultAndSubtrahendSameSign.and(argsSignDifferent)
+    withResource(new NvtxRange("ANSI: decimalOpOverflowCheck2", NvtxColor.PURPLE)) { _ =>
+      // We need a special overflow check for decimal because CUDF does not support INT128 so we
+      // cannot reuse the same code for the other types.
+      // Overflow happens if the arguments have different signs and the sign of the result is
+      // different from the sign of subtractend (RHS).
+      val numRows = ret.getRowCount.toInt
+      val zero = BigDecimal(0).bigDecimal
+      val overflow = withResource(DecimalUtils.lessThan(rhs, zero, numRows)) { rhsLz =>
+        val argsSignDifferent = withResource(DecimalUtils.lessThan(lhs, zero, numRows)) { lhsLz =>
+          lhsLz.notEqualTo(rhsLz)
         }
-      }
-    }
-    withResource(overflow) { overflow =>
-      if (failOnError) {
-        withResource(overflow.any()) { any =>
-          if (any.isValid && any.getBoolean) {
-            throw new ArithmeticException("One or more rows overflow for Subtract operation.")
+        withResource(argsSignDifferent) { argsSignDifferent =>
+          val resultAndSubtrahendSameSign =
+            withResource(DecimalUtils.lessThan(ret, zero)) { resultLz =>
+              rhsLz.equalTo(resultLz)
+            }
+          withResource(resultAndSubtrahendSameSign) { resultAndSubtrahendSameSign =>
+            resultAndSubtrahendSameSign.and(argsSignDifferent)
           }
         }
-        ret.incRefCount()
-      } else {
-        withResource(GpuScalar.from(null, dataType)) { nullVal =>
-          overflow.ifElse(nullVal, ret)
+      }
+      withResource(overflow) { overflow =>
+        if (failOnError) {
+          withResource(overflow.any()) { any =>
+            if (any.isValid && any.getBoolean) {
+              throw new ArithmeticException("One or more rows overflow for Subtract operation.")
+            }
+          }
+          ret.incRefCount()
+        } else {
+          withResource(GpuScalar.from(null, dataType)) { nullVal =>
+            overflow.ifElse(nullVal, ret)
+          }
         }
       }
     }
@@ -422,9 +431,11 @@ trait GpuDecimalMultiplyBase extends GpuExpression {
             withResource(DecimalMultiplyChecks
                 .checkForOverflow(castLhs, castRhs)) { wouldOverflow =>
               if (failOnError) {
-                withResource(wouldOverflow.any()) { anyOverflow =>
-                  if (anyOverflow.isValid && anyOverflow.getBoolean) {
-                    throw new IllegalStateException(GpuCast.INVALID_INPUT_MESSAGE)
+                withResource(new NvtxRange("ANSI: regularMultiply", NvtxColor.PURPLE)) { _ =>
+                  withResource(wouldOverflow.any()) { anyOverflow =>
+                    if (anyOverflow.isValid && anyOverflow.getBoolean) {
+                      throw new IllegalStateException(GpuCast.INVALID_INPUT_MESSAGE)
+                    }
                   }
                 }
                 mult.incRefCount()
@@ -461,9 +472,11 @@ trait GpuDecimalMultiplyBase extends GpuExpression {
     }
     val retCol = withResource(retTab) { retTab =>
       if (failOnError) {
-        withResource(retTab.getColumn(0).any()) { anyOverflow =>
-          if (anyOverflow.isValid && anyOverflow.getBoolean) {
-            throw new ArithmeticException(GpuCast.INVALID_INPUT_MESSAGE)
+        withResource(new NvtxRange("ANSI: longMultiply", NvtxColor.PURPLE)) { _ =>
+          withResource(retTab.getColumn(0).any()) { anyOverflow =>
+            if (anyOverflow.isValid && anyOverflow.getBoolean) {
+              throw new ArithmeticException(GpuCast.INVALID_INPUT_MESSAGE)
+            }
           }
         }
         retTab.getColumn(1).incRefCount()
@@ -751,14 +764,16 @@ trait GpuDivModLike extends CudfBinaryArithmetic {
 
   override def doColumnar(lhs: GpuColumnVector, rhs: GpuColumnVector): ColumnVector = {
     if (failOnError) {
-      withResource(makeZeroScalar(rhs.getBase.getType)) { zeroScalar =>
-        if (rhs.getBase.contains(zeroScalar)) {
-          throw RapidsErrorUtils.divByZeroError(origin)
+      withResource(new NvtxRange("ANSI: GpuDivModLike.doColumnar", NvtxColor.PURPLE)) { _ =>
+        withResource(makeZeroScalar(rhs.getBase.getType)) { zeroScalar =>
+          if (rhs.getBase.contains(zeroScalar)) {
+            throw RapidsErrorUtils.divByZeroError(origin)
+          }
+          if (checkDivideOverflow && isDivOverflow(lhs, rhs)) {
+            throw RapidsErrorUtils.divOverflowError(origin)
+          }
+          super.doColumnar(lhs, rhs)
         }
-        if (checkDivideOverflow && isDivOverflow(lhs, rhs)) {
-          throw RapidsErrorUtils.divOverflowError(origin)
-        }
-        super.doColumnar(lhs, rhs)
       }
     } else {
       if (checkDivideOverflow && isDivOverflow(lhs, rhs)) {
@@ -907,9 +922,11 @@ trait GpuDecimalDivideBase extends GpuExpression {
       val overflowed = retTab.getColumn(0)
       val quotient = retTab.getColumn(1)
       if (failOnError) {
-        withResource(overflowed.any()) { anyOverflow =>
-          if (anyOverflow.isValid && anyOverflow.getBoolean) {
-            throw new ArithmeticException(GpuCast.INVALID_INPUT_MESSAGE)
+        withResource(new NvtxRange("ANSI: longDivide", NvtxColor.PURPLE)) { _ =>
+          withResource(overflowed.any()) { anyOverflow =>
+            if (anyOverflow.isValid && anyOverflow.getBoolean) {
+              throw new ArithmeticException(GpuCast.INVALID_INPUT_MESSAGE)
+            }
           }
         }
         quotient.incRefCount()

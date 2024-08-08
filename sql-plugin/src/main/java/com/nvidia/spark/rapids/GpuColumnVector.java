@@ -1070,18 +1070,21 @@ public class GpuColumnVector extends GpuColumnVectorBase {
   }
 
   public static long getTotalDeviceMemoryUsed(Table table) {
-    long sum = 0;
-    int len = table.getNumberOfColumns();
-    // Deduplicate columns that are the same
-    HashSet<Long> found = new HashSet<>();
-    for (int i = 0; i < len; i++) {
-      ai.rapids.cudf.ColumnVector cv = table.getColumn(i);
-      long id = cv.getNativeView();
-      if (found.add(id)) {
-        sum += cv.getDeviceMemorySize();
+    try(ai.rapids.cudf.NvtxRange r =
+        new ai.rapids.cudf.NvtxRange("getTotalDeviceMemoryUsed", NvtxColor.RED)) {
+      long sum = 0;
+      int len = table.getNumberOfColumns();
+      // Deduplicate columns that are the same
+      HashSet<Long> found = new HashSet<>();
+      for (int i = 0; i < len; i++) {
+        ai.rapids.cudf.ColumnVector cv = table.getColumn(i);
+        long id = cv.getNativeView();
+        if (found.add(id)) {
+          sum += cv.getDeviceMemorySize();
+        }
       }
+      return sum;
     }
-    return sum;
   }
 
   public final ai.rapids.cudf.ColumnVector getBase() {
