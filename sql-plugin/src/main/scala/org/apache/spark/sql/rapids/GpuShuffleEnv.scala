@@ -27,9 +27,16 @@ class GpuShuffleEnv(rapidsConf: RapidsConf) extends Logging {
   private var shuffleCatalog: ShuffleBufferCatalog = _
   private var shuffleReceivedBufferCatalog: ShuffleReceivedBufferCatalog = _
 
-  private lazy val conf = SparkEnv.get.conf
+  private lazy val conf = {
+    try {
+      SparkEnv.get.conf
+    } catch {
+      case _: Throwable => null
+    }
+  }
 
   private lazy val isRapidsShuffleConfigured: Boolean = {
+    conf != null && 
     conf.contains("spark.shuffle.manager") &&
       conf.get("spark.shuffle.manager") == GpuShuffleEnv.RAPIDS_SHUFFLE_CLASS
   }
@@ -53,12 +60,26 @@ class GpuShuffleEnv(rapidsConf: RapidsConf) extends Logging {
     }
   }
 
+  def setShuffleCatalog(catalog: ShuffleBufferCatalog): Unit = {
+    shuffleCatalog = catalog
+  }
+
+  def setReceivedBufferCatalog(catalog: ShuffleReceivedBufferCatalog): Unit = {
+    shuffleReceivedBufferCatalog = catalog
+  }
+
   def getCatalog: ShuffleBufferCatalog = shuffleCatalog
 
   def getReceivedCatalog: ShuffleReceivedBufferCatalog = shuffleReceivedBufferCatalog
 
   def getShuffleFetchTimeoutSeconds: Long = {
     conf.getTimeAsSeconds("spark.network.timeout", "120s")
+  }
+
+  def getSparkPortMaxRetries: Int = {
+    val defaultRetries = "16"
+    Option(conf).map(_.get("spark.port.maxRetries", defaultRetries))
+      .getOrElse(defaultRetries).toInt
   }
 }
 
@@ -158,6 +179,14 @@ object GpuShuffleEnv extends Logging {
     env.getCatalog
   }
 
+  def setShuffleCatalog(catalog: ShuffleBufferCatalog): Unit = {
+    env.setShuffleCatalog(catalog)
+  }
+
+  def setReceivedBufferCatalog(catalog: ShuffleReceivedBufferCatalog): Unit = {
+    env.setReceivedBufferCatalog(catalog)
+  }
+
   private def validateRapidsShuffleManager(shuffManagerClassName: String): Unit = {
     val shuffleManagerStr = ShimLoader.getRapidsShuffleManagerClass
     if (shuffManagerClassName != shuffleManagerStr) {
@@ -183,4 +212,6 @@ object GpuShuffleEnv extends Logging {
   def rapidsShuffleCodec: Option[TableCompressionCodec] = env.rapidsShuffleCodec
 
   def shuffleFetchTimeoutSeconds: Long = env.getShuffleFetchTimeoutSeconds
+
+  def sparkPortMaxRetries: Int = env.getSparkPortMaxRetries
 }

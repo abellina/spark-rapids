@@ -21,9 +21,7 @@ import java.nio.ByteBuffer
 import java.security.SecureRandom
 import java.util.concurrent.{ConcurrentHashMap, ConcurrentLinkedQueue, Executors, TimeUnit}
 import java.util.concurrent.atomic.AtomicLong
-
 import scala.collection.mutable.ArrayBuffer
-
 import ai.rapids.cudf.{BaseDeviceMemoryBuffer, MemoryBuffer, NvtxColor, NvtxRange}
 import com.nvidia.spark.rapids.{GpuDeviceManager, RapidsConf}
 import com.nvidia.spark.rapids.Arm.withResource
@@ -34,9 +32,8 @@ import com.nvidia.spark.rapids.shuffle.{ClientConnection, MemoryRegistrationCall
 import org.openucx.jucx._
 import org.openucx.jucx.ucp._
 import org.openucx.jucx.ucs.UcsConstants
-
-import org.apache.spark.SparkEnv
 import org.apache.spark.internal.Logging
+import org.apache.spark.sql.rapids.GpuShuffleEnv
 import org.apache.spark.sql.rapids.storage.RapidsStorageUtils
 import org.apache.spark.storage.BlockManagerId
 
@@ -179,10 +176,10 @@ class UCX(transport: UCXShuffleTransport, executor: BlockManagerId, rapidsConf: 
             }
           }
 
-          withResource(new NvtxRange("UCX Handling Tasks", NvtxColor.CYAN)) { _ =>
-            // check initialized since on close we queue a "task" that sets initialized to false
-            // to exit the progress loop, we don't want to execute any other tasks after that.
-            while (!workerTasks.isEmpty && initialized) {
+          // check initialized since on close we queue a "task" that sets initialized to false
+          // to exit the progress loop, we don't want to execute any other tasks after that.
+          while (!workerTasks.isEmpty && initialized) {
+            withResource(new NvtxRange("UCX Handling Tasks", NvtxColor.CYAN)) { _ =>
               val wt = workerTasks.poll()
               if (wt != null) {
                 wt()
@@ -959,7 +956,7 @@ class UCX(transport: UCXShuffleTransport, executor: BlockManagerId, rapidsConf: 
         new UcpListenerParams()
           .setConnectionHandler(this)
 
-      val maxRetries = SparkEnv.get.conf.getInt("spark.port.maxRetries", 16)
+      val maxRetries = GpuShuffleEnv.sparkPortMaxRetries
       val startPort = if (rapidsConf.shuffleUcxListenerStartPort != 0) {
         rapidsConf.shuffleUcxListenerStartPort
       } else {
