@@ -1,3 +1,7 @@
+org/apache/spark/sql/rapids/execution/TrampolineUtil*
+com/nvidia/spark/rapids/RapidsConf*
+com/nvidia/spark/rapids/shuffle/ucx/*
+com/nvidia/spark/rapids/shuffle/*
 com/nvidia/spark/rapids/*/RapidsShuffleManager.class
 com/nvidia/spark/rapids/AvroProvider.class
 com/nvidia/spark/rapids/HiveProvider.class
