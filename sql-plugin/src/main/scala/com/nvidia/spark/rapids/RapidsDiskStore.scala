@@ -43,43 +43,49 @@ class RapidsDiskStore(diskBlockManager: RapidsDiskBlockManager)
       catalog: RapidsBufferCatalog,
       stream: Cuda.Stream): Option[RapidsBufferBase] = {
     // assuming that the disk store gets contiguous buffers
-    val id = incoming.id
-    val path = if (id.canShareDiskPaths) {
-      sharedBufferFiles.computeIfAbsent(id, _ => id.getDiskPath(diskBlockManager))
-    } else {
-      id.getDiskPath(diskBlockManager)
-    }
+    incoming match {
+      case bufferWithMeta: RapidsBufferWithMeta =>
+        val id = bufferWithMeta.id
+        val path = if (id.canShareDiskPaths) {
+          sharedBufferFiles.computeIfAbsent(id, _ => id.getDiskPath(diskBlockManager))
+        } else {
+          id.getDiskPath(diskBlockManager)
+        }
 
-    val (fileOffset, uncompressedSize, diskLength) = if (id.canShareDiskPaths) {
-      // only one writer at a time for now when using shared files
-      path.synchronized {
-        writeToFile(incoming, path, append = true, stream)
-      }
-    } else {
-      writeToFile(incoming, path, append = false, stream)
-    }
+        val (fileOffset, uncompressedSize, diskLength) = if (id.canShareDiskPaths) {
+          // only one writer at a time for now when using shared files
+          path.synchronized {
+            writeToFile(bufferWithMeta, path, append = true, stream)
+          }
+        } else {
+          writeToFile(bufferWithMeta, path, append = false, stream)
+        }
 
-    logDebug(s"Spilled to $path $fileOffset:$diskLength")
-    val buff = incoming match {
-      case _: RapidsHostBatchBuffer =>
-        new RapidsDiskColumnarBatch(
-          id,
-          fileOffset,
-          uncompressedSize,
-          diskLength,
-          incoming.meta,
-          incoming.getSpillPriority)
+        logDebug(s"Spilled to $path $fileOffset:$diskLength")
+        val buff = bufferWithMeta match {
+          case _: RapidsHostBatchBuffer =>
+            new RapidsDiskColumnarBatch(
+              id,
+              fileOffset,
+              uncompressedSize,
+              diskLength,
+              bufferWithMeta.getMeta,
+              bufferWithMeta.getSpillPriority)
 
+          case _ =>
+            new RapidsDiskBuffer(
+              id,
+              fileOffset,
+              uncompressedSize,
+              diskLength,
+              bufferWithMeta.getMeta,
+              bufferWithMeta.getSpillPriority)
+        }
+        Some(buff)
       case _ =>
-        new RapidsDiskBuffer(
-          id,
-          fileOffset,
-          uncompressedSize,
-          diskLength,
-          incoming.meta,
-          incoming.getSpillPriority)
+        throw new IllegalStateException("cannot copy buffer without meta")
     }
-    Some(buff)
+
   }
 
   /**
@@ -139,12 +145,14 @@ class RapidsDiskStore(diskBlockManager: RapidsDiskBlockManager)
       onDiskSizeInBytes: Long,
       meta: TableMeta,
       spillPriority: Long)
-      extends RapidsBufferBase(id, meta, spillPriority) {
+      extends RapidsBufferWithMeta(id, spillPriority) {
 
     // FIXME: Need to be clean up. Tracked in https://github.com/NVIDIA/spark-rapids/issues/9496
     override val memoryUsedBytes: Long = uncompressedSize
 
     override val storageTier: StorageTier = StorageTier.DISK
+
+    override def getMeta: TableMeta = meta
 
     override def getMemoryBuffer: MemoryBuffer = synchronized {
       require(onDiskSizeInBytes > 0,
@@ -191,6 +199,8 @@ class RapidsDiskStore(diskBlockManager: RapidsDiskBlockManager)
         }
       }
     }
+
+    override def buffers: RapidsBufferStore = RapidsBufferCatalog.getDiskStorage
   }
 
   /**
@@ -234,5 +244,7 @@ class RapidsDiskStore(diskBlockManager: RapidsDiskBlockManager)
         }
       }
     }
+
+    override def buffers: RapidsBufferStore = RapidsBufferCatalog.getDiskStorage
   }
 }

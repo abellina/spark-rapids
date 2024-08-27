@@ -61,26 +61,32 @@ class RapidsDeviceMemoryStore(
       copyIterator.next()
     }
     withResource(memoryBuffer) { _ =>
-      val deviceBuffer = {
-        memoryBuffer match {
-          case d: DeviceMemoryBuffer => d
-          case h: HostMemoryBuffer =>
-            GpuTaskMetrics.get.readSpillFromHostTime {
-              closeOnExcept(DeviceMemoryBuffer.allocate(memoryBuffer.getLength)) { deviceBuffer =>
-                logDebug(s"copying from host $h to device $deviceBuffer")
-                deviceBuffer.copyFromHostBuffer(h, stream)
-                deviceBuffer
-              }
+      other match {
+        case rapidsBufferWithMeta: RapidsBufferWithMeta =>
+          val deviceBuffer = {
+            memoryBuffer match {
+              case d: DeviceMemoryBuffer => d
+              case h: HostMemoryBuffer =>
+                GpuTaskMetrics.get.readSpillFromHostTime {
+                  closeOnExcept(DeviceMemoryBuffer.allocate(memoryBuffer.getLength)) {
+                      deviceBuffer =>
+                    logDebug(s"copying from host $h to device $deviceBuffer")
+                    deviceBuffer.copyFromHostBuffer(h, stream)
+                    deviceBuffer
+                  }
+                }
+              case b => throw new IllegalStateException(s"Unrecognized buffer: $b")
             }
-          case b => throw new IllegalStateException(s"Unrecognized buffer: $b")
-        }
+          }
+          Some(new RapidsDeviceMemoryBuffer(
+            rapidsBufferWithMeta.id,
+            deviceBuffer.getLength,
+            rapidsBufferWithMeta.getMeta,
+            deviceBuffer,
+            rapidsBufferWithMeta.getSpillPriority))
+        case _ =>
+          throw new IllegalStateException("cannot copy buffer without meta")
       }
-      Some(new RapidsDeviceMemoryBuffer(
-        other.id,
-        deviceBuffer.getLength,
-        other.meta,
-        deviceBuffer,
-        other.getSpillPriority))
     }
   }
 
@@ -114,7 +120,7 @@ class RapidsDeviceMemoryStore(
       initialSpillPriority)
     freeOnExcept(rapidsBuffer) { _ =>
       logDebug(s"Adding receive side table for: [id=$id, size=${buffer.getLength}, " +
-        s"uncompressed=${rapidsBuffer.meta.bufferMeta.uncompressedSize}, " +
+        s"uncompressed=${rapidsBuffer.getMeta.bufferMeta.uncompressedSize}, " +
         s"meta_id=${tableMeta.bufferMeta.id}, " +
         s"meta_size=${tableMeta.bufferMeta.size}]")
       addBuffer(rapidsBuffer, needsSync)
@@ -223,9 +229,8 @@ class RapidsDeviceMemoryStore(
       id: RapidsBufferId,
       table: Table,
       spillPriority: Long)
-      extends RapidsBufferBase(
+      extends RapidsBufferWithMeta(
         id,
-        null,
         spillPriority)
           with RapidsBufferChannelWritable {
 
@@ -262,7 +267,7 @@ class RapidsDeviceMemoryStore(
       }
     }
 
-    override def meta: TableMeta = cachedMeta
+    override def getMeta: TableMeta = cachedMeta
 
     override val memoryUsedBytes: Long = unpackedSizeInBytes
 
@@ -400,6 +405,7 @@ class RapidsDeviceMemoryStore(
       }
     }
 
+    override def buffers: RapidsBufferStore = RapidsBufferCatalog.getDeviceStorage
   }
 
   class RapidsDeviceMemoryBuffer(
@@ -408,13 +414,15 @@ class RapidsDeviceMemoryStore(
       meta: TableMeta,
       contigBuffer: DeviceMemoryBuffer,
       spillPriority: Long)
-      extends RapidsBufferBase(id, meta, spillPriority)
+      extends RapidsBufferWithMeta(id, spillPriority)
         with MemoryBuffer.EventHandler
         with RapidsBufferChannelWritable {
 
     override val memoryUsedBytes: Long = size
 
     override val storageTier: StorageTier = StorageTier.DEVICE
+
+    override def getMeta: TableMeta = meta
 
     // If this require triggers, we are re-adding a `DeviceMemoryBuffer` outside of
     // the catalog lock, which should not possible. The event handler is set to null
@@ -467,14 +475,6 @@ class RapidsDeviceMemoryStore(
 
     override def getMemoryBuffer: MemoryBuffer = getDeviceMemoryBuffer
 
-    override def getColumnarBatch(sparkTypes: Array[DataType]): ColumnarBatch = {
-      // calling `getDeviceMemoryBuffer` guarantees that we have marked this RapidsBuffer
-      // as not spillable and increased its refCount atomically
-      withResource(getDeviceMemoryBuffer) { buff =>
-        columnarBatchFromDeviceBuffer(buff, sparkTypes)
-      }
-    }
-
     /**
      * We overwrite free to make sure we don't have a handler for the underlying
      * contigBuffer, since this `RapidsBuffer` is no longer tracked.
@@ -505,7 +505,9 @@ class RapidsDeviceMemoryStore(
       written
     }
 
+    override def buffers: RapidsBufferStore = RapidsBufferCatalog.getDeviceStorage
   }
+
   override def close(): Unit = {
     try {
       super.close()

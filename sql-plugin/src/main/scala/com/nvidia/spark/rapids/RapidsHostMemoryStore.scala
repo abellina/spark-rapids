@@ -61,7 +61,7 @@ class RapidsHostMemoryStore(
       buffer)
     freeOnExcept(rapidsBuffer) { _ =>
       logDebug(s"Adding host buffer for: [id=$id, size=${buffer.getLength}, " +
-        s"uncompressed=${rapidsBuffer.meta.bufferMeta.uncompressedSize}, " +
+        s"uncompressed=${rapidsBuffer.getMeta.bufferMeta.uncompressedSize}, " +
         s"meta_id=${tableMeta.bufferMeta.id}, " +
         s"meta_size=${tableMeta.bufferMeta.size}]")
       addBuffer(rapidsBuffer, needsSync)
@@ -112,68 +112,75 @@ class RapidsHostMemoryStore(
       other: RapidsBuffer,
       catalog: RapidsBufferCatalog,
       stream: Cuda.Stream): Option[RapidsBufferBase] = {
-    val wouldFit = trySpillToMaximumSize(other, catalog, stream)
-    if (!wouldFit) {
-      // skip host
-      logWarning(s"Buffer $other with size ${other.memoryUsedBytes} does not fit " +
-          s"in the host store, skipping tier.")
-      None
-    } else {
-      // If the other is from the local disk store, we are unspilling to host memory.
-      if (other.storageTier == StorageTier.DISK) {
-        logDebug(s"copying RapidsDiskStore buffer ${other.id} to a HostMemoryBuffer")
-        val hostBuffer = other.getMemoryBuffer.asInstanceOf[HostMemoryBuffer]
-        Some(new RapidsHostMemoryBuffer(
-          other.id,
-          hostBuffer.getLength(),
-          other.meta,
-          applyPriorityOffset(other.getSpillPriority, HOST_MEMORY_BUFFER_SPILL_OFFSET),
-          hostBuffer))
-      } else {
-        withResource(other.getCopyIterator) { otherBufferIterator =>
-          val isChunked = otherBufferIterator.isChunked
-          val totalCopySize = otherBufferIterator.getTotalCopySize
-          closeOnExcept(HostAlloc.tryAlloc(totalCopySize)) { hb =>
-            hb.map { hostBuffer =>
-              val spillNs = GpuTaskMetrics.get.spillToHostTime {
-                var hostOffset = 0L
-                val start = System.nanoTime()
-                while (otherBufferIterator.hasNext) {
-                  val otherBuffer = otherBufferIterator.next()
-                  withResource(otherBuffer) { _ =>
-                    otherBuffer match {
-                      case devBuffer: DeviceMemoryBuffer =>
-                        hostBuffer.copyFromMemoryBufferAsync(
-                          hostOffset, devBuffer, 0, otherBuffer.getLength, stream)
-                        hostOffset += otherBuffer.getLength
-                      case _ =>
-                        throw new IllegalStateException("copying from buffer without device memory")
+    other match {
+      case bufferWithMeta: RapidsBufferWithMeta =>
+        val wouldFit = trySpillToMaximumSize(bufferWithMeta, catalog, stream)
+        if (!wouldFit) {
+          // skip host
+          logWarning(s"Buffer $bufferWithMeta with size ${bufferWithMeta.memoryUsedBytes} does not fit " +
+            s"in the host store, skipping tier.")
+          None
+        } else {
+          // If the other is from the local disk store, we are unspilling to host memory.
+          if (bufferWithMeta.storageTier == StorageTier.DISK) {
+            logDebug(s"copying RapidsDiskStore buffer ${bufferWithMeta.id} to a HostMemoryBuffer")
+            val hostBuffer = bufferWithMeta.getMemoryBuffer.asInstanceOf[HostMemoryBuffer]
+            Some(new RapidsHostMemoryBuffer(
+              bufferWithMeta.id,
+              hostBuffer.getLength(),
+              bufferWithMeta.getMeta,
+              applyPriorityOffset(bufferWithMeta.getSpillPriority, HOST_MEMORY_BUFFER_SPILL_OFFSET),
+              hostBuffer))
+          } else {
+            withResource(bufferWithMeta.getCopyIterator) { otherBufferIterator =>
+              val isChunked = otherBufferIterator.isChunked
+              val totalCopySize = otherBufferIterator.getTotalCopySize
+              closeOnExcept(HostAlloc.tryAlloc(totalCopySize)) { hb =>
+                hb.map { hostBuffer =>
+                  val spillNs = GpuTaskMetrics.get.spillToHostTime {
+                    var hostOffset = 0L
+                    val start = System.nanoTime()
+                    while (otherBufferIterator.hasNext) {
+                      val otherBuffer = otherBufferIterator.next()
+                      withResource(otherBuffer) { _ =>
+                        otherBuffer match {
+                          case devBuffer: DeviceMemoryBuffer =>
+                            hostBuffer.copyFromMemoryBufferAsync(
+                              hostOffset, devBuffer, 0, otherBuffer.getLength, stream)
+                            hostOffset += otherBuffer.getLength
+                          case _ =>
+                            throw new IllegalStateException("copying from buffer without device memory")
+                        }
+                      }
                     }
+                    stream.sync()
+                    System.nanoTime() - start
                   }
+                  val szMB = (totalCopySize.toDouble / 1024.0 / 1024.0).toLong
+                  val bw = (szMB.toDouble / (spillNs.toDouble / 1000000000.0)).toLong
+                  logDebug(s"Spill to host (chunked=$isChunked) " +
+                    s"size=$szMB MiB bandwidth=$bw MiB/sec")
+                  new RapidsHostMemoryBuffer(
+                    bufferWithMeta.id,
+                    totalCopySize,
+                    bufferWithMeta.getMeta,
+                    applyPriorityOffset(bufferWithMeta.getSpillPriority,
+                      HOST_MEMORY_BUFFER_SPILL_OFFSET),
+                    hostBuffer)
+                }.orElse {
+                  // skip host
+                  logWarning(s"Buffer $bufferWithMeta with size ${bufferWithMeta.memoryUsedBytes}" +
+                    "does not fit in the host store, skipping tier.")
+                  None
                 }
-                stream.sync()
-                System.nanoTime() - start
               }
-              val szMB = (totalCopySize.toDouble / 1024.0 / 1024.0).toLong
-              val bw = (szMB.toDouble / (spillNs.toDouble / 1000000000.0)).toLong
-              logDebug(s"Spill to host (chunked=$isChunked) " +
-                  s"size=$szMB MiB bandwidth=$bw MiB/sec")
-              new RapidsHostMemoryBuffer(
-                other.id,
-                totalCopySize,
-                other.meta,
-                applyPriorityOffset(other.getSpillPriority, HOST_MEMORY_BUFFER_SPILL_OFFSET),
-                hostBuffer)
-            }.orElse {
-              // skip host
-              logWarning(s"Buffer $other with size ${other.memoryUsedBytes} does not fit " +
-                  s"in the host store, skipping tier.")
-              None
             }
           }
         }
-      }
+      case _ =>
+        throw new IllegalStateException("cannot spill buffer without meta")
     }
+
   }
 
   def numBytesFree: Option[Long] = maxSize.map(_ - currentSize)
@@ -184,10 +191,12 @@ class RapidsHostMemoryStore(
       meta: TableMeta,
       spillPriority: Long,
       buffer: HostMemoryBuffer)
-      extends RapidsBufferBase(id, meta, spillPriority)
+      extends RapidsBufferWithMeta(id, spillPriority)
         with RapidsBufferChannelWritable
         with MemoryBuffer.EventHandler {
     override val storageTier: StorageTier = StorageTier.HOST
+
+    override def getMeta: TableMeta = meta
 
     override def getMemoryBuffer: MemoryBuffer = getHostMemoryBuffer
 
@@ -265,6 +274,8 @@ class RapidsHostMemoryStore(
       }
       super.free()
     }
+
+    override def buffers: RapidsBufferStore = RapidsBufferCatalog.getHostStorage
   }
 
   /**
@@ -338,7 +349,6 @@ class RapidsHostMemoryStore(
       spillPriority: Long)
       extends RapidsBufferBase(
         id,
-        null,
         spillPriority)
           with RapidsBufferChannelWritable
           with RapidsHostBatchBuffer {
@@ -360,10 +370,6 @@ class RapidsHostMemoryStore(
     /** Release the underlying resources for this buffer. */
     override protected def releaseResources(): Unit = {
       hostCb.close()
-    }
-
-    override def meta: TableMeta = {
-      null
     }
 
     // This is the current size in batch form. It is to be used while this
@@ -478,6 +484,8 @@ class RapidsHostMemoryStore(
         }
       }
     }
+
+    override def buffers: RapidsBufferStore = RapidsBufferCatalog.getHostStorage
   }
 }
 

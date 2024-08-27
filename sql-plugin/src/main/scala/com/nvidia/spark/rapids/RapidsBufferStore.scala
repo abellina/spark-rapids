@@ -401,229 +401,242 @@ abstract class RapidsBufferStore(val tier: StorageTier)
     true // default to success, HostMemoryStore overrides this
   }
 
-  /** Base class for all buffers in this store. */
-  abstract class RapidsBufferBase(
-      override val id: RapidsBufferId,
-      _meta: TableMeta,
-      initialSpillPriority: Long,
-      catalog: RapidsBufferCatalog = RapidsBufferCatalog.singleton)
-      extends RapidsBuffer {
-    private val MAX_UNSPILL_ATTEMPTS = 100
+  def remove(id: RapidsBufferId): Unit = buffers.remove(id)
 
-    // isValid and refcount must be used with the `RapidsBufferBase` lock held
-    protected[this] var isValid = true
-    protected[this] var refcount = 0
+  def updateSpillPriority(buffer: RapidsBufferBase, priority: Long): Unit = {
+    buffers.updateSpillPriority(buffer, priority)
+  }
+}
 
-    private[this] var spillPriority: Long = initialSpillPriority
+/** Base class for all buffers in this store. */
+abstract class RapidsBufferBase(override val id: RapidsBufferId,
+                                initialSpillPriority: Long,
+                                catalog: RapidsBufferCatalog = RapidsBufferCatalog.singleton)
+  extends RapidsBuffer
+    with Logging {
+  private val MAX_UNSPILL_ATTEMPTS = 100
 
-    private[this] val rwl: ReentrantReadWriteLock = new ReentrantReadWriteLock()
+  // isValid and refcount must be used with the `RapidsBufferBase` lock held
+  protected[this] var isValid = true
+  protected[this] var refcount = 0
 
+  private[this] var spillPriority: Long = initialSpillPriority
 
-    def meta: TableMeta = _meta
+  private[this] val rwl: ReentrantReadWriteLock = new ReentrantReadWriteLock()
 
-    /** Release the underlying resources for this buffer. */
-    protected def releaseResources(): Unit
+  /** Release the underlying resources for this buffer. */
+  protected def releaseResources(): Unit
 
-    /**
-     * Materialize the memory buffer from the underlying storage.
-     *
-     * If the buffer resides in device or host memory, only reference count is incremented.
-     * If the buffer resides in secondary storage, a new host or device memory buffer is created,
-     * with the data copied to the new buffer.
-     * The caller must have successfully acquired the buffer beforehand.
-     * @see [[addReference]]
-     * @note It is the responsibility of the caller to close the buffer.
-     * @note This is an internal API only used by Rapids buffer stores.
-     */
-    protected def materializeMemoryBuffer: MemoryBuffer = getMemoryBuffer
+  /**
+   * Materialize the memory buffer from the underlying storage.
+   *
+   * If the buffer resides in device or host memory, only reference count is incremented.
+   * If the buffer resides in secondary storage, a new host or device memory buffer is created,
+   * with the data copied to the new buffer.
+   * The caller must have successfully acquired the buffer beforehand.
+   * @see [[addReference]]
+   * @note It is the responsibility of the caller to close the buffer.
+   * @note This is an internal API only used by Rapids buffer stores.
+   */
+  protected def materializeMemoryBuffer: MemoryBuffer = getMemoryBuffer
 
-    override def addReference(): Boolean = synchronized {
-      if (isValid) {
-        refcount += 1
-      }
-      isValid
+  override def addReference(): Boolean = synchronized {
+    if (isValid) {
+      refcount += 1
     }
+    isValid
+  }
 
-    override def getColumnarBatch(sparkTypes: Array[DataType]): ColumnarBatch = {
-      // NOTE: Cannot hold a lock on this buffer here because memory is being
-      // allocated. Allocations can trigger synchronous spills which can
-      // deadlock if another thread holds the device store lock and is trying
-      // to spill to this store.
-      withResource(getDeviceMemoryBuffer) { deviceBuffer =>
-        columnarBatchFromDeviceBuffer(deviceBuffer, sparkTypes)
-      }
-    }
-
-    protected def columnarBatchFromDeviceBuffer(devBuffer: DeviceMemoryBuffer,
-        sparkTypes: Array[DataType]): ColumnarBatch = {
-      val bufferMeta = meta.bufferMeta()
-      if (bufferMeta == null || bufferMeta.codecBufferDescrsLength == 0) {
-        MetaUtils.getBatchFromMeta(devBuffer, meta, sparkTypes)
-      } else {
-        GpuCompressedColumnVector.from(devBuffer, meta)
+  override def copyToMemoryBuffer(srcOffset: Long, dst: MemoryBuffer, dstOffset: Long,
+                                  length: Long, stream: Cuda.Stream): Unit = {
+    withResource(getMemoryBuffer) { memBuff =>
+      dst match {
+        case _: HostMemoryBuffer =>
+          // TODO: consider moving to the async version.
+          dst.copyFromMemoryBuffer(dstOffset, memBuff, srcOffset, length, stream)
+        case _: BaseDeviceMemoryBuffer =>
+          dst.copyFromMemoryBufferAsync(dstOffset, memBuff, srcOffset, length, stream)
+        case _ =>
+          throw new IllegalStateException(s"Infeasible destination buffer type ${dst.getClass}")
       }
     }
+  }
 
-    override def copyToMemoryBuffer(srcOffset: Long, dst: MemoryBuffer, dstOffset: Long,
-        length: Long, stream: Cuda.Stream): Unit = {
-      withResource(getMemoryBuffer) { memBuff =>
-        dst match {
-          case _: HostMemoryBuffer =>
-            // TODO: consider moving to the async version.
-            dst.copyFromMemoryBuffer(dstOffset, memBuff, srcOffset, length, stream)
-          case _: BaseDeviceMemoryBuffer =>
-            dst.copyFromMemoryBufferAsync(dstOffset, memBuff, srcOffset, length, stream)
-          case _ =>
-            throw new IllegalStateException(s"Infeasible destination buffer type ${dst.getClass}")
-        }
-      }
-    }
-
-    /**
-     * TODO: we want to remove this method from the buffer, instead we want the catalog
-     *   to be responsible for producing the DeviceMemoryBuffer by asking the buffer. This
-     *   hides the RapidsBuffer from clients and simplifies locking.
-     */
-    override def getDeviceMemoryBuffer: DeviceMemoryBuffer = {
-      if (RapidsBufferCatalog.shouldUnspill) {
-        (0 until MAX_UNSPILL_ATTEMPTS).foreach { _ =>
-          catalog.acquireBuffer(id, DEVICE) match {
-            case Some(buffer) =>
-              withResource(buffer) { _ =>
-                return buffer.getDeviceMemoryBuffer
-              }
-            case _ =>
-              try {
-                logDebug(s"Unspilling $this $id to $DEVICE")
-                val newBuffer = catalog.unspillBufferToDeviceStore(
-                  this,
-                  Cuda.DEFAULT_STREAM)
-                withResource(newBuffer) { _ =>
-                  return newBuffer.getDeviceMemoryBuffer
-                }
-              } catch {
-                case _: DuplicateBufferException =>
-                  logDebug(s"Lost device buffer registration race for buffer $id, retrying...")
-              }
-          }
-        }
-        throw new IllegalStateException(s"Unable to get device memory buffer for ID: $id")
-      } else {
-        materializeMemoryBuffer match {
-          case h: HostMemoryBuffer =>
-            withResource(h) { _ =>
-              closeOnExcept(DeviceMemoryBuffer.allocate(h.getLength)) { deviceBuffer =>
-                logDebug(s"copying ${h.getLength} from host $h to device $deviceBuffer " +
-                    s"of size ${deviceBuffer.getLength}")
-                deviceBuffer.copyFromHostBuffer(h)
-                deviceBuffer
-              }
-            }
-          case d: DeviceMemoryBuffer => d
-          case b => throw new IllegalStateException(s"Unrecognized buffer: $b")
-        }
-      }
-    }
-
-    override def getHostMemoryBuffer: HostMemoryBuffer = {
+  /**
+   * TODO: we want to remove this method from the buffer, instead we want the catalog
+   *   to be responsible for producing the DeviceMemoryBuffer by asking the buffer. This
+   *   hides the RapidsBuffer from clients and simplifies locking.
+   */
+  override def getDeviceMemoryBuffer: DeviceMemoryBuffer = {
+    if (RapidsBufferCatalog.shouldUnspill) {
       (0 until MAX_UNSPILL_ATTEMPTS).foreach { _ =>
-        catalog.acquireBuffer(id, HOST) match {
+        catalog.acquireBuffer(id, DEVICE) match {
           case Some(buffer) =>
             withResource(buffer) { _ =>
-              return buffer.getHostMemoryBuffer
+              return buffer.getDeviceMemoryBuffer
             }
           case _ =>
             try {
-              logDebug(s"Unspilling $this $id to $HOST")
-              val newBuffer = catalog.unspillBufferToHostStore(
+              logDebug(s"Unspilling $this $id to $DEVICE")
+              val newBuffer = catalog.unspillBufferToDeviceStore(
                 this,
                 Cuda.DEFAULT_STREAM)
               withResource(newBuffer) { _ =>
-                return newBuffer.getHostMemoryBuffer
+                return newBuffer.getDeviceMemoryBuffer
               }
             } catch {
               case _: DuplicateBufferException =>
-                logDebug(s"Lost host buffer registration race for buffer $id, retrying...")
+                logDebug(s"Lost device buffer registration race for buffer $id, retrying...")
             }
         }
       }
-      throw new IllegalStateException(s"Unable to get host memory buffer for ID: $id")
-    }
-
-    /**
-     * close() is called by client code to decrease the ref count of this RapidsBufferBase.
-     * In the off chance that by the time close is invoked, the buffer was freed (not valid)
-     * then this close call winds up freeing the resources of the rapids buffer.
-     */
-    override def close(): Unit = synchronized {
-      if (refcount == 0) {
-        throw new IllegalStateException("Buffer already closed")
+      throw new IllegalStateException(s"Unable to get device memory buffer for ID: $id")
+    } else {
+      materializeMemoryBuffer match {
+        case h: HostMemoryBuffer =>
+          withResource(h) { _ =>
+            closeOnExcept(DeviceMemoryBuffer.allocate(h.getLength)) { deviceBuffer =>
+              logDebug(s"copying ${h.getLength} from host $h to device $deviceBuffer " +
+                s"of size ${deviceBuffer.getLength}")
+              deviceBuffer.copyFromHostBuffer(h)
+              deviceBuffer
+            }
+          }
+        case d: DeviceMemoryBuffer => d
+        case b => throw new IllegalStateException(s"Unrecognized buffer: $b")
       }
-      refcount -= 1
-      if (refcount == 0 && !isValid) {
+    }
+  }
+
+  override def getHostMemoryBuffer: HostMemoryBuffer = {
+    (0 until MAX_UNSPILL_ATTEMPTS).foreach { _ =>
+      catalog.acquireBuffer(id, HOST) match {
+        case Some(buffer) =>
+          withResource(buffer) { _ =>
+            return buffer.getHostMemoryBuffer
+          }
+        case _ =>
+          try {
+            logDebug(s"Unspilling $this $id to $HOST")
+            val newBuffer = catalog.unspillBufferToHostStore(
+              this,
+              Cuda.DEFAULT_STREAM)
+            withResource(newBuffer) { _ =>
+              return newBuffer.getHostMemoryBuffer
+            }
+          } catch {
+            case _: DuplicateBufferException =>
+              logDebug(s"Lost host buffer registration race for buffer $id, retrying...")
+          }
+      }
+    }
+    throw new IllegalStateException(s"Unable to get host memory buffer for ID: $id")
+  }
+
+  /**
+   * close() is called by client code to decrease the ref count of this RapidsBufferBase.
+   * In the off chance that by the time close is invoked, the buffer was freed (not valid)
+   * then this close call winds up freeing the resources of the rapids buffer.
+   */
+  override def close(): Unit = synchronized {
+    if (refcount == 0) {
+      throw new IllegalStateException("Buffer already closed")
+    }
+    refcount -= 1
+    if (refcount == 0 && !isValid) {
+      freeBuffer()
+    }
+  }
+
+  def buffers: RapidsBufferStore
+
+  /**
+   * Mark the buffer as freed and no longer valid. This is called by the store when removing a
+   * buffer (it is no longer tracked).
+   *
+   * @note The resources may not be immediately released if the buffer has outstanding references.
+   * In that case the resources will be released when the reference count reaches zero.
+   */
+  override def free(): Unit = synchronized {
+    if (isValid) {
+      isValid = false
+      buffers.remove(id)
+      if (refcount == 0) {
         freeBuffer()
       }
+    } else {
+      logWarning(s"Trying to free an invalid buffer => $id, size = ${memoryUsedBytes}, $this")
     }
-
-    /**
-     * Mark the buffer as freed and no longer valid. This is called by the store when removing a
-     * buffer (it is no longer tracked).
-     *
-     * @note The resources may not be immediately released if the buffer has outstanding references.
-     * In that case the resources will be released when the reference count reaches zero.
-     */
-    override def free(): Unit = synchronized {
-      if (isValid) {
-        isValid = false
-        buffers.remove(id)
-        if (refcount == 0) {
-          freeBuffer()
-        }
-      } else {
-        logWarning(s"Trying to free an invalid buffer => $id, size = ${memoryUsedBytes}, $this")
-      }
-    }
-
-    override def getSpillPriority: Long = spillPriority
-
-    override def setSpillPriority(priority: Long): Unit =
-      buffers.updateSpillPriority(this, priority)
-
-    private[RapidsBufferStore] def updateSpillPriorityValue(priority: Long): Unit = {
-      spillPriority = priority
-    }
-
-    override def withMemoryBufferReadLock[K](body: MemoryBuffer => K): K = {
-      withResource(getMemoryBuffer) { buff =>
-        val lock = rwl.readLock()
-        try {
-          lock.lock()
-          body(buff)
-        } finally {
-          lock.unlock()
-        }
-      }
-    }
-
-    override def withMemoryBufferWriteLock[K](body: MemoryBuffer => K): K = {
-      withResource(getMemoryBuffer) { buff =>
-        val lock = rwl.writeLock()
-        try {
-          lock.lock()
-          body(buff)
-        } finally {
-          lock.unlock()
-        }
-      }
-    }
-
-    /** Must be called with a lock on the buffer */
-    private def freeBuffer(): Unit = {
-      releaseResources()
-    }
-
-    override def toString: String = s"$name buffer size=$memoryUsedBytes"
   }
+
+  override def getSpillPriority: Long = spillPriority
+
+  override def setSpillPriority(priority: Long): Unit =
+    buffers.updateSpillPriority(this, priority)
+
+  def updateSpillPriorityValue(priority: Long): Unit = {
+    spillPriority = priority
+  }
+
+  override def withMemoryBufferReadLock[K](body: MemoryBuffer => K): K = {
+    withResource(getMemoryBuffer) { buff =>
+      val lock = rwl.readLock()
+      try {
+        lock.lock()
+        body(buff)
+      } finally {
+        lock.unlock()
+      }
+    }
+  }
+
+  override def withMemoryBufferWriteLock[K](body: MemoryBuffer => K): K = {
+    withResource(getMemoryBuffer) { buff =>
+      val lock = rwl.writeLock()
+      try {
+        lock.lock()
+        body(buff)
+      } finally {
+        lock.unlock()
+      }
+    }
+  }
+
+  /** Must be called with a lock on the buffer */
+  private def freeBuffer(): Unit = {
+    releaseResources()
+  }
+
+  // TODO: this should probably be overwritten by each member instead
+  override def toString: String = s"${this.getClass.getName} size=$memoryUsedBytes"
+}
+
+abstract class RapidsBufferWithMeta(id: RapidsBufferId,
+                                    initialSpillPriority: Long,
+                                    catalog: RapidsBufferCatalog = RapidsBufferCatalog.singleton)
+  extends RapidsBufferBase(id, initialSpillPriority, catalog) {
+
+  def getMeta: TableMeta
+
+  override def getColumnarBatch(sparkTypes: Array[DataType]): ColumnarBatch = {
+    // calling `getDeviceMemoryBuffer` guarantees that we have marked this RapidsBuffer
+    // as not spillable and increased its refCount atomically
+    withResource(getDeviceMemoryBuffer) { buff =>
+      columnarBatchFromDeviceBuffer(buff, sparkTypes)
+    }
+  }
+
+  protected def columnarBatchFromDeviceBuffer(devBuffer: DeviceMemoryBuffer,
+                                              sparkTypes: Array[DataType]): ColumnarBatch = {
+    val meta = getMeta
+    val bufferMeta = meta.bufferMeta()
+    if (bufferMeta == null || bufferMeta.codecBufferDescrsLength == 0) {
+      MetaUtils.getBatchFromMeta(devBuffer, meta, sparkTypes)
+    } else {
+      GpuCompressedColumnVector.from(devBuffer, meta)
+    }
+  }
+
 }
 
 /**

@@ -21,7 +21,6 @@ import java.util.UUID
 import ai.rapids.cudf.{Cuda, DeviceMemoryBuffer, HostMemoryBuffer, MemoryBuffer}
 import com.nvidia.spark.rapids.{RapidsBuffer, RapidsBufferCatalog, RapidsBufferId, SpillableColumnarBatchImpl, StorageTier}
 import com.nvidia.spark.rapids.StorageTier.StorageTier
-import com.nvidia.spark.rapids.format.TableMeta
 import org.scalatest.funsuite.AnyFunSuite
 
 import org.apache.spark.sql.types.{DataType, IntegerType}
@@ -48,7 +47,6 @@ class SpillableColumnarBatchSuite extends AnyFunSuite {
 
   class MockBuffer(override val id: RapidsBufferId) extends RapidsBuffer {
     override val memoryUsedBytes: Long = 123
-    override def meta: TableMeta = null
     override val storageTier: StorageTier = StorageTier.DEVICE
     override def getMemoryBuffer: MemoryBuffer = null
     override def copyToMemoryBuffer(srcOffset: Long, dst: MemoryBuffer, dstOffset: Long,

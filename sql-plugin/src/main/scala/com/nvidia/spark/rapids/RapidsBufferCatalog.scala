@@ -555,7 +555,12 @@ class RapidsBufferCatalog(
     if (buffers == null || buffers.isEmpty) {
       throw new NoSuchElementException(s"Cannot locate buffer associated with ID: $id")
     }
-    buffers.head.meta
+    buffers.head match {
+      case bufferWithMeta: RapidsBufferWithMeta =>
+        bufferWithMeta.getMeta
+      case other =>
+        throw new IllegalStateException(s"cannot get meta from a $other")
+    }
   }
 
   /**
@@ -878,6 +883,8 @@ object RapidsBufferCatalog extends Logging {
   }
 
   def getDeviceStorage: RapidsDeviceMemoryStore = deviceStorage
+
+  def getDiskStorage: RapidsDiskStore = diskStorage
 
   def getHostStorage: RapidsHostMemoryStore = hostStorage
 

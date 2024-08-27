@@ -19,7 +19,7 @@ package com.nvidia.spark.rapids.shuffle
 import java.io.IOException
 
 import ai.rapids.cudf.{Cuda, MemoryBuffer}
-import com.nvidia.spark.rapids.{RapidsBuffer, ShuffleMetadata, StorageTier}
+import com.nvidia.spark.rapids.{RapidsBuffer, RapidsBufferWithMeta, ShuffleMetadata, StorageTier}
 import com.nvidia.spark.rapids.Arm.{closeOnExcept, withResource}
 import com.nvidia.spark.rapids.RapidsPluginImplicits._
 import com.nvidia.spark.rapids.format.{BufferMeta, BufferTransferRequest}
@@ -82,7 +82,12 @@ class BufferSendState(
         val bufferTransferRequest = transferRequest.requests(btr, ix)
         withResource(requestHandler.acquireShuffleBuffer(
           bufferTransferRequest.bufferId())) { table =>
-          bufferMetas(ix) = table.meta.bufferMeta()
+          table match {
+            case bufferWithMeta: RapidsBufferWithMeta =>
+              bufferMetas(ix) = bufferWithMeta.getMeta.bufferMeta()
+            case _ =>
+              throw new IllegalStateException("cannot send a table without metadata")
+          }
           new SendBlock(bufferTransferRequest.bufferId(), table.getPackedSizeBytes)
         }
       }

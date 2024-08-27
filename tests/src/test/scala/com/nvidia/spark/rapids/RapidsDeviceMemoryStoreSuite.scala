@@ -323,10 +323,10 @@ class RapidsDeviceMemoryStoreSuite extends AnyFunSuite with MockitoSugar {
       }
       val captor: ArgumentCaptor[RapidsBuffer] = ArgumentCaptor.forClass(classOf[RapidsBuffer])
       verify(catalog).registerNewBuffer(captor.capture())
-      val resultBuffer = captor.getValue
+      val resultBuffer = captor.getValue.asInstanceOf[RapidsBufferWithMeta]
       assertResult(bufferId)(resultBuffer.id)
       assertResult(spillPriority)(resultBuffer.getSpillPriority)
-      assertResult(meta)(resultBuffer.meta)
+      assertResult(meta)(resultBuffer.getMeta)
     }
   }
 
@@ -469,13 +469,22 @@ class RapidsDeviceMemoryStoreSuite extends AnyFunSuite with MockitoSugar {
         c: RapidsBufferCatalog,
         s: Cuda.Stream): Option[RapidsBufferBase] = {
       spilledBuffers += b.id
-      Some(new MockRapidsBuffer(
-        b.id, b.getPackedSizeBytes, b.meta, b.getSpillPriority))
+      b match {
+        case bufferWithMeta: RapidsBufferWithMeta =>
+          Some(new MockRapidsBuffer(
+            bufferWithMeta.id,
+            bufferWithMeta.getPackedSizeBytes,
+            bufferWithMeta.getMeta,
+            bufferWithMeta.getSpillPriority))
+        case _ => throw new IllegalStateException("should not be here")
+      }
     }
 
     class MockRapidsBuffer(id: RapidsBufferId, size: Long, meta: TableMeta, spillPriority: Long)
-        extends RapidsBufferBase(id, meta, spillPriority) {
+        extends RapidsBufferWithMeta(id, spillPriority) {
       override protected def releaseResources(): Unit = {}
+
+      override def getMeta: TableMeta = meta
 
       override val storageTier: StorageTier = StorageTier.HOST
 
@@ -484,6 +493,8 @@ class RapidsDeviceMemoryStoreSuite extends AnyFunSuite with MockitoSugar {
 
       /** The size of this buffer in bytes. */
       override val memoryUsedBytes: Long = size
+
+      override def buffers: RapidsBufferStore = null
     }
   }
 }
