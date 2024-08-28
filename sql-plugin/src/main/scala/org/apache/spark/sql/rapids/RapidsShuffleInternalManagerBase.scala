@@ -921,7 +921,6 @@ abstract class RapidsShuffleThreadedReaderBase[K, C](
           var didFit = true
           while (blockState.hasNext && didFit) {
             val batch = blockState.next()
-            queued.offer(batch)
             // peek at the next batch
             currentBatchSize = blockState.getNextBatchSize
             didFit = limiter.acquire(currentBatchSize)

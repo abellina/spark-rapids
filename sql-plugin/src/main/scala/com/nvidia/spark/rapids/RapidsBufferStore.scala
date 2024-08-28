@@ -589,7 +589,9 @@ abstract class RapidsBufferBase(override val id: RapidsBufferId,
     }
   }
 
-  override def getSpillPriority: Long = spillPriority
+  override def getSpillPriority: Long = {
+    spillPriority
+  }
 
   def updateSpillPriorityValue(priority: Long): Unit = {
     spillPriority = priority

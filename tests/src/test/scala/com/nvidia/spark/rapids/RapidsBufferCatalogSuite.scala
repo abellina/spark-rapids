@@ -17,18 +17,20 @@
 package com.nvidia.spark.rapids
 
 import java.io.File
+
 import ai.rapids.cudf.{Cuda, DeviceMemoryBuffer, HostMemoryBuffer, MemoryBuffer}
 import com.nvidia.spark.rapids.Arm.withResource
 import com.nvidia.spark.rapids.StorageTier.{DEVICE, DISK, HOST, StorageTier}
 import com.nvidia.spark.rapids.format.TableMeta
 import org.mockito.ArgumentMatchers.any
 import org.mockito.Mockito._
+import org.scalatest.BeforeAndAfterEach
 import org.scalatest.funsuite.AnyFunSuite
 import org.scalatestplus.mockito.MockitoSugar
+
 import org.apache.spark.sql.rapids.RapidsDiskBlockManager
 import org.apache.spark.sql.types.DataType
 import org.apache.spark.sql.vectorized.ColumnarBatch
-import org.scalatest.BeforeAndAfterEach
 
 class RapidsBufferCatalogSuite
   extends AnyFunSuite
@@ -71,106 +73,127 @@ class RapidsBufferCatalogSuite
   }
 
   test("a second handle prevents buffer to be removed") {
-    val bufferId = MockBufferId(5)
-    val buffer = mockBuffer(bufferId)
-    catalog.registerNewBuffer(buffer)
-    val handle1 =
-      catalog.makeNewHandle(bufferId, -1)
-    val handle2 =
-      catalog.makeNewHandle(bufferId, -1)
+    withResource(new RapidsDeviceMemoryStore) { devStore =>
+      catalog = new RapidsBufferCatalog(devStore)
+      val bufferId = MockBufferId(5)
+      val buffer = mockBuffer(bufferId)
+      catalog.registerNewBuffer(buffer)
+      val handle1 =
+        catalog.makeNewHandle(bufferId, -1)
+      val handle2 =
+        catalog.makeNewHandle(bufferId, -1)
 
-    handle1.close()
+      handle1.close()
 
-    // this does not throw
-    catalog.acquireBuffer(handle2).close()
-    // actually this doesn't throw either
-    catalog.acquireBuffer(handle1).close()
+      // this does not throw
+      catalog.acquireBuffer(handle2).close()
+      // actually this doesn't throw either
+      catalog.acquireBuffer(handle1).close()
 
-    handle2.close()
+      handle2.close()
 
-    assertThrows[NoSuchElementException](catalog.acquireBuffer(handle1))
-    assertThrows[NoSuchElementException](catalog.acquireBuffer(handle2))
+      assertThrows[NoSuchElementException](catalog.acquireBuffer(handle1))
+      assertThrows[NoSuchElementException](catalog.acquireBuffer(handle2))
+    }
   }
 
   test("spill priorities are updated as handles are registered and unregistered") {
-    val bufferId = MockBufferId(5)
-    val buffer = mockBuffer(bufferId, initialPriority = -1)
-    catalog.registerNewBuffer(buffer)
-    val handle1 =
-      catalog.makeNewHandle(bufferId, -1)
-    withResource(catalog.acquireBuffer(handle1)) { buff =>
-      assertResult(-1)(buff.getSpillPriority)
-    }
-    val handle2 =
-      catalog.makeNewHandle(bufferId, 0)
-    withResource(catalog.acquireBuffer(handle2)) { buff =>
-      assertResult(0)(buff.getSpillPriority)
-    }
+    withResource(new RapidsDeviceMemoryStore) { devStore =>
+      catalog = new RapidsBufferCatalog(devStore)
+      val bufferId = MockBufferId(5)
+      val buffer = mockBuffer(bufferId, initialPriority = -1)
+      catalog.registerNewBuffer(buffer)
+      val handle1 =
+        catalog.makeNewHandle(bufferId, -1)
+      withResource(catalog.acquireBuffer(handle1)) { buff =>
+        assertResult(-1)(buff.getSpillPriority)
+      }
+      val handle2 =
+        catalog.makeNewHandle(bufferId, 0)
+      withResource(catalog.acquireBuffer(handle2)) { buff =>
+        assertResult(0)(buff.getSpillPriority)
+      }
 
-    // removing the lower priority handle, keeps the high priority spill
-    handle1.close()
-    withResource(catalog.acquireBuffer(handle2)) { buff =>
-      assertResult(0)(buff.getSpillPriority)
-    }
+      // removing the lower priority handle, keeps the high priority spill
+      handle1.close()
+      withResource(catalog.acquireBuffer(handle2)) { buff =>
+        assertResult(0)(buff.getSpillPriority)
+      }
 
-    // adding a lower priority -1000 handle keeps the high priority (0) spill
-    val handle3 =
-      catalog.makeNewHandle(bufferId, -1000)
-    withResource(catalog.acquireBuffer(handle3)) { buff =>
-      assertResult(0)(buff.getSpillPriority)
-    }
+      // adding a lower priority -1000 handle keeps the high priority (0) spill
+      val handle3 =
+        catalog.makeNewHandle(bufferId, -1000)
+      withResource(catalog.acquireBuffer(handle3)) { buff =>
+        assertResult(0)(buff.getSpillPriority)
+      }
 
-    // removing the high priority spill (0) brings us down to the
-    // low priority that is remaining
-    handle2.close()
-    withResource(catalog.acquireBuffer(handle2)) { buff =>
-      assertResult(-1000)(buff.getSpillPriority)
-    }
+      // removing the high priority spill (0) brings us down to the
+      // low priority that is remaining
+      handle2.close()
+      withResource(catalog.acquireBuffer(handle2)) { buff =>
+        assertResult(-1000)(buff.getSpillPriority)
+      }
 
-    handle3.close()
+      handle3.close()
+    }
   }
 
   test("buffer registering slower tier does not hide faster tier") {
-    val bufferId = MockBufferId(5)
-    val buffer = mockBuffer(bufferId, tier = DEVICE)
-    catalog.registerNewBuffer(buffer)
-    val handle = catalog.makeNewHandle(bufferId, 0)
-    val buffer2 = mockBuffer(bufferId, tier = HOST)
-    catalog.registerNewBuffer(buffer2)
-    val buffer3 = mockBuffer(bufferId, tier = DISK)
-    catalog.registerNewBuffer(buffer3)
-    val acquired = catalog.acquireBuffer(handle)
-    assertResult(5)(acquired.id.tableId)
-    assertResult(buffer)(acquired)
+    withResource(new RapidsDeviceMemoryStore) { deviceStore =>
+      val mockStore = mock[RapidsDiskStore]
+      withResource(
+        new RapidsHostMemoryStore(Some(10000))) { hostStore =>
+        deviceStore.setSpillStore(hostStore)
+        hostStore.setSpillStore(mockStore)
+        catalog = new RapidsBufferCatalog(deviceStore, hostStore, mockStore)
+        val bufferId = MockBufferId(5)
+        val buffer = mockBuffer(bufferId, tier = DEVICE)
+        catalog.registerNewBuffer(buffer)
+        val handle = catalog.makeNewHandle(bufferId, 0)
+        val buffer2 = mockBuffer(bufferId, tier = HOST)
+        catalog.registerNewBuffer(buffer2)
+        val buffer3 = mockBuffer(bufferId, tier = DISK)
+        catalog.registerNewBuffer(buffer3)
+        val acquired = catalog.acquireBuffer(handle)
+        assertResult(5)(acquired.id.tableId)
+        assertResult(buffer)(acquired)
 
-    // registering the handle acquires the buffer
-    verify(buffer, times(2)).addReference()
+        // registering the handle acquires the buffer
+        verify(buffer, times(2)).addReference()
+      }
+    }
   }
 
   test("acquire buffer") {
-    val bufferId = MockBufferId(5)
-    val buffer = mockBuffer(bufferId)
-    catalog.registerNewBuffer(buffer)
-    val handle = catalog.makeNewHandle(bufferId, 0)
-    val acquired = catalog.acquireBuffer(handle)
-    assertResult(5)(acquired.id.tableId)
-    assertResult(buffer)(acquired)
+    withResource(new RapidsDeviceMemoryStore) { devStore =>
+      catalog = new RapidsBufferCatalog(devStore)
+      val bufferId = MockBufferId(5)
+      val buffer = mockBuffer(bufferId)
+      catalog.registerNewBuffer(buffer)
+      val handle = catalog.makeNewHandle(bufferId, 0)
+      val acquired = catalog.acquireBuffer(handle)
+      assertResult(5)(acquired.id.tableId)
+      assertResult(buffer)(acquired)
 
-    // registering the handle acquires the buffer
-    verify(buffer, times(2)).addReference()
+      // registering the handle acquires the buffer
+      verify(buffer, times(2)).addReference()
+    }
   }
 
   test("acquire buffer retries automatically") {
-    val bufferId = MockBufferId(5)
-    val buffer = mockBuffer(bufferId, acquireAttempts = 9)
-    catalog.registerNewBuffer(buffer)
-    val handle = catalog.makeNewHandle(bufferId, 0)
-    val acquired = catalog.acquireBuffer(handle)
-    assertResult(5)(acquired.id.tableId)
-    assertResult(buffer)(acquired)
+    withResource(new RapidsDeviceMemoryStore) { devStore =>
+      catalog = new RapidsBufferCatalog(devStore)
+      val bufferId = MockBufferId(5)
+      val buffer = mockBuffer(bufferId, acquireAttempts = 9)
+      catalog.registerNewBuffer(buffer)
+      val handle = catalog.makeNewHandle(bufferId, 0)
+      val acquired = catalog.acquireBuffer(handle)
+      assertResult(5)(acquired.id.tableId)
+      assertResult(buffer)(acquired)
 
-    // registering the handle acquires the buffer
-    verify(buffer, times(10)).addReference()
+      // registering the handle acquires the buffer
+      verify(buffer, times(10)).addReference()
+    }
   }
 
   test("acquire buffer at specific tier") {
@@ -290,34 +313,45 @@ class RapidsBufferCatalogSuite
   }
 
   test("remove buffer releases buffer resources") {
-    val bufferId = MockBufferId(5)
-    val buffer = mockBuffer(bufferId)
-    catalog.registerNewBuffer(buffer)
-    val handle = catalog.makeNewHandle(
-      bufferId, -1)
-    handle.close()
-    verify(buffer).free()
+    withResource(new RapidsDeviceMemoryStore) { devStore =>
+      catalog = new RapidsBufferCatalog(devStore)
+      val bufferId = MockBufferId(5)
+      val buffer = mockBuffer(bufferId)
+      catalog.registerNewBuffer(buffer)
+      val handle = catalog.makeNewHandle(
+        bufferId, -1)
+      handle.close()
+      verify(buffer).free()
+    }
   }
 
   test("remove buffer releases buffer resources at all tiers") {
-    val bufferId = MockBufferId(5)
-    val buffer = mockBuffer(bufferId, tier = DEVICE)
-    catalog.registerNewBuffer(buffer)
-    val handle = catalog.makeNewHandle(
-      bufferId, -1)
+    withResource(new RapidsDeviceMemoryStore) { deviceStore =>
+      val mockStore = mock[RapidsDiskStore]
+      withResource(new RapidsHostMemoryStore(Some(1000))) { hostStore =>
+        deviceStore.setSpillStore(hostStore)
+        hostStore.setSpillStore(mockStore)
+        catalog = new RapidsBufferCatalog(deviceStore, hostStore, mockStore)
+        val bufferId = MockBufferId(5)
+        val buffer = mockBuffer(bufferId, tier = DEVICE)
+        catalog.registerNewBuffer(buffer)
+        val handle = catalog.makeNewHandle(
+          bufferId, -1)
 
-    // these next registrations don't get their own handle. This is an internal
-    // operation from the store where it has spilled to host and disk the RapidsBuffer
-    val buffer2 = mockBuffer(bufferId, tier = HOST)
-    catalog.registerNewBuffer(buffer2)
-    val buffer3 = mockBuffer(bufferId, tier = DISK)
-    catalog.registerNewBuffer(buffer3)
+        // these next registrations don't get their own handle. This is an internal
+        // operation from the store where it has spilled to host and disk the RapidsBuffer
+        val buffer2 = mockBuffer(bufferId, tier = HOST)
+        catalog.registerNewBuffer(buffer2)
+        val buffer3 = mockBuffer(bufferId, tier = DISK)
+        catalog.registerNewBuffer(buffer3)
 
-    // removing the original handle removes all buffers from all tiers.
-    handle.close()
-    verify(buffer).free()
-    verify(buffer2).free()
-    verify(buffer3).free()
+        // removing the original handle removes all buffers from all tiers.
+        handle.close()
+        verify(buffer).free()
+        verify(buffer2).free()
+        verify(buffer3).free()
+      }
+    }
   }
 
   private def mockBuffer(
@@ -329,7 +363,6 @@ class RapidsBufferCatalogSuite
     spy(new RapidsBufferBase(bufferId,
           tableMeta, initialPriority, catalog) {
       var _acquireAttempts: Int = acquireAttempts
-      var currentPriority: Long =  initialPriority
       override val id: RapidsBufferId = bufferId
       override val memoryUsedBytes: Long = 0
       override def meta: TableMeta = tableMeta
@@ -351,7 +384,6 @@ class RapidsBufferCatalogSuite
         _acquireAttempts == 0
       }
       override def free(): Unit = {}
-      override def getSpillPriority: Long = currentPriority
       override def withMemoryBufferReadLock[K](body: MemoryBuffer => K): K = { body(null) }
       override def withMemoryBufferWriteLock[K](body: MemoryBuffer => K): K = { body(null) }
       override def close(): Unit = {}
