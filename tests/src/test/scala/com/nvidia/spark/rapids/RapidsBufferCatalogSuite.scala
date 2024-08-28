@@ -17,7 +17,6 @@
 package com.nvidia.spark.rapids
 
 import java.io.File
-
 import ai.rapids.cudf.{Cuda, DeviceMemoryBuffer, HostMemoryBuffer, MemoryBuffer}
 import com.nvidia.spark.rapids.Arm.withResource
 import com.nvidia.spark.rapids.StorageTier.{DEVICE, DISK, HOST, StorageTier}
@@ -26,14 +25,29 @@ import org.mockito.ArgumentMatchers.any
 import org.mockito.Mockito._
 import org.scalatest.funsuite.AnyFunSuite
 import org.scalatestplus.mockito.MockitoSugar
-
 import org.apache.spark.sql.rapids.RapidsDiskBlockManager
 import org.apache.spark.sql.types.DataType
 import org.apache.spark.sql.vectorized.ColumnarBatch
+import org.scalatest.BeforeAndAfterEach
 
-class RapidsBufferCatalogSuite extends AnyFunSuite with MockitoSugar {
+class RapidsBufferCatalogSuite
+  extends AnyFunSuite
+    with MockitoSugar
+    with BeforeAndAfterEach {
+
+  var catalog: RapidsBufferCatalog = _
+
+  override def beforeEach(): Unit = {
+    super.beforeEach()
+    catalog = new RapidsBufferCatalog()
+  }
+
+  override def afterEach(): Unit = {
+    super.afterEach()
+    catalog = new RapidsBufferCatalog()
+  }
+
   test("lookup unknown buffer") {
-    val catalog = new RapidsBufferCatalog
     val bufferId = new RapidsBufferId {
       override val tableId: Int = 10
       override def getDiskPath(m: RapidsDiskBlockManager): File = null
@@ -49,7 +63,6 @@ class RapidsBufferCatalogSuite extends AnyFunSuite with MockitoSugar {
   }
 
   test("buffer double register throws") {
-    val catalog = new RapidsBufferCatalog
     val bufferId = MockBufferId(5)
     val buffer = mockBuffer(bufferId)
     catalog.registerNewBuffer(buffer)
@@ -58,7 +71,6 @@ class RapidsBufferCatalogSuite extends AnyFunSuite with MockitoSugar {
   }
 
   test("a second handle prevents buffer to be removed") {
-    val catalog = new RapidsBufferCatalog
     val bufferId = MockBufferId(5)
     val buffer = mockBuffer(bufferId)
     catalog.registerNewBuffer(buffer)
@@ -81,7 +93,6 @@ class RapidsBufferCatalogSuite extends AnyFunSuite with MockitoSugar {
   }
 
   test("spill priorities are updated as handles are registered and unregistered") {
-    val catalog = new RapidsBufferCatalog
     val bufferId = MockBufferId(5)
     val buffer = mockBuffer(bufferId, initialPriority = -1)
     catalog.registerNewBuffer(buffer)
@@ -120,7 +131,6 @@ class RapidsBufferCatalogSuite extends AnyFunSuite with MockitoSugar {
   }
 
   test("buffer registering slower tier does not hide faster tier") {
-    val catalog = new RapidsBufferCatalog
     val bufferId = MockBufferId(5)
     val buffer = mockBuffer(bufferId, tier = DEVICE)
     catalog.registerNewBuffer(buffer)
@@ -138,7 +148,6 @@ class RapidsBufferCatalogSuite extends AnyFunSuite with MockitoSugar {
   }
 
   test("acquire buffer") {
-    val catalog = new RapidsBufferCatalog
     val bufferId = MockBufferId(5)
     val buffer = mockBuffer(bufferId)
     catalog.registerNewBuffer(buffer)
@@ -152,7 +161,6 @@ class RapidsBufferCatalogSuite extends AnyFunSuite with MockitoSugar {
   }
 
   test("acquire buffer retries automatically") {
-    val catalog = new RapidsBufferCatalog
     val bufferId = MockBufferId(5)
     val buffer = mockBuffer(bufferId, acquireAttempts = 9)
     catalog.registerNewBuffer(buffer)
@@ -166,7 +174,6 @@ class RapidsBufferCatalogSuite extends AnyFunSuite with MockitoSugar {
   }
 
   test("acquire buffer at specific tier") {
-    val catalog = new RapidsBufferCatalog
     val bufferId = MockBufferId(5)
     val buffer = mockBuffer(bufferId, tier = DEVICE)
     catalog.registerNewBuffer(buffer)
@@ -179,7 +186,6 @@ class RapidsBufferCatalogSuite extends AnyFunSuite with MockitoSugar {
   }
 
   test("acquire buffer at nonexistent tier") {
-    val catalog = new RapidsBufferCatalog
     val bufferId = MockBufferId(5)
     val buffer = mockBuffer(bufferId, tier = HOST)
     catalog.registerNewBuffer(buffer)
@@ -188,7 +194,6 @@ class RapidsBufferCatalogSuite extends AnyFunSuite with MockitoSugar {
   }
 
   test("get buffer meta") {
-    val catalog = new RapidsBufferCatalog
     val bufferId = MockBufferId(5)
     val expectedMeta = new TableMeta
     val buffer = mockBuffer(bufferId, tableMeta = expectedMeta)
@@ -198,7 +203,6 @@ class RapidsBufferCatalogSuite extends AnyFunSuite with MockitoSugar {
   }
 
   test("buffer is spilled to slower tier only") {
-    val catalog = new RapidsBufferCatalog
     val bufferId = MockBufferId(5)
     val buffer = mockBuffer(bufferId, tier = DEVICE)
     catalog.registerNewBuffer(buffer)
@@ -213,12 +217,12 @@ class RapidsBufferCatalogSuite extends AnyFunSuite with MockitoSugar {
 
   test("multiple calls to unspill return existing DEVICE buffer") {
     withResource(spy(new RapidsDeviceMemoryStore)) { deviceStore =>
-      val mockStore = mock[RapidsBufferStore]
+      val mockStore = mock[RapidsDiskStore]
       withResource(
         new RapidsHostMemoryStore(Some(10000))) { hostStore =>
         deviceStore.setSpillStore(hostStore)
         hostStore.setSpillStore(mockStore)
-        val catalog = new RapidsBufferCatalog(deviceStore)
+        catalog = new RapidsBufferCatalog(deviceStore, hostStore, mockStore)
         val handle = withResource(DeviceMemoryBuffer.allocate(1024)) { buff =>
           val meta = MetaUtils.getTableMetaNoTable(buff.getLength)
           catalog.addBuffer(
@@ -260,7 +264,6 @@ class RapidsBufferCatalogSuite extends AnyFunSuite with MockitoSugar {
   }
 
   test("remove buffer tier") {
-    val catalog = new RapidsBufferCatalog
     val bufferId = MockBufferId(5)
     val buffer = mockBuffer(bufferId, tier = DEVICE)
     catalog.registerNewBuffer(buffer)
@@ -276,7 +279,6 @@ class RapidsBufferCatalogSuite extends AnyFunSuite with MockitoSugar {
   }
 
   test("remove nonexistent buffer tier") {
-    val catalog = new RapidsBufferCatalog
     val bufferId = MockBufferId(5)
     val buffer = mockBuffer(bufferId, tier = DEVICE)
     catalog.registerNewBuffer(buffer)
@@ -288,7 +290,6 @@ class RapidsBufferCatalogSuite extends AnyFunSuite with MockitoSugar {
   }
 
   test("remove buffer releases buffer resources") {
-    val catalog = new RapidsBufferCatalog
     val bufferId = MockBufferId(5)
     val buffer = mockBuffer(bufferId)
     catalog.registerNewBuffer(buffer)
@@ -299,7 +300,6 @@ class RapidsBufferCatalogSuite extends AnyFunSuite with MockitoSugar {
   }
 
   test("remove buffer releases buffer resources at all tiers") {
-    val catalog = new RapidsBufferCatalog
     val bufferId = MockBufferId(5)
     val buffer = mockBuffer(bufferId, tier = DEVICE)
     catalog.registerNewBuffer(buffer)
@@ -325,8 +325,9 @@ class RapidsBufferCatalogSuite extends AnyFunSuite with MockitoSugar {
       tableMeta: TableMeta = null,
       tier: StorageTier = StorageTier.DEVICE,
       acquireAttempts: Int = 1,
-      initialPriority: Long = -1): RapidsBuffer = {
-    spy(new RapidsBuffer {
+      initialPriority: Long = -1): RapidsBufferBase = {
+    spy(new RapidsBufferBase(bufferId,
+          tableMeta, initialPriority, catalog) {
       var _acquireAttempts: Int = acquireAttempts
       var currentPriority: Long =  initialPriority
       override val id: RapidsBufferId = bufferId
@@ -351,10 +352,10 @@ class RapidsBufferCatalogSuite extends AnyFunSuite with MockitoSugar {
       }
       override def free(): Unit = {}
       override def getSpillPriority: Long = currentPriority
-
       override def withMemoryBufferReadLock[K](body: MemoryBuffer => K): K = { body(null) }
       override def withMemoryBufferWriteLock[K](body: MemoryBuffer => K): K = { body(null) }
       override def close(): Unit = {}
+      override protected def releaseResources(): Unit = {}
     })
   }
 }
