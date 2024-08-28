@@ -85,6 +85,12 @@ class RapidsHostMemoryStoreSuite extends AnyFunSuite with MockitoSugar {
       }, hostCols.head.getRowCount.toInt)
   }
 
+  def acquireRapidsBufferBase(
+      catalog: RapidsBufferCatalog,
+      handle: RapidsBufferHandle): RapidsBufferBase = {
+    catalog.acquireBuffer(handle).asInstanceOf[RapidsBufferBase]
+  }
+
   test("spill updates catalog") {
     val spillPriority = -7
     val hostStoreMaxSize = 1L * 1024 * 1024
@@ -113,7 +119,7 @@ class RapidsHostMemoryStoreSuite extends AnyFunSuite with MockitoSugar {
           verify(catalog, times(2)).registerNewBuffer(ArgumentMatchers.any[RapidsBuffer])
           verify(catalog).removeBufferTier(
             ArgumentMatchers.eq(handle.id), ArgumentMatchers.eq(StorageTier.DEVICE))
-          withResource(catalog.acquireBuffer(handle)) { buffer =>
+          withResource(acquireRapidsBufferBase(catalog, handle)) { buffer =>
             assertResult(StorageTier.HOST)(buffer.storageTier)
             assertResult(bufferSize)(buffer.memoryUsedBytes)
             assertResult(handle.id)(buffer.id)

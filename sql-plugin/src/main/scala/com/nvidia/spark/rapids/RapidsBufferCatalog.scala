@@ -440,7 +440,7 @@ class RapidsBufferCatalog(
   def registerDegenerateBuffer(
       bufferId: RapidsBufferId,
       meta: TableMeta): RapidsBufferHandle = synchronized {
-    val buffer = new DegenerateRapidsBuffer(bufferId, meta)
+    val buffer = new DegenerateRapidsBuffer(bufferId, meta, this)
     registerNewBuffer(buffer)
     makeNewHandle(buffer.id, buffer.getSpillPriority)
   }

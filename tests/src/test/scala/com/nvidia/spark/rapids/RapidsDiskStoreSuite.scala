@@ -60,6 +60,12 @@ class RapidsDiskStoreSuite extends FunSuiteWithTempDir with MockitoSugar {
   private val mockTableDataTypes: Array[DataType] =
     Array(IntegerType, StringType, DoubleType, DecimalType(10, 5))
 
+  def acquireRapidsBufferBase(
+      catalog: RapidsBufferCatalog,
+      handle: RapidsBufferHandle): RapidsBufferBase = {
+    catalog.acquireBuffer(handle).asInstanceOf[RapidsBufferBase]
+  }
+
   test("spill updates catalog") {
     val bufferId = MockRapidsBufferId(7, canShareDiskPaths = false)
     val mockDiskBlockManager = mock[RapidsDiskBlockManager]
@@ -88,7 +94,7 @@ class RapidsDiskStoreSuite extends FunSuiteWithTempDir with MockitoSugar {
             verify(catalog, times(3)).registerNewBuffer(ArgumentMatchers.any[RapidsBuffer])
             verify(catalog).removeBufferTier(
               ArgumentMatchers.eq(handle.id), ArgumentMatchers.eq(StorageTier.DEVICE))
-            withResource(catalog.acquireBuffer(handle)) { buffer =>
+            withResource(acquireRapidsBufferBase(catalog, handle)) { buffer =>
               assertResult(StorageTier.DISK)(buffer.storageTier)
               assertResult(bufferSize)(buffer.memoryUsedBytes)
               assertResult(handle.id)(buffer.id)
@@ -517,7 +523,7 @@ class RapidsDiskStoreSuite extends FunSuiteWithTempDir with MockitoSugar {
 
   class AlwaysFailingRapidsHostMemoryStore extends RapidsHostMemoryStore(Some(0L)){
     override def createBuffer(
-        other: RapidsBuffer,
+        other: RapidsBufferBase,
         catalog: RapidsBufferCatalog,
         stream: Cuda.Stream): Option[RapidsBufferBase] = {
       None

@@ -221,11 +221,16 @@ abstract class RapidsBufferStore(val tier: StorageTier)
       buffer: RapidsBuffer,
       catalog: RapidsBufferCatalog,
       stream: Cuda.Stream): Option[RapidsBufferBase] = {
-    createBuffer(buffer, catalog, stream).map { newBuffer =>
-      freeOnExcept(newBuffer) { newBuffer =>
-        addBuffer(newBuffer)
-        newBuffer
-      }
+    buffer match {
+      case bufferBase: RapidsBufferBase =>
+        createBuffer(bufferBase, catalog, stream).map { newBuffer =>
+          freeOnExcept(newBuffer) { newBuffer =>
+            addBuffer(newBuffer)
+            newBuffer
+          }
+        }
+      case other =>
+        throw new IllegalStateException(s"buffer ${other} cannot be spilled")
     }
   }
 
@@ -246,7 +251,7 @@ abstract class RapidsBufferStore(val tier: StorageTier)
    * @return the new buffer that was created.
    */
   protected def createBuffer(
-     buffer: RapidsBuffer,
+     buffer: RapidsBufferBase,
      catalog: RapidsBufferCatalog,
      stream: Cuda.Stream): Option[RapidsBufferBase]
 
@@ -589,9 +594,22 @@ abstract class RapidsBufferBase(override val id: RapidsBufferId,
     }
   }
 
-  override def getSpillPriority: Long = {
+  /**
+   * Get the spill priority value for this buffer. Lower values are higher
+   * priority for spilling, meaning buffers with lower values will be
+   * preferred for spilling over buffers with a higher value.
+   */
+  def getSpillPriority: Long = {
     spillPriority
   }
+
+  /**
+   * Function invoked by the `RapidsBufferStore.addBuffer` method that prompts
+   * the specific `RapidsBuffer` to check its reference counting to make itself
+   * spillable or not. Only `RapidsTable` and `RapidsHostMemoryBuffer` implement
+   * this method.
+   */
+  def updateSpillability(): Unit = {}
 
   def updateSpillPriorityValue(priority: Long): Unit = {
     spillPriority = priority

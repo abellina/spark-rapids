@@ -113,7 +113,7 @@ class RapidsHostMemoryStore(
   }
 
   override protected def createBuffer(
-      other: RapidsBuffer,
+      other: RapidsBufferBase,
       catalog: RapidsBufferCatalog,
       stream: Cuda.Stream): Option[RapidsBufferBase] = {
     val wouldFit = trySpillToMaximumSize(other, catalog, stream)

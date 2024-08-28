@@ -54,7 +54,7 @@ class RapidsDeviceMemoryStore(
     HostMemoryBuffer.allocate(hostBounceBufferSize)
 
   override protected def createBuffer(
-      other: RapidsBuffer,
+      other: RapidsBufferBase,
       catalog: RapidsBufferCatalog,
       stream: Cuda.Stream): Option[RapidsBufferBase] = {
     val memoryBuffer = withResource(other.getCopyIterator) { copyIterator =>

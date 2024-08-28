@@ -71,7 +71,7 @@ class RapidsDeviceMemoryStoreSuite extends AnyFunSuite with MockitoSugar {
       }
       val captor: ArgumentCaptor[RapidsBuffer] = ArgumentCaptor.forClass(classOf[RapidsBuffer])
       verify(catalog).registerNewBuffer(captor.capture())
-      val resultBuffer = captor.getValue
+      val resultBuffer = captor.getValue.asInstanceOf[RapidsBufferBase]
       assertResult(bufferId)(resultBuffer.id)
       assertResult(spillPriority)(resultBuffer.getSpillPriority)
     }
@@ -329,7 +329,7 @@ class RapidsDeviceMemoryStoreSuite extends AnyFunSuite with MockitoSugar {
       }
       val captor: ArgumentCaptor[RapidsBuffer] = ArgumentCaptor.forClass(classOf[RapidsBuffer])
       verify(catalog).registerNewBuffer(captor.capture())
-      val resultBuffer = captor.getValue
+      val resultBuffer = captor.getValue.asInstanceOf[RapidsBufferBase]
       assertResult(bufferId)(resultBuffer.id)
       assertResult(spillPriority)(resultBuffer.getSpillPriority)
       assertResult(meta)(resultBuffer.meta)
@@ -471,7 +471,7 @@ class RapidsDeviceMemoryStoreSuite extends AnyFunSuite with MockitoSugar {
     val spilledBuffers = new ArrayBuffer[RapidsBufferId]
 
     override protected def createBuffer(
-        b: RapidsBuffer,
+        b: RapidsBufferBase,
         c: RapidsBufferCatalog,
         s: Cuda.Stream): Option[RapidsBufferBase] = {
       spilledBuffers += b.id

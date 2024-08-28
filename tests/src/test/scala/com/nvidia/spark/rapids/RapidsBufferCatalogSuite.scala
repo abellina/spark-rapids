@@ -97,6 +97,12 @@ class RapidsBufferCatalogSuite
     }
   }
 
+  def acquireRapidsBufferBase(
+      catalog: RapidsBufferCatalog,
+      handle: RapidsBufferHandle): RapidsBufferBase = {
+    catalog.acquireBuffer(handle).asInstanceOf[RapidsBufferBase]
+  }
+
   test("spill priorities are updated as handles are registered and unregistered") {
     withResource(new RapidsDeviceMemoryStore) { devStore =>
       catalog = new RapidsBufferCatalog(devStore)
@@ -105,32 +111,32 @@ class RapidsBufferCatalogSuite
       catalog.registerNewBuffer(buffer)
       val handle1 =
         catalog.makeNewHandle(bufferId, -1)
-      withResource(catalog.acquireBuffer(handle1)) { buff =>
+      withResource(acquireRapidsBufferBase(catalog, handle1)) { buff =>
         assertResult(-1)(buff.getSpillPriority)
       }
       val handle2 =
         catalog.makeNewHandle(bufferId, 0)
-      withResource(catalog.acquireBuffer(handle2)) { buff =>
+      withResource(acquireRapidsBufferBase(catalog, handle2)) { buff =>
         assertResult(0)(buff.getSpillPriority)
       }
 
       // removing the lower priority handle, keeps the high priority spill
       handle1.close()
-      withResource(catalog.acquireBuffer(handle2)) { buff =>
+      withResource(acquireRapidsBufferBase(catalog, handle2)) { buff =>
         assertResult(0)(buff.getSpillPriority)
       }
 
       // adding a lower priority -1000 handle keeps the high priority (0) spill
       val handle3 =
         catalog.makeNewHandle(bufferId, -1000)
-      withResource(catalog.acquireBuffer(handle3)) { buff =>
+      withResource(acquireRapidsBufferBase(catalog, handle3)) { buff =>
         assertResult(0)(buff.getSpillPriority)
       }
 
       // removing the high priority spill (0) brings us down to the
       // low priority that is remaining
       handle2.close()
-      withResource(catalog.acquireBuffer(handle2)) { buff =>
+      withResource(acquireRapidsBufferBase(catalog, handle2)) { buff =>
         assertResult(-1000)(buff.getSpillPriority)
       }
 

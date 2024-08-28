@@ -348,21 +348,6 @@ trait RapidsBuffer extends AutoCloseable {
   def free(): Unit
 
   /**
-   * Get the spill priority value for this buffer. Lower values are higher
-   * priority for spilling, meaning buffers with lower values will be
-   * preferred for spilling over buffers with a higher value.
-   */
-  def getSpillPriority: Long
-
-  /**
-   * Function invoked by the `RapidsBufferStore.addBuffer` method that prompts
-   * the specific `RapidsBuffer` to check its reference counting to make itself
-   * spillable or not. Only `RapidsTable` and `RapidsHostMemoryBuffer` implement
-   * this method.
-   */
-  def updateSpillability(): Unit = {}
-
-  /**
    * Obtains a read lock on this instance of `RapidsBuffer` and calls the function
    * in `body` while holding the lock.
    * @param body function that takes a `MemoryBuffer` and produces `K`
@@ -392,7 +377,9 @@ trait RapidsBuffer extends AutoCloseable {
  */
 sealed class DegenerateRapidsBuffer(
     override val id: RapidsBufferId,
-    override val meta: TableMeta) extends RapidsBuffer {
+    override val meta: TableMeta,
+    catalog: RapidsBufferCatalog)
+  extends RapidsBufferBase(id, meta, Long.MaxValue, catalog) {
 
   override val memoryUsedBytes: Long = 0L
 
@@ -441,6 +428,8 @@ sealed class DegenerateRapidsBuffer(
   }
 
   override def close(): Unit = {}
+
+  override protected def releaseResources(): Unit = {}
 }
 
 trait RapidsHostBatchBuffer extends AutoCloseable {

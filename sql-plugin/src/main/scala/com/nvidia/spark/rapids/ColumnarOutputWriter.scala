@@ -90,8 +90,7 @@ abstract class ColumnarOutputWriter(context: TaskAttemptContext,
   private[this] var anythingWritten = false
   private[this] val buffers = mutable.Queue[(HostMemoryBuffer, Long)]()
 
-  override
-  def handleBuffer(buffer: HostMemoryBuffer, len: Long): Unit =
+  override def handleBuffer(buffer: HostMemoryBuffer, len: Long): Unit =
     buffers += Tuple2(buffer, len)
 
   def writeBufferedData(): Unit = {

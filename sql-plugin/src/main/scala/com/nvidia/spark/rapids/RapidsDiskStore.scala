@@ -39,7 +39,7 @@ class RapidsDiskStore(diskBlockManager: RapidsDiskBlockManager)
   private[this] val sharedBufferFiles = new ConcurrentHashMap[RapidsBufferId, File]
 
   override protected def createBuffer(
-      incoming: RapidsBuffer,
+      incoming: RapidsBufferBase,
       catalog: RapidsBufferCatalog,
       stream: Cuda.Stream): Option[RapidsBufferBase] = {
     // assuming that the disk store gets contiguous buffers
