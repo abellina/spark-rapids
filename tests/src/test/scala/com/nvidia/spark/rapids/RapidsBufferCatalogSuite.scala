@@ -351,9 +351,6 @@ class RapidsBufferCatalogSuite extends AnyFunSuite with MockitoSugar {
       }
       override def free(): Unit = {}
       override def getSpillPriority: Long = currentPriority
-      override def setSpillPriority(priority: Long): Unit = {
-        currentPriority = priority
-      }
 
       override def withMemoryBufferReadLock[K](body: MemoryBuffer => K): K = { body(null) }
       override def withMemoryBufferWriteLock[K](body: MemoryBuffer => K): K = { body(null) }

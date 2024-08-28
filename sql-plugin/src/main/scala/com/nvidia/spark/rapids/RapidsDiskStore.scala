@@ -68,7 +68,8 @@ class RapidsDiskStore(diskBlockManager: RapidsDiskBlockManager)
           uncompressedSize,
           diskLength,
           incoming.meta,
-          incoming.getSpillPriority)
+          incoming.getSpillPriority,
+          catalog)
 
       case _ =>
         new RapidsDiskBuffer(
@@ -77,7 +78,8 @@ class RapidsDiskStore(diskBlockManager: RapidsDiskBlockManager)
           uncompressedSize,
           diskLength,
           incoming.meta,
-          incoming.getSpillPriority)
+          incoming.getSpillPriority,
+          catalog)
     }
     Some(buff)
   }
@@ -138,8 +140,9 @@ class RapidsDiskStore(diskBlockManager: RapidsDiskBlockManager)
       uncompressedSize: Long,
       onDiskSizeInBytes: Long,
       meta: TableMeta,
-      spillPriority: Long)
-      extends RapidsBufferBase(id, meta, spillPriority) {
+      spillPriority: Long,
+      catalog: RapidsBufferCatalog)
+      extends RapidsBufferBase(id, meta, spillPriority, catalog) {
 
     // FIXME: Need to be clean up. Tracked in https://github.com/NVIDIA/spark-rapids/issues/9496
     override val memoryUsedBytes: Long = uncompressedSize
@@ -205,9 +208,10 @@ class RapidsDiskStore(diskBlockManager: RapidsDiskBlockManager)
       uncompressedSize: Long,
       // TODO: remove meta
       meta: TableMeta,
-      spillPriority: Long)
+      spillPriority: Long,
+      catalog: RapidsBufferCatalog)
     extends RapidsDiskBuffer(
-      id, fileOffset, size, uncompressedSize, meta, spillPriority)
+      id, fileOffset, size, uncompressedSize, meta, spillPriority, catalog)
         with RapidsHostBatchBuffer {
 
     override def getMemoryBuffer: MemoryBuffer =

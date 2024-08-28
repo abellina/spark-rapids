@@ -247,60 +247,66 @@ class RapidsDeviceMemoryStoreSuite extends AnyFunSuite with MockitoSugar {
 
   test("a buffer is not spillable until the owner closes columns referencing it") {
     withResource(new RapidsDeviceMemoryStore) { store =>
-      val spillPriority = 3
-      val bufferId = MockRapidsBufferId(7)
-      val ct = buildContiguousTable()
-      val buffSize = ct.getBuffer.getLength
-      withResource(ct) { _ =>
-        val meta = MetaUtils.buildTableMeta(bufferId.tableId, ct)
+      withResource(new RapidsBufferCatalog(store)) { catalog =>
+        val spillPriority = 3
+        val bufferId = MockRapidsBufferId(7)
+        val ct = buildContiguousTable()
+        val buffSize = ct.getBuffer.getLength
         withResource(ct) { _ =>
-          store.addBuffer(
-            bufferId,
-            ct.getBuffer,
-            meta,
-            spillPriority,
-            false)
-          assertResult(buffSize)(store.currentSize)
-          assertResult(0)(store.currentSpillableSize)
+          val meta = MetaUtils.buildTableMeta(bufferId.tableId, ct)
+          withResource(ct) { _ =>
+            store.addBuffer(
+              bufferId,
+              ct.getBuffer,
+              meta,
+              spillPriority,
+              false,
+              catalog)
+            assertResult(buffSize)(store.currentSize)
+            assertResult(0)(store.currentSpillableSize)
+          }
         }
+        // after closing the original table, the RapidsBuffer should be spillable
+        assertResult(buffSize)(store.currentSize)
+        assertResult(buffSize)(store.currentSpillableSize)
       }
-      // after closing the original table, the RapidsBuffer should be spillable
-      assertResult(buffSize)(store.currentSize)
-      assertResult(buffSize)(store.currentSpillableSize)
     }
   }
 
   test("a buffer is not spillable when the underlying device buffer is obtained from it") {
     withResource(new RapidsDeviceMemoryStore) { store =>
-      val spillPriority = 3
-      val bufferId = MockRapidsBufferId(7)
-      val ct = buildContiguousTable()
-      val buffSize = ct.getBuffer.getLength
-      val buffer = withResource(ct) { _ =>
-        val meta = MetaUtils.buildTableMeta(bufferId.tableId, ct)
-        val buffer = store.addBuffer(
-          bufferId,
-          ct.getBuffer,
-          meta,
-          spillPriority,
-          false)
+      withResource(new RapidsBufferCatalog(store)) { catalog =>
+        val spillPriority = 3
+        val bufferId = MockRapidsBufferId(7)
+        val ct = buildContiguousTable()
+        val buffSize = ct.getBuffer.getLength
+        val buffer = withResource(ct) { _ =>
+          val meta = MetaUtils.buildTableMeta(bufferId.tableId, ct)
+          val buffer = store.addBuffer(
+            bufferId,
+            ct.getBuffer,
+            meta,
+            spillPriority,
+            false,
+            catalog)
+          assertResult(buffSize)(store.currentSize)
+          assertResult(0)(store.currentSpillableSize)
+          buffer
+        }
+
+        // after closing the original table, the RapidsBuffer should be spillable
         assertResult(buffSize)(store.currentSize)
-        assertResult(0)(store.currentSpillableSize)
-        buffer
+        assertResult(buffSize)(store.currentSpillableSize)
+
+        // if a device memory buffer is obtained from the buffer, it is no longer spillable
+        withResource(buffer.getDeviceMemoryBuffer) { deviceBuffer =>
+          assertResult(buffSize)(store.currentSize)
+          assertResult(0)(store.currentSpillableSize)
+        }
+
+        // once the DeviceMemoryBuffer is closed, the RapidsBuffer should be spillable again
+        assertResult(buffSize)(store.currentSpillableSize)
       }
-
-      // after closing the original table, the RapidsBuffer should be spillable
-      assertResult(buffSize)(store.currentSize)
-      assertResult(buffSize)(store.currentSpillableSize)
-
-      // if a device memory buffer is obtained from the buffer, it is no longer spillable
-      withResource(buffer.getDeviceMemoryBuffer) { deviceBuffer =>
-        assertResult(buffSize)(store.currentSize)
-        assertResult(0)(store.currentSpillableSize)
-      }
-
-      // once the DeviceMemoryBuffer is closed, the RapidsBuffer should be spillable again
-      assertResult(buffSize)(store.currentSpillableSize)
     }
   }
 
@@ -470,11 +476,16 @@ class RapidsDeviceMemoryStoreSuite extends AnyFunSuite with MockitoSugar {
         s: Cuda.Stream): Option[RapidsBufferBase] = {
       spilledBuffers += b.id
       Some(new MockRapidsBuffer(
-        b.id, b.getPackedSizeBytes, b.meta, b.getSpillPriority))
+        b.id, b.getPackedSizeBytes, b.meta, b.getSpillPriority, c))
     }
 
-    class MockRapidsBuffer(id: RapidsBufferId, size: Long, meta: TableMeta, spillPriority: Long)
-        extends RapidsBufferBase(id, meta, spillPriority) {
+    class MockRapidsBuffer(
+        id: RapidsBufferId,
+        size: Long,
+        meta: TableMeta,
+        spillPriority: Long,
+        catalog: RapidsBufferCatalog)
+        extends RapidsBufferBase(id, meta, spillPriority, catalog) {
       override protected def releaseResources(): Unit = {}
 
       override val storageTier: StorageTier = StorageTier.HOST

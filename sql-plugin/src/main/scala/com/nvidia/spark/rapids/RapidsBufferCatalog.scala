@@ -18,17 +18,15 @@ package com.nvidia.spark.rapids
 
 import java.util.concurrent.ConcurrentHashMap
 import java.util.function.BiFunction
-
 import scala.collection.JavaConverters.collectionAsScalaIterableConverter
 
-import ai.rapids.cudf.{ContiguousTable, Cuda, DeviceMemoryBuffer, HostMemoryBuffer, MemoryBuffer, Rmm, Table}
+import ai.rapids.cudf.{Cuda, ContiguousTable, DeviceMemoryBuffer, HostMemoryBuffer, MemoryBuffer, Rmm, Table}
 import com.nvidia.spark.rapids.Arm.{closeOnExcept, withResource}
 import com.nvidia.spark.rapids.RapidsBufferCatalog.getExistingRapidsBufferAndAcquire
 import com.nvidia.spark.rapids.RapidsPluginImplicits._
 import com.nvidia.spark.rapids.StorageTier.StorageTier
 import com.nvidia.spark.rapids.format.TableMeta
 import com.nvidia.spark.rapids.jni.RmmSpark
-
 import org.apache.spark.{SparkConf, SparkEnv}
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.rapids.{RapidsDiskBlockManager, TempSpillBufferId}
@@ -63,7 +61,8 @@ trait RapidsBufferHandle extends AutoCloseable {
  */
 class RapidsBufferCatalog(
     deviceStorage: RapidsDeviceMemoryStore = RapidsBufferCatalog.deviceStorage,
-    hostStorage: RapidsHostMemoryStore = RapidsBufferCatalog.hostStorage)
+    hostStorage: RapidsHostMemoryStore = RapidsBufferCatalog.hostStorage,
+    diskStorage: RapidsDiskStore = RapidsBufferCatalog.diskStorage)
   extends AutoCloseable with Logging {
 
   /** Map of buffer IDs to buffers sorted by storage tier */
@@ -194,7 +193,7 @@ class RapidsBufferCatalog(
         true
       } else {
         // more handles remain, our priority changed so we need to update things
-        buffer.setSpillPriority(maxPriority)
+        setSpillPriority(buffer, maxPriority)
         false // we have handles left
       }
     }
@@ -321,14 +320,16 @@ class RapidsBufferCatalog(
           gpuBuffer,
           tableMeta,
           initialSpillPriority,
-          needsSync)
+          needsSync,
+          this)
       case hostBuffer: HostMemoryBuffer =>
         hostStorage.addBuffer(
           id,
           hostBuffer,
           tableMeta,
           initialSpillPriority,
-          needsSync)
+          needsSync,
+          this)
       case _ =>
         throw new IllegalArgumentException(
           s"Cannot call addBuffer with buffer $buffer")
@@ -406,7 +407,8 @@ class RapidsBufferCatalog(
       id,
       table,
       initialSpillPriority,
-      needsSync)
+      needsSync,
+      this)
     registerNewBuffer(rapidsBuffer)
     makeNewHandle(id, initialSpillPriority)
   }
@@ -425,7 +427,8 @@ class RapidsBufferCatalog(
       id,
       hostCb,
       initialSpillPriority,
-      needsSync)
+      needsSync,
+      this)
     registerNewBuffer(rapidsBuffer)
     makeNewHandle(id, initialSpillPriority)
   }
@@ -452,7 +455,21 @@ class RapidsBufferCatalog(
       val maxPriority = handles.map(_.getSpillPriority).max
       // update the priority of the underlying RapidsBuffer to be the
       // maximum priority for all handles associated with it
-      buffer.setSpillPriority(maxPriority)
+      setSpillPriority(buffer, maxPriority)
+    }
+  }
+
+  private def setSpillPriority(buffer: RapidsBuffer, newPriority: Long): Unit = {
+    buffer match {
+      case rapidsBufferBase: RapidsBufferBase =>
+        val storage = rapidsBufferBase.storageTier match {
+          case StorageTier.DEVICE => deviceStorage
+          case StorageTier.HOST => hostStorage
+          case StorageTier.DISK => diskStorage
+        }
+        storage.setSpillPriority(rapidsBufferBase, newPriority)
+      case _ =>
+        throw new IllegalStateException("only RapidsBufferBase supports priorities")
     }
   }
 
@@ -723,6 +740,15 @@ class RapidsBufferCatalog(
     } else {
       false
     }
+  }
+
+  def removeFromTier(id: RapidsBufferId, storageTier: StorageTier) = {
+    val store = storageTier match {
+      case StorageTier.DEVICE => deviceStorage
+      case StorageTier.HOST => hostStorage
+      case StorageTier.DISK => diskStorage
+    }
+    store.remove(id)
   }
 
   /** Return the number of buffers currently in the catalog. */
@@ -1001,5 +1027,6 @@ object RapidsBufferCatalog extends Logging {
         }
     }
   }
+
 }
 

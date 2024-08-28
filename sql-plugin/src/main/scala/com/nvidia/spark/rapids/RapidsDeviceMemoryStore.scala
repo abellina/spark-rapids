@@ -80,7 +80,8 @@ class RapidsDeviceMemoryStore(
         deviceBuffer.getLength,
         other.meta,
         deviceBuffer,
-        other.getSpillPriority))
+        other.getSpillPriority,
+        catalog))
     }
   }
 
@@ -104,14 +105,16 @@ class RapidsDeviceMemoryStore(
       buffer: DeviceMemoryBuffer,
       tableMeta: TableMeta,
       initialSpillPriority: Long,
-      needsSync: Boolean): RapidsBuffer = {
+      needsSync: Boolean,
+      catalog: RapidsBufferCatalog): RapidsBuffer = {
     buffer.incRefCount()
     val rapidsBuffer = new RapidsDeviceMemoryBuffer(
       id,
       buffer.getLength,
       tableMeta,
       buffer,
-      initialSpillPriority)
+      initialSpillPriority,
+      catalog)
     freeOnExcept(rapidsBuffer) { _ =>
       logDebug(s"Adding receive side table for: [id=$id, size=${buffer.getLength}, " +
         s"uncompressed=${rapidsBuffer.meta.bufferMeta.uncompressedSize}, " +
@@ -141,11 +144,13 @@ class RapidsDeviceMemoryStore(
       id: RapidsBufferId,
       table: Table,
       initialSpillPriority: Long,
-      needsSync: Boolean): RapidsBuffer = {
+      needsSync: Boolean,
+      catalog: RapidsBufferCatalog): RapidsBuffer = {
     val rapidsTable = new RapidsTable(
       id,
       table,
-      initialSpillPriority)
+      initialSpillPriority,
+      catalog)
     freeOnExcept(rapidsTable) { _ =>
       addBuffer(rapidsTable, needsSync)
       rapidsTable
@@ -222,11 +227,13 @@ class RapidsDeviceMemoryStore(
   class RapidsTable(
       id: RapidsBufferId,
       table: Table,
-      spillPriority: Long)
+      spillPriority: Long,
+      catalog: RapidsBufferCatalog)
       extends RapidsBufferBase(
         id,
         null,
-        spillPriority)
+        spillPriority,
+        catalog)
           with RapidsBufferChannelWritable {
 
     /** The storage tier for this buffer */
@@ -407,8 +414,9 @@ class RapidsDeviceMemoryStore(
       size: Long,
       meta: TableMeta,
       contigBuffer: DeviceMemoryBuffer,
-      spillPriority: Long)
-      extends RapidsBufferBase(id, meta, spillPriority)
+      spillPriority: Long,
+      catalog: RapidsBufferCatalog)
+      extends RapidsBufferBase(id, meta, spillPriority, catalog)
         with MemoryBuffer.EventHandler
         with RapidsBufferChannelWritable {
 

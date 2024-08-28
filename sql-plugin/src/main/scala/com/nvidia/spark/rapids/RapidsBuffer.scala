@@ -355,15 +355,6 @@ trait RapidsBuffer extends AutoCloseable {
   def getSpillPriority: Long
 
   /**
-   * Set the spill priority for this buffer. Lower values are higher priority
-   * for spilling, meaning buffers with lower values will be preferred for
-   * spilling over buffers with a higher value.
-   * @note should only be called from the buffer catalog
-   * @param priority new priority value for this buffer
-   */
-  def setSpillPriority(priority: Long): Unit
-
-  /**
    * Function invoked by the `RapidsBufferStore.addBuffer` method that prompts
    * the specific `RapidsBuffer` to check its reference counting to make itself
    * spillable or not. Only `RapidsTable` and `RapidsHostMemoryBuffer` implement
@@ -440,8 +431,6 @@ sealed class DegenerateRapidsBuffer(
   override def addReference(): Boolean = true
 
   override def getSpillPriority: Long = Long.MaxValue
-
-  override def setSpillPriority(priority: Long): Unit = {}
 
   override def withMemoryBufferReadLock[K](body: MemoryBuffer => K): K = {
     throw new UnsupportedOperationException("degenerate buffer has no memory buffer")

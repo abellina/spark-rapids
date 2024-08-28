@@ -51,14 +51,16 @@ class RapidsHostMemoryStore(
       buffer: HostMemoryBuffer,
       tableMeta: TableMeta,
       initialSpillPriority: Long,
-      needsSync: Boolean): RapidsBuffer = {
+      needsSync: Boolean,
+      catalog: RapidsBufferCatalog): RapidsBuffer = {
     buffer.incRefCount()
     val rapidsBuffer = new RapidsHostMemoryBuffer(
       id,
       buffer.getLength,
       tableMeta,
       initialSpillPriority,
-      buffer)
+      buffer,
+      catalog)
     freeOnExcept(rapidsBuffer) { _ =>
       logDebug(s"Adding host buffer for: [id=$id, size=${buffer.getLength}, " +
         s"uncompressed=${rapidsBuffer.meta.bufferMeta.uncompressedSize}, " +
@@ -72,12 +74,14 @@ class RapidsHostMemoryStore(
   def addBatch(id: RapidsBufferId,
                hostCb: ColumnarBatch,
                initialSpillPriority: Long,
-               needsSync: Boolean): RapidsBuffer = {
+               needsSync: Boolean,
+               catalog: RapidsBufferCatalog): RapidsBuffer = {
     RapidsHostColumnVector.incRefCounts(hostCb)
     val rapidsBuffer = new RapidsHostColumnarBatch(
       id,
       hostCb,
-      initialSpillPriority)
+      initialSpillPriority,
+      catalog)
     freeOnExcept(rapidsBuffer) { _ =>
       addBuffer(rapidsBuffer, needsSync)
       rapidsBuffer
@@ -128,7 +132,8 @@ class RapidsHostMemoryStore(
           hostBuffer.getLength(),
           other.meta,
           applyPriorityOffset(other.getSpillPriority, HOST_MEMORY_BUFFER_SPILL_OFFSET),
-          hostBuffer))
+          hostBuffer,
+          catalog))
       } else {
         withResource(other.getCopyIterator) { otherBufferIterator =>
           val isChunked = otherBufferIterator.isChunked
@@ -163,7 +168,8 @@ class RapidsHostMemoryStore(
                 totalCopySize,
                 other.meta,
                 applyPriorityOffset(other.getSpillPriority, HOST_MEMORY_BUFFER_SPILL_OFFSET),
-                hostBuffer)
+                hostBuffer,
+                catalog)
             }.orElse {
               // skip host
               logWarning(s"Buffer $other with size ${other.memoryUsedBytes} does not fit " +
@@ -183,8 +189,9 @@ class RapidsHostMemoryStore(
       size: Long,
       meta: TableMeta,
       spillPriority: Long,
-      buffer: HostMemoryBuffer)
-      extends RapidsBufferBase(id, meta, spillPriority)
+      buffer: HostMemoryBuffer,
+      catalog: RapidsBufferCatalog)
+      extends RapidsBufferBase(id, meta, spillPriority, catalog)
         with RapidsBufferChannelWritable
         with MemoryBuffer.EventHandler {
     override val storageTier: StorageTier = StorageTier.HOST
@@ -335,11 +342,13 @@ class RapidsHostMemoryStore(
   class RapidsHostColumnarBatch(
       id: RapidsBufferId,
       hostCb: ColumnarBatch,
-      spillPriority: Long)
+      spillPriority: Long,
+      catalog: RapidsBufferCatalog)
       extends RapidsBufferBase(
         id,
         null,
-        spillPriority)
+        spillPriority,
+        catalog)
           with RapidsBufferChannelWritable
           with RapidsHostBatchBuffer {
 

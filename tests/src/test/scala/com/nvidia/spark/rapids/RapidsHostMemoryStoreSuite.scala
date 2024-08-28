@@ -90,9 +90,9 @@ class RapidsHostMemoryStoreSuite extends AnyFunSuite with MockitoSugar {
     val hostStoreMaxSize = 1L * 1024 * 1024
     val mockStore = mock[RapidsHostMemoryStore]
     withResource(new RapidsDeviceMemoryStore) { devStore =>
-      val catalog = spy(new RapidsBufferCatalog(devStore))
       withResource(new RapidsHostMemoryStore(Some(hostStoreMaxSize))) {
         hostStore =>
+          val catalog = spy(new RapidsBufferCatalog(devStore, hostStore))
           assertResult(0)(hostStore.currentSize)
           assertResult(hostStoreMaxSize)(hostStore.numBytesFree.get)
           devStore.setSpillStore(hostStore)
@@ -128,9 +128,9 @@ class RapidsHostMemoryStoreSuite extends AnyFunSuite with MockitoSugar {
     val hostStoreMaxSize = 1L * 1024 * 1024
     val mockStore = mock[RapidsHostMemoryStore]
     withResource(new RapidsDeviceMemoryStore) { devStore =>
-      val catalog = new RapidsBufferCatalog(devStore)
       withResource(new RapidsHostMemoryStore(Some(hostStoreMaxSize))) {
         hostStore =>
+          val catalog = new RapidsBufferCatalog(devStore, hostStore)
           devStore.setSpillStore(hostStore)
           hostStore.setSpillStore(mockStore)
           var expectedBuffer: HostMemoryBuffer = null
@@ -163,9 +163,9 @@ class RapidsHostMemoryStoreSuite extends AnyFunSuite with MockitoSugar {
     val hostStoreMaxSize = 1L * 1024 * 1024
     val mockStore = mock[RapidsHostMemoryStore]
     withResource(new RapidsDeviceMemoryStore) { devStore =>
-      val catalog = new RapidsBufferCatalog(devStore)
       withResource(new RapidsHostMemoryStore(Some(hostStoreMaxSize))) {
         hostStore =>
+          val catalog = new RapidsBufferCatalog(devStore, hostStore)
           devStore.setSpillStore(hostStore)
           hostStore.setSpillStore(mockStore)
           var expectedBatch: ColumnarBatch = null
@@ -207,7 +207,7 @@ class RapidsHostMemoryStoreSuite extends AnyFunSuite with MockitoSugar {
             devStore.setSpillStore(hostStore)
             hostStore.setSpillStore(diskStore)
             val catalog = closeOnExcept(
-                new RapidsBufferCatalog(devStore, hostStore)) { catalog => catalog }
+                new RapidsBufferCatalog(devStore, hostStore, diskStore)) { catalog => catalog }
             (catalog, devStore, hostStore, diskStore)
           }
         }
@@ -290,7 +290,7 @@ class RapidsHostMemoryStoreSuite extends AnyFunSuite with MockitoSugar {
               devStore.setSpillStore(hostStore)
               hostStore.setSpillStore(diskStore)
               val catalog = closeOnExcept(
-                new RapidsBufferCatalog(devStore, hostStore)) { catalog => catalog }
+                new RapidsBufferCatalog(devStore, hostStore, diskStore)) { catalog => catalog }
               (catalog, devStore, hostStore, diskStore)
             }
           }
@@ -328,7 +328,7 @@ class RapidsHostMemoryStoreSuite extends AnyFunSuite with MockitoSugar {
     withResource(new RapidsDiskStore(bm)) { diskStore =>
       withResource(new RapidsHostMemoryStore(Some(hostStoreMaxSize))) { hostStore =>
         withResource(new RapidsDeviceMemoryStore) { devStore =>
-          val catalog = new RapidsBufferCatalog(devStore, hostStore)
+          val catalog = new RapidsBufferCatalog(devStore, hostStore, diskStore)
           devStore.setSpillStore(hostStore)
           hostStore.setSpillStore(diskStore)
           val hmb = HostMemoryBuffer.allocate(1L * 1024)
@@ -361,7 +361,7 @@ class RapidsHostMemoryStoreSuite extends AnyFunSuite with MockitoSugar {
     withResource(new RapidsDiskStore(bm)) { diskStore =>
       withResource(new RapidsHostMemoryStore(Some(hostStoreMaxSize))) { hostStore =>
         withResource(new RapidsDeviceMemoryStore) { devStore =>
-          val catalog = new RapidsBufferCatalog(devStore, hostStore)
+          val catalog = new RapidsBufferCatalog(devStore, hostStore, diskStore)
           devStore.setSpillStore(hostStore)
           hostStore.setSpillStore(diskStore)
 
@@ -451,7 +451,7 @@ class RapidsHostMemoryStoreSuite extends AnyFunSuite with MockitoSugar {
     withResource(new RapidsDiskStore(bm)) { diskStore =>
       withResource(new RapidsHostMemoryStore(Some(hostStoreMaxSize))) { hostStore =>
         withResource(new RapidsDeviceMemoryStore) { devStore =>
-          val catalog = new RapidsBufferCatalog(devStore, hostStore)
+          val catalog = new RapidsBufferCatalog(devStore, hostStore, diskStore)
           devStore.setSpillStore(hostStore)
           hostStore.setSpillStore(diskStore)
 

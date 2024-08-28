@@ -84,7 +84,7 @@ class GeneratedInternalRowToCudfRowIteratorRetrySuite
         rapidsBufferSpy
       }
     }).when(deviceStorage)
-        .addTable(any(), any(), any(), any())
+        .addTable(any(), any(), any(), any(), any())
 
     withResource(new ColumnarToRowIterator(batchIter, NoopMetric, NoopMetric, NoopMetric,
       NoopMetric)) { ctriter =>
@@ -130,7 +130,7 @@ class GeneratedInternalRowToCudfRowIteratorRetrySuite
         rapidsBufferSpy
       }
     }).when(deviceStorage)
-        .addTable(any(), any(), any(), any())
+        .addTable(any(), any(), any(), any(), any())
 
     withResource(new ColumnarToRowIterator(batchIter, NoopMetric, NoopMetric, NoopMetric,
       NoopMetric)) { ctriter =>
