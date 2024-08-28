@@ -63,6 +63,7 @@ class NonDeterministicRetrySuite extends RmmSparkRetrySuiteBase {
       }
     }
   }
+  
 
   test("GPU project retry with GPU rand") {
     def projectRand(): Seq[GpuExpression] = Seq(
@@ -128,6 +129,7 @@ class NonDeterministicRetrySuite extends RmmSparkRetrySuiteBase {
         }
         val batchSeq = GpuFilter.filterAndClose(cb, boundCondition,
           NoopMetric, NoopMetric, NoopMetric).toSeq
+          
         withResource(batchSeq) { _ =>
           val tables = batchSeq.safeMap(GpuColumnVector.from)
           if (tables.size == 1) {
@@ -154,5 +156,4 @@ class NonDeterministicRetrySuite extends RmmSparkRetrySuiteBase {
       }
     }
   }
-
 }

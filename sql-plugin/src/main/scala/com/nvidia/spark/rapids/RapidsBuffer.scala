@@ -18,15 +18,12 @@ package com.nvidia.spark.rapids
 
 import java.io.File
 import java.nio.channels.WritableByteChannel
-
 import scala.collection.mutable.ArrayBuffer
-
 import ai.rapids.cudf.{Cuda, DeviceMemoryBuffer, HostMemoryBuffer, MemoryBuffer, Table}
-import com.nvidia.spark.rapids.Arm.withResource
+import com.nvidia.spark.rapids.Arm.{closeOnExcept, withResource}
 import com.nvidia.spark.rapids.RapidsPluginImplicits._
-import com.nvidia.spark.rapids.StorageTier.StorageTier
+import com.nvidia.spark.rapids.StorageTier.{DEVICE, StorageTier}
 import com.nvidia.spark.rapids.format.TableMeta
-
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.rapids.RapidsDiskBlockManager
 import org.apache.spark.sql.types.DataType
@@ -81,10 +78,8 @@ object StorageTier extends Enumeration {
 class ChunkedPacker(
     id: RapidsBufferId,
     table: Table,
-    bounceBuffer: DeviceMemoryBuffer)
-    extends Iterator[MemoryBuffer]
-        with Logging
-        with AutoCloseable {
+    bounceBufferSize: Long)
+    extends Logging with AutoCloseable {
 
   private var closed: Boolean = false
 
@@ -94,7 +89,7 @@ class ChunkedPacker(
     val pool = GpuDeviceManager.chunkedPackMemoryResource
     val cudfChunkedPack = try {
       pool.flatMap { chunkedPool =>
-        Some(table.makeChunkedPack(bounceBuffer.getLength, chunkedPool))
+        Some(table.makeChunkedPack(bounceBufferSize, chunkedPool))
       }
     } catch {
       case _: OutOfMemoryError =>
@@ -109,7 +104,7 @@ class ChunkedPacker(
 
     // if the pool is not configured, or we got an OOM, try again with the per-device pool
     cudfChunkedPack.getOrElse {
-      table.makeChunkedPack(bounceBuffer.getLength)
+      table.makeChunkedPack(bounceBufferSize)
     }
   }
 
@@ -121,23 +116,23 @@ class ChunkedPacker(
       table.getRowCount)
   }
 
-  // take out a lease on the bounce buffer
-  bounceBuffer.incRefCount()
-
   def getTotalContiguousSize: Long = chunkedPack.getTotalContiguousSize
 
   def getMeta: TableMeta = {
     tableMeta
   }
 
-  override def hasNext: Boolean = synchronized {
+  def hasNext: Boolean = synchronized {
     if (closed) {
       throw new IllegalStateException(s"ChunkedPacker for $id is closed")
     }
     chunkedPack.hasNext
   }
 
-  def next(): MemoryBuffer = synchronized {
+  def next(bounceBuffer: DeviceMemoryBuffer): MemoryBuffer = synchronized {
+    require(bounceBuffer.getLength() == bounceBufferSize, 
+      s"Bounce buffer ${bounceBuffer} doesn't match size ${bounceBufferSize} B.")
+
     if (closed) {
       throw new IllegalStateException(s"ChunkedPacker for $id is closed")
     }
@@ -150,9 +145,7 @@ class ChunkedPacker(
   override def close(): Unit = synchronized {
     if (!closed) {
       closed = true
-      val toClose = new ArrayBuffer[AutoCloseable]()
-      toClose.append(chunkedPack, bounceBuffer)
-      toClose.safeClose()
+      chunkedPack.close()
     }
   }
 }
@@ -173,49 +166,48 @@ object ChunkedPacker {
  *
  * @param buffer `RapidsBuffer` to copy out of its tier.
  */
-class RapidsBufferCopyIterator(buffer: RapidsBuffer)
-    extends Iterator[MemoryBuffer] with AutoCloseable with Logging {
+class RapidsBufferCopyIterator(
+  chunkedPacker: Option[ChunkedPacker] = None, 
+  singleShotBuffer: Option[MemoryBuffer] = None)
+    extends AutoCloseable with Logging {
 
-  private val chunkedPacker: Option[ChunkedPacker] = if (buffer.supportsChunkedPacker) {
-    Some(buffer.makeChunkedPacker)
-  } else {
-    None
-  }
   def isChunked: Boolean = chunkedPacker.isDefined
 
   // this is used for the single shot case to flag when `next` is call
   // to satisfy the Iterator interface
-  private var singleShotCopyHasNext: Boolean = false
-  private var singleShotBuffer: MemoryBuffer = _
+  private var singleShotCopyHasNext: Boolean = singleShotBuffer.isDefined
 
-  if (!isChunked) {
-    singleShotCopyHasNext = true
-    singleShotBuffer = buffer.getMemoryBuffer
-  }
-
-  override def hasNext: Boolean =
+  def hasNext: Boolean =
     chunkedPacker.map(_.hasNext).getOrElse(singleShotCopyHasNext)
 
-  override def next(): MemoryBuffer = {
+  def next(memoryBuffer: DeviceMemoryBuffer): MemoryBuffer = {
     require(hasNext,
       "next called on exhausted iterator")
-    chunkedPacker.map(_.next()).getOrElse {
+    chunkedPacker.map(_.next(memoryBuffer)).getOrElse {
       singleShotCopyHasNext = false
-      singleShotBuffer.slice(0, singleShotBuffer.getLength)
+      singleShotBuffer.get.slice(0, singleShotBuffer.get.getLength)
     }
   }
 
   def getTotalCopySize: Long = {
     chunkedPacker
         .map(_.getTotalContiguousSize)
-        .getOrElse(singleShotBuffer.getLength)
+        .getOrElse(singleShotBuffer.get.getLength)
+  }
+
+  def getMeta: TableMeta = {
+    chunkedPacker
+        .map(_.getMeta)
+        .getOrElse {
+          throw new IllegalStateException(
+            "asked to get TableMeta but not chunk packed!")
+        }
   }
 
   override def close(): Unit = {
     val toClose = new ArrayBuffer[AutoCloseable]()
     toClose.appendAll(chunkedPacker)
-    toClose.appendAll(Option(singleShotBuffer))
-
+    toClose.appendAll(singleShotBuffer)
     toClose.safeClose()
   }
 }
@@ -224,6 +216,8 @@ class RapidsBufferCopyIterator(buffer: RapidsBuffer)
 trait RapidsBuffer extends AutoCloseable {
   /** The buffer identifier for this buffer. */
   val id: RapidsBufferId
+
+  val base: RapidsMemoryBuffer
 
   /**
    * The size of this buffer in bytes in its _current_ store. As the buffer goes through
@@ -234,101 +228,13 @@ trait RapidsBuffer extends AutoCloseable {
    */
   val memoryUsedBytes: Long
 
-  /**
-   * The size of this buffer if it has already gone through contiguous_split.
-   *
-   * @note Use this function when allocating a target buffer for spill or shuffle purposes.
-   */
-  def getPackedSizeBytes: Long = memoryUsedBytes
+  def copyTo(store: RapidsBufferStore, stream: Cuda.Stream): RapidsBuffer
 
-  /**
-   * At spill time, obtain an iterator used to copy this buffer to a different tier.
-   */
-  def getCopyIterator: RapidsBufferCopyIterator =
-    new RapidsBufferCopyIterator(this)
-
-  /** Descriptor for how the memory buffer is formatted */
-  def meta: TableMeta
+  def getCopyIterator(stream: Cuda.Stream): RapidsBufferCopyIterator
 
   /** The storage tier for this buffer */
   val storageTier: StorageTier
-
-  /**
-   * Get the columnar batch within this buffer. The caller must have
-   * successfully acquired the buffer beforehand.
-   * @param sparkTypes the spark data types the batch should have
-   * @see [[addReference]]
-   * @note It is the responsibility of the caller to close the batch.
-   * @note If the buffer is compressed data then the resulting batch will be built using
-   *       `GpuCompressedColumnVector`, and it is the responsibility of the caller to deal
-   *       with decompressing the data if necessary.
-   */
-  def getColumnarBatch(sparkTypes: Array[DataType]): ColumnarBatch
-
-  /**
-   * Get the host-backed columnar batch from this buffer. The caller must have
-   * successfully acquired the buffer beforehand.
-   *
-   * If this `RapidsBuffer` was added originally to the device tier, or if this is
-   * a just a buffer (not a batch), this function will throw.
-   *
-   * @param sparkTypes the spark data types the batch should have
-   * @see [[addReference]]
-   * @note It is the responsibility of the caller to close the batch.
-   */
-  def getHostColumnarBatch(sparkTypes: Array[DataType]): ColumnarBatch = {
-    throw new IllegalStateException(s"$this does not support host columnar batches.")
-  }
-
-  /**
-   * Get the underlying memory buffer. This may be either a HostMemoryBuffer or a DeviceMemoryBuffer
-   * depending on where the buffer currently resides.
-   * The caller must have successfully acquired the buffer beforehand.
-   * @see [[addReference]]
-   * @note It is the responsibility of the caller to close the buffer.
-   */
-  def getMemoryBuffer: MemoryBuffer
-
-  val supportsChunkedPacker: Boolean = false
-
-  /**
-   * Makes a new chunked packer. It is the responsibility of the caller to close this.
-   */
-  def makeChunkedPacker: ChunkedPacker = {
-    throw new NotImplementedError("not implemented for this store")
-  }
-
-  /**
-   * Copy the content of this buffer into the specified memory buffer, starting from the given
-   * offset.
-   *
-   * @param srcOffset offset to start copying from.
-   * @param dst the memory buffer to copy into.
-   * @param dstOffset offset to copy into.
-   * @param length number of bytes to copy.
-   * @param stream CUDA stream to use
-   */
-  def copyToMemoryBuffer(
-      srcOffset: Long, dst: MemoryBuffer, dstOffset: Long, length: Long, stream: Cuda.Stream): Unit
-
-  /**
-   * Get the device memory buffer from the underlying storage. If the buffer currently resides
-   * outside of device memory, a new DeviceMemoryBuffer is created with the data copied over.
-   * The caller must have successfully acquired the buffer beforehand.
-   * @see [[addReference]]
-   * @note It is the responsibility of the caller to close the buffer.
-   */
-  def getDeviceMemoryBuffer: DeviceMemoryBuffer
-
-  /**
-   * Get the host memory buffer from the underlying storage. If the buffer currently resides
-   * outside of host memory, a new HostMemoryBuffer is created with the data copied over.
-   * The caller must have successfully acquired the buffer beforehand.
-   * @see [[addReference]]
-   * @note It is the responsibility of the caller to close the buffer.
-   */
-  def getHostMemoryBuffer: HostMemoryBuffer
-
+  
   /**
    * Try to add a reference to this buffer to acquire it.
    * @note The close method must be called for every successfully obtained reference.
@@ -347,47 +253,26 @@ trait RapidsBuffer extends AutoCloseable {
    */
   def free(): Unit
 
-  /**
-   * Get the spill priority value for this buffer. Lower values are higher
-   * priority for spilling, meaning buffers with lower values will be
-   * preferred for spilling over buffers with a higher value.
-   */
+  def setSpillPriority(newPriority: Long): Unit
+
   def getSpillPriority: Long
 
-  /**
-   * Set the spill priority for this buffer. Lower values are higher priority
-   * for spilling, meaning buffers with lower values will be preferred for
-   * spilling over buffers with a higher value.
-   * @note should only be called from the buffer catalog
-   * @param priority new priority value for this buffer
-   */
-  def setSpillPriority(priority: Long): Unit
-
-  /**
-   * Function invoked by the `RapidsBufferStore.addBuffer` method that prompts
-   * the specific `RapidsBuffer` to check its reference counting to make itself
-   * spillable or not. Only `RapidsTable` and `RapidsHostMemoryBuffer` implement
-   * this method.
-   */
-  def updateSpillability(): Unit = {}
-
-  /**
-   * Obtains a read lock on this instance of `RapidsBuffer` and calls the function
-   * in `body` while holding the lock.
-   * @param body function that takes a `MemoryBuffer` and produces `K`
-   * @tparam K any return type specified by `body`
-   * @return the result of body(memoryBuffer)
-   */
-  def withMemoryBufferReadLock[K](body: MemoryBuffer => K): K
-
-  /**
-   * Obtains a write lock on this instance of `RapidsBuffer` and calls the function
-   * in `body` while holding the lock.
-   * @param body function that takes a `MemoryBuffer` and produces `K`
-   * @tparam K any return type specified by `body`
-   * @return the result of body(memoryBuffer)
-   */
-  def withMemoryBufferWriteLock[K](body: MemoryBuffer => K): K
+  // helper methods
+  def getColumnarBatch(sparkTypes: Array[DataType], stream: Cuda.Stream): ColumnarBatch =
+    throw new UnsupportedOperationException(
+      s"buffer ${this} does not support getColumnarBatch")
+  def getHostColumnarBatch(sparkTypes: Array[DataType]): ColumnarBatch =
+    throw new UnsupportedOperationException(
+      s"buffer ${this} does not support getHostColumnarBatch")
+  def getDeviceMemoryBuffer(stream: Cuda.Stream): DeviceMemoryBuffer =
+    throw new UnsupportedOperationException(
+      s"buffer ${this} does not support getDeviceMemoryBuffer")
+  def getMemoryBuffer(stream: Cuda.Stream): MemoryBuffer =
+    throw new UnsupportedOperationException(
+      s"buffer ${this} does not support getMemoryBuffer")
+  def getHostMemoryBuffer(stream: Cuda.Stream): HostMemoryBuffer =
+    throw new UnsupportedOperationException(
+      s"buffer ${this} does not support getHostMemoryBuffer")
 }
 
 /**
@@ -397,22 +282,28 @@ trait RapidsBuffer extends AutoCloseable {
  * a representative `ColumnarBatch` but cannot provide a
  * `MemoryBuffer`.
  * @param id buffer ID to associate with the buffer
- * @param meta schema metadata
  */
 sealed class DegenerateRapidsBuffer(
     override val id: RapidsBufferId,
-    override val meta: TableMeta) extends RapidsBuffer {
+    val meta: TableMeta,
+    val base: RapidsMemoryBuffer)
+  extends RapidsBuffer {
 
-  override val memoryUsedBytes: Long = 0L
+  override def getCopyIterator(stream: Cuda.Stream): RapidsBufferCopyIterator = {
+    throw new UnsupportedOperationException("degenerate buffer can't be copied")
+  }
 
-  override val storageTier: StorageTier = StorageTier.DEVICE
+  override def copyTo(store: RapidsBufferStore, stream: Cuda.Stream): RapidsBuffer = {
+    throw new UnsupportedOperationException("degenerate buffer can't be copied")
+  }
 
-  override def getColumnarBatch(sparkTypes: Array[DataType]): ColumnarBatch = {
+  override def getColumnarBatch(sparkTypes: Array[DataType], stream: Cuda.Stream): ColumnarBatch = {
     val rowCount = meta.rowCount
     val packedMeta = meta.packedMetaAsByteBuffer()
     if (packedMeta != null) {
       withResource(DeviceMemoryBuffer.allocate(0)) { deviceBuffer =>
-        withResource(Table.fromPackedTable(meta.packedMetaAsByteBuffer(), deviceBuffer)) { table =>
+        withResource(Table.fromPackedTable(
+          meta.packedMetaAsByteBuffer(), deviceBuffer)) { table =>
           GpuColumnVectorFromBuffer.from(table, deviceBuffer, meta, sparkTypes)
         }
       }
@@ -422,34 +313,17 @@ sealed class DegenerateRapidsBuffer(
     }
   }
 
+  override val memoryUsedBytes: Long = 0L
+
+  override val storageTier: StorageTier = StorageTier.DEVICE
+
   override def free(): Unit = {}
-
-  override def getMemoryBuffer: MemoryBuffer =
-    throw new UnsupportedOperationException("degenerate buffer has no memory buffer")
-
-  override def copyToMemoryBuffer(srcOffset: Long, dst: MemoryBuffer, dstOffset: Long, length: Long,
-      stream: Cuda.Stream): Unit =
-    throw new UnsupportedOperationException("degenerate buffer cannot copy to memory buffer")
-
-  override def getDeviceMemoryBuffer: DeviceMemoryBuffer =
-    throw new UnsupportedOperationException("degenerate buffer has no device memory buffer")
-
-  override def getHostMemoryBuffer: HostMemoryBuffer =
-    throw new UnsupportedOperationException("degenerate buffer has no host memory buffer")
 
   override def addReference(): Boolean = true
 
   override def getSpillPriority: Long = Long.MaxValue
 
-  override def setSpillPriority(priority: Long): Unit = {}
-
-  override def withMemoryBufferReadLock[K](body: MemoryBuffer => K): K = {
-    throw new UnsupportedOperationException("degenerate buffer has no memory buffer")
-  }
-
-  override def withMemoryBufferWriteLock[K](body: MemoryBuffer => K): K = {
-    throw new UnsupportedOperationException("degenerate buffer has no memory buffer")
-  }
+  override def setSpillPriority(newPriority: Long): Unit = {}
 
   override def close(): Unit = {}
 }
@@ -471,6 +345,176 @@ trait RapidsHostBatchBuffer extends AutoCloseable {
   val memoryUsedBytes: Long
 }
 
+class RapidsMemoryBuffer(val id: RapidsBufferId) {
+  private val MAX_BUFFER_LOOKUP_ATTEMPTS = 100
+
+  // a rapids memory buffer supports three "tiers"
+  private var device: RapidsBuffer = _
+  private var host: RapidsBuffer = _
+  private var disk: RapidsBuffer = _
+
+  def acquireBuffer(): RapidsBuffer = synchronized {
+    def lookupAndReturn: Option[RapidsBuffer] = {
+      val buffer = get(promote = false)
+      if (buffer.addReference()) {
+        Some(buffer)
+      } else {
+        None
+      }
+    }
+    // fast path
+    (0 until MAX_BUFFER_LOOKUP_ATTEMPTS).foreach { _ =>
+      val mayBuffer = lookupAndReturn
+      if (mayBuffer.isDefined) {
+        return mayBuffer.get
+      }
+    }
+    throw new IllegalStateException(s"Unable to acquire buffer for ID: $id")
+  }
+
+  def initialize(buffer: RapidsBuffer, tier: StorageTier): Unit = synchronized {
+    tier match {
+      case StorageTier.DEVICE =>
+        device = buffer
+      case StorageTier.HOST =>
+        host = buffer
+      case StorageTier.DISK =>
+        disk = buffer
+    }
+  }
+
+  /**
+   * Spill a buffer from a store to a target store. In turn, this function calls
+   * `copyTo` to copy the buffer, then returns the buffer at the tier we were
+   * spilling from, nulling out that tier internally. It is the responsibility
+   * of the caller to `free` the returned `RapidsBuffer`.
+   * @param fromStore
+   * @param targetStore
+   * @param stream
+   * @return
+   */
+  //TODO: AB: this function is not clear on what happens if the buffer already spilled, or if the buffer
+  // could not spill to the target store
+  def spill(
+      fromStore: RapidsBufferStore, 
+      targetStore: RapidsBufferStore, 
+      stream: Cuda.Stream): Option[RapidsBuffer] = synchronized {
+    val copyToTarget = copyTo(targetStore, stream)
+    fromStore.tier match {
+      case StorageTier.DEVICE => device = null
+      case StorageTier.HOST => host = null
+      case StorageTier.DISK => disk = null
+    }
+    copyToTarget
+  }
+
+  def copyTo(targetStore: RapidsBufferStore,
+             stream: Cuda.Stream): Option[RapidsBuffer] = synchronized {
+    val bufferAtTier = targetStore.tier match {
+      case StorageTier.DEVICE => Option(device)
+      case StorageTier.HOST => Option(host)
+      case StorageTier.DISK => Option(disk)
+    }
+    if (bufferAtTier.isDefined) {
+      None
+    } else {
+      def copyTo(store: RapidsBufferStore): RapidsBuffer = {
+        if (device != null) {
+          device.copyTo(store, stream)
+        } else if (host != null) {
+          host.copyTo(store, stream)
+        } else {
+          disk.copyTo(store, stream)
+        }
+      }
+
+      // we are copying from a tier to another tier
+      val newBuffer = targetStore.tier match {
+        case StorageTier.DEVICE => 
+          copyTo(targetStore)
+        case StorageTier.HOST =>
+          copyTo(targetStore)
+        case StorageTier.DISK =>
+          copyTo(targetStore)
+      }
+
+      newBuffer.storageTier match {
+        case StorageTier.DEVICE =>
+          device = newBuffer
+        case StorageTier.HOST =>
+          host = newBuffer
+        case StorageTier.DISK =>
+          disk = newBuffer
+      }
+      Some(newBuffer)
+    }
+  }
+
+  def free(tier: StorageTier): Unit = synchronized {
+    tier match {
+      case StorageTier.DEVICE =>
+        device.safeFree()
+        device = null
+      case StorageTier.HOST =>
+        host.safeFree()
+        host = null
+      case StorageTier.DISK =>
+        disk.safeFree()
+        disk = null
+    }
+  }
+
+  def free(): Unit = synchronized {
+    Seq(device, host, disk).safeFree()
+    device = null
+    host = null
+    disk = null
+  }
+
+  // promote to `device` if the caller intends to reuse this (hint)
+  def get(promote: Boolean): RapidsBuffer = synchronized {
+    val res = if (device != null) {
+      device
+    } else {
+      if (promote) {
+        copyTo(RapidsBufferCatalog.getDeviceStorage, Cuda.DEFAULT_STREAM).getOrElse(device)
+      } else {
+        if (host != null) {
+          host
+        } else {
+          disk
+        }
+      }
+    }
+    if (res == null) {
+      throw new IllegalStateException(s"Unable to acquire buffer for ID: ${id}")
+    }
+    res
+  }
+
+  // useful in tests
+  def get(tier: StorageTier): Option[RapidsBuffer] = synchronized {
+    val res = tier match {
+      case StorageTier.DEVICE =>
+        device
+      case StorageTier.HOST =>
+        host
+      case StorageTier.DISK =>
+        disk
+    }
+    Option(res)
+  }
+
+  def setSpillPriority(newPriority: Long): Unit = synchronized {
+    val buffs = Seq(device, host, disk)
+    buffs.foreach { b =>
+      if (b != null) {
+        b.setSpillPriority(newPriority)
+      }
+    }
+  }
+}
+
 trait RapidsBufferChannelWritable {
   /**
    * At spill time, write this buffer to an nio WritableByteChannel.
@@ -481,5 +525,21 @@ trait RapidsBufferChannelWritable {
    *               for staged copies.
    * @return the amount of bytes written to the channel
    */
-  def writeToChannel(writableChannel: WritableByteChannel, stream: Cuda.Stream): Long
+  def writeToChannel(
+    writableChannel: WritableByteChannel,
+    stream: Cuda.Stream): (Long, Option[TableMeta])
+}
+
+object RapidsBuffer {
+  def columnarBatchFromDeviceBuffer(
+      devBuffer: DeviceMemoryBuffer,
+      sparkTypes: Array[DataType],
+      meta: TableMeta): ColumnarBatch = {
+    val bufferMeta = meta.bufferMeta()
+    if (bufferMeta == null || bufferMeta.codecBufferDescrsLength == 0) {
+      MetaUtils.getBatchFromMeta(devBuffer, meta, sparkTypes)
+    } else {
+      GpuCompressedColumnVector.from(devBuffer, meta)
+    }
+  }
 }

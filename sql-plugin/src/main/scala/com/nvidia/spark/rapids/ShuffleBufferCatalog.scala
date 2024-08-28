@@ -56,12 +56,12 @@ class ShuffleBufferCatalog(
 
   private def trackCachedHandle(
       bufferId: ShuffleBufferId,
-      bufferHandle: RapidsBufferHandle): Unit = {
-    bufferIdToHandle.put(bufferId, bufferHandle)
+      handle: RapidsBufferHandle): Unit = {
+    bufferIdToHandle.put(bufferId, handle)
   }
 
   def removeCachedHandles(): Unit = {
-    bufferIdToHandle.forEach { (_, handle) => removeBuffer(handle) }
+    bufferIdToHandle.values().forEach(removeBuffer)
   }
 
   /**
@@ -112,7 +112,7 @@ class ShuffleBufferCatalog(
     val bufferId = nextShuffleBufferId(blockId)
     // update the table metadata for the buffer ID generated above
     tableMeta.bufferMeta.mutateId(bufferId.tableId)
-    val handle = catalog.addBuffer(
+    val handle = catalog.addBufferWithMeta(
       bufferId,
       buffer,
       tableMeta,
@@ -204,7 +204,7 @@ class ShuffleBufferCatalog(
   def blockIdToBuffersIds(blockId: ShuffleBlockId): Array[ShuffleBufferId] = {
     val info = activeShuffles.get(blockId.shuffleId)
     if (info == null) {
-      throw new NoSuchElementException(s"unknown shuffle $blockId.shuffleId")
+      throw new NoSuchElementException(s"unknown shuffle ${blockId.shuffleId}")
     }
     val entries = info.blockMap.get(blockId)
     if (entries == null) {
@@ -218,7 +218,7 @@ class ShuffleBufferCatalog(
   def blockIdToBufferHandles(blockId: ShuffleBlockId): Array[RapidsBufferHandle] = {
     val info = activeShuffles.get(blockId.shuffleId)
     if (info == null) {
-      throw new NoSuchElementException(s"unknown shuffle $blockId.shuffleId")
+      throw new NoSuchElementException(s"unknown shuffle ${blockId.shuffleId}")
     }
     val entries = info.blockMap.get(blockId)
     if (entries == null) {
@@ -231,7 +231,25 @@ class ShuffleBufferCatalog(
 
   /** Get all the buffer metadata that correspond to a shuffle block identifier. */
   def blockIdToMetas(blockId: ShuffleBlockId): Seq[TableMeta] = {
-    blockIdToBuffersIds(blockId).map(catalog.getBufferMeta)
+    // TODO: we are going to keep the metadata in the shuffle catalog instead
+    val info = activeShuffles.get(blockId.shuffleId)
+    if (info == null) {
+      throw new NoSuchElementException(s"unknown shuffle ${blockId.shuffleId}")
+    }
+    val entries = info.blockMap.get(blockId)
+    if (entries == null) {
+      throw new NoSuchElementException(s"unknown shuffle block $blockId")
+    }
+    entries.synchronized { 
+      entries.map(bufferIdToHandle.get).map { handle => 
+        withResource(catalog.acquireBuffer(handle)) { rmb => 
+          rmb match {
+            case rmbwm: RapidsBufferWithMeta => rmbwm.meta
+            case _ => throw new IllegalStateException(s"buffer $rmb doesn't have meta!")
+          }
+        }
+      }
+    }
   }
 
   /** Allocate a new shuffle buffer identifier and update the shuffle block mapping. */
@@ -295,9 +313,10 @@ class ShuffleBufferCatalog(
    * @param handle buffer handle
    */
   def removeBuffer(handle: RapidsBufferHandle): Unit = {
-    val id = handle.id
-    tableMap.remove(id.tableId)
-    handle.close()
+    // TODO: handle this here
+    // val id = handle.rmb
+    //tableMap.remove(id.tableId)
+    //handle.close()
   }
 }
 

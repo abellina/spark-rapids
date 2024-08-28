@@ -173,6 +173,25 @@ abstract class RapidsBufferStore(val tier: StorageTier)
     def getTotalSpillableBytes: Long = synchronized { totalBytesSpillable }
   }
 
+  // Utility function to obtain meta from a buffer if it supports it
+  def getMeta(rapidsBuffer: RapidsBuffer, copyIter: RapidsBufferCopyIterator): Option[TableMeta] = {
+    // we have a couple of ways to get meta from a buffer
+    // either the buffer implements `RapidsBufferWithMeta`, so it has a `meta` function
+    // or the `copyIter` is operating on a chunked-pack buffer, in which case it can be used to
+    // provide a meta.
+    // In other cases, we don't have a meta to describe this buffer, so it is "just a buffer"
+    rapidsBuffer match {
+      case bwm: RapidsBufferWithMeta =>
+        Some(bwm.meta)
+      case _ =>
+        if (copyIter.isChunked) {
+          Some(copyIter.getMeta)
+        } else {
+          None
+        }
+    }
+  }
+
   /**
    * Stores that need to stay within a specific byte limit of buffers stored override
    * this function. Only the `HostMemoryBufferStore` requires such a limit.
@@ -205,31 +224,9 @@ abstract class RapidsBufferStore(val tier: StorageTier)
   def setSpillStore(store: RapidsBufferStore): Unit = {
     require(spillStore == null, "spill store already registered")
     spillStore = store
-  }
+  } 
 
-  /**
-   * Adds an existing buffer from another store to this store. The buffer must already
-   * have an active reference by the caller and needs to be eventually closed by the caller
-   * (i.e.: this method will not take ownership of the incoming buffer object).
-   * This does not need to update the catalog, the caller is responsible for that.
-   * @param buffer data from another store
-   * @param catalog RapidsBufferCatalog we may need to modify during this copy
-   * @param stream CUDA stream to use for copy or null
-   * @return the new buffer that was created
-   */
-  def copyBuffer(
-      buffer: RapidsBuffer,
-      catalog: RapidsBufferCatalog,
-      stream: Cuda.Stream): Option[RapidsBufferBase] = {
-    createBuffer(buffer, catalog, stream).map { newBuffer =>
-      freeOnExcept(newBuffer) { newBuffer =>
-        addBuffer(newBuffer)
-        newBuffer
-      }
-    }
-  }
-
-  protected def setSpillable(buffer: RapidsBufferBase, isSpillable: Boolean): Unit = {
+  def setSpillable(buffer: RapidsBufferBase, isSpillable: Boolean): Unit = {
     buffers.setSpillable(buffer, isSpillable)
   }
 
@@ -245,10 +242,11 @@ abstract class RapidsBufferStore(val tier: StorageTier)
    * @param stream CUDA stream to use or null
    * @return the new buffer that was created.
    */
-  protected def createBuffer(
-     buffer: RapidsBuffer,
-     catalog: RapidsBufferCatalog,
-     stream: Cuda.Stream): Option[RapidsBufferBase]
+  def createBuffer(
+    rapidsBuffer: RapidsBuffer,
+    catalog: RapidsBufferCatalog,
+    stream: Cuda.Stream,
+    base: RapidsMemoryBuffer): RapidsBuffer
 
   /** Update bookkeeping for a new buffer */
   protected def addBuffer(buffer: RapidsBufferBase): Unit = {
@@ -280,7 +278,6 @@ abstract class RapidsBufferStore(val tier: StorageTier)
 
   def synchronousSpill(
       targetTotalSize: Long,
-      catalog: RapidsBufferCatalog,
       stream: Cuda.Stream = Cuda.DEFAULT_STREAM): Long = {
     if (currentSpillableSize > targetTotalSize) {
       logWarning(s"Targeting a ${name} size of $targetTotalSize. " +
@@ -302,23 +299,9 @@ abstract class RapidsBufferStore(val tier: StorageTier)
             if (nextSpillableBuffer != null) {
               if (nextSpillableBuffer.addReference()) {
                 withResource(nextSpillableBuffer) { _ =>
-                  val bufferHasSpilled =
-                    catalog.isBufferSpilled(
-                      nextSpillableBuffer.id,
-                      nextSpillableBuffer.storageTier)
-                  val bufferSpill = if (!bufferHasSpilled) {
-                    spillBuffer(
-                      nextSpillableBuffer, this, catalog, stream)
-                  } else {
-                    // if `nextSpillableBuffer` already spilled, we still need to
-                    // remove it from our tier and call free on it, but set
-                    // `newBuffer` to None because there's nothing to register
-                    // as it has already spilled.
-                    BufferSpill(nextSpillableBuffer, None)
-                  }
+                  val bufferSpill = spillBuffer(nextSpillableBuffer, this, stream)
                   totalSpilled += bufferSpill.spillBuffer.memoryUsedBytes
                   bufferSpills.append(bufferSpill)
-                  catalog.updateTiers(bufferSpill)
                 }
               }
             }
@@ -362,29 +345,10 @@ abstract class RapidsBufferStore(val tier: StorageTier)
   private def spillBuffer(
       buffer: RapidsBuffer,
       store: RapidsBufferStore,
-      catalog: RapidsBufferCatalog,
       stream: Cuda.Stream): BufferSpill = {
-    // copy the buffer to spillStore
-    var maybeNewBuffer: Option[RapidsBuffer] = None
-    var lastTier: Option[StorageTier] = None
-    var nextSpillStore = store.spillStore
-    while (maybeNewBuffer.isEmpty && nextSpillStore != null) {
-      lastTier = Some(nextSpillStore.tier)
-      // copy buffer if it fits
-      maybeNewBuffer = nextSpillStore.copyBuffer(buffer, catalog, stream)
-
-      // if it didn't fit, we can try a lower tier that has more space
-      if (maybeNewBuffer.isEmpty) {
-        nextSpillStore = nextSpillStore.spillStore
-      }
-    }
-    if (maybeNewBuffer.isEmpty) {
-      throw new IllegalStateException(
-        s"Unable to spill buffer ${buffer.id} of size ${buffer.memoryUsedBytes} " +
-            s"to tier ${lastTier}")
-    }
+    val newBuffer = buffer.base.spill(store, store.spillStore, stream)
     // return the buffer to free and the new buffer to register
-    BufferSpill(buffer, maybeNewBuffer)
+    BufferSpill(buffer, newBuffer)
   }
 
   /**
@@ -396,158 +360,36 @@ abstract class RapidsBufferStore(val tier: StorageTier)
    */
   protected def trySpillToMaximumSize(
       buffer: RapidsBuffer,
-      catalog: RapidsBufferCatalog,
       stream: Cuda.Stream): Boolean = {
     true // default to success, HostMemoryStore overrides this
   }
 
+  def setSpillPriority(buffer: RapidsBufferBase, newPriority: Long): Unit =
+    buffers.updateSpillPriority(buffer, newPriority)
+
+  def remove(id: RapidsBufferId) = buffers.remove(id)
+
   /** Base class for all buffers in this store. */
-  abstract class RapidsBufferBase(
-      override val id: RapidsBufferId,
-      _meta: TableMeta,
-      initialSpillPriority: Long,
-      catalog: RapidsBufferCatalog = RapidsBufferCatalog.singleton)
-      extends RapidsBuffer {
-    private val MAX_UNSPILL_ATTEMPTS = 100
+  abstract class RapidsBufferBase(override val id: RapidsBufferId,
+                                  initialSpillPriority: Long,
+                                  catalog: RapidsBufferCatalog)
+    extends RapidsBuffer with Logging {
 
     // isValid and refcount must be used with the `RapidsBufferBase` lock held
     protected[this] var isValid = true
+
     protected[this] var refcount = 0
 
     private[this] var spillPriority: Long = initialSpillPriority
 
-    private[this] val rwl: ReentrantReadWriteLock = new ReentrantReadWriteLock()
-
-
-    def meta: TableMeta = _meta
-
     /** Release the underlying resources for this buffer. */
     protected def releaseResources(): Unit
-
-    /**
-     * Materialize the memory buffer from the underlying storage.
-     *
-     * If the buffer resides in device or host memory, only reference count is incremented.
-     * If the buffer resides in secondary storage, a new host or device memory buffer is created,
-     * with the data copied to the new buffer.
-     * The caller must have successfully acquired the buffer beforehand.
-     * @see [[addReference]]
-     * @note It is the responsibility of the caller to close the buffer.
-     * @note This is an internal API only used by Rapids buffer stores.
-     */
-    protected def materializeMemoryBuffer: MemoryBuffer = getMemoryBuffer
 
     override def addReference(): Boolean = synchronized {
       if (isValid) {
         refcount += 1
       }
       isValid
-    }
-
-    override def getColumnarBatch(sparkTypes: Array[DataType]): ColumnarBatch = {
-      // NOTE: Cannot hold a lock on this buffer here because memory is being
-      // allocated. Allocations can trigger synchronous spills which can
-      // deadlock if another thread holds the device store lock and is trying
-      // to spill to this store.
-      withResource(getDeviceMemoryBuffer) { deviceBuffer =>
-        columnarBatchFromDeviceBuffer(deviceBuffer, sparkTypes)
-      }
-    }
-
-    protected def columnarBatchFromDeviceBuffer(devBuffer: DeviceMemoryBuffer,
-        sparkTypes: Array[DataType]): ColumnarBatch = {
-      val bufferMeta = meta.bufferMeta()
-      if (bufferMeta == null || bufferMeta.codecBufferDescrsLength == 0) {
-        MetaUtils.getBatchFromMeta(devBuffer, meta, sparkTypes)
-      } else {
-        GpuCompressedColumnVector.from(devBuffer, meta)
-      }
-    }
-
-    override def copyToMemoryBuffer(srcOffset: Long, dst: MemoryBuffer, dstOffset: Long,
-        length: Long, stream: Cuda.Stream): Unit = {
-      withResource(getMemoryBuffer) { memBuff =>
-        dst match {
-          case _: HostMemoryBuffer =>
-            // TODO: consider moving to the async version.
-            dst.copyFromMemoryBuffer(dstOffset, memBuff, srcOffset, length, stream)
-          case _: BaseDeviceMemoryBuffer =>
-            dst.copyFromMemoryBufferAsync(dstOffset, memBuff, srcOffset, length, stream)
-          case _ =>
-            throw new IllegalStateException(s"Infeasible destination buffer type ${dst.getClass}")
-        }
-      }
-    }
-
-    /**
-     * TODO: we want to remove this method from the buffer, instead we want the catalog
-     *   to be responsible for producing the DeviceMemoryBuffer by asking the buffer. This
-     *   hides the RapidsBuffer from clients and simplifies locking.
-     */
-    override def getDeviceMemoryBuffer: DeviceMemoryBuffer = {
-      if (RapidsBufferCatalog.shouldUnspill) {
-        (0 until MAX_UNSPILL_ATTEMPTS).foreach { _ =>
-          catalog.acquireBuffer(id, DEVICE) match {
-            case Some(buffer) =>
-              withResource(buffer) { _ =>
-                return buffer.getDeviceMemoryBuffer
-              }
-            case _ =>
-              try {
-                logDebug(s"Unspilling $this $id to $DEVICE")
-                val newBuffer = catalog.unspillBufferToDeviceStore(
-                  this,
-                  Cuda.DEFAULT_STREAM)
-                withResource(newBuffer) { _ =>
-                  return newBuffer.getDeviceMemoryBuffer
-                }
-              } catch {
-                case _: DuplicateBufferException =>
-                  logDebug(s"Lost device buffer registration race for buffer $id, retrying...")
-              }
-          }
-        }
-        throw new IllegalStateException(s"Unable to get device memory buffer for ID: $id")
-      } else {
-        materializeMemoryBuffer match {
-          case h: HostMemoryBuffer =>
-            withResource(h) { _ =>
-              closeOnExcept(DeviceMemoryBuffer.allocate(h.getLength)) { deviceBuffer =>
-                logDebug(s"copying ${h.getLength} from host $h to device $deviceBuffer " +
-                    s"of size ${deviceBuffer.getLength}")
-                deviceBuffer.copyFromHostBuffer(h)
-                deviceBuffer
-              }
-            }
-          case d: DeviceMemoryBuffer => d
-          case b => throw new IllegalStateException(s"Unrecognized buffer: $b")
-        }
-      }
-    }
-
-    override def getHostMemoryBuffer: HostMemoryBuffer = {
-      (0 until MAX_UNSPILL_ATTEMPTS).foreach { _ =>
-        catalog.acquireBuffer(id, HOST) match {
-          case Some(buffer) =>
-            withResource(buffer) { _ =>
-              return buffer.getHostMemoryBuffer
-            }
-          case _ =>
-            try {
-              logDebug(s"Unspilling $this $id to $HOST")
-              val newBuffer = catalog.unspillBufferToHostStore(
-                this,
-                Cuda.DEFAULT_STREAM)
-              withResource(newBuffer) { _ =>
-                return newBuffer.getHostMemoryBuffer
-              }
-            } catch {
-              case _: DuplicateBufferException =>
-                logDebug(s"Lost host buffer registration race for buffer $id, retrying...")
-            }
-        }
-      }
-      throw new IllegalStateException(s"Unable to get host memory buffer for ID: $id")
     }
 
     /**
@@ -575,7 +417,9 @@ abstract class RapidsBufferStore(val tier: StorageTier)
     override def free(): Unit = synchronized {
       if (isValid) {
         isValid = false
-        buffers.remove(id)
+        // the catalog knows about all tiers, so we ask it to
+        // find the right store to remove this buffer from
+        catalog.removeFromTier(id, storageTier)
         if (refcount == 0) {
           freeBuffer()
         }
@@ -584,37 +428,29 @@ abstract class RapidsBufferStore(val tier: StorageTier)
       }
     }
 
-    override def getSpillPriority: Long = spillPriority
+    /**
+     * Get the spill priority value for this buffer. Lower values are higher
+     * priority for spilling, meaning buffers with lower values will be
+     * preferred for spilling over buffers with a higher value.
+     */
+    override def getSpillPriority: Long = {
+      spillPriority
+    }
 
-    override def setSpillPriority(priority: Long): Unit =
-      buffers.updateSpillPriority(this, priority)
+    override def setSpillPriority(newPriority: Long): Unit = {
+      buffers.updateSpillPriority(this, newPriority)
+    }
 
-    private[RapidsBufferStore] def updateSpillPriorityValue(priority: Long): Unit = {
+    /**
+     * Function invoked by the `RapidsBufferStore.addBuffer` method that prompts
+     * the specific `RapidsBuffer` to check its reference counting to make itself
+     * spillable or not. Only `RapidsTable` and `RapidsHostMemoryBuffer` implement
+     * this method.
+     */
+    def updateSpillability(): Unit = {}
+
+    def updateSpillPriorityValue(priority: Long): Unit = {
       spillPriority = priority
-    }
-
-    override def withMemoryBufferReadLock[K](body: MemoryBuffer => K): K = {
-      withResource(getMemoryBuffer) { buff =>
-        val lock = rwl.readLock()
-        try {
-          lock.lock()
-          body(buff)
-        } finally {
-          lock.unlock()
-        }
-      }
-    }
-
-    override def withMemoryBufferWriteLock[K](body: MemoryBuffer => K): K = {
-      withResource(getMemoryBuffer) { buff =>
-        val lock = rwl.writeLock()
-        try {
-          lock.lock()
-          body(buff)
-        } finally {
-          lock.unlock()
-        }
-      }
     }
 
     /** Must be called with a lock on the buffer */
@@ -622,7 +458,60 @@ abstract class RapidsBufferStore(val tier: StorageTier)
       releaseResources()
     }
 
-    override def toString: String = s"$name buffer size=$memoryUsedBytes"
+    override def toString: String = s"${this.getClass.getName} size=$memoryUsedBytes"
+  }
+
+  abstract class RapidsBufferBaseWithMeta(
+      override val id: RapidsBufferId,
+      _meta: TableMeta,
+      initialSpillPriority: Long,
+      catalog: RapidsBufferCatalog)
+    extends RapidsBufferBase(id, initialSpillPriority, catalog)
+      with RapidsBufferWithMeta {
+    override def meta: TableMeta = _meta
+
+    override def getColumnarBatch(
+        sparkTypes: Array[DataType], stream: Cuda.Stream): ColumnarBatch = {
+      // NOTE: Cannot hold a lock on this buffer here because memory is being
+      // allocated. Allocations can trigger synchronous spills which can
+      // deadlock if another thread holds the device store lock and is trying
+      // to spill to this store.
+      withResource(getDeviceMemoryBuffer(stream)) { deviceBuffer =>
+        RapidsBuffer.columnarBatchFromDeviceBuffer(deviceBuffer, sparkTypes, meta)
+      }
+    }
+  }
+}
+
+trait RapidsBufferWithMeta {
+  def meta: TableMeta
+}
+
+trait CopyableRapidsBuffer extends RapidsBuffer {
+
+  /**
+   * Copy the content of this buffer into the specified memory buffer, starting from the given
+   * offset.
+   *
+   * @param srcOffset offset to start copying from.
+   * @param dst the memory buffer to copy into.
+   * @param dstOffset offset to copy into.
+   * @param length number of bytes to copy.
+   * @param stream CUDA stream to use
+   */
+  def copyToMemoryBuffer(srcOffset: Long, dst: MemoryBuffer, dstOffset: Long,
+                         length: Long, stream: Cuda.Stream): Unit = {
+    withResource(getMemoryBuffer(stream)) { memBuff =>
+      dst match {
+        case _: HostMemoryBuffer =>
+          // TODO: consider moving to the async version.
+          dst.copyFromMemoryBuffer(dstOffset, memBuff, srcOffset, length, stream)
+        case _: BaseDeviceMemoryBuffer =>
+          dst.copyFromMemoryBufferAsync(dstOffset, memBuff, srcOffset, length, stream)
+        case _ =>
+          throw new IllegalStateException(s"Infeasible destination buffer type ${dst.getClass}")
+      }
+    }
   }
 }
 

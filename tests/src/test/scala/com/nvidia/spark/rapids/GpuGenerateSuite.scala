@@ -17,16 +17,13 @@
 package com.nvidia.spark.rapids
 
 import java.util
-
 import scala.collection.JavaConverters.seqAsJavaListConverter
 import scala.collection.mutable.ArrayBuffer
-
-import ai.rapids.cudf.{ColumnVector, DType, HostColumnVector, Table}
+import ai.rapids.cudf.{ColumnVector, Cuda, DType, HostColumnVector, Table}
 import ai.rapids.cudf.HostColumnVector.{BasicType, ListType, StructType}
 import com.nvidia.spark.rapids.Arm.{closeOnExcept, withResource}
 import com.nvidia.spark.rapids.RapidsPluginImplicits._
 import com.nvidia.spark.rapids.jni.GpuSplitAndRetryOOM
-
 import org.apache.spark.sql.catalyst.expressions.{AttributeReference, Expression}
 import org.apache.spark.sql.types.{ArrayType, DataType, IntegerType, MapType}
 import org.apache.spark.sql.vectorized.ColumnarBatch
@@ -268,7 +265,8 @@ class GpuGenerateSuite
       var forceOOM: Boolean) extends SpillableColumnarBatch {
     override def numRows(): Int = spillable.numRows()
     override def setSpillPriority(priority: Long): Unit = spillable.setSpillPriority(priority)
-    override def getColumnarBatch(): ColumnarBatch = {
+    override def getColumnarBatch(
+        stream: Cuda.Stream = Cuda.DEFAULT_STREAM): ColumnarBatch = {
       if (forceOOM) {
         forceOOM = false
         throw new GpuSplitAndRetryOOM(s"mock split and retry")

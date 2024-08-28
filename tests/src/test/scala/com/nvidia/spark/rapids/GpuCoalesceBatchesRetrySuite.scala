@@ -17,13 +17,11 @@
 package com.nvidia.spark.rapids
 
 import scala.collection.mutable.ArrayBuffer
-
-import ai.rapids.cudf.Table
+import ai.rapids.cudf.{Cuda, Table}
 import com.nvidia.spark.rapids.Arm.withResource
 import com.nvidia.spark.rapids.jni.{GpuSplitAndRetryOOM, RmmSpark}
 import org.mockito.Mockito._
 import org.scalatestplus.mockito.MockitoSugar
-
 import org.apache.spark.sql.types.{DataType, LongType, StructField, StructType}
 import org.apache.spark.sql.vectorized.ColumnarBatch
 
@@ -209,7 +207,8 @@ class GpuCoalesceBatchesRetrySuite
     var refCount = 1
     override def numRows(): Int = 0
     override def setSpillPriority(priority: Long): Unit = {}
-    override def getColumnarBatch(): ColumnarBatch = {
+    override def getColumnarBatch(
+        stream: Cuda.Stream = Cuda.DEFAULT_STREAM): ColumnarBatch = {
       throw new GpuSplitAndRetryOOM()
     }
     override def sizeInBytes: Long = 0

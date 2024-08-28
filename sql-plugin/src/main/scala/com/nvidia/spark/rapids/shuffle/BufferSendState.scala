@@ -17,13 +17,11 @@
 package com.nvidia.spark.rapids.shuffle
 
 import java.io.IOException
-
 import ai.rapids.cudf.{Cuda, MemoryBuffer}
-import com.nvidia.spark.rapids.{RapidsBuffer, ShuffleMetadata, StorageTier}
+import com.nvidia.spark.rapids.{CopyableRapidsBuffer, RapidsBufferWithMeta, ShuffleMetadata, StorageTier}
 import com.nvidia.spark.rapids.Arm.{closeOnExcept, withResource}
 import com.nvidia.spark.rapids.RapidsPluginImplicits._
 import com.nvidia.spark.rapids.format.{BufferMeta, BufferTransferRequest}
-
 import org.apache.spark.internal.Logging
 import org.apache.spark.shuffle.rapids.RapidsShuffleSendPrepareException
 
@@ -81,12 +79,15 @@ class BufferSendState(
       val blocksToSend = (0 until transferRequest.requestsLength()).map { ix =>
         val bufferTransferRequest = transferRequest.requests(btr, ix)
         withResource(requestHandler.acquireShuffleBuffer(
-          bufferTransferRequest.bufferId())) { table =>
-          bufferMetas(ix) = table.meta.bufferMeta()
-          new SendBlock(bufferTransferRequest.bufferId(), table.getPackedSizeBytes)
+          bufferTransferRequest.bufferId())) {
+          case bufferWithMeta: RapidsBufferWithMeta =>
+            bufferMetas(ix) = bufferWithMeta.meta.bufferMeta()
+            new SendBlock(bufferTransferRequest.bufferId(), bufferWithMeta.memoryUsedBytes)
+          case rapidsBuffer =>
+            throw new IllegalStateException(
+              s"only buffers with meta are allowed, but got $rapidsBuffer")
         }
-      }
-
+        }
       (peerBufferReceiveHeader, bufferMetas, blocksToSend)
     }
   }
@@ -145,7 +146,7 @@ class BufferSendState(
   }
 
   case class RangeBuffer(
-      range: BlockRange[SendBlock], rapidsBuffer: RapidsBuffer)
+      range: BlockRange[SendBlock], rapidsBuffer: CopyableRapidsBuffer)
       extends AutoCloseable {
     override def close(): Unit = {
       rapidsBuffer.close()
@@ -176,15 +177,18 @@ class BufferSendState(
           // we acquire these buffers now, and keep them until the caller releases them
           // using `releaseAcquiredToCatalog`
           closeOnExcept(
-            requestHandler.acquireShuffleBuffer(bufferId)) { rapidsBuffer =>
-            //these are closed later, after we synchronize streams
-            rapidsBuffer.storageTier match {
-              case StorageTier.DEVICE =>
+            requestHandler.acquireShuffleBuffer(bufferId)) {
+            case shuffleBuffer: CopyableRapidsBuffer =>
+              //these are closed later, after we synchronize streams
+              if (shuffleBuffer.storageTier == StorageTier.DEVICE) {
                 deviceBuffs += blockRange.rangeSize()
-              case _ => // host/disk
+              } else {
                 hostBuffs += blockRange.rangeSize()
-            }
-            RangeBuffer(blockRange, rapidsBuffer)
+              }
+              RangeBuffer(blockRange, shuffleBuffer)
+            case rapidsMemoryBuffer =>
+              throw new IllegalStateException(
+                s"cannot use buffer ${rapidsMemoryBuffer} in UCX shuffle")
           }
         }
 
@@ -204,8 +208,12 @@ class BufferSendState(
           acquiredBuffs.foreach { case RangeBuffer(blockRange, rapidsBuffer) =>
             needsCleanup = true
             require(blockRange.rangeSize() <= bounceBuffToUse.getLength - buffOffset)
-            rapidsBuffer.copyToMemoryBuffer(blockRange.rangeStart, bounceBuffToUse, buffOffset,
-              blockRange.rangeSize(), serverStream)
+            rapidsBuffer.copyToMemoryBuffer(
+              blockRange.rangeStart, 
+              bounceBuffToUse, 
+              buffOffset,
+              blockRange.rangeSize(), 
+              serverStream)
             buffOffset += blockRange.rangeSize()
           }
           needsCleanup = false

@@ -18,6 +18,7 @@ package com.nvidia.spark.rapids
 
 import java.io.File
 import java.math.RoundingMode
+import java.nio.channels.WritableByteChannel
 
 import scala.collection.mutable.ArrayBuffer
 
@@ -62,295 +63,310 @@ class RapidsDeviceMemoryStoreSuite extends AnyFunSuite with MockitoSugar {
 
   test("add table registers with catalog") {
     withResource(new RapidsDeviceMemoryStore) { store =>
-      val catalog = spy(new RapidsBufferCatalog(store))
-      val spillPriority = 3
-      val bufferId = MockRapidsBufferId(7)
-      withResource(buildContiguousTable()) { ct =>
-        catalog.addContiguousTable(
-          bufferId, ct, spillPriority, false)
+      withResource(spy(new RapidsBufferCatalog(store))) { catalog =>
+        val spillPriority = 3
+        val bufferId = MockRapidsBufferId(7)
+        val handle = withResource(buildContiguousTable()) { ct =>
+          catalog.addContiguousTable(
+            bufferId, ct, spillPriority, false)
+        }
+        withResource(catalog.acquireBuffer(handle)) { resultBuffer =>
+          assertResult(bufferId)(resultBuffer.id)
+          assertResult(spillPriority)(resultBuffer.getSpillPriority)
+        }
       }
-      val captor: ArgumentCaptor[RapidsBuffer] = ArgumentCaptor.forClass(classOf[RapidsBuffer])
-      verify(catalog).registerNewBuffer(captor.capture())
-      val resultBuffer = captor.getValue
-      assertResult(bufferId)(resultBuffer.id)
-      assertResult(spillPriority)(resultBuffer.getSpillPriority)
     }
   }
 
   test("a non-contiguous table is spillable and it is handed over to the store") {
     withResource(new RapidsDeviceMemoryStore) { store =>
-      val catalog = spy(new RapidsBufferCatalog(store))
-      val spillPriority = 3
-      val table = buildTable()
-      catalog.addTable(table, spillPriority)
-      val buffSize = GpuColumnVector.getTotalDeviceMemoryUsed(table)
-      assertResult(buffSize)(store.currentSize)
-      assertResult(buffSize)(store.currentSpillableSize)
+      withResource(spy(new RapidsBufferCatalog(store))) { catalog =>
+        val spillPriority = 3
+        val table = buildTable()
+        catalog.addTable(table, spillPriority)
+        val buffSize = GpuColumnVector.getTotalDeviceMemoryUsed(table)
+        assertResult(buffSize)(store.currentSize)
+        assertResult(buffSize)(store.currentSpillableSize)
+      }
     }
   }
 
   test("a non-contiguous table becomes non-spillable when batch is obtained") {
     withResource(new RapidsDeviceMemoryStore) { store =>
-      val catalog = spy(new RapidsBufferCatalog(store))
-      val spillPriority = 3
-      val table = buildTable()
-      val handle = catalog.addTable(table, spillPriority)
-      val types: Array[DataType] =
+      withResource(spy(new RapidsBufferCatalog(store))) { catalog =>
+        val spillPriority = 3
+        val table = buildTable()
+        val handle = catalog.addTable(table, spillPriority)
+        val types: Array[DataType] =
           Seq(IntegerType, StringType, DoubleType, DecimalType(10, 5)).toArray
-      val buffSize = GpuColumnVector.getTotalDeviceMemoryUsed(table)
-      assertResult(buffSize)(store.currentSize)
-      assertResult(buffSize)(store.currentSpillableSize)
-      val batch = withResource(catalog.acquireBuffer(handle)) { rapidsBuffer =>
-        rapidsBuffer.getColumnarBatch(types)
-      }
-      withResource(batch) { _ =>
+        val buffSize = GpuColumnVector.getTotalDeviceMemoryUsed(table)
         assertResult(buffSize)(store.currentSize)
-        assertResult(0)(store.currentSpillableSize)
+        assertResult(buffSize)(store.currentSpillableSize)
+        val batch = withResource(catalog.acquireBuffer(handle)) { rapidsBuffer =>
+          rapidsBuffer.getColumnarBatch(types, Cuda.DEFAULT_STREAM)
+        }
+        withResource(batch) { _ =>
+          assertResult(buffSize)(store.currentSize)
+          assertResult(0)(store.currentSpillableSize)
+        }
+        assertResult(buffSize)(store.currentSpillableSize)
       }
-      assertResult(buffSize)(store.currentSpillableSize)
     }
   }
 
   test("a non-contiguous table is non-spillable until all columns are returned") {
     withResource(new RapidsDeviceMemoryStore) { store =>
-      val catalog = spy(new RapidsBufferCatalog(store))
-      val spillPriority = 3
-      val table = buildTable()
-      val handle = catalog.addTable(table, spillPriority)
-      val types: Array[DataType] =
-        Seq(IntegerType, StringType, DoubleType, DecimalType(10, 5)).toArray
-      val buffSize = GpuColumnVector.getTotalDeviceMemoryUsed(table)
-      assertResult(buffSize)(store.currentSize)
-      assertResult(buffSize)(store.currentSpillableSize)
-      // incRefCount all the columns via `batch`
-      val batch = withResource(catalog.acquireBuffer(handle)) { rapidsBuffer =>
-        rapidsBuffer.getColumnarBatch(types)
-      }
-      val columns = GpuColumnVector.extractBases(batch)
-      withResource(columns.head) { _ =>
-        columns.head.incRefCount()
-        withResource(batch) { _ =>
-          assertResult(buffSize)(store.currentSize)
+      withResource(spy(new RapidsBufferCatalog(store))) { catalog =>
+        val spillPriority = 3
+        val table = buildTable()
+        val handle = catalog.addTable(table, spillPriority)
+        val types: Array[DataType] =
+          Seq(IntegerType, StringType, DoubleType, DecimalType(10, 5)).toArray
+        val buffSize = GpuColumnVector.getTotalDeviceMemoryUsed(table)
+        assertResult(buffSize)(store.currentSize)
+        assertResult(buffSize)(store.currentSpillableSize)
+        // incRefCount all the columns via `batch`
+        val batch = withResource(catalog.acquireBuffer(handle)) { rapidsBuffer =>
+          rapidsBuffer.getColumnarBatch(types, Cuda.DEFAULT_STREAM)
+        }
+        val columns = GpuColumnVector.extractBases(batch)
+        withResource(columns.head) { _ =>
+          columns.head.incRefCount()
+          withResource(batch) { _ =>
+            assertResult(buffSize)(store.currentSize)
+            assertResult(0)(store.currentSpillableSize)
+          }
+          // still 0 after the batch is closed, because of the extra incRefCount
+          // for columns.head
           assertResult(0)(store.currentSpillableSize)
         }
-        // still 0 after the batch is closed, because of the extra incRefCount
-        // for columns.head
-        assertResult(0)(store.currentSpillableSize)
+        // columns.head is closed, so now our RapidsTable is spillable again
+        assertResult(buffSize)(store.currentSpillableSize)
       }
-      // columns.head is closed, so now our RapidsTable is spillable again
-      assertResult(buffSize)(store.currentSpillableSize)
     }
   }
 
   test("an aliased non-contiguous table is not spillable (until closing the alias) ") {
     withResource(new RapidsDeviceMemoryStore) { store =>
-      val catalog = spy(new RapidsBufferCatalog(store))
-      val spillPriority = 3
-      val table = buildTable()
-      val handle = catalog.addTable(table, spillPriority)
-      val types: Array[DataType] =
-        Seq(IntegerType, StringType, DoubleType, DecimalType(10, 5)).toArray
-      val buffSize = GpuColumnVector.getTotalDeviceMemoryUsed(table)
-      assertResult(buffSize)(store.currentSize)
-      assertResult(buffSize)(store.currentSpillableSize)
-      val aliasHandle = withResource(catalog.acquireBuffer(handle)) { rapidsBuffer =>
-        // extract the batch from the table we added, and add it back as a batch
-        withResource(rapidsBuffer.getColumnarBatch(types)) { batch =>
-          catalog.addBatch(batch, spillPriority)
-        }
-      } // we now have two copies in the store
-      assertResult(buffSize*2)(store.currentSize)
-      assertResult(0)(store.currentSpillableSize)
+      withResource(spy(new RapidsBufferCatalog(store))) { catalog =>
+        val spillPriority = 3
+        val table = buildTable()
+        val handle = catalog.addTable(table, spillPriority)
+        val types: Array[DataType] =
+          Seq(IntegerType, StringType, DoubleType, DecimalType(10, 5)).toArray
+        val buffSize = GpuColumnVector.getTotalDeviceMemoryUsed(table)
+        assertResult(buffSize)(store.currentSize)
+        assertResult(buffSize)(store.currentSpillableSize)
+        val aliasHandle = withResource(catalog.acquireBuffer(handle)) { rapidsBuffer =>
+          // extract the batch from the table we added, and add it back as a batch
+          withResource(rapidsBuffer.getColumnarBatch(types, Cuda.DEFAULT_STREAM)) { batch =>
+            catalog.addBatch(batch, spillPriority)
+          }
+        } // we now have two copies in the store
+        assertResult(buffSize * 2)(store.currentSize)
+        assertResult(0)(store.currentSpillableSize)
 
-      aliasHandle.close() // remove the alias
+        aliasHandle.close() // remove the alias
 
-      assertResult(buffSize)(store.currentSize)
-      assertResult(buffSize)(store.currentSpillableSize)
+        assertResult(buffSize)(store.currentSize)
+        assertResult(buffSize)(store.currentSpillableSize)
+      }
     }
   }
 
   test("an aliased non-contiguous table is not spillable (until closing the original) ") {
     withResource(new RapidsDeviceMemoryStore) { store =>
-      val catalog = spy(new RapidsBufferCatalog(store))
-      val spillPriority = 3
-      val table = buildTable()
-      val handle = catalog.addTable(table, spillPriority)
-      val types: Array[DataType] =
-        Seq(IntegerType, StringType, DoubleType, DecimalType(10, 5)).toArray
-      val buffSize = GpuColumnVector.getTotalDeviceMemoryUsed(table)
-      assertResult(buffSize)(store.currentSize)
-      assertResult(buffSize)(store.currentSpillableSize)
-      withResource(catalog.acquireBuffer(handle)) { rapidsBuffer =>
-        // extract the batch from the table we added, and add it back as a batch
-        withResource(rapidsBuffer.getColumnarBatch(types)) { batch =>
-          catalog.addBatch(batch, spillPriority)
-        }
-      } // we now have two copies in the store
-      assertResult(buffSize * 2)(store.currentSize)
-      assertResult(0)(store.currentSpillableSize)
+      withResource(spy(new RapidsBufferCatalog(store))) { catalog =>
+        val spillPriority = 3
+        val table = buildTable()
+        val handle = catalog.addTable(table, spillPriority)
+        val types: Array[DataType] =
+          Seq(IntegerType, StringType, DoubleType, DecimalType(10, 5)).toArray
+        val buffSize = GpuColumnVector.getTotalDeviceMemoryUsed(table)
+        assertResult(buffSize)(store.currentSize)
+        assertResult(buffSize)(store.currentSpillableSize)
+        withResource(catalog.acquireBuffer(handle)) { rapidsBuffer =>
+          // extract the batch from the table we added, and add it back as a batch
+          withResource(rapidsBuffer.getColumnarBatch(types, Cuda.DEFAULT_STREAM)) { batch =>
+            catalog.addBatch(batch, spillPriority)
+          }
+        } // we now have two copies in the store
+        assertResult(buffSize * 2)(store.currentSize)
+        assertResult(0)(store.currentSpillableSize)
 
-      handle.close() // remove the original
+        handle.close() // remove the original
 
-      assertResult(buffSize)(store.currentSize)
-      assertResult(buffSize)(store.currentSpillableSize)
+        assertResult(buffSize)(store.currentSize)
+        assertResult(buffSize)(store.currentSpillableSize)
+      }
     }
   }
 
   test("an non-contiguous table supports duplicated columns") {
     withResource(new RapidsDeviceMemoryStore) { store =>
-      val catalog = spy(new RapidsBufferCatalog(store))
-      val spillPriority = 3
-      val table = buildTableWithDuplicate()
-      val handle = catalog.addTable(table, spillPriority)
-      val types: Array[DataType] =
-        Seq(IntegerType, IntegerType, StringType, DoubleType).toArray
-      val buffSize = GpuColumnVector.getTotalDeviceMemoryUsed(table)
-      assertResult(buffSize)(store.currentSize)
-      assertResult(buffSize)(store.currentSpillableSize)
-      withResource(catalog.acquireBuffer(handle)) { rapidsBuffer =>
-        // extract the batch from the table we added, and add it back as a batch
-        withResource(rapidsBuffer.getColumnarBatch(types)) { batch =>
-          catalog.addBatch(batch, spillPriority)
-        }
-      } // we now have two copies in the store
-      assertResult(buffSize * 2)(store.currentSize)
-      assertResult(0)(store.currentSpillableSize)
+      withResource(spy(new RapidsBufferCatalog(store))) { catalog =>
+        val spillPriority = 3
+        val table = buildTableWithDuplicate()
+        val handle = catalog.addTable(table, spillPriority)
+        val types: Array[DataType] =
+          Seq(IntegerType, IntegerType, StringType, DoubleType).toArray
+        val buffSize = GpuColumnVector.getTotalDeviceMemoryUsed(table)
+        assertResult(buffSize)(store.currentSize)
+        assertResult(buffSize)(store.currentSpillableSize)
+        withResource(catalog.acquireBuffer(handle)) { rapidsBuffer =>
+          // extract the batch from the table we added, and add it back as a batch
+          withResource(rapidsBuffer.getColumnarBatch(types, Cuda.DEFAULT_STREAM)) { batch =>
+            catalog.addBatch(batch, spillPriority)
+          }
+        } // we now have two copies in the store
+        assertResult(buffSize * 2)(store.currentSize)
+        assertResult(0)(store.currentSpillableSize)
 
-      handle.close() // remove the original
+        handle.close() // remove the original
 
-      assertResult(buffSize)(store.currentSize)
-      assertResult(buffSize)(store.currentSpillableSize)
+        assertResult(buffSize)(store.currentSize)
+        assertResult(buffSize)(store.currentSpillableSize)
+      }
     }
   }
 
   test("a contiguous table is not spillable until the owner closes it") {
     withResource(new RapidsDeviceMemoryStore) { store =>
-      val catalog = spy(new RapidsBufferCatalog(store))
-      val spillPriority = 3
-      val bufferId = MockRapidsBufferId(7)
-      val ct = buildContiguousTable()
-      val buffSize = ct.getBuffer.getLength
-      withResource(ct) { _ =>
-        catalog.addContiguousTable(
-          bufferId,
-          ct,
-          spillPriority,
-          false)
-        assertResult(buffSize)(store.currentSize)
-        assertResult(0)(store.currentSpillableSize)
-      }
-      // after closing the original table, the RapidsBuffer should be spillable
-      assertResult(buffSize)(store.currentSize)
-      assertResult(buffSize)(store.currentSpillableSize)
-    }
-  }
-
-  test("a buffer is not spillable until the owner closes columns referencing it") {
-    withResource(new RapidsDeviceMemoryStore) { store =>
-      val spillPriority = 3
-      val bufferId = MockRapidsBufferId(7)
-      val ct = buildContiguousTable()
-      val buffSize = ct.getBuffer.getLength
-      withResource(ct) { _ =>
-        val meta = MetaUtils.buildTableMeta(bufferId.tableId, ct)
+      withResource(spy(new RapidsBufferCatalog(store))) { catalog =>
+        val spillPriority = 3
+        val bufferId = MockRapidsBufferId(7)
+        val ct = buildContiguousTable()
+        val buffSize = ct.getBuffer.getLength
         withResource(ct) { _ =>
-          store.addBuffer(
+          catalog.addContiguousTable(
             bufferId,
-            ct.getBuffer,
-            meta,
+            ct,
             spillPriority,
             false)
           assertResult(buffSize)(store.currentSize)
           assertResult(0)(store.currentSpillableSize)
         }
+        // after closing the original table, the RapidsBuffer should be spillable
+        assertResult(buffSize)(store.currentSize)
+        assertResult(buffSize)(store.currentSpillableSize)
       }
-      // after closing the original table, the RapidsBuffer should be spillable
-      assertResult(buffSize)(store.currentSize)
-      assertResult(buffSize)(store.currentSpillableSize)
+    }
+  }
+
+  test("a buffer is not spillable until the owner closes columns referencing it") {
+    withResource(new RapidsDeviceMemoryStore) { store =>
+      withResource(new RapidsBufferCatalog(store)) { catalog =>
+        val spillPriority = 3
+        val bufferId = MockRapidsBufferId(7)
+        val ct = buildContiguousTable()
+        val buffSize = ct.getBuffer.getLength
+        withResource(ct) { _ =>
+          val meta = MetaUtils.buildTableMeta(bufferId.tableId, ct)
+          withResource(ct) { _ =>
+            store.addBuffer(
+              bufferId,
+              ct.getBuffer,
+              meta,
+              spillPriority,
+              false,
+              catalog)
+            assertResult(buffSize)(store.currentSize)
+            assertResult(0)(store.currentSpillableSize)
+          }
+        }
+        // after closing the original table, the RapidsBuffer should be spillable
+        assertResult(buffSize)(store.currentSize)
+        assertResult(buffSize)(store.currentSpillableSize)
+      }
     }
   }
 
   test("a buffer is not spillable when the underlying device buffer is obtained from it") {
     withResource(new RapidsDeviceMemoryStore) { store =>
-      val spillPriority = 3
-      val bufferId = MockRapidsBufferId(7)
-      val ct = buildContiguousTable()
-      val buffSize = ct.getBuffer.getLength
-      val buffer = withResource(ct) { _ =>
-        val meta = MetaUtils.buildTableMeta(bufferId.tableId, ct)
-        val buffer = store.addBuffer(
-          bufferId,
-          ct.getBuffer,
-          meta,
-          spillPriority,
-          false)
+      withResource(new RapidsBufferCatalog(store)) { catalog =>
+        val spillPriority = 3
+        val bufferId = MockRapidsBufferId(7)
+        val ct = buildContiguousTable()
+        val buffSize = ct.getBuffer.getLength
+        val buffer = withResource(ct) { _ =>
+          val meta = MetaUtils.buildTableMeta(bufferId.tableId, ct)
+          val buffer = store.addBuffer(
+            bufferId,
+            ct.getBuffer,
+            meta,
+            spillPriority,
+            false,
+            catalog)
+          assertResult(buffSize)(store.currentSize)
+          assertResult(0)(store.currentSpillableSize)
+          buffer
+        }
+
+        // after closing the original table, the RapidsBuffer should be spillable
         assertResult(buffSize)(store.currentSize)
-        assertResult(0)(store.currentSpillableSize)
-        buffer
+        assertResult(buffSize)(store.currentSpillableSize)
+
+        // if a device memory buffer is obtained from the buffer, it is no longer spillable
+        withResource(buffer.get(promote = false)
+            .getDeviceMemoryBuffer(Cuda.DEFAULT_STREAM)) { deviceBuffer =>
+          assertResult(buffSize)(store.currentSize)
+          assertResult(0)(store.currentSpillableSize)
+        }
+
+        // once the DeviceMemoryBuffer is closed, the RapidsBuffer should be spillable again
+        assertResult(buffSize)(store.currentSpillableSize)
       }
-
-      // after closing the original table, the RapidsBuffer should be spillable
-      assertResult(buffSize)(store.currentSize)
-      assertResult(buffSize)(store.currentSpillableSize)
-
-      // if a device memory buffer is obtained from the buffer, it is no longer spillable
-      withResource(buffer.getDeviceMemoryBuffer) { deviceBuffer =>
-        assertResult(buffSize)(store.currentSize)
-        assertResult(0)(store.currentSpillableSize)
-      }
-
-      // once the DeviceMemoryBuffer is closed, the RapidsBuffer should be spillable again
-      assertResult(buffSize)(store.currentSpillableSize)
     }
   }
 
   test("add buffer registers with catalog") {
     withResource(new RapidsDeviceMemoryStore) { store =>
-      val catalog = spy(new RapidsBufferCatalog(store))
-      val spillPriority = 3
-      val bufferId = MockRapidsBufferId(7)
-      val meta = withResource(buildContiguousTable()) { ct =>
-        val meta = MetaUtils.buildTableMeta(bufferId.tableId, ct)
-        withResource(ct) { _ =>
-          catalog.addBuffer(
-            bufferId,
-            ct.getBuffer,
-            meta,
-            spillPriority,
-            false)
+      withResource(spy(new RapidsBufferCatalog(store))) { catalog =>
+        val spillPriority = 3
+        val bufferId = MockRapidsBufferId(7)
+        val (meta, handle) = withResource(buildContiguousTable()) { ct =>
+          val meta = MetaUtils.buildTableMeta(bufferId.tableId, ct)
+          val handle = withResource(ct) { _ =>
+            catalog.addBufferWithMeta(
+              bufferId,
+              ct.getBuffer,
+              meta,
+              spillPriority,
+              false)
+          }
+          (meta, handle)
         }
-        meta
+        withResource(catalog.acquireBuffer(handle)) { resultBuffer =>
+          assertResult(bufferId)(resultBuffer.id)
+          assertResult(spillPriority)(resultBuffer.getSpillPriority)
+          assertResult(meta)(resultBuffer.asInstanceOf[RapidsBufferWithMeta].meta)
+        }
       }
-      val captor: ArgumentCaptor[RapidsBuffer] = ArgumentCaptor.forClass(classOf[RapidsBuffer])
-      verify(catalog).registerNewBuffer(captor.capture())
-      val resultBuffer = captor.getValue
-      assertResult(bufferId)(resultBuffer.id)
-      assertResult(spillPriority)(resultBuffer.getSpillPriority)
-      assertResult(meta)(resultBuffer.meta)
     }
   }
 
   test("get memory buffer") {
     withResource(new RapidsDeviceMemoryStore) { store =>
-      val catalog = spy(new RapidsBufferCatalog(store))
-      val bufferId = MockRapidsBufferId(7)
-      withResource(buildContiguousTable()) { ct =>
-        withResource(HostMemoryBuffer.allocate(ct.getBuffer.getLength)) { expectedHostBuffer =>
-          expectedHostBuffer.copyFromDeviceBuffer(ct.getBuffer)
-          val meta = MetaUtils.buildTableMeta(bufferId.tableId, ct)
-          val handle = withResource(ct) { _ =>
-            catalog.addBuffer(
-              bufferId,
-              ct.getBuffer,
-              meta,
-              initialSpillPriority = 3,
-              needsSync = false)
-          }
-          withResource(catalog.acquireBuffer(handle)) { buffer =>
-            withResource(buffer.getMemoryBuffer.asInstanceOf[DeviceMemoryBuffer]) { devbuf =>
-              withResource(HostMemoryBuffer.allocate(devbuf.getLength)) { actualHostBuffer =>
-                actualHostBuffer.copyFromDeviceBuffer(devbuf)
-                assertResult(expectedHostBuffer.asByteBuffer())(actualHostBuffer.asByteBuffer())
+      withResource(spy(new RapidsBufferCatalog(store))) { catalog =>
+        val bufferId = MockRapidsBufferId(7)
+        withResource(buildContiguousTable()) { ct =>
+          withResource(HostMemoryBuffer.allocate(ct.getBuffer.getLength)) { expectedHostBuffer =>
+            expectedHostBuffer.copyFromDeviceBuffer(ct.getBuffer)
+            val meta = MetaUtils.buildTableMeta(bufferId.tableId, ct)
+            val handle = withResource(ct) { _ =>
+              catalog.addBufferWithMeta(
+                bufferId,
+                ct.getBuffer,
+                meta,
+                initialSpillPriority = 3,
+                needsSync = false)
+            }
+            withResource(catalog.acquireBuffer(handle)) { buffer =>
+              withResource(buffer.getDeviceMemoryBuffer(Cuda.DEFAULT_STREAM)) { devbuf =>
+                withResource(HostMemoryBuffer.allocate(devbuf.getLength)) { actualHostBuffer =>
+                  actualHostBuffer.copyFromDeviceBuffer(devbuf)
+                  assertResult(expectedHostBuffer.asByteBuffer())(actualHostBuffer.asByteBuffer())
+                }
               }
             }
           }
@@ -361,56 +377,57 @@ class RapidsDeviceMemoryStoreSuite extends AnyFunSuite with MockitoSugar {
 
   test("get column batch") {
     withResource(new RapidsDeviceMemoryStore) { store =>
-      val catalog = new RapidsBufferCatalog(store)
-      val sparkTypes = Array[DataType](IntegerType, StringType, DoubleType,
-        DecimalType(ai.rapids.cudf.DType.DECIMAL64_MAX_PRECISION, 5))
-      val bufferId = MockRapidsBufferId(7)
-      withResource(buildContiguousTable()) { ct =>
-        withResource(GpuColumnVector.from(ct.getTable, sparkTypes)) {
-          expectedBatch =>
-            val meta = MetaUtils.buildTableMeta(bufferId.tableId, ct)
-            val handle = withResource(ct) { _ =>
-              catalog.addBuffer(
-                bufferId,
-                ct.getBuffer,
-                meta,
-                initialSpillPriority = 3,
-                false)
-            }
-            withResource(catalog.acquireBuffer(handle)) { buffer =>
-              withResource(buffer.getColumnarBatch(sparkTypes)) { actualBatch =>
-                TestUtils.compareBatches(expectedBatch, actualBatch)
+      withResource(spy(new RapidsBufferCatalog(store))) { catalog =>
+        val sparkTypes = Array[DataType](IntegerType, StringType, DoubleType,
+          DecimalType(ai.rapids.cudf.DType.DECIMAL64_MAX_PRECISION, 5))
+        val bufferId = MockRapidsBufferId(7)
+        withResource(buildContiguousTable()) { ct =>
+          withResource(GpuColumnVector.from(ct.getTable, sparkTypes)) {
+            expectedBatch =>
+              val meta = MetaUtils.buildTableMeta(bufferId.tableId, ct)
+              val handle = withResource(ct) { _ =>
+                catalog.addBufferWithMeta(
+                  bufferId,
+                  ct.getBuffer,
+                  meta,
+                  initialSpillPriority = 3,
+                  false)
               }
-            }
+              withResource(catalog.acquireBuffer(handle)) { buffer =>
+                withResource(buffer.getColumnarBatch(sparkTypes, Cuda.DEFAULT_STREAM)) { actualBatch =>
+                  TestUtils.compareBatches(expectedBatch, actualBatch)
+                }
+              }
+          }
         }
       }
     }
   }
 
   test("size statistics") {
-
     withResource(new RapidsDeviceMemoryStore) { store =>
-      val catalog = new RapidsBufferCatalog(store)
-      assertResult(0)(store.currentSize)
-      val bufferSizes = new Array[Long](2)
-      val bufferHandles = new Array[RapidsBufferHandle](2)
-      bufferSizes.indices.foreach { i =>
-        withResource(buildContiguousTable()) { ct =>
-          bufferSizes(i) = ct.getBuffer.getLength
-          // store takes ownership of the table
-          bufferHandles(i) =
-            catalog.addContiguousTable(
-              MockRapidsBufferId(i),
-              ct,
-              initialSpillPriority = 0,
-              false)
+      withResource(spy(new RapidsBufferCatalog(store))) { catalog =>
+        assertResult(0)(store.currentSize)
+        val bufferSizes = new Array[Long](2)
+        val bufferHandles = new Array[RapidsBufferHandle](2)
+        bufferSizes.indices.foreach { i =>
+          withResource(buildContiguousTable()) { ct =>
+            bufferSizes(i) = ct.getBuffer.getLength
+            // store takes ownership of the table
+            bufferHandles(i) =
+              catalog.addContiguousTable(
+                MockRapidsBufferId(i),
+                ct,
+                initialSpillPriority = 0,
+                false)
+          }
+          assertResult(bufferSizes.take(i + 1).sum)(store.currentSize)
         }
-        assertResult(bufferSizes.take(i+1).sum)(store.currentSize)
+        bufferHandles(0).close()
+        assertResult(bufferSizes(1))(store.currentSize)
+        bufferHandles(1).close()
+        assertResult(0)(store.currentSize)
       }
-      bufferHandles(0).close()
-      assertResult(bufferSizes(1))(store.currentSize)
-      bufferHandles(1).close()
-      assertResult(0)(store.currentSize)
     }
   }
 
@@ -419,40 +436,44 @@ class RapidsDeviceMemoryStoreSuite extends AnyFunSuite with MockitoSugar {
     val spillPriorities = Array(0, -1, 2)
     val bufferSizes = new Array[Long](spillPriorities.length)
     withResource(new RapidsDeviceMemoryStore) { store =>
-      val catalog = new RapidsBufferCatalog(store)
-      store.setSpillStore(spillStore)
-      spillPriorities.indices.foreach { i =>
-        withResource(buildContiguousTable()) { ct =>
-          bufferSizes(i) = ct.getBuffer.getLength
-          // store takes ownership of the table
-          catalog.addContiguousTable(
-            MockRapidsBufferId(i), ct, spillPriorities(i),
-            false)
+      withResource(
+        new RapidsBufferCatalog(
+          deviceStorage = store,
+          hostStorage = spillStore)) { catalog =>
+        store.setSpillStore(spillStore)
+        spillPriorities.indices.foreach { i =>
+          withResource(buildContiguousTable()) { ct =>
+            bufferSizes(i) = ct.getBuffer.getLength
+            // store takes ownership of the table
+            catalog.addContiguousTable(
+              MockRapidsBufferId(i), ct, spillPriorities(i),
+              false)
+          }
         }
+        assert(spillStore.spilledBuffers.isEmpty)
+
+        // asking to spill 0 bytes should not spill
+        val sizeBeforeSpill = store.currentSize
+        catalog.synchronousSpill(store, sizeBeforeSpill)
+        assert(spillStore.spilledBuffers.isEmpty)
+        assertResult(sizeBeforeSpill)(store.currentSize)
+        catalog.synchronousSpill(store, sizeBeforeSpill + 1)
+        assert(spillStore.spilledBuffers.isEmpty)
+        assertResult(sizeBeforeSpill)(store.currentSize)
+
+        // spilling 1 byte should force one buffer to spill in priority order
+        catalog.synchronousSpill(store, sizeBeforeSpill - 1)
+        assertResult(1)(spillStore.spilledBuffers.length)
+        assertResult(bufferSizes.drop(1).sum)(store.currentSize)
+        assertResult(1)(spillStore.spilledBuffers(0).tableId)
+
+        // spilling to zero should force all buffers to spill in priority order
+        catalog.synchronousSpill(store, 0)
+        assertResult(3)(spillStore.spilledBuffers.length)
+        assertResult(0)(store.currentSize)
+        assertResult(0)(spillStore.spilledBuffers(1).tableId)
+        assertResult(2)(spillStore.spilledBuffers(2).tableId)
       }
-      assert(spillStore.spilledBuffers.isEmpty)
-
-      // asking to spill 0 bytes should not spill
-      val sizeBeforeSpill = store.currentSize
-      catalog.synchronousSpill(store, sizeBeforeSpill)
-      assert(spillStore.spilledBuffers.isEmpty)
-      assertResult(sizeBeforeSpill)(store.currentSize)
-      catalog.synchronousSpill(store, sizeBeforeSpill + 1)
-      assert(spillStore.spilledBuffers.isEmpty)
-      assertResult(sizeBeforeSpill)(store.currentSize)
-
-      // spilling 1 byte should force one buffer to spill in priority order
-      catalog.synchronousSpill(store, sizeBeforeSpill - 1)
-      assertResult(1)(spillStore.spilledBuffers.length)
-      assertResult(bufferSizes.drop(1).sum)(store.currentSize)
-      assertResult(1)(spillStore.spilledBuffers(0).tableId)
-
-      // spilling to zero should force all buffers to spill in priority order
-      catalog.synchronousSpill(store, 0)
-      assertResult(3)(spillStore.spilledBuffers.length)
-      assertResult(0)(store.currentSize)
-      assertResult(0)(spillStore.spilledBuffers(1).tableId)
-      assertResult(2)(spillStore.spilledBuffers(2).tableId)
     }
   }
 
@@ -461,29 +482,43 @@ class RapidsDeviceMemoryStoreSuite extends AnyFunSuite with MockitoSugar {
       throw new UnsupportedOperationException
   }
 
-  class MockSpillStore extends RapidsBufferStore(StorageTier.HOST) {
+  class MockSpillStore extends RapidsHostMemoryStore(maxSize = None) {
     val spilledBuffers = new ArrayBuffer[RapidsBufferId]
 
-    override protected def createBuffer(
-        b: RapidsBuffer,
-        c: RapidsBufferCatalog,
-        s: Cuda.Stream): Option[RapidsBufferBase] = {
-      spilledBuffers += b.id
-      Some(new MockRapidsBuffer(
-        b.id, b.getPackedSizeBytes, b.meta, b.getSpillPriority))
+    override def createBuffer(
+                               rapidsBuffer: RapidsBuffer,
+                               catalog: RapidsBufferCatalog,
+                               stream: Cuda.Stream,
+                               base: RapidsMemoryBuffer): RapidsBuffer = {
+      val bwm = rapidsBuffer.asInstanceOf[RapidsBuffer with RapidsBufferWithMeta]
+      spilledBuffers += bwm.id
+      new MockRapidsBuffer(
+        bwm.id, 
+        bwm.memoryUsedBytes, 
+        bwm.meta, 
+        bwm.getSpillPriority,
+        catalog)
     }
 
-    class MockRapidsBuffer(id: RapidsBufferId, size: Long, meta: TableMeta, spillPriority: Long)
-        extends RapidsBufferBase(id, meta, spillPriority) {
-      override protected def releaseResources(): Unit = {}
+    class MockRapidsBuffer(
+        override val id: RapidsBufferId,
+        size: Long,
+        override val meta: TableMeta,
+        val spillPriority: Long,
+        catalog: RapidsBufferCatalog)
+        extends RapidsBufferBase(id, spillPriority, catalog)
+          with RapidsBufferWithMeta {
+
+      override val base: RapidsMemoryBuffer = null
+
+      override def getCopyIterator(stream: Cuda.Stream): RapidsBufferCopyIterator = null
+
+      override def copyTo(store: RapidsBufferStore, stream: Cuda.Stream): RapidsBufferBase = null
 
       override val storageTier: StorageTier = StorageTier.HOST
-
-      override def getMemoryBuffer: MemoryBuffer =
-        throw new UnsupportedOperationException
-
-      /** The size of this buffer in bytes. */
       override val memoryUsedBytes: Long = size
+
+      override protected def releaseResources(): Unit = {}
     }
   }
 }

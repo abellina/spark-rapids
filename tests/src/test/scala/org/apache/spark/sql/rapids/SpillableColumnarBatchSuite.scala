@@ -17,52 +17,54 @@
 package org.apache.spark.sql.rapids
 
 import java.util.UUID
-
 import ai.rapids.cudf.{Cuda, DeviceMemoryBuffer, HostMemoryBuffer, MemoryBuffer}
-import com.nvidia.spark.rapids.{RapidsBuffer, RapidsBufferCatalog, RapidsBufferId, SpillableColumnarBatchImpl, StorageTier}
+import com.nvidia.spark.rapids.Arm.withResource
+import com.nvidia.spark.rapids.{RapidsBufferCatalog, RapidsBufferId, RapidsBufferStore, RapidsBufferWithMeta, RapidsDeviceMemoryStore, SpillableColumnarBatchImpl, StorageTier}
 import com.nvidia.spark.rapids.StorageTier.StorageTier
-import com.nvidia.spark.rapids.format.TableMeta
 import org.scalatest.funsuite.AnyFunSuite
-
 import org.apache.spark.sql.types.{DataType, IntegerType}
 import org.apache.spark.sql.vectorized.ColumnarBatch
 import org.apache.spark.storage.TempLocalBlockId
+import com.nvidia.spark.rapids.RapidsMemoryBuffer
+import com.nvidia.spark.rapids.RapidsBuffer
+import com.nvidia.spark.rapids.RapidsBufferCopyIterator
 
 class SpillableColumnarBatchSuite extends AnyFunSuite {
 
   test("close updates catalog") {
-    val id = TempSpillBufferId(0, TempLocalBlockId(new UUID(1, 2)))
-    val mockBuffer = new MockBuffer(id)
-    val catalog = RapidsBufferCatalog.singleton
-    val oldBufferCount = catalog.numBuffers
-    catalog.registerNewBuffer(mockBuffer)
-    val handle = catalog.makeNewHandle(id, -1)
-    assertResult(oldBufferCount + 1)(catalog.numBuffers)
-    val spillableBatch = new SpillableColumnarBatchImpl(
-      handle,
-      5,
-      Array[DataType](IntegerType))
-    spillableBatch.close()
-    assertResult(oldBufferCount)(catalog.numBuffers)
+    withResource(new RapidsDeviceMemoryStore) { deviceStore =>
+      val id = TempSpillBufferId(0, TempLocalBlockId(new UUID(1, 2)))
+      withResource(new RapidsBufferCatalog(deviceStore)) { catalog =>
+        val mockBuffer = new MockBuffer(id, catalog)
+        val rmb = new RapidsMemoryBuffer(id)
+        rmb.initialize(mockBuffer, StorageTier.DEVICE)
+        val oldBufferCount = catalog.numBuffers
+        catalog.registerNewBuffer(rmb)
+        val handle = catalog.makeNewHandle(id, -1)
+        assertResult(oldBufferCount + 1)(catalog.numBuffers)
+        val spillableBatch = new SpillableColumnarBatchImpl(
+          handle,
+          5,
+          Array[DataType](IntegerType))
+        spillableBatch.close()
+        assertResult(oldBufferCount)(catalog.numBuffers)
+      }
+    }
   }
 
-  class MockBuffer(override val id: RapidsBufferId) extends RapidsBuffer {
+  class MockBuffer(override val id: RapidsBufferId, catalog: RapidsBufferCatalog)
+    extends RapidsBuffer {
+    override val base: RapidsMemoryBuffer = null
+    // TODO: fixme: why is this RBBWM
+    override def getCopyIterator(stream: Cuda.Stream): RapidsBufferCopyIterator = null
+    override def copyTo(
+      store: RapidsBufferStore, stream: Cuda.Stream): RapidsBuffer = null
     override val memoryUsedBytes: Long = 123
-    override def meta: TableMeta = null
     override val storageTier: StorageTier = StorageTier.DEVICE
-    override def getMemoryBuffer: MemoryBuffer = null
-    override def copyToMemoryBuffer(srcOffset: Long, dst: MemoryBuffer, dstOffset: Long,
-        length: Long, stream: Cuda.Stream): Unit = {}
-    override def getDeviceMemoryBuffer: DeviceMemoryBuffer = null
-    override def getHostMemoryBuffer: HostMemoryBuffer = null
     override def addReference(): Boolean = true
     override def free(): Unit = {}
     override def getSpillPriority: Long = 0
-    override def setSpillPriority(priority: Long): Unit = {}
     override def close(): Unit = {}
-    override def getColumnarBatch(
-      sparkTypes: Array[DataType]): ColumnarBatch = null
-    override def withMemoryBufferReadLock[K](body: MemoryBuffer => K): K = { body(null) }
-    override def withMemoryBufferWriteLock[K](body: MemoryBuffer => K): K = { body(null) }
+    override def setSpillPriority(newPriority: Long): Unit = {}
   }
 }

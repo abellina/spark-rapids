@@ -16,9 +16,8 @@
 
 package com.nvidia.spark.rapids
 
-import ai.rapids.cudf.{ContiguousTable, DeviceMemoryBuffer, HostMemoryBuffer}
+import ai.rapids.cudf.{ContiguousTable, Cuda, DeviceMemoryBuffer, HostMemoryBuffer}
 import com.nvidia.spark.rapids.Arm.{closeOnExcept, withResource}
-
 import org.apache.spark.TaskContext
 import org.apache.spark.sql.types.DataType
 import org.apache.spark.sql.vectorized.ColumnarBatch
@@ -50,7 +49,7 @@ trait SpillableColumnarBatch extends AutoCloseable {
    *       `GpuCompressedColumnVector`, and it is the responsibility of the caller to deal
    *       with decompressing the data if necessary.
    */
-  def getColumnarBatch(): ColumnarBatch
+  def getColumnarBatch(stream: Cuda.Stream = Cuda.DEFAULT_STREAM): ColumnarBatch
 
   def sizeInBytes: Long
 
@@ -67,7 +66,7 @@ class JustRowsColumnarBatch(numRows: Int)
   override def numRows(): Int = numRows
   override def setSpillPriority(priority: Long): Unit = () // NOOP nothing to spill
 
-  def getColumnarBatch(): ColumnarBatch = {
+  def getColumnarBatch(stream: Cuda.Stream = Cuda.DEFAULT_STREAM): ColumnarBatch = {
     GpuSemaphore.acquireIfNecessary(TaskContext.get())
     new ColumnarBatch(Array.empty, numRows)
   }
@@ -116,10 +115,10 @@ class SpillableColumnarBatchImpl (
     handle.setSpillPriority(priority)
   }
 
-  override def getColumnarBatch(): ColumnarBatch = {
-    withRapidsBuffer { rapidsBuffer =>
+  override def getColumnarBatch(stream: Cuda.Stream = Cuda.DEFAULT_STREAM): ColumnarBatch = {
+    withRapidsBuffer { rapidsBufferBase =>
       GpuSemaphore.acquireIfNecessary(TaskContext.get())
-      rapidsBuffer.getColumnarBatch(sparkTypes)
+      rapidsBufferBase.getColumnarBatch(sparkTypes, stream)
     }
   }
 
@@ -140,7 +139,7 @@ class SpillableColumnarBatchImpl (
       // closing my reference
       handle.close()
     }
-    // TODO this is causing problems so we need to look into this
+    // TODO: AB this is causing problems so we need to look into this
     //  https://github.com/NVIDIA/spark-rapids/issues/10161
 //    else if (refCount < 0) {
 //      throw new IllegalStateException("Double free on SpillableColumnarBatchImpl")
@@ -156,7 +155,7 @@ class JustRowsHostColumnarBatch(numRows: Int)
   override def numRows(): Int = numRows
   override def setSpillPriority(priority: Long): Unit = () // NOOP nothing to spill
 
-  def getColumnarBatch(): ColumnarBatch = {
+  def getColumnarBatch(stream: Cuda.Stream = Cuda.DEFAULT_STREAM): ColumnarBatch = {
     new ColumnarBatch(Array.empty, numRows)
   }
 
@@ -207,7 +206,7 @@ class SpillableHostColumnarBatchImpl (
     handle.setSpillPriority(priority)
   }
 
-  override def getColumnarBatch(): ColumnarBatch = {
+  override def getColumnarBatch(stream: Cuda.Stream = Cuda.DEFAULT_STREAM): ColumnarBatch = {
     withRapidsHostBatchBuffer { hostBatchBuffer =>
       hostBatchBuffer.getHostColumnarBatch(sparkTypes)
     }
@@ -304,7 +303,7 @@ object SpillableColumnarBatch {
       if (GpuCompressedColumnVector.isBatchCompressed(batch)) {
         val cv = batch.column(0).asInstanceOf[GpuCompressedColumnVector]
         val buff = cv.getTableBuffer
-        RapidsBufferCatalog.addBuffer(buff, cv.getTableMeta, initialSpillPriority)
+        RapidsBufferCatalog.addBufferWithMeta(buff, cv.getTableMeta, initialSpillPriority)
       } else if (GpuPackedTableColumn.isBatchPacked(batch)) {
         val cv = batch.column(0).asInstanceOf[GpuPackedTableColumn]
         RapidsBufferCatalog.addContiguousTable(
@@ -314,7 +313,7 @@ object SpillableColumnarBatch {
           allFromSameBuffer(batch)) {
         val cv = batch.column(0).asInstanceOf[GpuColumnVectorFromBuffer]
         val buff = cv.getBuffer
-        RapidsBufferCatalog.addBuffer(buff, cv.getTableMeta, initialSpillPriority)
+        RapidsBufferCatalog.addBufferWithMeta(buff, cv.getTableMeta, initialSpillPriority)
       } else {
         RapidsBufferCatalog.addBatch(batch, initialSpillPriority)
       }
@@ -376,9 +375,9 @@ class SpillableBuffer(
   /**
    * Use the device buffer.
    */
-  def getDeviceBuffer(): DeviceMemoryBuffer = {
+  def getDeviceBuffer(stream: Cuda.Stream = Cuda.DEFAULT_STREAM): DeviceMemoryBuffer = {
     withResource(RapidsBufferCatalog.acquireBuffer(handle)) { rapidsBuffer =>
-      rapidsBuffer.getDeviceMemoryBuffer
+      rapidsBuffer.getDeviceMemoryBuffer(stream)
     }
   }
 
@@ -417,9 +416,9 @@ class SpillableHostBuffer(handle: RapidsBufferHandle,
     handle.close()
   }
 
-  def getHostBuffer(): HostMemoryBuffer = {
+  def getHostBuffer(stream: Cuda.Stream = Cuda.DEFAULT_STREAM): HostMemoryBuffer = {
     withResource(catalog.acquireBuffer(handle)) { rapidsBuffer =>
-      rapidsBuffer.getHostMemoryBuffer
+      rapidsBuffer.getHostMemoryBuffer(stream)
     }
   }
 }
@@ -435,9 +434,8 @@ object SpillableBuffer {
   def apply(
       buffer: DeviceMemoryBuffer,
       priority: Long): SpillableBuffer = {
-    val meta = MetaUtils.getTableMetaNoTable(buffer.getLength)
     val handle = withResource(buffer) { _ => 
-      RapidsBufferCatalog.addBuffer(buffer, meta, priority)
+      RapidsBufferCatalog.addBuffer(buffer, priority)
     }
     new SpillableBuffer(handle)
   }
@@ -463,9 +461,8 @@ object SpillableHostBuffer {
         s"Attempted to add a host spillable with a length ${length} B which is " +
           s"greater than the backing host buffer length ${buffer.getLength} B")
     }
-    val meta = MetaUtils.getTableMetaNoTable(buffer.getLength)
     val handle = withResource(buffer) { _ =>
-      catalog.addBuffer(buffer, meta, priority)
+      catalog.addBuffer(buffer, priority)
     }
     new SpillableHostBuffer(handle, length, catalog)
   }

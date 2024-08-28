@@ -17,7 +17,7 @@
 package com.nvidia.spark.rapids
 
 import java.io.{File, FileInputStream}
-import java.nio.channels.{Channels, FileChannel}
+import java.nio.channels.{Channels, FileChannel, WritableByteChannel}
 import java.nio.channels.FileChannel.MapMode
 import java.nio.file.StandardOpenOption
 import java.util.concurrent.ConcurrentHashMap
@@ -33,11 +33,16 @@ import org.apache.spark.sql.rapids.{GpuTaskMetrics, RapidsDiskBlockManager}
 import org.apache.spark.sql.rapids.execution.{SerializedHostTableUtils, TrampolineUtil}
 import org.apache.spark.sql.types.DataType
 import org.apache.spark.sql.vectorized.ColumnarBatch
+import ai.rapids.cudf.DeviceMemoryBuffer
 
 /** A buffer store using files on the local disks. */
-class RapidsDiskStore(diskBlockManager: RapidsDiskBlockManager)
+class RapidsDiskStore(val diskBlockManager: RapidsDiskBlockManager)
     extends RapidsBufferStoreWithoutSpill(StorageTier.DISK) {
   private[this] val sharedBufferFiles = new ConcurrentHashMap[RapidsBufferId, File]
+
+  private def removeSharedBufferFile(id: RapidsBufferId): Unit = {
+    sharedBufferFiles.remove(id)
+  }
 
   private def reportDiskAllocMetrics(metrics: GpuTaskMetrics): String = {
     val taskId = TaskContext.get().taskAttemptId()
@@ -46,53 +51,98 @@ class RapidsDiskStore(diskBlockManager: RapidsDiskBlockManager)
     s"total size for task $taskId is $totalSize, max size is $maxSize"
   }
 
-  override protected def createBuffer(
-      incoming: RapidsBuffer,
+  private def createBuffer(
+      rapidsBuffer: RapidsBuffer,
+      channelWriter: ((WritableByteChannel, Cuda.Stream) => (Long, Option[TableMeta])),
       catalog: RapidsBufferCatalog,
-      stream: Cuda.Stream): Option[RapidsBufferBase] = {
+      stream: Cuda.Stream,
+      base: RapidsMemoryBuffer): RapidsBuffer = {
     // assuming that the disk store gets contiguous buffers
-    val id = incoming.id
+    val id = rapidsBuffer.id
     val path = if (id.canShareDiskPaths) {
       sharedBufferFiles.computeIfAbsent(id, _ => id.getDiskPath(diskBlockManager))
     } else {
       id.getDiskPath(diskBlockManager)
     }
 
-    val (fileOffset, uncompressedSize, diskLength) = if (id.canShareDiskPaths) {
+    val (fileOffset, uncompressedSize, diskLength, maybeMeta) = if (id.canShareDiskPaths) {
       // only one writer at a time for now when using shared files
       path.synchronized {
-        writeToFile(incoming, path, append = true, stream)
+        writeToFile(rapidsBuffer, channelWriter, path, append = true, stream)
       }
     } else {
-      writeToFile(incoming, path, append = false, stream)
+      writeToFile(rapidsBuffer, channelWriter, path, append = false, stream)
     }
     logDebug(s"Spilled to $path $fileOffset:$diskLength")
-    val buff = incoming match {
-      case _: RapidsHostBatchBuffer =>
+    val newDiskBuffer = rapidsBuffer match {
+      case rhbb: RapidsHostBatchBuffer =>
         new RapidsDiskColumnarBatch(
           id,
           fileOffset,
           uncompressedSize,
           diskLength,
-          incoming.meta,
-          incoming.getSpillPriority)
-
-      case _ =>
-        new RapidsDiskBuffer(
-          id,
-          fileOffset,
-          uncompressedSize,
-          diskLength,
-          incoming.meta,
-          incoming.getSpillPriority)
+          rhbb.getSpillPriority,
+          catalog,
+          base,
+          this)
+      case rb: RapidsBuffer =>
+        maybeMeta.orElse {
+          rb match {
+            case bufferWithMeta: RapidsBufferWithMeta =>
+              Some(bufferWithMeta.meta)
+            case _ => None
+          }
+        } match {
+          case Some(tableMeta) =>
+            new RapidsDiskBufferWithMeta(
+              id,
+              fileOffset,
+              uncompressedSize,
+              diskLength,
+              tableMeta,
+              rb.getSpillPriority,
+              catalog,
+              base,
+              this)
+          case None =>
+            new RapidsDiskBuffer(
+              id,
+              fileOffset,
+              uncompressedSize,
+              diskLength,
+              rb.getSpillPriority,
+              catalog,
+              base,
+              this)
+        }
     }
-    TrampolineUtil.incTaskMetricsDiskBytesSpilled(uncompressedSize)
+    addBuffer(newDiskBuffer)
+    newDiskBuffer
+  }
 
-    val metrics = GpuTaskMetrics.get
-    metrics.incDiskBytesAllocated(uncompressedSize)
-    logDebug(s"acquiring resources for disk buffer $id of size $uncompressedSize bytes")
-    logDebug(reportDiskAllocMetrics(metrics))
-    Some(buff)
+  override def createBuffer(
+      rapidsBuffer: RapidsBuffer,
+      catalog: RapidsBufferCatalog,
+      stream: Cuda.Stream,
+      base: RapidsMemoryBuffer): RapidsBuffer = {
+    rapidsBuffer match {
+      case cw: RapidsBufferChannelWritable =>
+        createBuffer(
+          rapidsBuffer,
+          (channel, stream) => cw.writeToChannel(channel, stream),
+          catalog,
+          stream,
+          base)
+      case _ =>
+        throw new IllegalStateException(s"${rapidsBuffer} does " +
+          s"not support channel writable")
+    }
+    //TrampolineUtil.incTaskMetricsDiskBytesSpilled(uncompressedSize)
+    //val metrics = GpuTaskMetrics.get
+    //metrics.incDiskBytesAllocated(uncompressedSize)
+    //logDebug(s"acquiring resources for disk buffer $id of size $uncompressedSize bytes")
+    //logDebug(reportDiskAllocMetrics(metrics))
+    //Some(buff)
   }
 
   /**
@@ -108,36 +158,117 @@ class RapidsDiskStore(diskBlockManager: RapidsDiskBlockManager)
    *         occupied in memory before writing to disk. Written size on disk is actual byte size
    *         written to disk.
    */
-  private def writeToFile(
-      incoming: RapidsBuffer,
-      path: File,
-      append: Boolean,
-      stream: Cuda.Stream): (Long, Long, Long) = {
-    incoming match {
-      case fileWritable: RapidsBufferChannelWritable =>
-        val option = if (append) {
-          Array(StandardOpenOption.CREATE, StandardOpenOption.APPEND)
-        } else {
-          Array(StandardOpenOption.CREATE, StandardOpenOption.WRITE)
-        }
-        var currentPos, writtenBytes = 0L
+  private def writeToFile(rapidsBuffer: RapidsBuffer,
+                          channelWriter: ((WritableByteChannel, Cuda.Stream) =>
+                             (Long, Option[TableMeta])),
+                          path: File,
+                          append: Boolean,
+                          stream: Cuda.Stream): (Long, Long, Long, Option[TableMeta]) = {
+    val option = if (append) {
+      Array(StandardOpenOption.CREATE, StandardOpenOption.APPEND)
+    } else {
+      Array(StandardOpenOption.CREATE, StandardOpenOption.WRITE)
+    }
+    GpuTaskMetrics.get.spillToDiskTime {
+      withResource(FileChannel.open(path.toPath, option: _*)) { fc =>
+        val currentPos = fc.position()
+        val (writtenBytes, maybeMeta) =
+          withResource(Channels.newOutputStream(fc)) { os =>
+            withResource(diskBlockManager.getSerializerManager()
+              .wrapStream(rapidsBuffer.id, os)) { cos =>
+              val outputChannel = Channels.newChannel(cos)
+              channelWriter(outputChannel, stream)
+            }
+          }
+        (currentPos, writtenBytes, path.length() - currentPos, maybeMeta)
+      }
+    }
+  }
 
-        GpuTaskMetrics.get.spillToDiskTime {
-          withResource(FileChannel.open(path.toPath, option: _*)) { fc =>
-            currentPos = fc.position()
-            withResource(Channels.newOutputStream(fc)) { os =>
-              withResource(diskBlockManager.getSerializerManager()
-                .wrapStream(incoming.id, os)) { cos =>
-                val outputChannel = Channels.newChannel(cos)
-                writtenBytes = fileWritable.writeToChannel(outputChannel, stream)
+  /**
+   * A RapidsDiskBuffer that is meant to represent just a buffer without meta.
+   */
+  class RapidsDiskBuffer(id: RapidsBufferId,
+                         fileOffset: Long,
+                         uncompressedSize: Long,
+                         onDiskSizeInBytes: Long,
+                         spillPriority: Long,
+                         catalog: RapidsBufferCatalog,
+                         override val base: RapidsMemoryBuffer,
+                         diskStore: RapidsDiskStore)
+    extends RapidsBufferBase(id, spillPriority, catalog) {
+
+    def getCopyIterator(stream: Cuda.Stream): RapidsBufferCopyIterator =
+      new RapidsBufferCopyIterator(
+        singleShotBuffer = Some(getMemoryBuffer(stream)))
+
+    override def copyTo(store: RapidsBufferStore, stream: Cuda.Stream): RapidsBuffer = {
+      store.createBuffer(this, catalog, stream, base)
+    }
+
+    // FIXME: Need to be clean up. Tracked in https://github.com/NVIDIA/spark-rapids/issues/9496
+    override val memoryUsedBytes: Long = uncompressedSize
+
+    override val storageTier: StorageTier = StorageTier.DISK
+
+    override def getDeviceMemoryBuffer(stream: Cuda.Stream): DeviceMemoryBuffer = {
+      withResource(getMemoryBuffer(stream)) { hb =>
+        closeOnExcept(DeviceMemoryBuffer.allocate(hb.getLength, stream)) { db =>
+          db.copyFromMemoryBuffer(0, hb, 0, db.getLength, stream)
+          db
+        }
+      }
+    }
+
+    // used in UCX shuffle and copy iterator
+    override def getMemoryBuffer(stream: Cuda.Stream): MemoryBuffer = synchronized {
+      require(onDiskSizeInBytes > 0,
+        s"$this attempted an invalid 0-byte mmap of a file")
+      val diskBlockManager = diskStore.diskBlockManager
+      val path = id.getDiskPath(diskBlockManager)
+      val serializerManager = diskBlockManager.getSerializerManager()
+      val memBuffer = if (serializerManager.isRapidsSpill(id)) {
+        // Only go through serializerManager's stream wrapper for spill case
+        closeOnExcept(HostAlloc.alloc(uncompressedSize)) {
+          decompressed => GpuTaskMetrics.get.readSpillFromDiskTime {
+            withResource(FileChannel.open(path.toPath, StandardOpenOption.READ)) { c =>
+              c.position(fileOffset)
+              withResource(Channels.newInputStream(c)) { compressed =>
+                withResource(serializerManager.wrapStream(id, compressed)) { in =>
+                  withResource(new HostMemoryOutputStream(decompressed)) { out =>
+                    IOUtils.copy(in, out)
+                  }
+                  decompressed
+                }
               }
             }
-            (currentPos, writtenBytes, path.length() - currentPos)
           }
         }
-      case other =>
-        throw new IllegalStateException(
-          s"Unable to write $other to file")
+      } else {
+        // Reserved mmap read fashion for UCX shuffle path. Also it's skipping encryption and
+        // compression.
+        HostMemoryBuffer.mapFile(path, MapMode.READ_WRITE, fileOffset, onDiskSizeInBytes)
+      }
+      memBuffer
+    }
+
+    override def getHostMemoryBuffer(stream: Cuda.Stream): HostMemoryBuffer =
+      getMemoryBuffer(stream).asInstanceOf[HostMemoryBuffer]
+
+    override def close(): Unit = synchronized {
+      super.close()
+    }
+
+    override protected def releaseResources(): Unit = {
+      // Buffers that share paths must be cleaned up elsewhere
+      if (id.canShareDiskPaths) {
+        diskStore.removeSharedBufferFile(id)
+      } else {
+        val path = id.getDiskPath(diskStore.diskBlockManager)
+        if (!path.delete() && path.exists()) {
+          logWarning(s"Unable to delete spill path $path")
+        }
+      }
     }
   }
 
@@ -145,29 +276,51 @@ class RapidsDiskStore(diskBlockManager: RapidsDiskBlockManager)
    * A RapidsDiskBuffer that is mean to represent device-bound memory. This
    * buffer can produce a device-backed ColumnarBatch.
    */
-  class RapidsDiskBuffer(
-      id: RapidsBufferId,
-      fileOffset: Long,
-      uncompressedSize: Long,
-      onDiskSizeInBytes: Long,
-      meta: TableMeta,
-      spillPriority: Long)
-      extends RapidsBufferBase(id, meta, spillPriority) {
+  class RapidsDiskBufferWithMeta(id: RapidsBufferId,
+                                 fileOffset: Long,
+                                 uncompressedSize: Long,
+                                 onDiskSizeInBytes: Long,
+                                 meta: TableMeta,
+                                 spillPriority: Long,
+                                 catalog: RapidsBufferCatalog,
+                                 override val base: RapidsMemoryBuffer,
+                                 diskStore: RapidsDiskStore)
+    extends RapidsBufferBaseWithMeta(id, meta, spillPriority, catalog)
+      with CopyableRapidsBuffer {
+
+    def getCopyIterator(stream: Cuda.Stream): RapidsBufferCopyIterator =
+      new RapidsBufferCopyIterator(
+        singleShotBuffer = Some(getMemoryBuffer(stream)))
+
+    override def copyTo(store: RapidsBufferStore, stream: Cuda.Stream): RapidsBuffer = {
+      store.createBuffer(this, catalog, stream, base)
+    }
 
     // FIXME: Need to be clean up. Tracked in https://github.com/NVIDIA/spark-rapids/issues/9496
     override val memoryUsedBytes: Long = uncompressedSize
 
     override val storageTier: StorageTier = StorageTier.DISK
 
-    override def getMemoryBuffer: MemoryBuffer = synchronized {
+    override def getDeviceMemoryBuffer(stream: Cuda.Stream): DeviceMemoryBuffer = {
+      withResource(getMemoryBuffer(stream)) { hb =>
+        closeOnExcept(DeviceMemoryBuffer.allocate(hb.getLength, stream)) { db =>
+          db.copyFromMemoryBuffer(0, hb, 0, db.getLength, stream)
+          db
+        }
+      }
+    }
+
+    // used in UCX shuffle and copy iterator
+    override def getMemoryBuffer(stream: Cuda.Stream): MemoryBuffer = synchronized {
       require(onDiskSizeInBytes > 0,
         s"$this attempted an invalid 0-byte mmap of a file")
+      val diskBlockManager = diskStore.diskBlockManager
       val path = id.getDiskPath(diskBlockManager)
       val serializerManager = diskBlockManager.getSerializerManager()
       val memBuffer = if (serializerManager.isRapidsSpill(id)) {
         // Only go through serializerManager's stream wrapper for spill case
-          closeOnExcept(HostAlloc.alloc(uncompressedSize)) {
-            decompressed => GpuTaskMetrics.get.readSpillFromDiskTime {
+        closeOnExcept(HostAlloc.alloc(uncompressedSize)) {
+          decompressed => GpuTaskMetrics.get.readSpillFromDiskTime {
             withResource(FileChannel.open(path.toPath, StandardOpenOption.READ)) { c =>
               c.position(fileOffset)
               withResource(Channels.newInputStream(c)) { compressed =>
@@ -201,13 +354,25 @@ class RapidsDiskStore(diskBlockManager: RapidsDiskBlockManager)
 
       // Buffers that share paths must be cleaned up elsewhere
       if (id.canShareDiskPaths) {
-        sharedBufferFiles.remove(id)
+        diskStore.removeSharedBufferFile(id)
       } else {
-        val path = id.getDiskPath(diskBlockManager)
+        val path = id.getDiskPath(diskStore.diskBlockManager)
         if (!path.delete() && path.exists()) {
           logWarning(s"Unable to delete spill path $path")
         }
       }
+    }
+
+    override def getColumnarBatch(
+        sparkTypes: Array[DataType],
+        stream: Cuda.Stream): ColumnarBatch = {
+      withResource(getDeviceMemoryBuffer(stream)) { db =>
+        RapidsBuffer.columnarBatchFromDeviceBuffer(db, sparkTypes, meta)
+      }
+    }
+
+    override def getHostMemoryBuffer(stream: Cuda.Stream): HostMemoryBuffer = {
+      getMemoryBuffer(stream).asInstanceOf[HostMemoryBuffer]
     }
   }
 
@@ -216,33 +381,25 @@ class RapidsDiskStore(diskBlockManager: RapidsDiskBlockManager)
    * ColumnarBatch if the caller invokes getHostColumnarBatch, but not producing
    * anything on the device.
    */
-  class RapidsDiskColumnarBatch(
-      id: RapidsBufferId,
-      fileOffset: Long,
-      size: Long,
-      uncompressedSize: Long,
-      // TODO: remove meta
-      meta: TableMeta,
-      spillPriority: Long)
+  class RapidsDiskColumnarBatch(id: RapidsBufferId,
+                                fileOffset: Long,
+                                size: Long,
+                                uncompressedSize: Long,
+                                spillPriority: Long,
+                                catalog: RapidsBufferCatalog,
+                                override val base: RapidsMemoryBuffer,
+                                diskStore: RapidsDiskStore)
     extends RapidsDiskBuffer(
-      id, fileOffset, size, uncompressedSize, meta, spillPriority)
-        with RapidsHostBatchBuffer {
-
-    override def getMemoryBuffer: MemoryBuffer =
-      throw new IllegalStateException(
-        "Called getMemoryBuffer on a disk buffer that needs deserialization")
-
-    override def getColumnarBatch(sparkTypes: Array[DataType]): ColumnarBatch =
-      throw new IllegalStateException(
-        "Called getColumnarBatch on a disk buffer that needs deserialization")
+      id, fileOffset, size, uncompressedSize, spillPriority, catalog, base, diskStore)
+      with RapidsHostBatchBuffer {
 
     override def getHostColumnarBatch(sparkTypes: Array[DataType]): ColumnarBatch = {
       require(fileOffset == 0,
         "Attempted to obtain a HostColumnarBatch from a spilled RapidsBuffer that is sharing " +
           "paths on disk")
-      val path = id.getDiskPath(diskBlockManager)
+      val path = id.getDiskPath(diskStore.diskBlockManager)
       withResource(new FileInputStream(path)) { fis =>
-        withResource(diskBlockManager.getSerializerManager()
+        withResource(diskStore.diskBlockManager.getSerializerManager()
           .wrapStream(id, fis)) { fs =>
           val (header, hostBuffer) = SerializedHostTableUtils.readTableHeaderAndBuffer(fs)
           val hostCols = withResource(hostBuffer) { _ =>
@@ -254,3 +411,4 @@ class RapidsDiskStore(diskBlockManager: RapidsDiskBlockManager)
     }
   }
 }
+

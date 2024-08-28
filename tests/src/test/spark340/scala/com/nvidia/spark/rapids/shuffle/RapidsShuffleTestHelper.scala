@@ -30,20 +30,18 @@ package com.nvidia.spark.rapids.shuffle
 
 import java.nio.ByteBuffer
 import java.util.concurrent.Executor
-
 import scala.collection
 import scala.collection.mutable.ArrayBuffer
-
-import ai.rapids.cudf.{ColumnVector, ContiguousTable, DeviceMemoryBuffer, HostMemoryBuffer}
-import com.nvidia.spark.rapids.{GpuColumnVector, MetaUtils, RapidsBufferHandle, RapidsConf, RapidsDeviceMemoryStore, RmmSparkRetrySuiteBase, ShuffleMetadata, ShuffleReceivedBufferCatalog}
+import ai.rapids.cudf.{ColumnVector, ContiguousTable, Cuda, DeviceMemoryBuffer, HostMemoryBuffer}
+import com.nvidia.spark.rapids.{CopyableRapidsBuffer, GpuColumnVector, MetaUtils, RapidsBuffer, RapidsBufferCopyIterator, RapidsBufferHandle, RapidsBufferId, RapidsBufferStore, RapidsBufferWithMeta, RapidsConf, RapidsDeviceMemoryStore, RapidsMemoryBuffer, RmmSparkRetrySuiteBase, ShuffleMetadata, ShuffleReceivedBufferCatalog, StorageTier}
 import com.nvidia.spark.rapids.Arm.withResource
+import com.nvidia.spark.rapids.StorageTier.StorageTier
 import com.nvidia.spark.rapids.format.TableMeta
 import org.mockito.ArgumentCaptor
 import org.mockito.ArgumentMatchers.any
 import org.mockito.Mockito.{spy, when}
 import org.scalatest.BeforeAndAfterEach
 import org.scalatestplus.mockito.MockitoSugar
-
 import org.apache.spark.sql.rapids.ShuffleMetricsUpdater
 import org.apache.spark.sql.types.IntegerType
 import org.apache.spark.sql.vectorized.ColumnarBatch
@@ -285,4 +283,20 @@ class MockClientConnection(mockTransaction: Transaction) extends ClientConnectio
 
   override def registerReceiveHandler(messageType: MessageType.Value): Unit = {}
 }
+
+class MockBuffer extends RapidsBuffer with RapidsBufferWithMeta with CopyableRapidsBuffer {
+  override val id: RapidsBufferId = null
+  override val base: RapidsMemoryBuffer = null
+  override val memoryUsedBytes: Long = 0L
+  override def copyTo(store: RapidsBufferStore, stream: Cuda.Stream): RapidsBuffer = null
+  override def getCopyIterator(stream: Cuda.Stream): RapidsBufferCopyIterator = null
+  override val storageTier: StorageTier = StorageTier.DEVICE
+  override def addReference(): Boolean = true
+  override def free(): Unit = {}
+  override def setSpillPriority(newPriority: Long): Unit = {}
+  override def getSpillPriority: Long = 0
+  override def meta: TableMeta = null
+  override def close(): Unit = {}
+}
+
 

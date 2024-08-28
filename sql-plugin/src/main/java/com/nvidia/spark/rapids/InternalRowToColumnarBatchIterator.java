@@ -21,19 +21,12 @@ import java.util.Collections;
 import java.util.NoSuchElementException;
 import java.util.Optional;
 
+import ai.rapids.cudf.*;
 import com.nvidia.spark.Retryable;
 import scala.Option;
 import scala.Tuple2;
 import scala.collection.Iterator;
 
-import ai.rapids.cudf.ColumnVector;
-import ai.rapids.cudf.DType;
-import ai.rapids.cudf.HostColumnVector;
-import ai.rapids.cudf.HostColumnVectorCore;
-import ai.rapids.cudf.HostMemoryBuffer;
-import ai.rapids.cudf.NvtxColor;
-import ai.rapids.cudf.NvtxRange;
-import ai.rapids.cudf.Table;
 import com.nvidia.spark.rapids.jni.RowConversion;
 import com.nvidia.spark.rapids.shims.CudfUnsafeRow;
 
@@ -203,7 +196,7 @@ public abstract class InternalRowToColumnarBatchIterator implements Iterator<Col
     try (NvtxRange ignored = batchAndRange._2;
          Table tab =
            RmmRapidsRetryIterator.withRetryNoSplit(batchAndRange._1, (attempt) -> {
-             try (ColumnarBatch cb = attempt.getColumnarBatch()) {
+             try (ColumnarBatch cb = attempt.getColumnarBatch(Cuda.DEFAULT_STREAM)) {
                return convertFromRowsUnderRetry(cb);
              }
            })) {
@@ -216,7 +209,7 @@ public abstract class InternalRowToColumnarBatchIterator implements Iterator<Col
     return RmmRapidsRetryIterator.withRetryNoSplit( () -> {
       // One SpillableHostBuffer is used for both data and offsets.  Slice it into the
       // two separate HostMemoryBuffers.
-      try (HostMemoryBuffer dataOffsetBuffer = spillableBuffer.getHostBuffer();
+      try (HostMemoryBuffer dataOffsetBuffer = spillableBuffer.getHostBuffer(Cuda.DEFAULT_STREAM);
            HostMemoryBuffer dataBuffer = dataOffsetBuffer.slice(0, dataLength);
            HostMemoryBuffer offsetsBuffer = dataOffsetBuffer.slice(dataLength, offsetLength);
       ) {

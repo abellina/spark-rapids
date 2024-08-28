@@ -380,7 +380,7 @@ object GpuDeviceManager extends Logging {
       }
 
       RapidsBufferCatalog.init(conf)
-      GpuShuffleEnv.init(conf, RapidsBufferCatalog.getDiskBlockManager())
+      GpuShuffleEnv.init(conf, RapidsBufferCatalog.getDiskBlockManager)
     }
   }
 

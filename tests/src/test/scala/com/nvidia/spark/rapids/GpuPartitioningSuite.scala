@@ -161,55 +161,59 @@ class GpuPartitioningSuite extends AnyFunSuite {
       val spillPriority = 7L
 
       withResource(new RapidsDeviceMemoryStore) { store =>
-        val catalog = new RapidsBufferCatalog(store)
-        val partitionIndices = Array(0, 2, 2)
-        val gp = new GpuPartitioning {
-          override val numPartitions: Int = partitionIndices.length
-        }
-        withResource(buildBatch()) { batch =>
-          // `sliceInternalOnGpuAndClose` will close the batch, but in this test we want to
-          // reuse it
-          GpuColumnVector.incRefCounts(batch)
-          val columns = GpuColumnVector.extractColumns(batch)
-          val sparkTypes = GpuColumnVector.extractTypes(batch)
-          val numRows = batch.numRows
-          withResource(
-              gp.sliceInternalOnGpuAndClose(numRows, partitionIndices, columns)) { partitions =>
-            partitions.zipWithIndex.foreach { case (partBatch, partIndex) =>
-              val startRow = partitionIndices(partIndex)
-              val endRow = if (partIndex < partitionIndices.length - 1) {
-                partitionIndices(partIndex + 1)
-              } else {
-                batch.numRows
-              }
-              val expectedRows = endRow - startRow
-              assertResult(expectedRows)(partBatch.numRows)
-              val columns = (0 until partBatch.numCols).map(i => partBatch.column(i))
-              columns.foreach { column =>
-                // batches with any rows should be compressed, and
-                // batches with no rows should not be compressed.
-                val actualRows = column match {
-                  case c: GpuCompressedColumnVector =>
-                    val rows = c.getTableMeta.rowCount
-                    assert(rows != 0)
-                    rows
-                  case c: GpuPackedTableColumn =>
-                    val rows = c.getContiguousTable.getRowCount
-                    assert(rows == 0)
-                    rows
-                  case _ =>
-                    throw new IllegalStateException("column should either be compressed or packed")
+        withResource(new RapidsBufferCatalog(store)) { catalog =>
+          val partitionIndices = Array(0, 2, 2)
+          val gp = new GpuPartitioning {
+            override val numPartitions: Int = partitionIndices.length
+          }
+          withResource(buildBatch()) { batch =>
+            // `sliceInternalOnGpuAndClose` will close the batch, but in this test we want to
+            // reuse it
+            GpuColumnVector.incRefCounts(batch)
+            val columns = GpuColumnVector.extractColumns(batch)
+            val sparkTypes = GpuColumnVector.extractTypes(batch)
+            val numRows = batch.numRows
+            withResource(
+                gp.sliceInternalOnGpuAndClose(numRows, partitionIndices, columns)) { partitions =>
+              partitions.zipWithIndex.foreach { case (partBatch, partIndex) =>
+                val startRow = partitionIndices(partIndex)
+                val endRow = if (partIndex < partitionIndices.length - 1) {
+                  partitionIndices(partIndex + 1)
+                } else {
+                  batch.numRows
                 }
-                assertResult(expectedRows)(actualRows)
-              }
-              if (GpuCompressedColumnVector.isBatchCompressed(partBatch)) {
-                val gccv = columns.head.asInstanceOf[GpuCompressedColumnVector]
-                val devBuffer = gccv.getTableBuffer
-                val handle = catalog.addBuffer(devBuffer, gccv.getTableMeta, spillPriority)
-                withResource(buildSubBatch(batch, startRow, endRow)) { expectedBatch =>
-                  withResource(catalog.acquireBuffer(handle)) { buffer =>
-                    withResource(buffer.getColumnarBatch(sparkTypes)) { batch =>
-                      compareBatches(expectedBatch, batch)
+                val expectedRows = endRow - startRow
+                assertResult(expectedRows)(partBatch.numRows)
+                val columns = (0 until partBatch.numCols).map(i => partBatch.column(i))
+                columns.foreach { column =>
+                  // batches with any rows should be compressed, and
+                  // batches with no rows should not be compressed.
+                  val actualRows = column match {
+                    case c: GpuCompressedColumnVector =>
+                      val rows = c.getTableMeta.rowCount
+                      assert(rows != 0)
+                      rows
+                    case c: GpuPackedTableColumn =>
+                      val rows = c.getContiguousTable.getRowCount
+                      assert(rows == 0)
+                      rows
+                    case _ =>
+                      throw new IllegalStateException(
+                        "column should either be compressed or packed")
+                  }
+                  assertResult(expectedRows)(actualRows)
+                }
+                if (GpuCompressedColumnVector.isBatchCompressed(partBatch)) {
+                  val gccv = columns.head.asInstanceOf[GpuCompressedColumnVector]
+                  val devBuffer = gccv.getTableBuffer
+                  val handle = catalog.addBufferWithMeta(
+                    devBuffer, gccv.getTableMeta, spillPriority)
+                  withResource(buildSubBatch(batch, startRow, endRow)) { expectedBatch =>
+                    withResource(catalog.acquireBuffer(handle)) { buffer =>
+                      withResource(buffer.getColumnarBatch(
+                          sparkTypes, Cuda.DEFAULT_STREAM)) { batch =>
+                        compareBatches(expectedBatch, batch)
+                      }
                     }
                   }
                 }

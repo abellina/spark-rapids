@@ -16,12 +16,11 @@
 
 package com.nvidia.spark.rapids.shuffle
 
-import com.nvidia.spark.rapids.{RapidsBuffer, RapidsBufferHandle}
+import com.nvidia.spark.rapids.{CopyableRapidsBuffer, RapidsBufferHandle, RapidsBufferWithMeta}
 import com.nvidia.spark.rapids.jni.RmmSpark
 import org.mockito.ArgumentCaptor
 import org.mockito.ArgumentMatchers._
 import org.mockito.Mockito._
-
 import org.apache.spark.shuffle.rapids.{RapidsShuffleFetchFailedException, RapidsShuffleTimeoutException}
 import org.apache.spark.sql.vectorized.ColumnarBatch
 
@@ -214,12 +213,14 @@ class RapidsShuffleIteratorSuite extends RapidsShuffleTestHelper {
       val ac = ArgumentCaptor.forClass(classOf[RapidsShuffleFetchHandler])
       when(mockTransport.makeClient(any())).thenReturn(client)
       doNothing().when(client).doFetch(any(), ac.capture())
-      val mockBuffer = mock[RapidsBuffer]
+      val mockBuffer = mock[MockBuffer]
+      when(mockBuffer.memoryUsedBytes).thenReturn(123L)
 
       val cb = new ColumnarBatch(Array.empty, 10)
       val handle = mock[RapidsBufferHandle]
-      when(mockBuffer.getColumnarBatch(Array.empty)).thenReturn(cb)
-      when(mockCatalog.acquireBuffer(any[RapidsBufferHandle]())).thenReturn(mockBuffer)
+      doAnswer(_ => (cb, mockBuffer.memoryUsedBytes)).when(mockCatalog)
+        .getColumnarBatchAndRemove(any[RapidsBufferHandle](), any(), any())
+
       doNothing().when(mockCatalog).removeBuffer(any())
       cl.start()
 

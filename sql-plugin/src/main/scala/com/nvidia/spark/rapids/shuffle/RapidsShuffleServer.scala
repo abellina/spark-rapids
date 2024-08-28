@@ -21,7 +21,7 @@ import java.util.concurrent.{ConcurrentLinkedQueue, Executor}
 import scala.collection.mutable.ArrayBuffer
 
 import ai.rapids.cudf.{Cuda, MemoryBuffer, NvtxColor, NvtxRange}
-import com.nvidia.spark.rapids.{RapidsBuffer, RapidsConf, ShuffleMetadata}
+import com.nvidia.spark.rapids.{RapidsBuffer, RapidsMemoryBuffer, RapidsConf, ShuffleMetadata}
 import com.nvidia.spark.rapids.Arm.{closeOnExcept, withResource}
 import com.nvidia.spark.rapids.format.TableMeta
 

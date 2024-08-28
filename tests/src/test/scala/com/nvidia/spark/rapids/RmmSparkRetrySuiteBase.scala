@@ -55,9 +55,9 @@ trait RmmSparkRetrySuiteBase extends AnyFunSuite with BeforeAndAfterEach {
     super.afterEach()
     SparkSession.getActiveSession.foreach(_.stop())
     SparkSession.clearActiveSession()
+    RapidsBufferCatalog.close()
     RmmSpark.removeAllCurrentThreadAssociation()
     RmmSpark.clearEventHandler()
-    RapidsBufferCatalog.close()
     GpuSemaphore.shutdown()
     if (rmmWasInitialized) {
       Rmm.shutdown()

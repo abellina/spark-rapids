@@ -20,13 +20,13 @@ import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.function.IntUnaryOperator
-
-import ai.rapids.cudf.DeviceMemoryBuffer
+import ai.rapids.cudf.{Cuda, DeviceMemoryBuffer, Table}
 import com.nvidia.spark.rapids.Arm.withResource
 import com.nvidia.spark.rapids.format.TableMeta
-
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.rapids.RapidsDiskBlockManager
+import org.apache.spark.sql.types.DataType
+import org.apache.spark.sql.vectorized.ColumnarBatch
 
 /** Identifier for a shuffle buffer that holds the data for a table on the read side */
 
@@ -81,7 +81,7 @@ class ShuffleReceivedBufferCatalog(
     tableMeta.bufferMeta.mutateId(bufferId.tableId)
     // when we call `addBuffer` the store will incRefCount
     withResource(buffer) { _ =>
-      catalog.addBuffer(
+      catalog.addBufferWithMeta(
         bufferId,
         buffer,
         tableMeta,
@@ -110,7 +110,24 @@ class ShuffleReceivedBufferCatalog(
    * @param handle shuffle buffer handle
    * @return shuffle buffer that has been acquired
    */
-  def acquireBuffer(handle: RapidsBufferHandle): RapidsBuffer = catalog.acquireBuffer(handle)
+  def acquireBuffer(handle: RapidsBufferHandle): RapidsBuffer =
+    catalog.acquireBuffer(handle)
+
+  def getColumnarBatchAndRemove(handle: RapidsBufferHandle,
+                                sparkTypes: Array[DataType],
+                                stream: Cuda.Stream): (ColumnarBatch, Long) = {
+    var cb: ColumnarBatch = null
+    var memoryUsedBytes: Long = 0L
+    withResource(handle) { _ =>
+      // TODO: we need to be able to make any buffer not just degenerate!!
+      cb = withResource(acquireBuffer(handle)) { rapidsBufferBase =>
+        memoryUsedBytes = rapidsBufferBase.memoryUsedBytes
+        rapidsBufferBase.getColumnarBatch(sparkTypes, stream)
+      }
+    }
+    removeBuffer(handle)
+    (cb, memoryUsedBytes)
+  }
 
   /**
    * Remove a buffer and table given a buffer handle
@@ -119,8 +136,8 @@ class ShuffleReceivedBufferCatalog(
    * @param handle buffer handle
    */
   def removeBuffer(handle: RapidsBufferHandle): Unit = {
-    val id = handle.id
-    tableMap.remove(id.tableId)
+    // TODO: handle this here also
+    tableMap.remove(handle.id.tableId)
     handle.close()
   }
 }

@@ -17,13 +17,11 @@
 package com.nvidia.spark.rapids
 
 import scala.collection.mutable.ArrayBuffer
-
-import ai.rapids.cudf.{CudfException, Table}
+import ai.rapids.cudf.{Cuda, CudfException, Table}
 import com.nvidia.spark.rapids.Arm.withResource
 import com.nvidia.spark.rapids.jni.RmmSpark
 import org.mockito.Mockito._
 import org.scalatestplus.mockito.MockitoSugar
-
 import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.rapids.aggregate.{CudfAggregate, CudfSum}
 import org.apache.spark.sql.types.{DataType, IntegerType, LongType}
@@ -122,7 +120,7 @@ class HashAggregateRetrySuite
       RmmSpark.OomInjectionType.GPU.ordinal, 0)
     val result = doReduction(reductionBatch)
     withResource(result) { spillable =>
-      withResource(spillable.getColumnarBatch) { cb =>
+      withResource(spillable.getColumnarBatch()) { cb =>
         assertResult(1)(cb.numRows)
         val gcv = cb.column(0).asInstanceOf[GpuColumnVector]
         withResource(gcv.getBase.copyToHost()) { hcv =>
@@ -140,7 +138,7 @@ class HashAggregateRetrySuite
       RmmSpark.OomInjectionType.GPU.ordinal, 0)
     val result = doReduction(reductionBatch)
     withResource(result) { spillable =>
-      withResource(spillable.getColumnarBatch) { cb =>
+      withResource(spillable.getColumnarBatch()) { cb =>
         assertResult(1)(cb.numRows)
         val gcv = cb.column(0).asInstanceOf[GpuColumnVector]
         withResource(gcv.getBase.copyToHost()) { hcv =>
@@ -170,7 +168,7 @@ class HashAggregateRetrySuite
       RmmSpark.OomInjectionType.GPU.ordinal, 0)
     val result = doGroupBy(groupByBatch)
     withResource(result) { spillable =>
-      withResource(spillable.getColumnarBatch) { cb =>
+      withResource(spillable.getColumnarBatch()) { cb =>
         assertResult(3)(cb.numRows)
         val gcv = cb.column(0).asInstanceOf[GpuColumnVector]
         val aggv = cb.column(1).asInstanceOf[GpuColumnVector]
@@ -204,7 +202,7 @@ class HashAggregateRetrySuite
       RmmSpark.OomInjectionType.GPU.ordinal, 0)
     val result = doReduction(reductionBatch)
     withResource(result) { spillable =>
-      withResource(spillable.getColumnarBatch) { cb =>
+      withResource(spillable.getColumnarBatch()) { cb =>
         assertResult(1)(cb.numRows)
         val gcv = cb.column(0).asInstanceOf[GpuColumnVector]
 
@@ -223,7 +221,7 @@ class HashAggregateRetrySuite
       RmmSpark.OomInjectionType.GPU.ordinal, 0)
     val result = doGroupBy(groupByBatch)
     withResource(result) { spillable =>
-      withResource(spillable.getColumnarBatch) { cb =>
+      withResource(spillable.getColumnarBatch()) { cb =>
         assertResult(3)(cb.numRows)
         val gcv = cb.column(0).asInstanceOf[GpuColumnVector]
         val aggv = cb.column(1).asInstanceOf[GpuColumnVector]
@@ -259,7 +257,7 @@ class HashAggregateRetrySuite
       RmmSpark.OomInjectionType.GPU.ordinal, 0)
     val result = doGroupBy(groupByBatch, forceMerge = true)
     withResource(result) { spillable =>
-      withResource(spillable.getColumnarBatch) { cb =>
+      withResource(spillable.getColumnarBatch()) { cb =>
         assertResult(3)(cb.numRows)
         val gcv = cb.column(0).asInstanceOf[GpuColumnVector]
         val aggv = cb.column(1).asInstanceOf[GpuColumnVector]

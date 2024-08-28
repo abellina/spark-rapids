@@ -23,7 +23,6 @@ import scala.collection.mutable
 
 import ai.rapids.cudf.{ColumnVector, Cuda, DeviceMemoryBuffer, HostMemoryBuffer, MemoryBuffer, Table}
 import com.nvidia.spark.rapids.Arm._
-import com.nvidia.spark.rapids.RapidsPluginImplicits.AutoCloseableSeq
 import com.nvidia.spark.rapids.StorageTier.StorageTier
 import com.nvidia.spark.rapids.format.TableMeta
 
@@ -34,53 +33,58 @@ import org.apache.spark.sql.vectorized.ColumnarBatch
 
 /**
  * Buffer storage using device memory.
- * @param chunkedPackBounceBufferSize this is the size of the bounce buffer to be used
- *    during spill in chunked_pack. The parameter defaults to 128MB,
- *    with a rule-of-thumb of 1MB per SM.
  */
-class RapidsDeviceMemoryStore(
-    chunkedPackBounceBufferSize: Long = 128L*1024*1024,
-    hostBounceBufferSize: Long = 128L*1024*1024)
+class RapidsDeviceMemoryStore
   extends RapidsBufferStore(StorageTier.DEVICE) {
 
   // The RapidsDeviceMemoryStore handles spillability via ref counting
   override protected def spillableOnAdd: Boolean = false
 
-  // bounce buffer to be used during chunked pack in GPU to host memory spill
-  private var chunkedPackBounceBuffer: DeviceMemoryBuffer =
-    DeviceMemoryBuffer.allocate(chunkedPackBounceBufferSize)
-
-  private var hostSpillBounceBuffer: HostMemoryBuffer =
-    HostMemoryBuffer.allocate(hostBounceBufferSize)
-
-  override protected def createBuffer(
-      other: RapidsBuffer,
+  override def createBuffer(
+      rapidsBuffer: RapidsBuffer,
       catalog: RapidsBufferCatalog,
-      stream: Cuda.Stream): Option[RapidsBufferBase] = {
-    val memoryBuffer = withResource(other.getCopyIterator) { copyIterator =>
-      copyIterator.next()
-    }
-    withResource(memoryBuffer) { _ =>
-      val deviceBuffer = {
-        memoryBuffer match {
-          case d: DeviceMemoryBuffer => d
-          case h: HostMemoryBuffer =>
-            GpuTaskMetrics.get.readSpillFromHostTime {
-              closeOnExcept(DeviceMemoryBuffer.allocate(memoryBuffer.getLength)) { deviceBuffer =>
-                logDebug(s"copying from host $h to device $deviceBuffer")
-                deviceBuffer.copyFromHostBuffer(h, stream)
-                deviceBuffer
-              }
+      stream: Cuda.Stream,
+      base: RapidsMemoryBuffer): RapidsBuffer = {
+    withResource(rapidsBuffer.getCopyIterator(stream)) { copyIter =>
+      catalog.withChunkedPackBounceBuffer { bounceBuffer =>
+        val meta = getMeta(rapidsBuffer, copyIter)
+        withResource(copyIter.next(bounceBuffer)) { memoryBuffer =>
+          val deviceBuffer = {
+            memoryBuffer match {
+              case d: DeviceMemoryBuffer => d
+              case h: HostMemoryBuffer =>
+                GpuTaskMetrics.get.readSpillFromHostTime {
+                  closeOnExcept(DeviceMemoryBuffer.allocate(memoryBuffer.getLength, stream)) {
+                    deviceBuffer =>
+                      logDebug(s"copying from host $h to device $deviceBuffer")
+                      deviceBuffer.copyFromHostBuffer(h, stream)
+                      deviceBuffer
+                  }
+                }
+              case b => throw new IllegalStateException(s"Unrecognized buffer: $b")
             }
-          case b => throw new IllegalStateException(s"Unrecognized buffer: $b")
+          }
+
+          meta.map { tableMeta =>
+            new RapidsDeviceMemoryBufferWithMeta(
+              rapidsBuffer.id,
+              deviceBuffer.getLength,
+              tableMeta,
+              deviceBuffer,
+              rapidsBuffer.getSpillPriority,
+              catalog,
+              base)
+          }.getOrElse {
+            new RapidsDeviceMemoryBuffer(
+              rapidsBuffer.id,
+              deviceBuffer.getLength,
+              deviceBuffer,
+              rapidsBuffer.getSpillPriority,
+              catalog,
+              base)
+          }
         }
       }
-      Some(new RapidsDeviceMemoryBuffer(
-        other.id,
-        deviceBuffer.getLength,
-        other.meta,
-        deviceBuffer,
-        other.getSpillPriority))
     }
   }
 
@@ -104,21 +108,49 @@ class RapidsDeviceMemoryStore(
       buffer: DeviceMemoryBuffer,
       tableMeta: TableMeta,
       initialSpillPriority: Long,
-      needsSync: Boolean): RapidsBuffer = {
+      needsSync: Boolean,
+      catalog: RapidsBufferCatalog): RapidsMemoryBuffer = {
     buffer.incRefCount()
-    val rapidsBuffer = new RapidsDeviceMemoryBuffer(
+    val rmb = new RapidsMemoryBuffer(id)
+    val rapidsBuffer = new RapidsDeviceMemoryBufferWithMeta(
       id,
       buffer.getLength,
       tableMeta,
       buffer,
-      initialSpillPriority)
+      initialSpillPriority,
+      catalog,
+      rmb)
     freeOnExcept(rapidsBuffer) { _ =>
       logDebug(s"Adding receive side table for: [id=$id, size=${buffer.getLength}, " +
         s"uncompressed=${rapidsBuffer.meta.bufferMeta.uncompressedSize}, " +
         s"meta_id=${tableMeta.bufferMeta.id}, " +
         s"meta_size=${tableMeta.bufferMeta.size}]")
       addBuffer(rapidsBuffer, needsSync)
-      rapidsBuffer
+      rmb.initialize(rapidsBuffer, StorageTier.DEVICE)
+      rmb
+    }
+  }
+
+  def addBuffer(
+      id: RapidsBufferId,
+      buffer: DeviceMemoryBuffer,
+      initialSpillPriority: Long,
+      needsSync: Boolean,
+      catalog: RapidsBufferCatalog): RapidsMemoryBuffer = {
+    buffer.incRefCount()
+    val rmb = new RapidsMemoryBuffer(id)
+    val rapidsBuffer = new RapidsDeviceMemoryBuffer(
+      id,
+      buffer.getLength,
+      buffer,
+      initialSpillPriority,
+      catalog,
+      rmb)
+    freeOnExcept(rapidsBuffer) { _ =>
+      logDebug(s"Adding receive side table for: [id=$id, size=${buffer.getLength}]")
+      addBuffer(rapidsBuffer, needsSync)
+      rmb.initialize(rapidsBuffer, StorageTier.DEVICE)
+      rmb
     }
   }
 
@@ -141,68 +173,19 @@ class RapidsDeviceMemoryStore(
       id: RapidsBufferId,
       table: Table,
       initialSpillPriority: Long,
-      needsSync: Boolean): RapidsBuffer = {
+      needsSync: Boolean,
+      catalog: RapidsBufferCatalog): RapidsMemoryBuffer = {
+    val rmb = new RapidsMemoryBuffer(id)
     val rapidsTable = new RapidsTable(
       id,
       table,
-      initialSpillPriority)
+      initialSpillPriority,
+      catalog,
+      rmb)
     freeOnExcept(rapidsTable) { _ =>
       addBuffer(rapidsTable, needsSync)
-      rapidsTable
-    }
-  }
-
-  /**
-   * A per cuDF column event handler that handles calls to .close()
-   * inside of the `ColumnVector` lock.
-   */
-  class RapidsDeviceColumnEventHandler
-      extends ColumnVector.EventHandler {
-
-    // Every RapidsTable that references this column has an entry in this map.
-    // The value represents the number of times (normally 1) that a ColumnVector
-    // appears in the RapidsTable. This is also the ColumnVector refCount at which
-    // the column is considered spillable.
-    // The map is protected via the ColumnVector lock.
-    private val registration = new mutable.HashMap[RapidsTable, Int]()
-
-    /**
-     * Every RapidsTable iterates through its columns and either creates
-     * a `ColumnTracking` object and associates it with the column's
-     * `eventHandler` or calls into the existing one, and registers itself.
-     *
-     * The registration has two goals: it accounts for repetition of a column
-     * in a `RapidsTable`. If a table has the same column repeated it must adjust
-     * the refCount at which this column is considered spillable.
-     *
-     * The second goal is to account for aliasing. If two tables alias this column
-     * we are going to mark it as non spillable.
-     *
-     * @param rapidsTable - the table that is registering itself with this tracker
-     */
-    def register(rapidsTable: RapidsTable, repetition: Int): Unit = {
-      registration.put(rapidsTable, repetition)
-    }
-
-    /**
-     * This is invoked during `RapidsTable.free` in order to remove the entry
-     * in `registration`.
-     * @param rapidsTable - the table that is de-registering itself
-     */
-    def deregister(rapidsTable: RapidsTable): Unit = {
-      registration.remove(rapidsTable)
-    }
-
-    // called with the cudfCv lock held from cuDF's side
-    override def onClosed(cudfCv: ColumnVector, refCount: Int): Unit = {
-      // we only handle spillability if there is a single table registered
-      // (no aliasing)
-      if (registration.size == 1) {
-        val (rapidsTable, spillableRefCount) = registration.head
-        if (spillableRefCount == refCount) {
-          rapidsTable.onColumnSpillable(cudfCv)
-        }
-      }
+      rmb.initialize(rapidsTable, StorageTier.DEVICE)
+      rmb
     }
   }
 
@@ -219,24 +202,60 @@ class RapidsDeviceMemoryStore(
    * @param table the cuDF table that we are managing
    * @param spillPriority a starting spill priority
    */
-  class RapidsTable(
-      id: RapidsBufferId,
-      table: Table,
-      spillPriority: Long)
-      extends RapidsBufferBase(
-        id,
-        null,
-        spillPriority)
-          with RapidsBufferChannelWritable {
+  class RapidsTable(id: RapidsBufferId,
+                    table: Table,
+                    spillPriority: Long,
+                    catalog: RapidsBufferCatalog,
+                    override val base: RapidsMemoryBuffer)
+    extends RapidsBufferBase(
+      id,
+      spillPriority,
+      catalog)
+      with RapidsBufferChannelWritable {
 
     /** The storage tier for this buffer */
     override val storageTier: StorageTier = StorageTier.DEVICE
 
-    override val supportsChunkedPacker: Boolean = true
+    override def getCopyIterator(stream: Cuda.Stream): RapidsBufferCopyIterator =
+      new RapidsBufferCopyIterator(
+        chunkedPacker = Some(new ChunkedPacker(id, table, catalog.chunkedPackBounceBufferSize)))
 
-    // This is the current size in batch form. It is to be used while this
-    // table hasn't migrated to another store.
-    private val unpackedSizeInBytes: Long = GpuColumnVector.getTotalDeviceMemoryUsed(table)
+    override def copyTo(otherStore: RapidsBufferStore, stream: Cuda.Stream): RapidsBuffer = {
+      otherStore.createBuffer(this, catalog, stream, base)
+    }
+
+    override def writeToChannel(
+        outputChannel: WritableByteChannel,
+        stream: Cuda.Stream): (Long, Option[TableMeta]) = {
+      // TODO: it is really strange that this is called from copyTo by way of the peer store
+      // we should just be calling store methods in copyTo
+      var written: Long = 0L
+      catalog.withChunkedPackBounceBuffer { chunkedPackBounceBuffer =>
+        withResource(getCopyIterator(stream)){ copyIter =>
+          while(copyIter.hasNext) {
+            withResource(copyIter.next(chunkedPackBounceBuffer)) { slice =>
+              catalog.withHostSpillBounceBuffer { hostSpillBounceBuffer =>
+                val iter =
+                  new MemoryBufferToHostByteBufferIterator(
+                    slice,
+                    hostSpillBounceBuffer,
+                    stream)
+                iter.foreach { bb =>
+                  try {
+                    while (bb.hasRemaining) {
+                      written += outputChannel.write(bb)
+                    }
+                  } finally {
+                    RapidsStorageUtils.dispose(bb)
+                  }
+                }
+              }
+            }
+          }
+          (written, Some(copyIter.getMeta))
+        }
+      }
+    }
 
     // By default all columns are NOT spillable since we are not the only owners of
     // the columns (the caller is holding onto a ColumnarBatch that will be closed
@@ -251,25 +270,21 @@ class RapidsDeviceMemoryStore(
     // spillability
     registerOnCloseEventHandler()
 
-    /** Release the underlying resources for this buffer. */
-    override protected def releaseResources(): Unit = {
-      table.close()
-    }
+    private var isClosed = false
 
-    private lazy val (cachedMeta, cachedPackedSize) = {
-      withResource(makeChunkedPacker) { cp =>
-        (cp.getMeta, cp.getTotalContiguousSize)
+    /** Release the underlying resources for this buffer. */
+    override protected def releaseResources(): Unit = synchronized {
+      if (isClosed) {
+        println(s"double close for table ${id}")
+      } else {
+        table.close()
+        isClosed = true
       }
     }
 
-    override def meta: TableMeta = cachedMeta
-
-    override val memoryUsedBytes: Long = unpackedSizeInBytes
-
-    override def getPackedSizeBytes: Long = cachedPackedSize
-
-    override def makeChunkedPacker: ChunkedPacker =
-      new ChunkedPacker(id, table, chunkedPackBounceBuffer)
+    // This is the current size in batch form. It is to be used while this
+    // table hasn't migrated to another store.
+    override val memoryUsedBytes: Long = GpuColumnVector.getTotalDeviceMemoryUsed(table)
 
     /**
      * Mark a column as spillable
@@ -301,23 +316,10 @@ class RapidsDeviceMemoryStore(
      *
      * @param sparkTypes the spark data types the batch should have
      */
-    override def getColumnarBatch(sparkTypes: Array[DataType]): ColumnarBatch = {
+    override def getColumnarBatch(sparkTypes: Array[DataType], stream: Cuda.Stream): ColumnarBatch = {
       columnSpillability.clear()
       setSpillable(this, false)
       GpuColumnVector.from(table, sparkTypes)
-    }
-
-    /**
-     * Get the underlying memory buffer. This may be either a HostMemoryBuffer or a
-     * DeviceMemoryBuffer depending on where the buffer currently resides.
-     * The caller must have successfully acquired the buffer beforehand.
-     *
-     * @see [[addReference]]
-     * @note It is the responsibility of the caller to close the buffer.
-     */
-    override def getMemoryBuffer: MemoryBuffer = {
-      throw new UnsupportedOperationException(
-        "RapidsDeviceMemoryBatch doesn't support getMemoryBuffer")
     }
 
     override def free(): Unit = {
@@ -374,43 +376,74 @@ class RapidsDeviceMemoryStore(
         }
       }
     }
-
-    override def writeToChannel(outputChannel: WritableByteChannel, stream: Cuda.Stream): Long = {
-      var written: Long = 0L
-      withResource(getCopyIterator) { copyIter =>
-        while(copyIter.hasNext) {
-          withResource(copyIter.next()) { slice =>
-            val iter =
-              new MemoryBufferToHostByteBufferIterator(
-                slice,
-                hostSpillBounceBuffer,
-                stream)
-            iter.foreach { bb =>
-              try {
-                while (bb.hasRemaining) {
-                  written += outputChannel.write(bb)
-                }
-              } finally {
-                RapidsStorageUtils.dispose(bb)
-              }
-            }
-          }
-        }
-        written
-      }
-    }
-
   }
 
-  class RapidsDeviceMemoryBuffer(
-      id: RapidsBufferId,
-      size: Long,
-      meta: TableMeta,
-      contigBuffer: DeviceMemoryBuffer,
-      spillPriority: Long)
-      extends RapidsBufferBase(id, meta, spillPriority)
-        with MemoryBuffer.EventHandler
-        with RapidsBufferChannelWritable {
+  /**
+   * A per cuDF column event handler that handles calls to .close()
+   * inside of the `ColumnVector` lock.
+   */
+  class RapidsDeviceColumnEventHandler
+    extends ColumnVector.EventHandler {
+
+    // Every RapidsTable that references this column has an entry in this map.
+    // The value represents the number of times (normally 1) that a ColumnVector
+    // appears in the RapidsTable. This is also the ColumnVector refCount at which
+    // the column is considered spillable.
+    // The map is protected via the ColumnVector lock.
+    private val registration = new mutable.HashMap[RapidsTable, Int]()
+
+    /**
+     * Every RapidsTable iterates through its columns and either creates
+     * a `ColumnTracking` object and associates it with the column's
+     * `eventHandler` or calls into the existing one, and registers itself.
+     *
+     * The registration has two goals: it accounts for repetition of a column
+     * in a `RapidsTable`. If a table has the same column repeated it must adjust
+     * the refCount at which this column is considered spillable.
+     *
+     * The second goal is to account for aliasing. If two tables alias this column
+     * we are going to mark it as non spillable.
+     *
+     * @param rapidsTable - the table that is registering itself with this tracker
+     */
+    def register(rapidsTable: RapidsTable, repetition: Int): Unit = {
+      registration.put(rapidsTable, repetition)
+    }
+
+    /**
+     * This is invoked during `RapidsTable.free` in order to remove the entry
+     * in `registration`.
+     * @param rapidsTable - the table that is de-registering itself
+     */
+    def deregister(rapidsTable: RapidsTable): Unit = {
+      registration.remove(rapidsTable)
+    }
+
+    // called with the cudfCv lock held from cuDF's side
+    override def onClosed(cudfCv: ColumnVector, refCount: Int): Unit = {
+      // we only handle spillability if there is a single table registered
+      // (no aliasing)
+      if (registration.size == 1) {
+        val (rapidsTable, spillableRefCount) = registration.head
+        if (spillableRefCount == refCount) {
+          rapidsTable.onColumnSpillable(cudfCv)
+        }
+      }
+    }
+  }
+
+
+  class RapidsDeviceMemoryBufferWithMeta(id: RapidsBufferId,
+                                         size: Long,
+                                         meta: TableMeta,
+                                         contigBuffer: DeviceMemoryBuffer,
+                                         spillPriority: Long,
+                                         catalog: RapidsBufferCatalog,
+                                         override val base: RapidsMemoryBuffer)
+    extends RapidsBufferBaseWithMeta(id, meta, spillPriority, catalog)
+      with MemoryBuffer.EventHandler
+      with RapidsBufferChannelWritable
+      with CopyableRapidsBuffer {
 
     override val memoryUsedBytes: Long = size
 
@@ -457,7 +490,7 @@ class RapidsDeviceMemoryStore(
      *
      * @note It is the responsibility of the caller to close the DeviceMemoryBuffer
      */
-    override def getDeviceMemoryBuffer: DeviceMemoryBuffer = synchronized {
+    override def getDeviceMemoryBuffer(stream: Cuda.Stream): DeviceMemoryBuffer = synchronized {
       contigBuffer.synchronized {
         setSpillable(this, false)
         contigBuffer.incRefCount()
@@ -465,14 +498,16 @@ class RapidsDeviceMemoryStore(
       }
     }
 
-    override def getMemoryBuffer: MemoryBuffer = getDeviceMemoryBuffer
+    // for UCX shuffle
+    override def getMemoryBuffer(stream: Cuda.Stream): MemoryBuffer =
+      getDeviceMemoryBuffer(stream)
 
-    override def getColumnarBatch(sparkTypes: Array[DataType]): ColumnarBatch = {
-      // calling `getDeviceMemoryBuffer` guarantees that we have marked this RapidsBuffer
-      // as not spillable and increased its refCount atomically
-      withResource(getDeviceMemoryBuffer) { buff =>
-        columnarBatchFromDeviceBuffer(buff, sparkTypes)
-      }
+    def getCopyIterator(stream: Cuda.Stream): RapidsBufferCopyIterator =
+      new RapidsBufferCopyIterator(
+        singleShotBuffer = Some(getDeviceMemoryBuffer(stream)))
+
+    override def copyTo(store: RapidsBufferStore, stream: Cuda.Stream): RapidsBuffer = {
+      store.createBuffer(this, catalog, stream, base)
     }
 
     /**
@@ -487,32 +522,138 @@ class RapidsDeviceMemoryStore(
       super.free()
     }
 
-    override def writeToChannel(outputChannel: WritableByteChannel, stream: Cuda.Stream): Long = {
+    override def writeToChannel(
+        outputChannel: WritableByteChannel, stream: Cuda.Stream): (Long, Option[TableMeta]) = {
       var written: Long = 0L
-      val iter = new MemoryBufferToHostByteBufferIterator(
-        contigBuffer,
-        hostSpillBounceBuffer,
-        stream)
-      iter.foreach { bb =>
-        try {
-          while (bb.hasRemaining) {
-            written += outputChannel.write(bb)
+      catalog.withHostSpillBounceBuffer { hostSpillBounceBuffer =>
+        val iter = new MemoryBufferToHostByteBufferIterator(
+          contigBuffer,
+          hostSpillBounceBuffer,
+          stream)
+        iter.foreach { bb =>
+          try {
+            while (bb.hasRemaining) {
+              written += outputChannel.write(bb)
+            }
+          } finally {
+            RapidsStorageUtils.dispose(bb)
           }
-        } finally {
-          RapidsStorageUtils.dispose(bb)
         }
+        (written, Some(meta))
       }
-      written
+    }
+  }
+
+  class RapidsDeviceMemoryBuffer(id: RapidsBufferId,
+                                 size: Long,
+                                 contigBuffer: DeviceMemoryBuffer,
+                                 spillPriority: Long,
+                                 catalog: RapidsBufferCatalog,
+                                 override val base: RapidsMemoryBuffer)
+    extends RapidsBufferBase(id, spillPriority, catalog)
+      with MemoryBuffer.EventHandler
+      with RapidsBufferChannelWritable {
+
+    override val memoryUsedBytes: Long = size
+
+    override val storageTier: StorageTier = StorageTier.DEVICE
+
+    // If this require triggers, we are re-adding a `DeviceMemoryBuffer` outside of
+    // the catalog lock, which should not possible. The event handler is set to null
+    // when we free the `RapidsDeviceMemoryBuffer` and if the buffer is not free, we
+    // take out another handle (in the catalog).
+    // TODO: This is not robust (to rely on outside locking and addReference/free)
+    //  and should be revisited.
+    require(contigBuffer.setEventHandler(this) == null,
+      "DeviceMemoryBuffer with non-null event handler failed to add!!")
+
+    /**
+     * Override from the MemoryBuffer.EventHandler interface.
+     *
+     * If we are being invoked we have the `contigBuffer` lock, as this callback
+     * is being invoked from `MemoryBuffer.close`
+     *
+     * @param refCount - contigBuffer's current refCount
+     */
+    override def onClosed(refCount: Int): Unit = {
+      // refCount == 1 means only 1 reference exists to `contigBuffer` in the
+      // RapidsDeviceMemoryBuffer (we own it)
+      if (refCount == 1) {
+        // setSpillable is being called here as an extension of `MemoryBuffer.close()`
+        // we hold the MemoryBuffer lock and we could be called from a Spark task thread
+        // Since we hold the MemoryBuffer lock, `incRefCount` waits for us. The only other
+        // call to `setSpillable` is also under this same MemoryBuffer lock (see:
+        // `getDeviceMemoryBuffer`)
+        setSpillable(this, true)
+      }
     }
 
-  }
-  override def close(): Unit = {
-    try {
+    override protected def releaseResources(): Unit = synchronized {
+      // we need to disassociate this RapidsBuffer from the underlying buffer
+      contigBuffer.close()
+    }
+
+    /**
+     * Get and increase the reference count of the device memory buffer
+     * in this RapidsBuffer, while making the RapidsBuffer non-spillable.
+     *
+     * @note It is the responsibility of the caller to close the DeviceMemoryBuffer
+     */
+    override def getDeviceMemoryBuffer(stream: Cuda.Stream): DeviceMemoryBuffer = synchronized {
+      contigBuffer.synchronized {
+        setSpillable(this, false)
+        contigBuffer.incRefCount()
+        contigBuffer
+      }
+    }
+
+    override def getMemoryBuffer(stream: Cuda.Stream): MemoryBuffer =
+      getDeviceMemoryBuffer(stream)
+
+    /**
+     * We overwrite free to make sure we don't have a handler for the underlying
+     * contigBuffer, since this `RapidsBuffer` is no longer tracked.
+     */
+    override def free(): Unit = synchronized {
+      if (isValid) {
+        // it is going to be invalid when calling super.free()
+        contigBuffer.setEventHandler(null)
+      }
+      super.free()
+    }
+
+    override def writeToChannel(
+        outputChannel: WritableByteChannel, stream: Cuda.Stream): (Long, Option[TableMeta])= {
+      var written: Long = 0L
+      catalog.withHostSpillBounceBuffer { hostSpillBounceBuffer =>
+        val iter = new MemoryBufferToHostByteBufferIterator(
+          contigBuffer,
+          hostSpillBounceBuffer,
+          stream)
+        iter.foreach { bb =>
+          try {
+            while (bb.hasRemaining) {
+              written += outputChannel.write(bb)
+            }
+          } finally {
+            RapidsStorageUtils.dispose(bb)
+          }
+        }
+        (written, None)
+      }
+    }
+
+    def getCopyIterator(stream: Cuda.Stream): RapidsBufferCopyIterator =
+      new RapidsBufferCopyIterator(
+        singleShotBuffer = Some(getDeviceMemoryBuffer(stream)))
+
+    override def copyTo(store: RapidsBufferStore, stream: Cuda.Stream): RapidsBuffer = {
+      store.createBuffer(this, catalog, stream, base)
+    }
+
+    override def close(): Unit = {
       super.close()
-    } finally {
-      Seq(chunkedPackBounceBuffer, hostSpillBounceBuffer).safeClose()
-      chunkedPackBounceBuffer = null
-      hostSpillBounceBuffer = null
     }
   }
 }
+

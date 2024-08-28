@@ -19,15 +19,14 @@ package com.nvidia.spark.rapids.shuffle
 import java.io.IOException
 import java.nio.ByteBuffer
 import java.util
-
 import ai.rapids.cudf.{Cuda, DeviceMemoryBuffer, HostMemoryBuffer, MemoryBuffer}
-import com.nvidia.spark.rapids.{MetaUtils, RapidsBuffer, ShuffleMetadata}
+import com.nvidia.spark.rapids.{CopyableRapidsBuffer, MetaUtils, RapidsBuffer, RapidsBufferCopyIterator, RapidsBufferId, RapidsBufferStore, RapidsBufferWithMeta, RapidsMemoryBuffer, ShuffleMetadata, StorageTier}
 import com.nvidia.spark.rapids.Arm.{closeOnExcept, withResource}
+import com.nvidia.spark.rapids.StorageTier.StorageTier
 import com.nvidia.spark.rapids.format.TableMeta
 import org.mockito.{ArgumentCaptor, ArgumentMatchers}
 import org.mockito.ArgumentMatchers.{any, anyLong}
 import org.mockito.Mockito._
-
 import org.apache.spark.storage.ShuffleBlockBatchId
 
 class RapidsShuffleServerSuite extends RapidsShuffleTestHelper {
@@ -40,7 +39,7 @@ class RapidsShuffleServerSuite extends RapidsShuffleTestHelper {
       withResource(HostMemoryBuffer.allocate(deviceBuffer.getLength)) { hostBuff =>
         fillBuffer(hostBuff)
         deviceBuffer.copyFromHostBuffer(hostBuff)
-        val mockBuffer = mock[RapidsBuffer]
+        val mockBuffer = mock[MockBuffer]
         val mockMeta = RapidsShuffleTestHelper.mockTableMeta(100000)
         when(mockBuffer.copyToMemoryBuffer(anyLong(), any[MemoryBuffer](), anyLong(), anyLong(),
           any[Cuda.Stream]())).thenAnswer { invocation =>
@@ -54,7 +53,7 @@ class RapidsShuffleServerSuite extends RapidsShuffleTestHelper {
           val stream = invocation.getArgument[Cuda.Stream](4)
           dst.copyFromMemoryBuffer(dstOffset, deviceBuffer, srcOffset, length, stream)
         }
-        when(mockBuffer.getPackedSizeBytes).thenReturn(deviceBuffer.getLength)
+        when(mockBuffer.memoryUsedBytes).thenReturn(deviceBuffer.getLength)
         when(mockBuffer.meta).thenReturn(mockMeta)
         mockBuffer
       }
@@ -224,13 +223,13 @@ class RapidsShuffleServerSuite extends RapidsShuffleTestHelper {
         any(), any(), any(), any[MemoryBuffer](), ac.capture())).thenReturn(mockTransaction)
 
       val mockRequestHandler = mock[RapidsShuffleRequestHandler]
-      val rapidsBuffer = mock[RapidsBuffer]
+      val rapidsBuffer = mock[MockBuffer]
 
       val bb = ByteBuffer.allocateDirect(123)
       withResource(new RefCountedDirectByteBuffer(bb)) { _ =>
         val tableMeta = MetaUtils.buildTableMeta(1, 456, bb, 100)
         when(rapidsBuffer.meta).thenReturn(tableMeta)
-        when(rapidsBuffer.getPackedSizeBytes).thenReturn(tableMeta.bufferMeta().size())
+        when(rapidsBuffer.memoryUsedBytes).thenReturn(tableMeta.bufferMeta().size())
         when(mockRequestHandler.acquireShuffleBuffer(ArgumentMatchers.eq(1)))
           .thenReturn(rapidsBuffer)
 
@@ -281,13 +280,13 @@ class RapidsShuffleServerSuite extends RapidsShuffleTestHelper {
 
       val mockServerConnection = mock[ServerConnection]
       val mockRequestHandler = mock[RapidsShuffleRequestHandler]
-      val rapidsBuffer = mock[RapidsBuffer]
+      val rapidsBuffer = mock[MockBuffer]
 
       val bb = ByteBuffer.allocateDirect(123)
       withResource(new RefCountedDirectByteBuffer(bb)) { _ =>
         val tableMeta = MetaUtils.buildTableMeta(1, 456, bb, 100)
         when(rapidsBuffer.meta).thenReturn(tableMeta)
-        when(rapidsBuffer.getPackedSizeBytes).thenReturn(tableMeta.bufferMeta().size())
+        when(rapidsBuffer.memoryUsedBytes).thenReturn(tableMeta.bufferMeta().size())
         when(mockRequestHandler.acquireShuffleBuffer(ArgumentMatchers.eq(1)))
             .thenReturn(rapidsBuffer)
 
@@ -367,13 +366,14 @@ class RapidsShuffleServerSuite extends RapidsShuffleTestHelper {
 
       val mockRequestHandler = mock[RapidsShuffleRequestHandler]
 
-      def makeMockBuffer(tableId: Int, bb: ByteBuffer): RapidsBuffer = {
-        val rapidsBuffer = mock[RapidsBuffer]
+      def makeMockBuffer(
+          tableId: Int, bb: ByteBuffer): MockBuffer = {
+        val rapidsBuffer = mock[MockBuffer]
         val tableMeta = MetaUtils.buildTableMeta(tableId, 456, bb, 100)
         when(rapidsBuffer.meta).thenReturn(tableMeta)
-        when(rapidsBuffer.getPackedSizeBytes).thenReturn(tableMeta.bufferMeta().size())
+        when(rapidsBuffer.memoryUsedBytes).thenReturn(tableMeta.bufferMeta().size())
         when(mockRequestHandler.acquireShuffleBuffer(ArgumentMatchers.eq(tableId)))
-            .thenReturn(rapidsBuffer)
+          .thenReturn(rapidsBuffer)
         rapidsBuffer
       }
 

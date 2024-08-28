@@ -31,7 +31,7 @@ package org.apache.spark.sql.rapids
 import scala.collection
 import scala.collection.mutable.ArrayBuffer
 
-import ai.rapids.cudf.{NvtxColor, NvtxRange}
+import ai.rapids.cudf.{Cuda, NvtxColor, NvtxRange}
 import com.nvidia.spark.rapids._
 import com.nvidia.spark.rapids.Arm.withResource
 import com.nvidia.spark.rapids.shuffle.{RapidsShuffleIterator, RapidsShuffleTransport}
@@ -159,8 +159,8 @@ class RapidsCachingReader[K, C](
         val cachedIt = cachedBufferHandles.iterator.map(bufferHandle => {
           // No good way to get a metric in here for semaphore wait time
           GpuSemaphore.acquireIfNecessary(context)
-          val cb = withResource(catalog.acquireBuffer(bufferHandle)) { buffer =>
-            buffer.getColumnarBatch(sparkTypes)
+          val cb = withResource(catalog.acquireBuffer(bufferHandle)) { rapidsMemoryBuffer =>
+            rapidsMemoryBuffer.getColumnarBatch(sparkTypes, Cuda.DEFAULT_STREAM)
           }
           val cachedBytesRead = GpuColumnVector.getTotalDeviceMemoryUsed(cb)
           metrics.incLocalBytesRead(cachedBytesRead)

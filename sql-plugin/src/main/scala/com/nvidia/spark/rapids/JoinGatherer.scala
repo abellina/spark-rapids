@@ -373,7 +373,7 @@ class LazySpillableGatherMapImpl(
     ColumnView.fromDeviceBuffer(getBuffer, startRow * 4L, DType.INT32, numRows)
   }
 
-  private def getBuffer = {
+  private def getBuffer: DeviceMemoryBuffer = {
     if (cached.isEmpty) {
       withResource(new NvtxRange("get map " + name, NvtxColor.RED)) { _ =>
         cached = spill.map { sb =>

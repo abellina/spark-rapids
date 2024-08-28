@@ -146,7 +146,7 @@ class ProjectExprSuite extends SparkQueryCompareTestSuite {
       RmmSpark.forceSplitAndRetryOOM(RmmSpark.getCurrentThreadId, 1,
         RmmSpark.OomInjectionType.GPU.ordinal, 0)
       withResource(sb) { sb =>
-        withResource(ast.buildRetryableAstIterator(Seq(sb.getColumnarBatch).iterator)) { result =>
+        withResource(ast.buildRetryableAstIterator(Seq(sb.getColumnarBatch()).iterator)) { result =>
           withResource(result.next()) { cb =>
             assertResult(2)(cb.numRows)
             assertResult(1)(cb.numCols)
