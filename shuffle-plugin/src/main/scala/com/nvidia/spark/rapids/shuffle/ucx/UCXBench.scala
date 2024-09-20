@@ -88,10 +88,12 @@ class UCXBench(
     }.head
 
     val tableMeta = MetaUtils.buildTableMeta(1, ct)
+    var receivedFirst = false
 
     val ucxServer = ucx.makeServer(new RapidsShuffleRequestHandler {
       override def getShuffleBufferMetas(
           shuffleBlockBatchId: ShuffleBlockBatchId): Seq[TableMeta] = {
+        receivedFirst = true
         Seq(tableMeta)
       }
 
@@ -204,10 +206,12 @@ class UCXBench(
       var continue = true
       while (continue) {
         Thread.sleep(1000L)
-        ix += 1
-        if (numIter != null && numIter > 0 && ix > numIter) {
-          logInfo("done!")
-          continue = false
+        if (receivedFirst) {
+          ix += 1
+          if (numIter != null && numIter > 0 && ix > numIter) {
+            logInfo("done!")
+            continue = false
+          }
         }
       }
     }
