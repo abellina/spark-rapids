@@ -200,6 +200,7 @@ class UCXBench(
         }
       }
     } else {
+      Thread.sleep(5000L)
       var ix = 0
       var continue = true
       while (continue) {
