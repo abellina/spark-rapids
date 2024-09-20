@@ -20,7 +20,6 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
 import java.util.Properties
 import com.nvidia.spark.rapids.ShimLoader
-import java.util.concurrent.ThreadFactory
 import com.nvidia.spark.rapids.ThreadFactoryBuilder
 
 // make the trait open
