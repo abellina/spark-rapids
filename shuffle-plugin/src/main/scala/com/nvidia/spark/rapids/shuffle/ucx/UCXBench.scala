@@ -14,6 +14,10 @@ import org.apache.spark.sql.vectorized.ColumnarBatch
 import org.apache.spark.storage.ShuffleBlockBatchId
 
 import java.io.File
+import java.util.concurrent.Executors
+import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicLong
 import com.nvidia.spark.rapids.ShimLoader
 
 // make the trait open
@@ -23,18 +27,24 @@ class UCXBench(
   localHost: String,
   localPort: String,
   peerHost: String,
-  peerPort: String) 
+  peerPort: String,
+  maxInFlight: Integer) 
     extends Logging {
 
   def start(): Unit = {
     val server = peerHost == null
     val myId = if (server) { "0" } else { "1" }
+    val rowCount = 1000000
+    val batchSize = rowCount * 8
 
     val rapidsConf = new RapidsConf(
-      Map("spark.rapids.shuffle.ucx.bounceBuffers.device.count" -> "256",
-          "spark.rapids.shuffle.ucx.bounceBuffers.host.count" -> "256",
+      Map(
+          "spark.rapids.shuffle.ucx.activeMessages.forceRnd" -> "false",
+          "spark.rapids.shuffle.ucx.bounceBuffers.device.count" -> "128",
+          "spark.rapids.shuffle.ucx.bounceBuffers.device.count" -> "128",
+          "spark.rapids.shuffle.ucx.bounceBuffers.size" -> "8MB",
           "spark.rapids.shuffle.transport.maxReceiveInflightBytes"-> "4GB",
-          "spark.rapids.shuffle.ucx.useWakeup" -> "true",
+          "spark.rapids.shuffle.ucx.useWakeup" -> "false",
           "spark.rapids.shuffle.ucx.listenerStartPort" -> localPort,
           "spark.rapids.memory.gpu.allocFraction" -> "0.3",
           "spark.rapids.memory.gpu.minAllocFraction"->"0.1"))
@@ -50,7 +60,7 @@ class UCXBench(
       rapidsConf
     )
 
-    val longs = new Array[Long](1000000)
+    val longs = new Array[Long](rowCount)
     val ct =
       withResource(ai.rapids.cudf.ColumnVector.fromLongs(longs:_*)) { cv =>
         withResource(new ai.rapids.cudf.Table(cv)) { tbl =>
@@ -77,7 +87,11 @@ class UCXBench(
           override def meta: TableMeta = tableMeta
           override val storageTier: StorageTier = StorageTier.DEVICE
           override def getColumnarBatch(sparkTypes: Array[DataType]): ColumnarBatch = null
-          override def getMemoryBuffer: MemoryBuffer = ct.getBuffer
+          override def getMemoryBuffer: MemoryBuffer = {
+            val b = ct.getBuffer
+            b.incRefCount()
+            b
+          }
           override def copyToMemoryBuffer(
             srcOffset: Long,
             dst: MemoryBuffer,
@@ -86,7 +100,11 @@ class UCXBench(
             stream: Cuda.Stream): Unit = {
             dst.copyFromMemoryBufferAsync(dstOffset, getMemoryBuffer, srcOffset, length, stream)
           }
-          override def getDeviceMemoryBuffer: DeviceMemoryBuffer = ct.getBuffer
+          override def getDeviceMemoryBuffer: DeviceMemoryBuffer = {
+            val b = ct.getBuffer
+            b.incRefCount()
+            b
+          }
           override def getHostMemoryBuffer: HostMemoryBuffer = null
           override def addReference(): Boolean = true
           override def free(): Unit = {}
@@ -104,36 +122,58 @@ class UCXBench(
     })
     ucxServer.start()
 
+    logInfo("press ctrl-c to exit")
+
+    val received = new AtomicLong(0L)
     if (!server) {
+      val clientProducer = Executors.newSingleThreadExecutor()
+      val reqsInFlight = new LinkedBlockingQueue[Int](maxInFlight)
+      val fetchHandler = new RapidsShuffleFetchHandler {
+        override def start(expectedBatches: Int): Unit = {
+        }
+
+        override def batchReceived(handle: RapidsBufferHandle): Boolean = {
+          received.addAndGet(batchSize)
+          handle.close()
+          reqsInFlight.poll()
+          true
+        }
+
+        override def transferError(errorMessage: String, throwable: Throwable): Unit = {}
+
+        override def getTaskIds: Array[Long] = {
+          Array.empty
+        }
+      }
+
       val client  =
         ucx.makeClient(TrampolineUtil.newBlockManagerId(
           "0", peerHost, peerPort.toInt, Some(s"rapids=${peerPort}")))
 
+      // client.mockTableMeta = Some(tableMeta)
+
       Thread.sleep(1000L)
 
-      (0 until 1000).foreach { _ =>
-        client.doFetch(ShuffleBlockBatchId(1, 1L, 1, 1) :: Nil, new RapidsShuffleFetchHandler {
-          override def start(expectedBatches: Int): Unit = {
+      clientProducer.execute(() => {
+        while (true) {
+          val doFetch = reqsInFlight.offer(1, 1, TimeUnit.SECONDS)
+          if (doFetch) {
+            client.doFetch(ShuffleBlockBatchId(1, 1L, 1, 1) :: Nil, fetchHandler)
           }
-
-          override def batchReceived(handle: RapidsBufferHandle): Boolean = {
-            handle.close()
-            true
-          }
-
-          override def transferError(errorMessage: String, throwable: Throwable): Unit = {}
-
-          override def getTaskIds: Array[Long] = {
-            Array.empty
-          }
-        })
+        }
+      })
+      
+      var ix = 0
+      while (true) {
+        Thread.sleep(1000L)
+        val sofar = received.getAndSet(0L)
+        logInfo(s"$ix: received ${sofar/1024/1024} MB/s, inflight: ${reqsInFlight.size()}")
+        ix += 1
       }
-      logInfo("done issuing")
     }
 
-    logInfo("press ctrl-c to exit")
     while (true) {
-      Thread.sleep(100000L)
+      Thread.sleep(1000L)
     }
   }
 }
@@ -145,8 +185,11 @@ object UCXBench extends Logging {
     val localPort = args(2)
     val peerHost = if (isServer) null else args(3)
     val peerPort = if (isServer) null else args(4)
+    val maxInFlight: Integer = if (isServer) null else args(5).toInt
     val b = 
-      ShimLoader.newUCXShuffleBench(localHost, localPort, peerHost, peerPort).asInstanceOf[UCXBench]
+      ShimLoader.newUCXShuffleBench(
+        localHost, localPort, peerHost, peerPort, maxInFlight)
+        .asInstanceOf[UCXBench]
     b.start()
   }
 }

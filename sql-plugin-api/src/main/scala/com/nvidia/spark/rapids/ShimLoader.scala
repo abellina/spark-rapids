@@ -335,7 +335,8 @@ object ShimLoader {
     localHost: String,
     localPort: String,
     peerHost: String,
-    peerPort: String): Any = {
+    peerPort: String,
+    maxInFlight: Integer): Any = {
     val classLoader = getShimClassLoader()
     val ucxBenchClassName = "com.nvidia.spark.rapids.shuffle.ucx.UCXBench"
     val ucxBenchClass= classLoader.loadClass(ucxBenchClassName)
@@ -343,8 +344,9 @@ object ShimLoader {
       classOf[java.lang.String],
       classOf[java.lang.String],
       classOf[java.lang.String],
-      classOf[java.lang.String])
-      .newInstance(localHost, localPort, peerHost, peerPort)
+      classOf[java.lang.String],
+      classOf[java.lang.Integer])
+      .newInstance(localHost, localPort, peerHost, peerPort, maxInFlight)
   }
 
   def newDriverPlugin(): DriverPlugin = {
