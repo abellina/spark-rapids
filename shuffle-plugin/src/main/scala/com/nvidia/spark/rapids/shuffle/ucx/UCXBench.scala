@@ -42,12 +42,29 @@ class UCXBench(
     val properties = new Properties()
     val source = scala.io.Source.fromURL(s"file://$configPath")
     properties.load(source.bufferedReader())
-    val configMap = properties.asInstanceOf[Map[String, String]]
+    val configMap = scala.collection.mutable.HashMap[String, String]()
+    properties.keySet().forEach { kobj => 
+      val key = kobj.asInstanceOf[String]
+      configMap.put(key, properties.getProperty(key))
+    }
+    configMap.put("spark.rapids.shuffle.ucx.listenerStartPort", localPort)
 
-    val rapidsConf = new RapidsConf(
-      configMap ++ 
-      Map(
-          "spark.rapids.shuffle.ucx.listenerStartPort" -> localPort))
+    val sb = new StringBuilder()
+    sb.append("\n*********************************************\n")
+    sb.append("****** NVIDIA spark-rapids UCXBench p2p \n")
+    sb.append(s"*** mode=${if (server) "SERVER" else "CLIENT"} maxInFlight=$maxInFlight\n") 
+    sb.append(s"*** localHost=$localHost localPort=$localPort\n")
+    if (!server)
+      sb.append(s"*** peerHost=$peerHost peerPort=$peerPort\n")
+    
+    sb.append(s"*** Configuration: \n")
+    configMap.foreach { case (k,v) => 
+      sb.append(s"*** $k = $v\n")
+    }
+    sb.append("*********************************************\n")
+    logInfo(sb.toString)
+
+    val rapidsConf = new RapidsConf(configMap.toMap)
 
     GpuDeviceManager.initializeMemory(None, Some(rapidsConf))
 
