@@ -331,6 +331,22 @@ object ShimLoader {
       .newInstance(conf, java.lang.Boolean.valueOf(isDriver))
   }
 
+  def newUCXShuffleBench(
+    localHost: String,
+    localPort: String,
+    peerHost: String,
+    peerPort: String): Any = {
+    val classLoader = getShimClassLoader()
+    val ucxBenchClassName = "com.nvidia.spark.rapids.shuffle.ucx.UCXBench"
+    val ucxBenchClass= classLoader.loadClass(ucxBenchClassName)
+    ucxBenchClass.getConstructor(
+      classOf[java.lang.String],
+      classOf[java.lang.String],
+      classOf[java.lang.String],
+      classOf[java.lang.String])
+      .newInstance(localHost, localPort, peerHost, peerPort)
+  }
+
   def newDriverPlugin(): DriverPlugin = {
     ShimReflectionUtils.newInstanceOf("com.nvidia.spark.rapids.RapidsDriverPlugin")
   }

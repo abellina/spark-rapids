@@ -441,7 +441,7 @@ EOF
         unset PYSP_TEST_spark_jars_packages
         unset PYSP_TEST_spark_jars_repositories
         unset PYSP_TEST_spark_rapids_memory_gpu_allocSize
-
+    	export JAVA_HOME="/home/abellina/compute_sanitizer"
         exec "$SPARK_HOME"/bin/spark-submit "${jarOpts[@]}" \
             --driver-java-options "$driverJavaOpts" \
             $SPARK_SUBMIT_FLAGS \

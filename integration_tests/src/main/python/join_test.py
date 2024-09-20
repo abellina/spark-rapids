@@ -582,6 +582,11 @@ def test_broadcast_join_left_table(data_gen, join_type, shuffle_conf):
 def test_broadcast_join_with_conditionals(data_gen, join_type):
     def do_join(spark):
         left, right = create_df(spark, data_gen, 500, 250)
+        try:
+            left.write.parquet("file:///tmp/lhs")
+            right.write.parquet("file:///tmp/rhs")
+        except:
+            print ("already wrote")
         return left.join(broadcast(right),
                    (left.a == right.r_a) & (left.b >= right.r_b), join_type)
     assert_gpu_and_cpu_are_equal_collect(do_join)

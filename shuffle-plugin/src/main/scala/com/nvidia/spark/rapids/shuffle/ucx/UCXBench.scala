@@ -3,7 +3,7 @@ package com.nvidia.spark.rapids.shuffle.ucx
 import ai.rapids.cudf.{Cuda, DeviceMemoryBuffer, HostMemoryBuffer, MemoryBuffer}
 import com.nvidia.spark.rapids.Arm.withResource
 import com.nvidia.spark.rapids.StorageTier.StorageTier
-import com.nvidia.spark.rapids.{GpuDeviceManager, MetaUtils, RapidsBuffer, RapidsBufferCatalog, RapidsBufferHandle, RapidsBufferId, ShuffleReceivedBufferCatalog, StorageTier}
+import com.nvidia.spark.rapids.{GpuDeviceManager, MetaUtils, RapidsConf, RapidsBuffer, RapidsBufferCatalog, RapidsBufferHandle, RapidsBufferId, ShuffleReceivedBufferCatalog, StorageTier}
 import com.nvidia.spark.rapids.format.TableMeta
 import com.nvidia.spark.rapids.shuffle.{RapidsShuffleFetchHandler, RapidsShuffleRequestHandler}
 import org.apache.spark.internal.Logging
@@ -14,15 +14,23 @@ import org.apache.spark.sql.vectorized.ColumnarBatch
 import org.apache.spark.storage.ShuffleBlockBatchId
 
 import java.io.File
+import com.nvidia.spark.rapids.ShimLoader
 
-object UCXBench extends Logging {
-  def main(args: Array[String]): Unit = {
-    val server = args(0).equalsIgnoreCase("-s")
-    val localHost = args(1)
-    val localPort = args(2)
+// make the trait open
+// make the impl part of shims
+// use shim loader to get impl
+class UCXBench(
+  localHost: String,
+  localPort: String,
+  peerHost: String,
+  peerPort: String) 
+    extends Logging {
+
+  def start(): Unit = {
+    val server = peerHost == null
     val myId = if (server) { "0" } else { "1" }
 
-    val rapidsConf = new com.nvidia.spark.rapids.RapidsConf(
+    val rapidsConf = new RapidsConf(
       Map("spark.rapids.shuffle.ucx.bounceBuffers.device.count" -> "256",
           "spark.rapids.shuffle.ucx.bounceBuffers.host.count" -> "256",
           "spark.rapids.shuffle.transport.maxReceiveInflightBytes"-> "4GB",
@@ -41,7 +49,6 @@ object UCXBench extends Logging {
         myId, localHost, localPort.toInt, Some(s"rapids=${localPort}")),
       rapidsConf
     )
-
 
     val longs = new Array[Long](1000000)
     val ct =
@@ -98,11 +105,9 @@ object UCXBench extends Logging {
     ucxServer.start()
 
     if (!server) {
-      val peer = args(3)
-      val peerPort = args(4)
       val client  =
         ucx.makeClient(TrampolineUtil.newBlockManagerId(
-          "0", peer, peerPort.toInt, Some(s"rapids=${peerPort}")))
+          "0", peerHost, peerPort.toInt, Some(s"rapids=${peerPort}")))
 
       Thread.sleep(1000L)
 
@@ -130,5 +135,18 @@ object UCXBench extends Logging {
     while (true) {
       Thread.sleep(100000L)
     }
+  }
+}
+
+object UCXBench extends Logging {
+  def main(args: Array[String]): Unit = {
+    val isServer = args(0) == "-s"
+    val localHost = args(1)
+    val localPort = args(2)
+    val peerHost = if (isServer) null else args(3)
+    val peerPort = if (isServer) null else args(4)
+    val b = 
+      ShimLoader.newUCXShuffleBench(localHost, localPort, peerHost, peerPort).asInstanceOf[UCXBench]
+    b.start()
   }
 }
