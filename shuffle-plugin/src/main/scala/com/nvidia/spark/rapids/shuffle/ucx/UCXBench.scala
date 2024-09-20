@@ -20,6 +20,8 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
 import java.util.Properties
 import com.nvidia.spark.rapids.ShimLoader
+import java.util.concurrent.ThreadFactory
+import com.nvidia.spark.rapids.ThreadFactoryBuilder
 
 // make the trait open
 // make the impl part of shims
@@ -143,7 +145,12 @@ class UCXBench(
 
     val received = new AtomicLong(0L)
     if (!server) {
-      val clientProducer = Executors.newSingleThreadExecutor()
+      val clientProducer = Executors.newSingleThreadExecutor(
+        new ThreadFactoryBuilder()
+          .setNameFormat("ucx-client-producer")
+          .setDaemon(true)
+          .build)
+
       val reqsInFlight = new LinkedBlockingQueue[Int](maxInFlight)
       val fetchHandler = new RapidsShuffleFetchHandler {
         override def start(expectedBatches: Int): Unit = {
