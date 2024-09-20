@@ -1,0 +1,18 @@
+export UCX_RNDV_SCHEME=put_zcopy
+export UCX_RNDV_FRAG_MEM_TYPE=cuda
+export SPARK_RAPIDS_JAR=$PWD/../dist/target/rapids-4-spark_2.12-24.10.0-SNAPSHOT-cuda11.jar
+export UCX_BENCH_CLASSPATH=$SPARK_RAPIDS_JAR:$SPARK_HOME/jars/*
+echo "$UCX_BENCH_CLASSPATH"
+
+export CONFIG_FILE=$PWD/config.properties
+export LOCAL_HOSTNAME="localhost"
+export LOCAL_PORT="12345"
+
+echo "com.nvidia.spark.rapids.shuffle.ucx.UCXBench.main(\
+Array(\
+\"$CONFIG_FILE\", \
+\"-s\", \
+\"$LOCAL_HOSTNAME\", \
+\"$LOCAL_PORT\"\
+))" | \
+scala -cp $UCX_BENCH_CLASSPATH -Dai.rapids.cudf.nvtx.enabled=true
