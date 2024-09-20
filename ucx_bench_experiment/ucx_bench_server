@@ -7,11 +7,13 @@ echo "$UCX_BENCH_CLASSPATH"
 export CONFIG_FILE=$PWD/config.properties
 export LOCAL_HOSTNAME="localhost"
 export LOCAL_PORT="12345"
+export NUM_ITER=10
 
 echo "com.nvidia.spark.rapids.shuffle.ucx.UCXBench.main(\
 Array(\
 \"$CONFIG_FILE\", \
 \"-s\", \
+\"$NUM_ITER\", \
 \"$LOCAL_HOSTNAME\", \
 \"$LOCAL_PORT\"\
 ))" | \

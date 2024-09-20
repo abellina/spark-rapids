@@ -193,18 +193,17 @@ class UCXBench(
         }
       }
     } else {
-
       var ix = 0
       var continue = true
       while (continue) {
         Thread.sleep(1000L)
+        ix += 1
         if (numIter != null && numIter > 0 && ix > numIter) {
           logInfo("done!")
           continue = false
         }
       }
     }
-    
   }
 }
 
@@ -212,9 +211,9 @@ object UCXBench extends Logging {
   def main(args: Array[String]): Unit = {
     val configPath = args(0)
     val isServer = args(1) == "-s"
-    val localHost = args(2)
-    val localPort = args(3)
-    val numIter: Integer = args(4).toInt
+    val numIter: Integer = args(2).toInt
+    val localHost = args(3)
+    val localPort = args(4)
     val peerHost = if (isServer) null else args(5)
     val peerPort = if (isServer) null else args(6)
     val maxInFlight: Integer = if (isServer) null else args(7).toInt
