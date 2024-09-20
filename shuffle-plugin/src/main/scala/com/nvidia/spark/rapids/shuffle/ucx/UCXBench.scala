@@ -30,7 +30,8 @@ class UCXBench(
   localPort: String,
   peerHost: String,
   peerPort: String,
-  maxInFlight: Integer) 
+  maxInFlight: Integer,
+  numIter: Integer) 
     extends Logging {
 
   def start(): Unit = {
@@ -52,7 +53,7 @@ class UCXBench(
     val sb = new StringBuilder()
     sb.append("\n*********************************************\n")
     sb.append("****** NVIDIA spark-rapids UCXBench p2p \n")
-    sb.append(s"*** mode=${if (server) "SERVER" else "CLIENT"} maxInFlight=$maxInFlight\n") 
+    sb.append(s"*** mode=${if (server) "SERVER" else "CLIENT"} maxInFlight=$maxInFlight numIter: $numIter\n") 
     sb.append(s"*** localHost=$localHost localPort=$localPort\n")
     if (!server)
       sb.append(s"*** peerHost=$peerHost peerPort=$peerPort\n")
@@ -90,7 +91,6 @@ class UCXBench(
     val ucxServer = ucx.makeServer(new RapidsShuffleRequestHandler {
       override def getShuffleBufferMetas(
           shuffleBlockBatchId: ShuffleBlockBatchId): Seq[TableMeta] = {
-        logInfo("received getShuffleBufferMetas request")
         Seq(tableMeta)
       }
 
@@ -181,17 +181,30 @@ class UCXBench(
       })
       
       var ix = 0
-      while (true) {
+      var continue = true
+      while (continue) {
         Thread.sleep(1000L)
         val sofar = received.getAndSet(0L)
         logInfo(s"$ix: received ${sofar/1024/1024} MB/s, inflight: ${reqsInFlight.size()}")
         ix += 1
+        if (numIter != null && numIter > 0 && ix > numIter) {
+          logInfo("done!")
+          continue = false
+        }
+      }
+    } else {
+
+      var ix = 0
+      var continue = true
+      while (continue) {
+        Thread.sleep(1000L)
+        if (numIter != null && numIter > 0 && ix > numIter) {
+          logInfo("done!")
+          continue = false
+        }
       }
     }
-
-    while (true) {
-      Thread.sleep(1000L)
-    }
+    
   }
 }
 
@@ -201,12 +214,13 @@ object UCXBench extends Logging {
     val isServer = args(1) == "-s"
     val localHost = args(2)
     val localPort = args(3)
-    val peerHost = if (isServer) null else args(4)
-    val peerPort = if (isServer) null else args(5)
-    val maxInFlight: Integer = if (isServer) null else args(6).toInt
+    val numIter: Integer = args(4).toInt
+    val peerHost = if (isServer) null else args(5)
+    val peerPort = if (isServer) null else args(6)
+    val maxInFlight: Integer = if (isServer) null else args(7).toInt
     val b = 
       ShimLoader.newUCXShuffleBench(
-        configPath, localHost, localPort, peerHost, peerPort, maxInFlight)
+        configPath, localHost, localPort, peerHost, peerPort, maxInFlight, numIter)
         .asInstanceOf[UCXBench]
     b.start()
   }
