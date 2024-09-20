@@ -18,12 +18,14 @@ import java.util.concurrent.Executors
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
+import java.util.Properties
 import com.nvidia.spark.rapids.ShimLoader
 
 // make the trait open
 // make the impl part of shims
 // use shim loader to get impl
 class UCXBench(
+  configPath: String,
   localHost: String,
   localPort: String,
   peerHost: String,
@@ -37,17 +39,15 @@ class UCXBench(
     val rowCount = 1000000
     val batchSize = rowCount * 8
 
+    val properties = new Properties()
+    val source = scala.io.Source.fromURL(s"file://$configPath")
+    properties.load(source.bufferedReader())
+    val configMap = properties.asInstanceOf[Map[String, String]]
+
     val rapidsConf = new RapidsConf(
+      configMap ++ 
       Map(
-          "spark.rapids.shuffle.ucx.activeMessages.forceRnd" -> "false",
-          "spark.rapids.shuffle.ucx.bounceBuffers.device.count" -> "128",
-          "spark.rapids.shuffle.ucx.bounceBuffers.device.count" -> "128",
-          "spark.rapids.shuffle.ucx.bounceBuffers.size" -> "8MB",
-          "spark.rapids.shuffle.transport.maxReceiveInflightBytes"-> "4GB",
-          "spark.rapids.shuffle.ucx.useWakeup" -> "false",
-          "spark.rapids.shuffle.ucx.listenerStartPort" -> localPort,
-          "spark.rapids.memory.gpu.allocFraction" -> "0.3",
-          "spark.rapids.memory.gpu.minAllocFraction"->"0.1"))
+          "spark.rapids.shuffle.ucx.listenerStartPort" -> localPort))
 
     GpuDeviceManager.initializeMemory(None, Some(rapidsConf))
 
@@ -180,15 +180,16 @@ class UCXBench(
 
 object UCXBench extends Logging {
   def main(args: Array[String]): Unit = {
-    val isServer = args(0) == "-s"
-    val localHost = args(1)
-    val localPort = args(2)
-    val peerHost = if (isServer) null else args(3)
-    val peerPort = if (isServer) null else args(4)
-    val maxInFlight: Integer = if (isServer) null else args(5).toInt
+    val configPath = args(0)
+    val isServer = args(1) == "-s"
+    val localHost = args(2)
+    val localPort = args(3)
+    val peerHost = if (isServer) null else args(4)
+    val peerPort = if (isServer) null else args(5)
+    val maxInFlight: Integer = if (isServer) null else args(6).toInt
     val b = 
       ShimLoader.newUCXShuffleBench(
-        localHost, localPort, peerHost, peerPort, maxInFlight)
+        configPath, localHost, localPort, peerHost, peerPort, maxInFlight)
         .asInstanceOf[UCXBench]
     b.start()
   }

@@ -332,6 +332,7 @@ object ShimLoader {
   }
 
   def newUCXShuffleBench(
+    configPath: String,
     localHost: String,
     localPort: String,
     peerHost: String,
@@ -345,8 +346,15 @@ object ShimLoader {
       classOf[java.lang.String],
       classOf[java.lang.String],
       classOf[java.lang.String],
+      classOf[java.lang.String],
       classOf[java.lang.Integer])
-      .newInstance(localHost, localPort, peerHost, peerPort, maxInFlight)
+      .newInstance(
+        configPath, 
+        localHost, 
+        localPort, 
+        peerHost, 
+        peerPort, 
+        maxInFlight)
   }
 
   def newDriverPlugin(): DriverPlugin = {
