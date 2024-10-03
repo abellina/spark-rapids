@@ -1282,7 +1282,6 @@ This will force full Scala code rebuild in downstream modules.
                             <arg>-explaintypes</arg>
                             <arg>-Xlint:missing-interpolator</arg>
                             <!-- #if scala-2.12 -->
-                            <arg>-Ywarn-unused:imports,locals,patvars,privates</arg>
                             <arg>-Yno-adapted-args</arg>
                             <arg>-Xfatal-warnings</arg>
                             <!-- #endif scala-2.12 -->
