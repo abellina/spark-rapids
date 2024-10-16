@@ -18,17 +18,14 @@ package com.nvidia.spark.rapids.shuffle.ucx
 
 import java.nio.ByteBuffer
 import java.util.concurrent._
-
 import scala.collection.mutable
 import scala.collection.mutable.ArrayBuffer
-
-import ai.rapids.cudf.{BaseDeviceMemoryBuffer, CudaFabricMemoryBuffer, CudaMemoryBuffer, DeviceMemoryBuffer, HostMemoryBuffer, MemoryBuffer}
+import ai.rapids.cudf.{BaseDeviceMemoryBuffer, Cuda, CudaFabricMemoryBuffer, CudaMemoryBuffer, DeviceMemoryBuffer, HostMemoryBuffer, MemoryBuffer, Rmm, RmmCudaAsyncMemoryResource}
 import com.nvidia.spark.rapids.{GpuDeviceManager, HashedPriorityQueue, RapidsConf}
 import com.nvidia.spark.rapids.ThreadFactoryBuilder
 import com.nvidia.spark.rapids.jni.RmmSpark
 import com.nvidia.spark.rapids.shuffle._
 import com.nvidia.spark.rapids.shuffle.{BounceBufferManager, BufferReceiveState, ClientConnection, PendingTransferRequest, RapidsShuffleClient, RapidsShuffleRequestHandler, RapidsShuffleServer, RapidsShuffleTransport, RefCountedDirectByteBuffer}
-
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.rapids.execution.TrampolineUtil
 import org.apache.spark.storage.BlockManagerId
@@ -111,6 +108,8 @@ class UCXShuffleTransport(shuffleServerId: BlockManagerId, rapidsConf: RapidsCon
     }
   }
 
+  var deviceBBPool: RmmCudaAsyncMemoryResource = null
+
   /**
    * Initialize the bounce buffer pools that are to be used to send and receive data against UCX
    *
@@ -131,8 +130,11 @@ class UCXShuffleTransport(shuffleServerId: BlockManagerId, rapidsConf: RapidsCon
       deviceNumBuffers: Int,
       hostNumBuffers: Int): Unit = {
 
+    val totalSize = bounceBufferSize * deviceNumBuffers
+    deviceBBPool = new RmmCudaAsyncMemoryResource(totalSize, totalSize, true)
+
     val deviceAllocator: Long => BaseDeviceMemoryBuffer = (size: Long) => {
-      CudaFabricMemoryBuffer.allocate(size)
+      Rmm.allocFromResource(deviceBBPool, size, Cuda.DEFAULT_STREAM)
       //// CUDA async allocator is not compatible with GPUDirectRDMA, so need to use `cudaMalloc`.
       //if (rapidsConf.rmmPool.equalsIgnoreCase("ASYNC")) {
       //  CudaMemoryBuffer.allocate(size)
