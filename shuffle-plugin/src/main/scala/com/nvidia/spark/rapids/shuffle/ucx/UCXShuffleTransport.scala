@@ -132,11 +132,11 @@ class UCXShuffleTransport(shuffleServerId: BlockManagerId, rapidsConf: RapidsCon
       useFabric: Boolean): Unit = {
 
     val totalSize = bounceBufferSize * deviceNumBuffers
-    deviceBBPool = new RmmCudaAsyncMemoryResource(totalSize, totalSize, true)
+    //deviceBBPool = new RmmCudaAsyncMemoryResource(totalSize, totalSize, true)
 
     val deviceAllocator: Long => BaseDeviceMemoryBuffer = (size: Long) => {
       if (useFabric) {
-        Cuda.allocFabric(size)
+        ai.rapids.cudf.CudaFabricMemoryBuffer.allocate(size)
       } else {
         if (rapidsConf.rmmPool.equalsIgnoreCase("ASYNC")) {
           CudaMemoryBuffer.allocate(size)
