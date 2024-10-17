@@ -129,28 +129,31 @@ class UCXShuffleTransport(shuffleServerId: BlockManagerId, rapidsConf: RapidsCon
       bounceBufferSize: Long,
       deviceNumBuffers: Int,
       hostNumBuffers: Int,
-      useFabric: Boolean): Unit = {
+      fabricType: String): Unit = {
 
-    val totalSize = bounceBufferSize * deviceNumBuffers
-    //deviceBBPool = new RmmCudaAsyncMemoryResource(totalSize, totalSize, true)
+
+
 
     val deviceAllocator: Long => BaseDeviceMemoryBuffer = (size: Long) => {
-      if (useFabric) {
+      if (fabricType.equalsIgnoreCase("fabric")) {
+        logInfo("using CudaFabricMemoryBuffer")
         ai.rapids.cudf.CudaFabricMemoryBuffer.allocate(size)
+      } else if (fabricType.equalsIgnoreCase("fabric-pooled")) {
+        logInfo("using fabric RMM pool")
+        val totalSize = bounceBufferSize * deviceNumBuffers
+        if (deviceBBPool == null) {
+          deviceBBPool = new RmmCudaAsyncMemoryResource(totalSize, totalSize, true)
+        }
+        Rmm.allocFromResource(deviceBBPool, size, Cuda.DEFAULT_STREAM)
       } else {
         if (rapidsConf.rmmPool.equalsIgnoreCase("ASYNC")) {
+          logInfo("using CudaMemoryBuffer")
           CudaMemoryBuffer.allocate(size)
         } else {
+          logInfo("using buffer from regular cudaMalloc pool")
           DeviceMemoryBuffer.allocate(size)
         }
       }
-      //Rmm.allocFromResource(deviceBBPool, size, Cuda.DEFAULT_STREAM)
-      //// CUDA async allocator is not compatible with GPUDirectRDMA, so need to use `cudaMalloc`.
-      //if (rapidsConf.rmmPool.equalsIgnoreCase("ASYNC")) {
-      //  CudaMemoryBuffer.allocate(size)
-      //} else {
-      //  DeviceMemoryBuffer.allocate(size)
-      //}
     }
 
     deviceSendBuffMgr =
