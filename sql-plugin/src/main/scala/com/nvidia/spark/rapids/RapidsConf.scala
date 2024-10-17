@@ -1796,6 +1796,14 @@ val GPU_COREDUMP_PIPE_PATTERN = conf("spark.rapids.gpu.coreDump.pipePattern")
     .integerConf
     .createWithDefault(0)
 
+  val SHUFFLE_UCX_BOUNCE_BUFFERS_USE_FABRIC =
+    conf("spark.rapids.shuffle.ucx.bounceBuffers.useFabric")
+      .doc("whether to request fabric handles for device bounce buffers")
+      .internal()
+      .startupOnly()
+      .booleanConf
+      .createWithDefault(true)
+
   val SHUFFLE_UCX_BOUNCE_BUFFERS_SIZE = conf("spark.rapids.shuffle.ucx.bounceBuffers.size")
     .doc("The size of bounce buffer to use in bytes. Note that this size will be the same " +
       "for device and host memory")
@@ -3011,6 +3019,8 @@ class RapidsConf(conf: Map[String, String]) extends Logging {
     SHUFFLE_TRANSPORT_MAX_RECEIVE_INFLIGHT_BYTES)
 
   lazy val shuffleUcxActiveMessagesForceRndv: Boolean = get(SHUFFLE_UCX_ACTIVE_MESSAGES_FORCE_RNDV)
+
+  lazy val shuffleUcxBounceBuffersUseFabric: Boolean = get(SHUFFLE_UCX_BOUNCE_BUFFERS_USE_FABRIC)
 
   lazy val shuffleUcxUseWakeup: Boolean = get(SHUFFLE_UCX_USE_WAKEUP)
 

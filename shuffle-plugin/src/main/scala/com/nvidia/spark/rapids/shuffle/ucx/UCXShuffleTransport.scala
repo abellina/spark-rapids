@@ -71,7 +71,7 @@ class UCXShuffleTransport(shuffleServerId: BlockManagerId, rapidsConf: RapidsCon
     ucxImpl.init()
 
     initBounceBufferPools(bounceBufferSize,
-      deviceNumBuffers, hostNumBuffers)
+      deviceNumBuffers, hostNumBuffers, rapidsConf.shuffleUcxBounceBuffersUseFabric)
 
     // Perform transport (potentially IB) registration early
     // NOTE: on error we log and close things, which should fail other parts of the job in a bad
@@ -128,13 +128,23 @@ class UCXShuffleTransport(shuffleServerId: BlockManagerId, rapidsConf: RapidsCon
   def initBounceBufferPools(
       bounceBufferSize: Long,
       deviceNumBuffers: Int,
-      hostNumBuffers: Int): Unit = {
+      hostNumBuffers: Int,
+      useFabric: Boolean): Unit = {
 
     val totalSize = bounceBufferSize * deviceNumBuffers
     deviceBBPool = new RmmCudaAsyncMemoryResource(totalSize, totalSize, true)
 
     val deviceAllocator: Long => BaseDeviceMemoryBuffer = (size: Long) => {
-      Rmm.allocFromResource(deviceBBPool, size, Cuda.DEFAULT_STREAM)
+      if (useFabric) {
+        Cuda.allocFabric(size)
+      } else {
+        if (rapidsConf.rmmPool.equalsIgnoreCase("ASYNC")) {
+          CudaMemoryBuffer.allocate(size)
+        } else {
+          DeviceMemoryBuffer.allocate(size)
+        }
+      }
+      //Rmm.allocFromResource(deviceBBPool, size, Cuda.DEFAULT_STREAM)
       //// CUDA async allocator is not compatible with GPUDirectRDMA, so need to use `cudaMalloc`.
       //if (rapidsConf.rmmPool.equalsIgnoreCase("ASYNC")) {
       //  CudaMemoryBuffer.allocate(size)
