@@ -140,7 +140,7 @@ class UCXShuffleTransport(shuffleServerId: BlockManagerId, rapidsConf: RapidsCon
         ai.rapids.cudf.CudaFabricMemoryBuffer.allocate(size)
       } else if (fabricType.equalsIgnoreCase("fabric-pooled")) {
         logInfo("using fabric RMM pool")
-        val totalSize = bounceBufferSize * deviceNumBuffers
+        val totalSize = bounceBufferSize * deviceNumBuffers * 2
         if (deviceBBPool == null) {
           deviceBBPool = new RmmCudaAsyncMemoryResource(totalSize, totalSize, true)
         }
