@@ -20,11 +20,9 @@ import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.function.IntUnaryOperator
-
-import ai.rapids.cudf.DeviceMemoryBuffer
+import ai.rapids.cudf.{DeviceMemoryBuffer, NvtxColor, NvtxRange}
 import com.nvidia.spark.rapids.Arm.withResource
 import com.nvidia.spark.rapids.format.TableMeta
-
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.rapids.RapidsDiskBlockManager
 
@@ -77,16 +75,18 @@ class ShuffleReceivedBufferCatalog(
       tableMeta: TableMeta,
       initialSpillPriority: Long,
       needsSync: Boolean): RapidsBufferHandle = {
-    val bufferId = nextShuffleReceivedBufferId()
-    tableMeta.bufferMeta.mutateId(bufferId.tableId)
-    // when we call `addBuffer` the store will incRefCount
-    withResource(buffer) { _ =>
-      catalog.addBuffer(
-        bufferId,
-        buffer,
-        tableMeta,
-        initialSpillPriority,
-        needsSync)
+    withResource(new NvtxRange("addBuffer", NvtxColor.GREEN)) { _ =>
+      val bufferId = nextShuffleReceivedBufferId()
+      tableMeta.bufferMeta.mutateId(bufferId.tableId)
+      // when we call `addBuffer` the store will incRefCount
+      withResource(buffer) { _ =>
+        catalog.addBuffer(
+          bufferId,
+          buffer,
+          tableMeta,
+          initialSpillPriority,
+          needsSync)
+      }
     }
   }
 
@@ -119,9 +119,11 @@ class ShuffleReceivedBufferCatalog(
    * @param handle buffer handle
    */
   def removeBuffer(handle: RapidsBufferHandle): Unit = {
-    val id = handle.id
-    tableMap.remove(id.tableId)
-    handle.close()
+    withResource(new NvtxRange("removeBuffer", NvtxColor.ORANGE)) { _ =>
+      val id = handle.id
+      tableMap.remove(id.tableId)
+      handle.close()
+    }
   }
 }
 
