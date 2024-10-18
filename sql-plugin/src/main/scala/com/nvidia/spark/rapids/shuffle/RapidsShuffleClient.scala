@@ -393,7 +393,7 @@ class RapidsShuffleClient(
                 buffMetas.foreach { consumed: ConsumedBatchFromBounceBuffer =>
                   val handle = track(consumed.contigBuffer, consumed.meta)
                   if (!consumed.handler.batchReceived(handle)) {
-                    withResource(new NvtxRane("remove from catalog", NvtxColor.BLUE)) { _ =>
+                    withResource(new NvtxRange("remove from catalog", NvtxColor.BLUE)) { _ =>
                       catalog.removeBuffer(handle)
                     }
                     numBatchesRejected += 1
