@@ -291,6 +291,7 @@ class RapidsShuffleClient(
         i.tableMeta.bufferMeta().id()
       }))
 
+    // TODO: instead of request, just send a transfer request and be done.
     connection.request(MessageType.TransferRequest, transferReq.acquire(), withResource(_) { tx =>
       withResource(transferReq) { _ =>
         tx.getStatus match {
