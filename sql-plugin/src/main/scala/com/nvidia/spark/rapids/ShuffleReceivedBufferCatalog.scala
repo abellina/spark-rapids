@@ -49,13 +49,15 @@ class ShuffleReceivedBufferCatalog(
 
   /** Allocate a new shuffle buffer identifier and update the shuffle block mapping. */
   private def nextShuffleReceivedBufferId(): ShuffleReceivedBufferId = {
-    val tableId = tableIdCounter.getAndUpdate(ShuffleReceivedBufferCatalog.TABLE_ID_UPDATER)
-    val id = ShuffleReceivedBufferId(tableId)
-    val prev = tableMap.put(tableId, id)
-    if (prev != null) {
-      throw new IllegalStateException(s"table ID $tableId is already in use")
+    withResource(new NvtxRange("nextShuffleReceiveBufferId", NvtxColor.DARK_GREEN)) { _ =>
+      val tableId = tableIdCounter.getAndUpdate(ShuffleReceivedBufferCatalog.TABLE_ID_UPDATER)
+      val id = ShuffleReceivedBufferId(tableId)
+      val prev = tableMap.put(tableId, id)
+      if (prev != null) {
+        throw new IllegalStateException(s"table ID $tableId is already in use")
+      }
+      id
     }
-    id
   }
 
   /**
@@ -77,7 +79,9 @@ class ShuffleReceivedBufferCatalog(
       needsSync: Boolean): RapidsBufferHandle = {
     withResource(new NvtxRange("addBuffer", NvtxColor.GREEN)) { _ =>
       val bufferId = nextShuffleReceivedBufferId()
-      tableMeta.bufferMeta.mutateId(bufferId.tableId)
+      withResource(new NvtxRange("mutateId", NvtxColor.YELLOW)) { _ =>
+        tableMeta.bufferMeta.mutateId(bufferId.tableId)
+      }
       // when we call `addBuffer` the store will incRefCount
       withResource(buffer) { _ =>
         catalog.addBuffer(
