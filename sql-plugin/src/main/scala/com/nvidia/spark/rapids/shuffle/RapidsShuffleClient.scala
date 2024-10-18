@@ -380,6 +380,8 @@ class RapidsShuffleClient(
             withResource(new NvtxRange("Buffer Callback", NvtxColor.RED)) { _ =>
               // consume buffers, which will non empty for batches that are ready
               // to be handed off to the catalog
+              // TODO: interact with bufferreceivestate once and get everything you need
+              // TODO: find the extra sync after consumeWindow, before buffercallback finishes.
               val buffMetas = bufferReceiveState.consumeWindow()
 
               // the number of batches successfully received that the requesting iterator
@@ -387,13 +389,17 @@ class RapidsShuffleClient(
               var numBatchesRejected = 0
 
               // hand buffer off to the catalog
-              buffMetas.foreach { consumed: ConsumedBatchFromBounceBuffer =>
-                val handle = track(consumed.contigBuffer, consumed.meta)
-                if (!consumed.handler.batchReceived(handle)) {
-                  catalog.removeBuffer(handle)
-                  numBatchesRejected += 1
+              withResource(new NvtxRange("hand off buffer to catalog", NvtxColor.CYAN)) { _ =>
+                buffMetas.foreach { consumed: ConsumedBatchFromBounceBuffer =>
+                  val handle = track(consumed.contigBuffer, consumed.meta)
+                  if (!consumed.handler.batchReceived(handle)) {
+                    withResource(new NvtxRane("remove from catalog", NvtxColor.BLUE)) { _ =>
+                      catalog.removeBuffer(handle)
+                    }
+                    numBatchesRejected += 1
+                  }
+                  transport.doneBytesInFlight(consumed.contigBuffer.getLength)
                 }
-                transport.doneBytesInFlight(consumed.contigBuffer.getLength)
               }
 
               if (numBatchesRejected > 0) {
@@ -404,7 +410,9 @@ class RapidsShuffleClient(
               if (!bufferReceiveState.hasMoreBlocks) {
                 logDebug(s"BufferReceiveState: " +
                   s"${TransportUtils.toHex(bufferReceiveState.id)} is DONE, closing.")
-                bufferReceiveState.close()
+                withResource(new NvtxRange("closing", NvtxColor.YELLOW)) { _ =>
+                  bufferReceiveState.close()
+                }
               } else {
                 logDebug(s"BufferReceiveState: " +
                   s"${TransportUtils.toHex(bufferReceiveState.id)} is NOT done, continuing.")
