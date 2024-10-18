@@ -397,22 +397,13 @@ class RapidsShuffleClient(
                     transport.doneBytesInFlight(consumed.contigBuffer.getLength)
                   }
                 }
-              }
-
-             //if (numBatchesRejected > 0) {
-             //  logDebug(s"Removed ${numBatchesRejected} batches that were received after " +
-             //    s"tasks completed.")
-             //}
-
-              if (!bufferReceiveState.hasMoreBlocks) {
-                logDebug(s"BufferReceiveState: " +
-                  s"${TransportUtils.toHex(bufferReceiveState.id)} is DONE, closing.")
-                withResource(new NvtxRange("closing", NvtxColor.YELLOW)) { _ =>
-                  bufferReceiveState.close()
+                if (!bufferReceiveState.hasMoreBlocks) {
+                  logDebug(s"BufferReceiveState: " +
+                    s"${TransportUtils.toHex(bufferReceiveState.id)} is DONE, closing.")
+                  withResource(new NvtxRange("closing", NvtxColor.YELLOW)) { _ =>
+                    bufferReceiveState.close()
+                  }
                 }
-              } else {
-                logDebug(s"BufferReceiveState: " +
-                  s"${TransportUtils.toHex(bufferReceiveState.id)} is NOT done, continuing.")
               }
             }
           case TransactionStatus.Error =>
