@@ -16,15 +16,12 @@
 
 package com.nvidia.spark.rapids.shuffle
 
-import java.util.concurrent.{ConcurrentHashMap, Executor}
-
+import java.util.concurrent.{ConcurrentHashMap, Executor, Executors}
 import scala.collection.mutable.ArrayBuffer
-
 import ai.rapids.cudf.{DeviceMemoryBuffer, NvtxColor, NvtxRange}
 import com.nvidia.spark.rapids._
 import com.nvidia.spark.rapids.Arm.withResource
 import com.nvidia.spark.rapids.format.{MetadataResponse, TableMeta, TransferState}
-
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.rapids.GpuShuffleEnv
 import org.apache.spark.storage.ShuffleBlockBatchId
@@ -364,6 +361,8 @@ class RapidsShuffleClient(
     transport.cancelPending(handler)
   }
 
+  val handleThread = Executors.newSingleThreadExecutor()
+
   /**
    * This function handles data received in `bounceBuffers`. The data should be copied out
    * of the buffers, and the function should call into `bufferReceiveState` to advance its
@@ -386,22 +385,24 @@ class RapidsShuffleClient(
 
               // the number of batches successfully received that the requesting iterator
               // rejected (limit case)
-              var numBatchesRejected = 0
+              //var numBatchesRejected = 0
 
               // hand buffer off to the catalog
-              withResource(new NvtxRange("hand off buffer to catalog", NvtxColor.CYAN)) { _ =>
-                buffMetas.foreach { consumed: ConsumedBatchFromBounceBuffer =>
-                  if (!consumed.handler.batchReceived(consumed.contigBuffer, consumed.meta)) {
-                    numBatchesRejected += 1
+              handleThread.execute { () =>
+                withResource(new NvtxRange("hand off buffer to catalog", NvtxColor.CYAN)) { _ =>
+                  buffMetas.foreach { consumed: ConsumedBatchFromBounceBuffer =>
+                    if (!consumed.handler.batchReceived(consumed.contigBuffer, consumed.meta)) {
+                      //numBatchesRejected += 1
+                    }
+                    transport.doneBytesInFlight(consumed.contigBuffer.getLength)
                   }
-                  transport.doneBytesInFlight(consumed.contigBuffer.getLength)
                 }
               }
 
-              if (numBatchesRejected > 0) {
-                logDebug(s"Removed ${numBatchesRejected} batches that were received after " +
-                  s"tasks completed.")
-              }
+             //if (numBatchesRejected > 0) {
+             //  logDebug(s"Removed ${numBatchesRejected} batches that were received after " +
+             //    s"tasks completed.")
+             //}
 
               if (!bufferReceiveState.hasMoreBlocks) {
                 logDebug(s"BufferReceiveState: " +
