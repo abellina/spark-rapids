@@ -18,15 +18,12 @@ package com.nvidia.spark.rapids
 
 import java.nio.channels.WritableByteChannel
 import java.util.concurrent.ConcurrentHashMap
-
 import scala.collection.mutable
-
-import ai.rapids.cudf.{ColumnVector, Cuda, DeviceMemoryBuffer, HostMemoryBuffer, MemoryBuffer, Table}
+import ai.rapids.cudf.{ColumnVector, Cuda, DeviceMemoryBuffer, HostMemoryBuffer, MemoryBuffer, NvtxColor, NvtxRange, Table}
 import com.nvidia.spark.rapids.Arm._
 import com.nvidia.spark.rapids.RapidsPluginImplicits.AutoCloseableSeq
 import com.nvidia.spark.rapids.StorageTier.StorageTier
 import com.nvidia.spark.rapids.format.TableMeta
-
 import org.apache.spark.sql.rapids.GpuTaskMetrics
 import org.apache.spark.sql.rapids.storage.RapidsStorageUtils
 import org.apache.spark.sql.types.DataType
@@ -106,12 +103,14 @@ class RapidsDeviceMemoryStore(
       initialSpillPriority: Long,
       needsSync: Boolean): RapidsBuffer = {
     buffer.incRefCount()
-    val rapidsBuffer = new RapidsDeviceMemoryBuffer(
-      id,
-      buffer.getLength,
-      tableMeta,
-      buffer,
-      initialSpillPriority)
+    val rapidsBuffer = withResource(new NvtxRange("create rdb", NvtxColor.PURPLE)) { _ =>
+      new RapidsDeviceMemoryBuffer(
+        id,
+        buffer.getLength,
+        tableMeta,
+        buffer,
+        initialSpillPriority)
+    }
     freeOnExcept(rapidsBuffer) { _ =>
       logDebug(s"Adding receive side table for: [id=$id, size=${buffer.getLength}, " +
         s"uncompressed=${rapidsBuffer.meta.bufferMeta.uncompressedSize}, " +

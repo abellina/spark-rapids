@@ -252,8 +252,12 @@ abstract class RapidsBufferStore(val tier: StorageTier)
 
   /** Update bookkeeping for a new buffer */
   protected def addBuffer(buffer: RapidsBufferBase): Unit = {
-    buffers.add(buffer)
-    buffer.updateSpillability()
+    withResource(new NvtxRange("addBuffer in store", NvtxColor.WHITE)) { _ =>
+      buffers.add(buffer)
+    }
+    withResource(new NvtxRange("update spillability", NvtxColor.CYAN)) { _ =>
+      buffer.updateSpillability()
+    }
   }
 
   /**
