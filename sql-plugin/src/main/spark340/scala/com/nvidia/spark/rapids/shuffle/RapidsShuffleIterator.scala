@@ -28,16 +28,14 @@ spark-rapids-shim-json-lines ***/
 package com.nvidia.spark.rapids.shuffle
 
 import java.util.concurrent.{LinkedBlockingQueue, TimeUnit}
-
 import scala.collection
 import scala.collection.mutable
-
-import ai.rapids.cudf.{NvtxColor, NvtxRange}
+import ai.rapids.cudf.{DeviceMemoryBuffer, NvtxColor, NvtxRange}
 import com.nvidia.spark.rapids.{GpuSemaphore, RapidsBuffer, RapidsBufferHandle, RapidsConf, ShuffleReceivedBufferCatalog}
 import com.nvidia.spark.rapids.Arm.withResource
 import com.nvidia.spark.rapids.ScalableTaskCompletion.onTaskCompletion
+import com.nvidia.spark.rapids.format.TableMeta
 import com.nvidia.spark.rapids.jni.RmmSpark
-
 import org.apache.spark.TaskContext
 import org.apache.spark.internal.Logging
 import org.apache.spark.shuffle.rapids.{RapidsShuffleFetchFailedException, RapidsShuffleTimeoutException}
@@ -239,11 +237,30 @@ class RapidsShuffleIterator(
           def clientDone: Boolean = clientExpectedBatches > 0 &&
             clientExpectedBatches == clientResolvedBatches
 
-          def batchReceived(handle: RapidsBufferHandle): Boolean = {
+          private def track(buffer: DeviceMemoryBuffer, meta: TableMeta): RapidsBufferHandle = {
+            if (buffer != null) {
+              // add the buffer to the catalog so it is available for spill
+              catalog.addBuffer(
+                buffer,
+                meta,
+                SpillPriorities.INPUT_FROM_SHUFFLE_PRIORITY,
+                // set needsSync to false because we already have stream synchronized after
+                // consuming the bounce buffer, so we know these buffers are synchronized
+                // w.r.t. the CPU
+                needsSync = false)
+            } else {
+              // no device data, just tracking metadata
+              catalog.addDegenerateRapidsBuffer(
+                meta)
+            }
+          }
+
+          def batchReceived(buffer: DeviceMemoryBuffer, tableMeta: TableMeta): Boolean = {
             resolvedBatches.synchronized {
               if (taskComplete) {
                 false
               } else {
+                val handle = track(buffer, tableMeta)
                 batchesInFlight = batchesInFlight - 1
                 withResource(new NvtxRange(s"BATCH RECEIVED", NvtxColor.DARK_GREEN)) { _ =>
                   if (markedAsDone) {

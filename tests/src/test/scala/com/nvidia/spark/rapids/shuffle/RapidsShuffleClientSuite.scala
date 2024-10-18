@@ -135,7 +135,7 @@ class RapidsShuffleClientSuite extends RapidsShuffleTestHelper {
     verify(mockTransport, times(0)).queuePending(any())
 
     // ensure our handler (iterator) received 3 batches
-    verify(mockHandler, times(numBatches)).batchReceived(any())
+    verify(mockHandler, times(numBatches)).batchReceived(any(), any())
   }
 
   private def doTestErrorOrCancelledMetadataFetch(status: TransactionStatus.Value): Unit = {
@@ -252,7 +252,7 @@ class RapidsShuffleClientSuite extends RapidsShuffleTestHelper {
         // we will hand off a `DeviceMemoryBuffer` to the catalog
         val dmbCaptor = ArgumentCaptor.forClass(classOf[DeviceMemoryBuffer])
         val tmCaptor = ArgumentCaptor.forClass(classOf[TableMeta])
-        verify(client, times(1)).track(any[DeviceMemoryBuffer](), tmCaptor.capture())
+        //verify(client, times(1)).track(any[DeviceMemoryBuffer](), tmCaptor.capture())
         verifyTableMeta(tableMeta, tmCaptor.getValue.asInstanceOf[TableMeta])
         verify(mockCatalog, times(1))
             .addBuffer(dmbCaptor.capture(), any(), any(), any())
@@ -279,7 +279,7 @@ class RapidsShuffleClientSuite extends RapidsShuffleTestHelper {
     RmmSpark.removeAllCurrentThreadAssociation()
     when(mockHandler.getTaskIds).thenReturn(Array[Long](1))
     when(mockTransaction.getStatus).thenReturn(TransactionStatus.Success)
-    when(mockHandler.batchReceived(any())).thenReturn(false) // reject incoming batches
+    when(mockHandler.batchReceived(any(), any())).thenReturn(false) // reject incoming batches
 
     val numRows = 100
     val tableMeta =
@@ -307,7 +307,7 @@ class RapidsShuffleClientSuite extends RapidsShuffleTestHelper {
       // we will hand off a `DeviceMemoryBuffer` to the catalog
       val dmbCaptor = ArgumentCaptor.forClass(classOf[DeviceMemoryBuffer])
       val tmCaptor = ArgumentCaptor.forClass(classOf[TableMeta])
-      verify(client, times(1)).track(any[DeviceMemoryBuffer](), tmCaptor.capture())
+      //verify(client, times(1)).track(any[DeviceMemoryBuffer](), tmCaptor.capture())
       verifyTableMeta(tableMeta, tmCaptor.getValue.asInstanceOf[TableMeta])
       verify(mockCatalog, times(1))
           .addBuffer(dmbCaptor.capture(), any(), any(), any())
@@ -361,7 +361,7 @@ class RapidsShuffleClientSuite extends RapidsShuffleTestHelper {
       // we will hand off a `DeviceMemoryBuffer` to the catalog
       val dmbCaptor = ArgumentCaptor.forClass(classOf[DeviceMemoryBuffer])
       val tmCaptor = ArgumentCaptor.forClass(classOf[TableMeta])
-      verify(client, times(5)).track(any[DeviceMemoryBuffer](), tmCaptor.capture())
+      //verify(client, times(5)).track(any[DeviceMemoryBuffer](), tmCaptor.capture())
       tableMetas.zipWithIndex.foreach { case (tm, ix) =>
         verifyTableMeta(tm, tmCaptor.getAllValues().get(ix).asInstanceOf[TableMeta])
       }
@@ -418,7 +418,7 @@ class RapidsShuffleClientSuite extends RapidsShuffleTestHelper {
       // we will hand off a `DeviceMemoryBuffer` to the catalog
       val dmbCaptor = ArgumentCaptor.forClass(classOf[DeviceMemoryBuffer])
       val tmCaptor = ArgumentCaptor.forClass(classOf[TableMeta])
-      verify(client, times(20)).track(any[DeviceMemoryBuffer](), tmCaptor.capture())
+      //verify(client, times(20)).track(any[DeviceMemoryBuffer](), tmCaptor.capture())
       tableMetas.zipWithIndex.foreach { case (tm, ix) =>
         verifyTableMeta(tm, tmCaptor.getAllValues().get(ix).asInstanceOf[TableMeta])
       }

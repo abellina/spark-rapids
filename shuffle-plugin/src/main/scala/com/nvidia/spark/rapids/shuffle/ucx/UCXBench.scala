@@ -157,9 +157,9 @@ class UCXBench(
         override def start(expectedBatches: Int): Unit = {
         }
 
-        override def batchReceived(handle: RapidsBufferHandle): Boolean = {
+        override def batchReceived(buffer: DeviceMemoryBuffer, tableMeta: TableMeta): Boolean = {
           received.addAndGet(batchSize)
-          handle.close()
+          buffer.close()
           reqsInFlight.poll()
           true
         }

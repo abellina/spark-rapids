@@ -47,7 +47,7 @@ trait RapidsShuffleFetchHandler {
    * @return a boolean that lets the caller know the batch was accepted (true), or
    *         rejected (false), in which case the caller should dispose of the batch.
    */
-  def batchReceived(handle: RapidsBufferHandle): Boolean
+  def batchReceived(buffer: DeviceMemoryBuffer, tableMeta: TableMeta): Boolean
 
   /**
    * Called when the transport layer is not able to handle a fetch error for metadata
@@ -345,7 +345,7 @@ class RapidsShuffleClient(
       } else {
         // Degenerate buffer (no device data) so no more data to request.
         // We need to trigger call in iterator, otherwise this batch is never handled.
-        handler.batchReceived(track(null, tableMeta))
+        handler.batchReceived(null, tableMeta)
       }
     }
 
@@ -391,11 +391,7 @@ class RapidsShuffleClient(
               // hand buffer off to the catalog
               withResource(new NvtxRange("hand off buffer to catalog", NvtxColor.CYAN)) { _ =>
                 buffMetas.foreach { consumed: ConsumedBatchFromBounceBuffer =>
-                  val handle = track(consumed.contigBuffer, consumed.meta)
-                  if (!consumed.handler.batchReceived(handle)) {
-                    withResource(new NvtxRange("remove from catalog", NvtxColor.BLUE)) { _ =>
-                      catalog.removeBuffer(handle)
-                    }
+                  if (!consumed.handler.batchReceived(consumed.contigBuffer, consumed.meta)) {
                     numBatchesRejected += 1
                   }
                   transport.doneBytesInFlight(consumed.contigBuffer.getLength)
