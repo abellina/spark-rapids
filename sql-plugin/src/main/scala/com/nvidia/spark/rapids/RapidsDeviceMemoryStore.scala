@@ -83,6 +83,7 @@ class RapidsDeviceMemoryStore
               catalog,
               base)
           }
+          // TODO: AB: when do we add this buffer to the device store?
         }
       }
     }
@@ -209,8 +210,7 @@ class RapidsDeviceMemoryStore
                     override val base: RapidsMemoryBuffer)
     extends RapidsBufferBase(
       id,
-      spillPriority,
-      catalog)
+      spillPriority)
       with RapidsBufferChannelWritable {
 
     override def getCopyIterator(stream: Cuda.Stream): RapidsBufferCopyIterator =
@@ -313,7 +313,8 @@ class RapidsDeviceMemoryStore
      *
      * @param sparkTypes the spark data types the batch should have
      */
-    override def getColumnarBatch(sparkTypes: Array[DataType], stream: Cuda.Stream): ColumnarBatch = {
+    override def getColumnarBatch(
+        sparkTypes: Array[DataType], stream: Cuda.Stream): ColumnarBatch = {
       columnSpillability.clear()
       setSpillable(this, false)
       GpuColumnVector.from(table, sparkTypes)
@@ -437,7 +438,7 @@ class RapidsDeviceMemoryStore
                                          spillPriority: Long,
                                          catalog: RapidsBufferCatalog,
                                          override val base: RapidsMemoryBuffer)
-    extends RapidsBufferBaseWithMeta(id, meta, spillPriority, catalog)
+    extends RapidsBufferBaseWithMeta(id, meta, spillPriority)
       with MemoryBuffer.EventHandler
       with RapidsBufferChannelWritable
       with CopyableRapidsBuffer {
@@ -545,7 +546,7 @@ class RapidsDeviceMemoryStore
                                  spillPriority: Long,
                                  catalog: RapidsBufferCatalog,
                                  override val base: RapidsMemoryBuffer)
-    extends RapidsBufferBase(id, spillPriority, catalog)
+    extends RapidsBufferBase(id, spillPriority)
       with MemoryBuffer.EventHandler
       with RapidsBufferChannelWritable {
 

@@ -308,7 +308,7 @@ class RapidsHostMemoryStore(
                                 buffer: HostMemoryBuffer,
                                 catalog: RapidsBufferCatalog,
                                 override val base: RapidsMemoryBuffer)
-    extends RapidsBufferBase(id, spillPriority, catalog)
+    extends RapidsBufferBase(id, spillPriority)
       with MemoryBuffer.EventHandler
       with RapidsBufferChannelWritable {
 
@@ -410,7 +410,7 @@ class RapidsHostMemoryStore(
                                         buffer: HostMemoryBuffer,
                                         catalog: RapidsBufferCatalog,
                                         override val base: RapidsMemoryBuffer)
-    extends RapidsBufferBaseWithMeta(id, meta, spillPriority, catalog)
+    extends RapidsBufferBaseWithMeta(id, meta, spillPriority)
       with MemoryBuffer.EventHandler
       with RapidsBufferChannelWritable
       with CopyableRapidsBuffer {
@@ -585,10 +585,7 @@ class RapidsHostMemoryStore(
                                  spillPriority: Long,
                                  catalog: RapidsBufferCatalog,
                                  override val base: RapidsMemoryBuffer)
-    extends RapidsBufferBase(
-      id,
-      spillPriority,
-      catalog)
+    extends RapidsBufferBase(id, spillPriority)
       with RapidsHostBatchBuffer
       with RapidsBufferChannelWritable {
 

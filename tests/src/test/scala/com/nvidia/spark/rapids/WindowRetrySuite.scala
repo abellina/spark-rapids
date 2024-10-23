@@ -22,10 +22,10 @@ import com.nvidia.spark.rapids.jni.{GpuSplitAndRetryOOM, RmmSpark}
 import com.nvidia.spark.rapids.window._
 import org.mockito.Mockito._
 import org.scalatestplus.mockito.MockitoSugar
-
 import org.apache.spark.sql.catalyst.expressions.{Ascending, CurrentRow, ExprId, RangeFrame, RowFrame, SortOrder, UnboundedFollowing, UnboundedPreceding}
 import org.apache.spark.sql.rapids.aggregate.GpuCount
 import org.apache.spark.sql.types.{DataType, DataTypes, IntegerType, LongType}
+import org.mockito.ArgumentMatchers.any
 
 class WindowRetrySuite
     extends RmmSparkRetrySuiteBase
@@ -80,7 +80,7 @@ class WindowRetrySuite
           assertResult(4)(hostCol.getLong(row))
         }
       }
-      verify(inputBatch, times(2)).getColumnarBatch()
+      verify(inputBatch, times(2)).getColumnarBatch(any())
       verify(inputBatch, times(1)).close()
     }
   }
@@ -102,7 +102,7 @@ class WindowRetrySuite
           assertResult(row + 1)(hostCol.getLong(row))
         }
       }
-      verify(inputBatch, times(2)).getColumnarBatch()
+      verify(inputBatch, times(2)).getColumnarBatch(any())
       verify(inputBatch, times(1)).close()
     }
   }
@@ -126,7 +126,7 @@ class WindowRetrySuite
           assertResult(4)(hostCol.getLong(row))
         }
       }
-      verify(inputBatch, times(2)).getColumnarBatch()
+      verify(inputBatch, times(2)).getColumnarBatch(any())
       verify(inputBatch, times(1)).close()
     }
   }
@@ -143,7 +143,7 @@ class WindowRetrySuite
     assertThrows[GpuSplitAndRetryOOM] {
       it.next()
     }
-    verify(inputBatch, times(1)).getColumnarBatch()
+    verify(inputBatch, times(1)).getColumnarBatch(any())
     verify(inputBatch, times(1)).close()
   }
 
@@ -173,7 +173,7 @@ class WindowRetrySuite
           }
         }
       }
-      verify(inputBatch, times(2)).getColumnarBatch()
+      verify(inputBatch, times(2)).getColumnarBatch(any())
       verify(inputBatch, times(1)).close()
     }
   }

@@ -196,7 +196,7 @@ class RapidsDiskStore(val diskBlockManager: RapidsDiskBlockManager)
                          catalog: RapidsBufferCatalog,
                          override val base: RapidsMemoryBuffer,
                          diskStore: RapidsDiskStore)
-    extends RapidsBufferBase(id, spillPriority, catalog) {
+    extends RapidsBufferBase(id, spillPriority) {
 
     def getCopyIterator(stream: Cuda.Stream): RapidsBufferCopyIterator =
       new RapidsBufferCopyIterator(
@@ -283,7 +283,7 @@ class RapidsDiskStore(val diskBlockManager: RapidsDiskBlockManager)
                                  catalog: RapidsBufferCatalog,
                                  override val base: RapidsMemoryBuffer,
                                  diskStore: RapidsDiskStore)
-    extends RapidsBufferBaseWithMeta(id, meta, spillPriority, catalog)
+    extends RapidsBufferBaseWithMeta(id, meta, spillPriority)
       with CopyableRapidsBuffer {
 
     def getCopyIterator(stream: Cuda.Stream): RapidsBufferCopyIterator =

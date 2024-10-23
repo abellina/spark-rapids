@@ -394,7 +394,8 @@ class RapidsDeviceMemoryStoreSuite extends AnyFunSuite with MockitoSugar {
                   false)
               }
               withResource(catalog.acquireBuffer(handle)) { buffer =>
-                withResource(buffer.getColumnarBatch(sparkTypes, Cuda.DEFAULT_STREAM)) { actualBatch =>
+                withResource(buffer.getColumnarBatch(
+                    sparkTypes, Cuda.DEFAULT_STREAM)) { actualBatch =>
                   TestUtils.compareBatches(expectedBatch, actualBatch)
                 }
               }
@@ -496,17 +497,15 @@ class RapidsDeviceMemoryStoreSuite extends AnyFunSuite with MockitoSugar {
         bwm.id, 
         bwm.memoryUsedBytes, 
         bwm.meta, 
-        bwm.getSpillPriority,
-        catalog)
+        bwm.getSpillPriority)
     }
 
     class MockRapidsBuffer(
         override val id: RapidsBufferId,
         size: Long,
         override val meta: TableMeta,
-        val spillPriority: Long,
-        catalog: RapidsBufferCatalog)
-        extends RapidsBufferBase(id, spillPriority, catalog)
+        val spillPriority: Long)
+        extends RapidsBufferBase(id, spillPriority)
           with RapidsBufferWithMeta {
 
       override val base: RapidsMemoryBuffer = null

@@ -367,12 +367,11 @@ abstract class RapidsBufferStore(val tier: StorageTier)
   def setSpillPriority(buffer: RapidsBufferBase, newPriority: Long): Unit =
     buffers.updateSpillPriority(buffer, newPriority)
 
-  def remove(id: RapidsBufferId) = buffers.remove(id)
+  def remove(id: RapidsBufferId): Unit = buffers.remove(id)
 
   /** Base class for all buffers in this store. */
   abstract class RapidsBufferBase(override val id: RapidsBufferId,
-                                  initialSpillPriority: Long,
-                                  catalog: RapidsBufferCatalog)
+                                  initialSpillPriority: Long)
     extends RapidsBuffer with Logging {
 
     /** The storage tier for buffers in this store */
@@ -420,9 +419,7 @@ abstract class RapidsBufferStore(val tier: StorageTier)
     override def free(): Unit = synchronized {
       if (isValid) {
         isValid = false
-        // the catalog knows about all tiers, so we ask it to
-        // find the right store to remove this buffer from
-        catalog.removeFromTier(id, storageTier)
+        remove(id)
         if (refcount == 0) {
           freeBuffer()
         }
@@ -467,9 +464,8 @@ abstract class RapidsBufferStore(val tier: StorageTier)
   abstract class RapidsBufferBaseWithMeta(
       override val id: RapidsBufferId,
       _meta: TableMeta,
-      initialSpillPriority: Long,
-      catalog: RapidsBufferCatalog)
-    extends RapidsBufferBase(id, initialSpillPriority, catalog)
+      initialSpillPriority: Long)
+    extends RapidsBufferBase(id, initialSpillPriority)
       with RapidsBufferWithMeta {
     override def meta: TableMeta = _meta
 

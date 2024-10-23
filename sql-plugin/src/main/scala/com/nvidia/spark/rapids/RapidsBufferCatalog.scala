@@ -231,21 +231,23 @@ class RapidsBufferCatalog(
       buffer: MemoryBuffer,
       tableMeta: TableMeta,
       initialSpillPriority: Long,
-      needsSync: Boolean = true): RapidsBufferHandle = synchronized {
+      needsSync: Boolean = true): RapidsBufferHandle = {
     // first time we see `buffer`
-    val existing = getExistingRapidsBufferAndAcquire(buffer)
-    existing match {
-      case None =>
-        addBufferWithMeta(
-          TempSpillBufferId(),
-          buffer,
-          tableMeta,
-          initialSpillPriority,
-          needsSync)
-      case Some(rapidsBuffer) =>
-        withResource(rapidsBuffer) { _ =>
-          makeNewHandle(rapidsBuffer.base.id, initialSpillPriority)
-        }
+    buffer.synchronized {
+      val existing = getExistingRapidsBufferAndAcquire(buffer)
+      existing match {
+        case None =>
+          addBufferWithMeta(
+            TempSpillBufferId(),
+            buffer,
+            tableMeta,
+            initialSpillPriority,
+            needsSync)
+        case Some(rapidsBuffer) =>
+          withResource(rapidsBuffer) { _ =>
+            makeNewHandle(rapidsBuffer.base.id, initialSpillPriority)
+          }
+      }
     }
   }
 
@@ -326,16 +328,13 @@ class RapidsBufferCatalog(
       contigTable: ContiguousTable,
       initialSpillPriority: Long,
       needsSync: Boolean): RapidsBufferHandle = {
-    val buff = contigTable.getBuffer
-    buff.synchronized {
-      val tableMeta = MetaUtils.buildTableMeta(id.tableId, contigTable)
-      addBufferWithMeta(
-        id,
-        buff,
-        tableMeta,
-        initialSpillPriority,
-        needsSync)
-    }
+    val tableMeta = MetaUtils.buildTableMeta(id.tableId, contigTable)
+    addBufferWithMeta(
+      id,
+      contigTable.getBuffer,
+      tableMeta,
+      initialSpillPriority,
+      needsSync)
   }
 
   /**
