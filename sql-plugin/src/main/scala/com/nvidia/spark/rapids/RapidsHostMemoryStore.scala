@@ -311,7 +311,6 @@ class RapidsHostMemoryStore(
     extends RapidsBufferBase(id, spillPriority, catalog)
       with MemoryBuffer.EventHandler
       with RapidsBufferChannelWritable {
-    override val storageTier: StorageTier = StorageTier.HOST
 
     override def getHostMemoryBuffer(
         stream: Cuda.Stream): HostMemoryBuffer = synchronized {
@@ -415,7 +414,6 @@ class RapidsHostMemoryStore(
       with MemoryBuffer.EventHandler
       with RapidsBufferChannelWritable
       with CopyableRapidsBuffer {
-    override val storageTier: StorageTier = StorageTier.HOST
 
     override def getHostMemoryBuffer(
         stream: Cuda.Stream): HostMemoryBuffer = synchronized {
@@ -593,8 +591,6 @@ class RapidsHostMemoryStore(
       catalog)
       with RapidsHostBatchBuffer
       with RapidsBufferChannelWritable {
-
-    override val storageTier: StorageTier = StorageTier.HOST
 
     // By default all columns are NOT spillable since we are not the only owners of
     // the columns (the caller is holding onto a ColumnarBatch that will be closed

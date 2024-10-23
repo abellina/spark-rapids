@@ -375,6 +375,9 @@ abstract class RapidsBufferStore(val tier: StorageTier)
                                   catalog: RapidsBufferCatalog)
     extends RapidsBuffer with Logging {
 
+    /** The storage tier for buffers in this store */
+    override val storageTier: StorageTier = tier
+
     // isValid and refcount must be used with the `RapidsBufferBase` lock held
     protected[this] var isValid = true
 

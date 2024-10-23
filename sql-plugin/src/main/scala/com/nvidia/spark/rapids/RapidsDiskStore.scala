@@ -209,8 +209,6 @@ class RapidsDiskStore(val diskBlockManager: RapidsDiskBlockManager)
     // FIXME: Need to be clean up. Tracked in https://github.com/NVIDIA/spark-rapids/issues/9496
     override val memoryUsedBytes: Long = uncompressedSize
 
-    override val storageTier: StorageTier = StorageTier.DISK
-
     override def getDeviceMemoryBuffer(stream: Cuda.Stream): DeviceMemoryBuffer = {
       withResource(getMemoryBuffer(stream)) { hb =>
         closeOnExcept(DeviceMemoryBuffer.allocate(hb.getLength, stream)) { db =>
@@ -298,8 +296,6 @@ class RapidsDiskStore(val diskBlockManager: RapidsDiskBlockManager)
 
     // FIXME: Need to be clean up. Tracked in https://github.com/NVIDIA/spark-rapids/issues/9496
     override val memoryUsedBytes: Long = uncompressedSize
-
-    override val storageTier: StorageTier = StorageTier.DISK
 
     override def getDeviceMemoryBuffer(stream: Cuda.Stream): DeviceMemoryBuffer = {
       withResource(getMemoryBuffer(stream)) { hb =>

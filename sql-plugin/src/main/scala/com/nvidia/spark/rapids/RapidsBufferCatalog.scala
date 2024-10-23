@@ -252,20 +252,22 @@ class RapidsBufferCatalog(
   def addBuffer(
       buffer: MemoryBuffer,
       initialSpillPriority: Long,
-      needsSync: Boolean = true): RapidsBufferHandle = synchronized {
+      needsSync: Boolean = true): RapidsBufferHandle = {
     // first time we see `buffer`
-    val existing = getExistingRapidsBufferAndAcquire(buffer)
-    existing match {
-      case None =>
-        addBuffer(
-          TempSpillBufferId(),
-          buffer,
-          initialSpillPriority,
-          needsSync)
-      case Some(rapidsBuffer) =>
-        withResource(rapidsBuffer) { _ =>
-          makeNewHandle(rapidsBuffer.base.id, initialSpillPriority)
-        }
+    buffer.synchronized {
+      val existing = getExistingRapidsBufferAndAcquire(buffer)
+      existing match {
+        case None =>
+          addBuffer(
+            TempSpillBufferId(),
+            buffer,
+            initialSpillPriority,
+            needsSync)
+        case Some(rapidsBuffer) =>
+          withResource(rapidsBuffer) { _ =>
+            makeNewHandle(rapidsBuffer.base.id, initialSpillPriority)
+          }
+      }
     }
   }
 
@@ -287,19 +289,22 @@ class RapidsBufferCatalog(
   def addContiguousTable(
       contigTable: ContiguousTable,
       initialSpillPriority: Long,
-      needsSync: Boolean = true): RapidsBufferHandle = synchronized {
-    val existing = getExistingRapidsBufferAndAcquire(contigTable.getBuffer)
-    existing match {
-      case None =>
-        addContiguousTable(
-          TempSpillBufferId(),
-          contigTable,
-          initialSpillPriority,
-          needsSync)
-      case Some(rapidsBuffer) =>
-        withResource(rapidsBuffer) { _ =>
-          makeNewHandle(rapidsBuffer.base.id, initialSpillPriority)
-        }
+      needsSync: Boolean = true): RapidsBufferHandle = {
+    val buff = contigTable.getBuffer
+    buff.synchronized {
+      val existing = getExistingRapidsBufferAndAcquire(buff)
+      existing match {
+        case None =>
+          addContiguousTable(
+            TempSpillBufferId(),
+            contigTable,
+            initialSpillPriority,
+            needsSync)
+        case Some(rapidsBuffer) =>
+          withResource(rapidsBuffer) { _ =>
+            makeNewHandle(rapidsBuffer.base.id, initialSpillPriority)
+          }
+      }
     }
   }
 
@@ -320,14 +325,17 @@ class RapidsBufferCatalog(
       id: RapidsBufferId,
       contigTable: ContiguousTable,
       initialSpillPriority: Long,
-      needsSync: Boolean): RapidsBufferHandle = synchronized {
-    val tableMeta = MetaUtils.buildTableMeta(id.tableId, contigTable)
-    addBufferWithMeta(
-      id,
-      contigTable.getBuffer,
-      tableMeta,
-      initialSpillPriority,
-      needsSync)
+      needsSync: Boolean): RapidsBufferHandle = {
+    val buff = contigTable.getBuffer
+    buff.synchronized {
+      val tableMeta = MetaUtils.buildTableMeta(id.tableId, contigTable)
+      addBufferWithMeta(
+        id,
+        buff,
+        tableMeta,
+        initialSpillPriority,
+        needsSync)
+    }
   }
 
   /**
@@ -347,7 +355,7 @@ class RapidsBufferCatalog(
       buffer: MemoryBuffer,
       tableMeta: TableMeta,
       initialSpillPriority: Long,
-      needsSync: Boolean): RapidsBufferHandle = synchronized {
+      needsSync: Boolean): RapidsBufferHandle = {
     val rapidsBuffer = buffer match {
       case gpuBuffer: DeviceMemoryBuffer =>
         deviceStorage.addBuffer(
@@ -377,7 +385,7 @@ class RapidsBufferCatalog(
       id: RapidsBufferId,
       buffer: MemoryBuffer,
       initialSpillPriority: Long,
-      needsSync: Boolean): RapidsBufferHandle = synchronized {
+      needsSync: Boolean): RapidsBufferHandle = {
     val rapidsBuffer = buffer match {
       case gpuBuffer: DeviceMemoryBuffer =>
         deviceStorage.addBuffer(
@@ -501,7 +509,7 @@ class RapidsBufferCatalog(
    */
   def registerDegenerateBuffer(
       bufferId: RapidsBufferId,
-      meta: TableMeta): RapidsBufferHandle = synchronized {
+      meta: TableMeta): RapidsBufferHandle = {
     val rmb = new RapidsMemoryBuffer(bufferId)
     val buffer = new DegenerateRapidsBuffer(bufferId, meta, rmb)
     rmb.initialize(buffer, StorageTier.DEVICE)

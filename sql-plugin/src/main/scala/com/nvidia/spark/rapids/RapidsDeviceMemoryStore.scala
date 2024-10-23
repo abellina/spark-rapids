@@ -213,9 +213,6 @@ class RapidsDeviceMemoryStore
       catalog)
       with RapidsBufferChannelWritable {
 
-    /** The storage tier for this buffer */
-    override val storageTier: StorageTier = StorageTier.DEVICE
-
     override def getCopyIterator(stream: Cuda.Stream): RapidsBufferCopyIterator =
       new RapidsBufferCopyIterator(
         chunkedPacker = Some(new ChunkedPacker(id, table, catalog.chunkedPackBounceBufferSize)))
@@ -447,8 +444,6 @@ class RapidsDeviceMemoryStore
 
     override val memoryUsedBytes: Long = size
 
-    override val storageTier: StorageTier = StorageTier.DEVICE
-
     // If this require triggers, we are re-adding a `DeviceMemoryBuffer` outside of
     // the catalog lock, which should not possible. The event handler is set to null
     // when we free the `RapidsDeviceMemoryBuffer` and if the buffer is not free, we
@@ -555,8 +550,6 @@ class RapidsDeviceMemoryStore
       with RapidsBufferChannelWritable {
 
     override val memoryUsedBytes: Long = size
-
-    override val storageTier: StorageTier = StorageTier.DEVICE
 
     // If this require triggers, we are re-adding a `DeviceMemoryBuffer` outside of
     // the catalog lock, which should not possible. The event handler is set to null

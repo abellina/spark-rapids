@@ -139,11 +139,11 @@ class SpillableColumnarBatchImpl (
       // closing my reference
       handle.close()
     }
-    // TODO: AB this is causing problems so we need to look into this
+    // TODO this is causing problems so we need to look into this
     //  https://github.com/NVIDIA/spark-rapids/issues/10161
-//    else if (refCount < 0) {
-//      throw new IllegalStateException("Double free on SpillableColumnarBatchImpl")
-//    }
+    //else if (refCount < 0) {
+    //  throw new IllegalStateException("Double free on SpillableColumnarBatchImpl")
+    //}
   }
 
   override def toString: String =
