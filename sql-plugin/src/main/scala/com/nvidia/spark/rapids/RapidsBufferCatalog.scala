@@ -130,6 +130,14 @@ class RapidsBufferCatalog(
    *
    * This function also adds the handle for internal tracking in the catalog.
    *
+   * Known races:
+   *   - remove: makeNewHandle, and remove, both take the catalog lock.
+   *
+   *   - spill: we race with spill, but what we have after this is a handle to a
+   *   copy of buffer that is in a different tier. We deem this race safe, as the
+   *   spill happens under the `RapidsMemoryBuffer` lock, and lock also protects
+   *   the interface to the `RapidsBufferBase`s in each tier.
+   *
    * @param id the `RapidsBufferId` that this handle refers to
    * @param spillPriority the spill priority specified on creation of the handle
    * @note public for testing
@@ -137,24 +145,11 @@ class RapidsBufferCatalog(
    */
   def makeNewHandle(
       id: RapidsBufferId,
-      spillPriority: Long): RapidsBufferHandle = {
-    val handle = new RapidsBufferHandleImpl(id, spillPriority)
-    trackNewHandle(handle)
-    updateUnderlyingRapidsBuffer(handle)
-    handle
-  }
-
-  /**
-   * Adds a handle to the internal `bufferIdToHandles` map.
-   *
-   * The priority and callback of the `RapidsBuffer` will also be updated.
-   *
-   * @param handle handle to start tracking
-   */
-  private def trackNewHandle(handle: RapidsBufferHandleImpl): Unit = {
-    if (!bufferMap.containsKey(handle.id)) {
-      throw new IllegalStateException(s"bufferMap is missing ${handle.id}")
+      spillPriority: Long): RapidsBufferHandle = synchronized {
+    if (!bufferMap.containsKey(id)) {
+      throw new IllegalStateException(s"bufferMap is missing ${id}")
     }
+    val handle = new RapidsBufferHandleImpl(id, spillPriority)
     bufferIdToHandles.compute(handle.id, (_, h) => {
       var handles = h
       if (handles == null) {
@@ -163,6 +158,7 @@ class RapidsBufferCatalog(
       handles :+ handle
     })
     updateUnderlyingRapidsBuffer(handle)
+    handle
   }
 
   /**
@@ -227,49 +223,20 @@ class RapidsBufferCatalog(
    *                  this device buffer (defaults to true)
    * @return RapidsBufferHandle handle for this buffer
    */
-  def addBufferWithMeta(
-      buffer: MemoryBuffer,
-      tableMeta: TableMeta,
-      initialSpillPriority: Long,
-      needsSync: Boolean = true): RapidsBufferHandle = {
-    // first time we see `buffer`
-    buffer.synchronized {
-      val existing = getExistingRapidsBufferAndAcquire(buffer)
-      existing match {
-        case None =>
-          addBufferWithMeta(
-            TempSpillBufferId(),
-            buffer,
-            tableMeta,
-            initialSpillPriority,
-            needsSync)
-        case Some(rapidsBuffer) =>
-          withResource(rapidsBuffer) { _ =>
-            makeNewHandle(rapidsBuffer.base.id, initialSpillPriority)
-          }
-      }
-    }
-  }
-
-  def addBuffer(
-      buffer: MemoryBuffer,
-      initialSpillPriority: Long,
-      needsSync: Boolean = true): RapidsBufferHandle = {
-    // first time we see `buffer`
-    buffer.synchronized {
-      val existing = getExistingRapidsBufferAndAcquire(buffer)
-      existing match {
-        case None =>
-          addBuffer(
-            TempSpillBufferId(),
-            buffer,
-            initialSpillPriority,
-            needsSync)
-        case Some(rapidsBuffer) =>
-          withResource(rapidsBuffer) { _ =>
-            makeNewHandle(rapidsBuffer.base.id, initialSpillPriority)
-          }
-      }
+  def addBuffer(buffer: MemoryBuffer,
+                initialSpillPriority: Long,
+                tableMeta: Option[TableMeta] = None,
+                needsSync: Boolean = true): RapidsBufferHandle = {
+    withMaybeExistingAndLock(buffer) {
+      case None =>
+        addBufferWithMeta(
+          TempSpillBufferId(),
+          buffer,
+          tableMeta,
+          initialSpillPriority,
+          needsSync)
+      case Some(rapidsBuffer) =>
+        makeNewHandle(rapidsBuffer.base.id, initialSpillPriority)
     }
   }
 
@@ -293,20 +260,15 @@ class RapidsBufferCatalog(
       initialSpillPriority: Long,
       needsSync: Boolean = true): RapidsBufferHandle = {
     val buff = contigTable.getBuffer
-    buff.synchronized {
-      val existing = getExistingRapidsBufferAndAcquire(buff)
-      existing match {
-        case None =>
-          addContiguousTable(
-            TempSpillBufferId(),
-            contigTable,
-            initialSpillPriority,
-            needsSync)
-        case Some(rapidsBuffer) =>
-          withResource(rapidsBuffer) { _ =>
-            makeNewHandle(rapidsBuffer.base.id, initialSpillPriority)
-          }
-      }
+    withMaybeExistingAndLock(buff) {
+      case None =>
+        addContiguousTable(
+          TempSpillBufferId(),
+          contigTable,
+          initialSpillPriority,
+          needsSync)
+      case Some(rapidsBuffer) =>
+        makeNewHandle(rapidsBuffer.base.id, initialSpillPriority)
     }
   }
 
@@ -315,6 +277,8 @@ class RapidsBufferCatalog(
    * contiguous table, so it is the responsibility of the caller to close it. The refcount of the
    * underlying device buffer will be incremented so the contiguous table can be closed before
    * this buffer is destroyed.
+   *
+   * Called either from the catalog or shuffle catalog, and from tests.
    *
    * @param id the RapidsBufferId to use for this buffer
    * @param contigTable contiguous table to track in storage
@@ -332,7 +296,7 @@ class RapidsBufferCatalog(
     addBufferWithMeta(
       id,
       contigTable.getBuffer,
-      tableMeta,
+      Some(tableMeta),
       initialSpillPriority,
       needsSync)
   }
@@ -352,7 +316,7 @@ class RapidsBufferCatalog(
   def addBufferWithMeta(
       id: RapidsBufferId,
       buffer: MemoryBuffer,
-      tableMeta: TableMeta,
+      tableMeta: Option[TableMeta],
       initialSpillPriority: Long,
       needsSync: Boolean): RapidsBufferHandle = {
     val rapidsBuffer = buffer match {
@@ -360,24 +324,26 @@ class RapidsBufferCatalog(
         deviceStorage.addBuffer(
           id,
           gpuBuffer,
-          tableMeta,
           initialSpillPriority,
           needsSync,
-          this)
+          this,
+          tableMeta)
       case hostBuffer: HostMemoryBuffer =>
         hostStorage.addBuffer(
           id,
           hostBuffer,
-          tableMeta,
           initialSpillPriority,
           needsSync,
-          this)
+          this,
+          tableMeta)
       case _ =>
         throw new IllegalArgumentException(
           s"Cannot call addBuffer with buffer $buffer")
     }
-    registerNewBuffer(rapidsBuffer)
-    makeNewHandle(rapidsBuffer.id, initialSpillPriority)
+    rapidsBuffer.synchronized {
+      registerNewBuffer(rapidsBuffer)
+      makeNewHandle(rapidsBuffer.id, initialSpillPriority)
+    }
   }
 
   def addBuffer(
@@ -404,8 +370,10 @@ class RapidsBufferCatalog(
         throw new IllegalArgumentException(
           s"Cannot call addBuffer with buffer $buffer")
     }
-    registerNewBuffer(rapidsBuffer)
-    makeNewHandle(rapidsBuffer.id, initialSpillPriority)
+    rapidsBuffer.synchronized {
+      registerNewBuffer(rapidsBuffer)
+      makeNewHandle(rapidsBuffer.id, initialSpillPriority)
+    }
   }
   /**
    * Adds a batch to the device storage. This does NOT take ownership of the
@@ -680,6 +648,28 @@ class RapidsBufferCatalog(
       body(chunkedPackBounceBuffer)
     }
 
+  private def withMaybeExistingAndLock[T](buffer: MemoryBuffer)(
+    body: Option[RapidsBuffer] => T): T = {
+    // one call for `buffer` at a time
+    buffer.synchronized {
+      val existing = getExistingRapidsBufferAndAcquire(buffer)
+      existing match {
+        case None =>
+          body(None)
+        case rb@Some(rapidsBuffer) =>
+          if (rapidsBuffer.addReference()) {
+            // it is valid
+            withResource(rapidsBuffer) { _ =>
+              body(rb)
+            }
+          } else {
+            // not valid
+            body(None)
+          }
+      }
+    }
+  }
+
   override def close(): Unit = {
     val handlesToClose =
       bufferIdToHandles.values.asScala.toSeq.flatMap(_.seq)
@@ -841,7 +831,7 @@ object RapidsBufferCatalog extends Logging {
    * contiguous table, so it is the responsibility of the caller to close it. The refcount of the
    * underlying device buffer will be incremented so the contiguous table can be closed before
    * this buffer is destroyed.
-   * @param contigTable contiguous table to trackNewHandle in device storage
+   * @param contigTable contiguous table to device storage
    * @param initialSpillPriority starting spill priority value for the buffer
    * @return RapidsBufferHandle associated with this buffer
    */
@@ -863,7 +853,7 @@ object RapidsBufferCatalog extends Logging {
       buffer: MemoryBuffer,
       tableMeta: TableMeta,
       initialSpillPriority: Long): RapidsBufferHandle = {
-    singleton.addBufferWithMeta(buffer, tableMeta, initialSpillPriority)
+    singleton.addBuffer(buffer, initialSpillPriority, Some(tableMeta))
   }
 
   def addBuffer(
@@ -952,11 +942,6 @@ object RapidsBufferCatalog extends Logging {
             existingBuffer = None
         }
     }
-
-    if (existingBuffer.exists(_.addReference())) {
-      existingBuffer
-    } else {
-      None
-    }
+    existingBuffer
   }
 }
