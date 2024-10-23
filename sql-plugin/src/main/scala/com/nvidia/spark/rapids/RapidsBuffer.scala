@@ -397,15 +397,14 @@ class RapidsMemoryBuffer(val id: RapidsBufferId) {
   // could not spill to the target store
   def spill(
       fromStore: RapidsBufferStore, 
-      targetStore: RapidsBufferStore, 
-      stream: Cuda.Stream): Option[RapidsBuffer] = synchronized {
-    val copyToTarget = copyTo(targetStore, stream)
+      targetStore: RapidsBufferStore,
+      stream: Cuda.Stream): Unit = synchronized {
+    copyTo(targetStore, stream)
     fromStore.tier match {
       case StorageTier.DEVICE => device = null
       case StorageTier.HOST => host = null
       case StorageTier.DISK => disk = null
     }
-    copyToTarget
   }
 
   def copyTo(targetStore: RapidsBufferStore,
@@ -438,6 +437,8 @@ class RapidsMemoryBuffer(val id: RapidsBufferId) {
           copyTo(targetStore)
       }
 
+      // use the tier from the new buffer, since we could have skipped
+      // a store (host store) if it was full
       newBuffer.storageTier match {
         case StorageTier.DEVICE =>
           device = newBuffer

@@ -32,24 +32,6 @@ import org.apache.spark.sql.types.DataType
 import org.apache.spark.sql.vectorized.ColumnarBatch
 
 /**
- * Helper case classes that contain the buffer we spilled or unspilled from our current tier
- * and likely a new buffer created in a target store tier, but it can be set to None.
- * If the buffer already exists in the target store, `newBuffer` will be None.
- * @param spillBuffer a `RapidsBuffer` we spilled or unspilled from this store
- * @param newBuffer an optional `RapidsBuffer` in the target store.
- */
-trait SpillAction {
-  val spillBuffer: RapidsBuffer
-  val newBuffer: Option[RapidsBuffer]
-}
-
-case class BufferSpill(spillBuffer: RapidsBuffer, newBuffer: Option[RapidsBuffer])
-    extends SpillAction
-
-case class BufferUnspill(spillBuffer: RapidsBuffer, newBuffer: Option[RapidsBuffer])
-    extends SpillAction
-
-/**
  * Base class for all buffer store types.
  *
  * @param tier storage tier of this store
@@ -283,7 +265,7 @@ abstract class RapidsBufferStore(val tier: StorageTier)
       logWarning(s"Targeting a ${name} size of $targetTotalSize. " +
           s"Current total ${currentSize}. " +
           s"Current spillable ${currentSpillableSize}")
-      val bufferSpills = new mutable.ArrayBuffer[BufferSpill]()
+      val bufferSpills = new mutable.ArrayBuffer[RapidsBuffer]()
       withResource(new NvtxRange(s"${name} sync spill", NvtxColor.ORANGE)) { _ =>
         logWarning(s"${name} store spilling to reduce usage from " +
           s"${currentSize} total (${currentSpillableSize} spillable) " +
@@ -298,10 +280,13 @@ abstract class RapidsBufferStore(val tier: StorageTier)
             val nextSpillableBuffer = nextSpillable()
             if (nextSpillableBuffer != null) {
               if (nextSpillableBuffer.addReference()) {
+                // TODO: AB: acquire lock of underlying MemoryBuffer iff it has
+                //   the onClosed callbacks, or mark it as invalid?, to prevent aliasing
+                //   a buffer that will be freed outside of the spill lock
                 withResource(nextSpillableBuffer) { _ =>
-                  val bufferSpill = spillBuffer(nextSpillableBuffer, this, stream)
-                  totalSpilled += bufferSpill.spillBuffer.memoryUsedBytes
-                  bufferSpills.append(bufferSpill)
+                  spillBuffer(nextSpillableBuffer, this, stream)
+                  totalSpilled += nextSpillableBuffer.memoryUsedBytes
+                  bufferSpills.append(nextSpillableBuffer)
                 }
               }
             }
@@ -325,7 +310,7 @@ abstract class RapidsBufferStore(val tier: StorageTier)
             // the buffer via events.
             // https://github.com/NVIDIA/spark-rapids/issues/8610
             Cuda.deviceSynchronize()
-            bufferSpills.foreach(_.spillBuffer.safeFree())
+            bufferSpills.foreach(_.safeFree())
           }
         }
       }
@@ -337,18 +322,13 @@ abstract class RapidsBufferStore(val tier: StorageTier)
   /**
    * Given a specific `RapidsBuffer` spill it to `spillStore`
    *
-   * @return a `BufferSpill` instance with the target buffer in this store, and an optional
-   *         new `RapidsBuffer` in the target spill store if this rapids buffer hadn't already
-   *         spilled.
    * @note called with catalog lock held
    */
   private def spillBuffer(
       buffer: RapidsBuffer,
       store: RapidsBufferStore,
-      stream: Cuda.Stream): BufferSpill = {
-    val newBuffer = buffer.base.spill(store, store.spillStore, stream)
-    // return the buffer to free and the new buffer to register
-    BufferSpill(buffer, newBuffer)
+      stream: Cuda.Stream): Unit = {
+    buffer.base.spill(store, store.spillStore, stream)
   }
 
   /**
