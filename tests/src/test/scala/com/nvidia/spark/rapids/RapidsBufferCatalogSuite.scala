@@ -288,8 +288,7 @@ class RapidsBufferCatalogSuite
           diskStorage = mockStore)) { catalog =>
           val handle = withResource(DeviceMemoryBuffer.allocate(1024)) { buff =>
             val meta = MetaUtils.getTableMetaNoTable(buff.getLength)
-            catalog.addBufferWithMeta(
-              buff, meta, -1)
+            catalog.addBuffer(buff, -1, Some(meta))
           }
           var rmb: RapidsMemoryBuffer = null
           withResource(handle) { _ =>
@@ -461,7 +460,8 @@ class MockBuffer(
   override val memoryUsedBytes: Long = 0
   override def meta: TableMeta = tableMeta
   override val storageTier: StorageTier = thisTier
-  override def getColumnarBatch(sparkTypes: Array[DataType], stream: Cuda.Stream): ColumnarBatch = null
+  override def getColumnarBatch(
+    sparkTypes: Array[DataType], stream: Cuda.Stream): ColumnarBatch = null
   override def getMemoryBuffer(stream: Cuda.Stream): MemoryBuffer = null
   override def close(): Unit = {}
 

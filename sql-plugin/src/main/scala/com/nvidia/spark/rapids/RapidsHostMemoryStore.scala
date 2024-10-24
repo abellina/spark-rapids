@@ -71,25 +71,33 @@ class RapidsHostMemoryStore(
   def addBuffer(
       id: RapidsBufferId,
       buffer: HostMemoryBuffer,
-      tableMeta: TableMeta,
       initialSpillPriority: Long,
       needsSync: Boolean,
-      catalog: RapidsBufferCatalog): RapidsMemoryBuffer = {
+      catalog: RapidsBufferCatalog,
+      tableMeta: Option[TableMeta]): RapidsMemoryBuffer = {
     buffer.incRefCount()
     val rmb = new RapidsMemoryBuffer(id)
-    val rapidsBuffer = new RapidsHostMemoryBufferWithMeta(
-      id,
-      buffer.getLength,
-      tableMeta,
-      initialSpillPriority,
-      buffer,
-      catalog,
-      rmb)
+    val rapidsBuffer = tableMeta match {
+      case Some(meta) =>
+        new RapidsHostMemoryBufferWithMeta(
+          id,
+          buffer.getLength,
+          meta,
+          initialSpillPriority,
+          buffer,
+          catalog,
+          rmb)
+      case None =>
+        new RapidsHostMemoryBuffer(
+          id,
+          buffer.getLength,
+          initialSpillPriority,
+          buffer,
+          catalog,
+          rmb)
+    }
+
     freeOnExcept(rapidsBuffer) { _ =>
-      logDebug(s"Adding host buffer for: [id=$id, size=${buffer.getLength}, " +
-        s"uncompressed=${rapidsBuffer.meta.bufferMeta.uncompressedSize}, " +
-        s"meta_id=${tableMeta.bufferMeta.id}, " +
-        s"meta_size=${tableMeta.bufferMeta.size}]")
       addBuffer(rapidsBuffer, needsSync)
       rmb.initialize(rapidsBuffer, StorageTier.HOST)
       rmb
@@ -216,98 +224,14 @@ class RapidsHostMemoryStore(
     res
   }
 
-  // TODO: remove
-   // override protected def createBuffer(
-   //     other: RapidsBufferBase,
-   //     catalog: RapidsBufferCatalog,
-   //     stream: Cuda.Stream): Option[RapidsBufferBase] = {
-   //       None
-
-    //val wouldFit = trySpillToMaximumSize(other, catalog, stream)
-    //val bufferWithMeta = other match {
-    //  case bwm: RapidsBufferWithMeta => bwm
-    //  case _ => 
-    //    throw new IllegalStateException(
-    //      s"cannot copy ${other.id} since it doesn't provide metadata.")
-    //}
-    //if (!wouldFit) {
-    //  // skip host
-    //  logWarning(s"Buffer $other with size ${other.memoryUsedBytes} does not fit " +
-    //      s"in the host store, skipping tier.")
-    //  None
-    //} else {
-    //  // If the other is from the local disk store, we are unspilling to host memory.
-    //  if (other.storageTier == StorageTier.DISK) {
-    //    logDebug(s"copying RapidsDiskStore buffer ${other.id} to a HostMemoryBuffer")
-    //    val hostBuffer = other.getMemoryBuffer.asInstanceOf[HostMemoryBuffer]
-    //    Some(new RapidsHostMemoryBufferWithMeta(
-    //      bufferWithMeta.id,
-    //      hostBuffer.getLength(),
-    //      bufferWithMeta.meta,
-    //      applyPriorityOffset(
-    //        bufferWithMeta.getSpillPriority, HOST_MEMORY_BUFFER_SPILL_OFFSET),
-    //      hostBuffer,
-    //      catalog,
-    //      this))
-    //  } else {
-    //    withResource(other.getCopyIterator) { otherBufferIterator =>
-    //      val isChunked = otherBufferIterator.isChunked
-    //      val totalCopySize = otherBufferIterator.getTotalCopySize
-    //      closeOnExcept(HostAlloc.tryAlloc(totalCopySize)) { hb =>
-    //        hb.map { hostBuffer =>
-    //          val spillNs = GpuTaskMetrics.get.spillToHostTime {
-    //            var hostOffset = 0L
-    //            val start = System.nanoTime()
-    //            while (otherBufferIterator.hasNext) {
-    //              val otherBuffer = otherBufferIterator.next()
-    //              withResource(otherBuffer) { _ =>
-    //                otherBuffer match {
-    //                  case devBuffer: DeviceMemoryBuffer =>
-    //                    hostBuffer.copyFromMemoryBufferAsync(
-    //                      hostOffset, devBuffer, 0, otherBuffer.getLength, stream)
-    //                    hostOffset += otherBuffer.getLength
-    //                  case _ =>
-    //                    throw new IllegalStateException("copying from buffer without device memory")
-    //                }
-    //              }
-    //            }
-    //            stream.sync()
-    //            System.nanoTime() - start
-    //          }
-    //          val szMB = (totalCopySize.toDouble / 1024.0 / 1024.0).toLong
-    //          val bw = (szMB.toDouble / (spillNs.toDouble / 1000000000.0)).toLong
-    //          logDebug(s"Spill to host (chunked=$isChunked) " +
-    //              s"size=$szMB MiB bandwidth=$bw MiB/sec")
-    //          new RapidsHostMemoryBufferWithMeta(
-    //            bufferWithMeta.id,
-    //            totalCopySize,
-    //            bufferWithMeta.meta,
-    //            applyPriorityOffset(
-    //              bufferWithMeta.getSpillPriority, HOST_MEMORY_BUFFER_SPILL_OFFSET),
-    //            hostBuffer,
-    //            catalog,
-    //            this)
-    //        }.orElse {
-    //          // skip host
-    //          logWarning(s"Buffer $other with size ${other.memoryUsedBytes} does not fit " +
-    //              s"in the host store, skipping tier.")
-    //          None
-    //        }
-    //      }
-    //    }
-    //  }
-    //}
-  //}
-
   def numBytesFree: Option[Long] = maxSize.map(_ - currentSize)
 
-  class RapidsHostMemoryBuffer(
-                                id: RapidsBufferId,
-                                size: Long,
-                                spillPriority: Long,
-                                buffer: HostMemoryBuffer,
-                                catalog: RapidsBufferCatalog,
-                                override val base: RapidsMemoryBuffer)
+  class RapidsHostMemoryBuffer(id: RapidsBufferId,
+                               size: Long,
+                               spillPriority: Long,
+                               buffer: HostMemoryBuffer,
+                               catalog: RapidsBufferCatalog,
+                               override val base: RapidsMemoryBuffer)
     extends RapidsBufferBase(id, spillPriority)
       with MemoryBuffer.EventHandler
       with RapidsBufferChannelWritable {
@@ -324,6 +248,15 @@ class RapidsHostMemoryStore(
     // used in UCX shuffle
     override def getMemoryBuffer(stream: Cuda.Stream): MemoryBuffer =
       getHostMemoryBuffer(stream)
+
+    override def getDeviceMemoryBuffer(stream: Cuda.Stream): DeviceMemoryBuffer = {
+      withResource(getMemoryBuffer(stream)) { hb =>
+        closeOnExcept(DeviceMemoryBuffer.allocate(hb.getLength, stream)) { db =>
+          db.copyFromMemoryBuffer(0, hb, 0, db.getLength, stream)
+          db
+        }
+      }
+    }
 
     override def writeToChannel(
         outputChannel: WritableByteChannel, ignored: Cuda.Stream): (Long, Option[TableMeta]) = {
@@ -402,116 +335,20 @@ class RapidsHostMemoryStore(
         singleShotBuffer = Some(getHostMemoryBuffer(stream)))
   }
 
-  class RapidsHostMemoryBufferWithMeta(
-                                        id: RapidsBufferId,
-                                        size: Long,
-                                        meta: TableMeta,
-                                        spillPriority: Long,
-                                        buffer: HostMemoryBuffer,
-                                        catalog: RapidsBufferCatalog,
-                                        override val base: RapidsMemoryBuffer)
-    extends RapidsBufferBaseWithMeta(id, meta, spillPriority)
+  class RapidsHostMemoryBufferWithMeta(id: RapidsBufferId,
+                                       size: Long,
+                                       _meta: TableMeta,
+                                       spillPriority: Long,
+                                       buffer: HostMemoryBuffer,
+                                       catalog: RapidsBufferCatalog,
+                                       override val base: RapidsMemoryBuffer)
+    extends RapidsHostMemoryBuffer(id, size, spillPriority, buffer, catalog, base)
+      with RapidsBufferWithMeta
       with MemoryBuffer.EventHandler
       with RapidsBufferChannelWritable
       with CopyableRapidsBuffer {
 
-    override def getHostMemoryBuffer(
-        stream: Cuda.Stream): HostMemoryBuffer = synchronized {
-      buffer.synchronized {
-        setSpillable(this, false)
-        buffer.incRefCount()
-        buffer
-      }
-    }
-
-    // used in UCX shuffle
-    override def getMemoryBuffer(stream: Cuda.Stream): MemoryBuffer =
-      getHostMemoryBuffer(stream)
-
-    override def writeToChannel(
-        outputChannel: WritableByteChannel, ignored: Cuda.Stream): (Long, Option[TableMeta])= {
-      var written: Long = 0L
-      val iter = new HostByteBufferIterator(buffer)
-      iter.foreach { bb =>
-        try {
-          while (bb.hasRemaining) {
-            written += outputChannel.write(bb)
-          }
-        } finally {
-          RapidsStorageUtils.dispose(bb)
-        }
-      }
-      (written, Some(meta))
-    }
-
-    override def copyTo(store: RapidsBufferStore, stream: Cuda.Stream): RapidsBuffer = {
-      store.createBuffer(this, catalog, stream, base)
-    }
-
-    override def updateSpillability(): Unit = {
-      if (buffer.getRefCount == 1) {
-        setSpillable(this, true)
-      }
-    }
-
-    override protected def releaseResources(): Unit = {
-      buffer.close()
-    }
-
-    /** The size of this buffer in bytes. */
-    override val memoryUsedBytes: Long = size
-
-    // If this require triggers, we are re-adding a `HostMemoryBuffer` outside of
-    // the catalog lock, which should not possible. The event handler is set to null
-    // when we free the `RapidsHostMemoryBufferWithMeta` and if the buffer is not free, we
-    // take out another handle (in the catalog).
-    HostAlloc.addEventHandler(buffer, this)
-
-    /**
-     * Override from the MemoryBuffer.EventHandler interface.
-     *
-     * If we are being invoked we have the `buffer` lock, as this callback
-     * is being invoked from `MemoryBuffer.close`
-     *
-     * @param refCount - buffer's current refCount
-     */
-    override def onClosed(refCount: Int): Unit = {
-      // refCount == 1 means only 1 reference exists to `buffer` in the
-      // RapidsHostMemoryBufferWithMeta (we own it)
-      if (refCount == 1) {
-        // setSpillable is being called here as an extension of `MemoryBuffer.close()`
-        // we hold the MemoryBuffer lock and we could be called from a Spark task thread
-        // Since we hold the MemoryBuffer lock, `incRefCount` waits for us. The only other
-        // call to `setSpillable` is also under this same MemoryBuffer lock (see:
-        // `getMemoryBuffer`)
-        setSpillable(this, true)
-      }
-    }
-
-    /**
-     * We overwrite free to make sure we don't have a handler for the underlying
-     * buffer, since this `RapidsBuffer` is no longer tracked.
-     */
-    override def free(): Unit = synchronized {
-      if (isValid) {
-        // it is going to be invalid when calling super.free()
-        HostAlloc.removeEventHandler(buffer, this)
-      }
-      super.free()
-    }
-
-    def getCopyIterator(stream: Cuda.Stream): RapidsBufferCopyIterator =
-      new RapidsBufferCopyIterator(
-        singleShotBuffer = Some(getHostMemoryBuffer(stream)))
-
-    override def getDeviceMemoryBuffer(stream: Cuda.Stream): DeviceMemoryBuffer = {
-      withResource(getHostMemoryBuffer(stream)) { hb =>
-        closeOnExcept(DeviceMemoryBuffer.allocate(hb.getLength, stream)) { db =>
-          db.copyFromMemoryBuffer(0, hb, 0, db.getLength, stream)
-          db
-        }
-      }
-    }
+    override val meta: TableMeta = _meta
   }
 
   /**
@@ -579,12 +416,11 @@ class RapidsHostMemoryStore(
    * @param batch the host ColumnarBatch we are managing
    * @param spillPriority a starting spill priority
    */
-  class RapidsHostColumnarBatch(
-                                 id: RapidsBufferId,
-                                 hostCb: ColumnarBatch,
-                                 spillPriority: Long,
-                                 catalog: RapidsBufferCatalog,
-                                 override val base: RapidsMemoryBuffer)
+  class RapidsHostColumnarBatch(id: RapidsBufferId,
+                                hostCb: ColumnarBatch,
+                                spillPriority: Long,
+                                catalog: RapidsBufferCatalog,
+                                override val base: RapidsMemoryBuffer)
     extends RapidsBufferBase(id, spillPriority)
       with RapidsHostBatchBuffer
       with RapidsBufferChannelWritable {

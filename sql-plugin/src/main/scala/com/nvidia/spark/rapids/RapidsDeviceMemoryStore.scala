@@ -65,7 +65,7 @@ class RapidsDeviceMemoryStore
             }
           }
 
-          meta.map { tableMeta =>
+          val devBuffer = meta.map { tableMeta =>
             new RapidsDeviceMemoryBufferWithMeta(
               rapidsBuffer.id,
               deviceBuffer.getLength,
@@ -83,7 +83,8 @@ class RapidsDeviceMemoryStore
               catalog,
               base)
           }
-          // TODO: AB: when do we add this buffer to the device store?
+          addBuffer(devBuffer)
+          devBuffer
         }
       }
     }
@@ -107,48 +108,33 @@ class RapidsDeviceMemoryStore
   def addBuffer(
       id: RapidsBufferId,
       buffer: DeviceMemoryBuffer,
-      tableMeta: TableMeta,
       initialSpillPriority: Long,
       needsSync: Boolean,
-      catalog: RapidsBufferCatalog): RapidsMemoryBuffer = {
+      catalog: RapidsBufferCatalog,
+      tableMeta: Option[TableMeta] = None): RapidsMemoryBuffer = {
     buffer.incRefCount()
     val rmb = new RapidsMemoryBuffer(id)
-    val rapidsBuffer = new RapidsDeviceMemoryBufferWithMeta(
-      id,
-      buffer.getLength,
-      tableMeta,
-      buffer,
-      initialSpillPriority,
-      catalog,
-      rmb)
-    freeOnExcept(rapidsBuffer) { _ =>
-      logDebug(s"Adding receive side table for: [id=$id, size=${buffer.getLength}, " +
-        s"uncompressed=${rapidsBuffer.meta.bufferMeta.uncompressedSize}, " +
-        s"meta_id=${tableMeta.bufferMeta.id}, " +
-        s"meta_size=${tableMeta.bufferMeta.size}]")
-      addBuffer(rapidsBuffer, needsSync)
-      rmb.initialize(rapidsBuffer, StorageTier.DEVICE)
-      rmb
+    val rapidsBuffer = tableMeta match {
+      case Some(meta) =>
+        new RapidsDeviceMemoryBufferWithMeta(
+          id,
+          buffer.getLength,
+          meta,
+          buffer,
+          initialSpillPriority,
+          catalog,
+          rmb)
+      case None =>
+        new RapidsDeviceMemoryBuffer(
+          id,
+          buffer.getLength,
+          buffer,
+          initialSpillPriority,
+          catalog,
+          rmb)
     }
-  }
 
-  def addBuffer(
-      id: RapidsBufferId,
-      buffer: DeviceMemoryBuffer,
-      initialSpillPriority: Long,
-      needsSync: Boolean,
-      catalog: RapidsBufferCatalog): RapidsMemoryBuffer = {
-    buffer.incRefCount()
-    val rmb = new RapidsMemoryBuffer(id)
-    val rapidsBuffer = new RapidsDeviceMemoryBuffer(
-      id,
-      buffer.getLength,
-      buffer,
-      initialSpillPriority,
-      catalog,
-      rmb)
     freeOnExcept(rapidsBuffer) { _ =>
-      logDebug(s"Adding receive side table for: [id=$id, size=${buffer.getLength}]")
       addBuffer(rapidsBuffer, needsSync)
       rmb.initialize(rapidsBuffer, StorageTier.DEVICE)
       rmb
@@ -430,116 +416,6 @@ class RapidsDeviceMemoryStore
     }
   }
 
-
-  class RapidsDeviceMemoryBufferWithMeta(id: RapidsBufferId,
-                                         size: Long,
-                                         meta: TableMeta,
-                                         contigBuffer: DeviceMemoryBuffer,
-                                         spillPriority: Long,
-                                         catalog: RapidsBufferCatalog,
-                                         override val base: RapidsMemoryBuffer)
-    extends RapidsBufferBaseWithMeta(id, meta, spillPriority)
-      with MemoryBuffer.EventHandler
-      with RapidsBufferChannelWritable
-      with CopyableRapidsBuffer {
-
-    override val memoryUsedBytes: Long = size
-
-    // If this require triggers, we are re-adding a `DeviceMemoryBuffer` outside of
-    // the catalog lock, which should not possible. The event handler is set to null
-    // when we free the `RapidsDeviceMemoryBuffer` and if the buffer is not free, we
-    // take out another handle (in the catalog).
-    // TODO: This is not robust (to rely on outside locking and addReference/free)
-    //  and should be revisited.
-    require(contigBuffer.setEventHandler(this) == null,
-      "DeviceMemoryBuffer with non-null event handler failed to add!!")
-
-    /**
-     * Override from the MemoryBuffer.EventHandler interface.
-     *
-     * If we are being invoked we have the `contigBuffer` lock, as this callback
-     * is being invoked from `MemoryBuffer.close`
-     *
-     * @param refCount - contigBuffer's current refCount
-     */
-    override def onClosed(refCount: Int): Unit = {
-      // refCount == 1 means only 1 reference exists to `contigBuffer` in the
-      // RapidsDeviceMemoryBuffer (we own it)
-      if (refCount == 1) {
-        // setSpillable is being called here as an extension of `MemoryBuffer.close()`
-        // we hold the MemoryBuffer lock and we could be called from a Spark task thread
-        // Since we hold the MemoryBuffer lock, `incRefCount` waits for us. The only other
-        // call to `setSpillable` is also under this same MemoryBuffer lock (see:
-        // `getDeviceMemoryBuffer`)
-        setSpillable(this, true)
-      }
-    }
-
-    override protected def releaseResources(): Unit = synchronized {
-      // we need to disassociate this RapidsBuffer from the underlying buffer
-      contigBuffer.close()
-    }
-
-    /**
-     * Get and increase the reference count of the device memory buffer
-     * in this RapidsBuffer, while making the RapidsBuffer non-spillable.
-     *
-     * @note It is the responsibility of the caller to close the DeviceMemoryBuffer
-     */
-    override def getDeviceMemoryBuffer(stream: Cuda.Stream): DeviceMemoryBuffer = synchronized {
-      contigBuffer.synchronized {
-        setSpillable(this, false)
-        contigBuffer.incRefCount()
-        contigBuffer
-      }
-    }
-
-    // for UCX shuffle
-    override def getMemoryBuffer(stream: Cuda.Stream): MemoryBuffer =
-      getDeviceMemoryBuffer(stream)
-
-    def getCopyIterator(stream: Cuda.Stream): RapidsBufferCopyIterator =
-      new RapidsBufferCopyIterator(
-        singleShotBuffer = Some(getDeviceMemoryBuffer(stream)))
-
-    override def copyTo(store: RapidsBufferStore, stream: Cuda.Stream): RapidsBuffer = {
-      store.createBuffer(this, catalog, stream, base)
-    }
-
-    /**
-     * We overwrite free to make sure we don't have a handler for the underlying
-     * contigBuffer, since this `RapidsBuffer` is no longer tracked.
-     */
-    override def free(): Unit = synchronized {
-      if (isValid) {
-        // it is going to be invalid when calling super.free()
-        contigBuffer.setEventHandler(null)
-      }
-      super.free()
-    }
-
-    override def writeToChannel(
-        outputChannel: WritableByteChannel, stream: Cuda.Stream): (Long, Option[TableMeta]) = {
-      var written: Long = 0L
-      catalog.withHostSpillBounceBuffer { hostSpillBounceBuffer =>
-        val iter = new MemoryBufferToHostByteBufferIterator(
-          contigBuffer,
-          hostSpillBounceBuffer,
-          stream)
-        iter.foreach { bb =>
-          try {
-            while (bb.hasRemaining) {
-              written += outputChannel.write(bb)
-            }
-          } finally {
-            RapidsStorageUtils.dispose(bb)
-          }
-        }
-        (written, Some(meta))
-      }
-    }
-  }
-
   class RapidsDeviceMemoryBuffer(id: RapidsBufferId,
                                  size: Long,
                                  contigBuffer: DeviceMemoryBuffer,
@@ -639,7 +515,7 @@ class RapidsDeviceMemoryStore
 
     def getCopyIterator(stream: Cuda.Stream): RapidsBufferCopyIterator =
       new RapidsBufferCopyIterator(
-        singleShotBuffer = Some(getDeviceMemoryBuffer(stream)))
+        singleShotBuffer = Some(getMemoryBuffer(stream)))
 
     override def copyTo(store: RapidsBufferStore, stream: Cuda.Stream): RapidsBuffer = {
       store.createBuffer(this, catalog, stream, base)
@@ -648,6 +524,22 @@ class RapidsDeviceMemoryStore
     override def close(): Unit = {
       super.close()
     }
+  }
+
+  class RapidsDeviceMemoryBufferWithMeta(id: RapidsBufferId,
+                                         size: Long,
+                                         _meta: TableMeta,
+                                         contigBuffer: DeviceMemoryBuffer,
+                                         spillPriority: Long,
+                                         catalog: RapidsBufferCatalog,
+                                         override val base: RapidsMemoryBuffer)
+    extends RapidsDeviceMemoryBuffer(id, size, contigBuffer, spillPriority, catalog, base)
+      with RapidsBufferWithMeta
+      with MemoryBuffer.EventHandler
+      with RapidsBufferChannelWritable
+      with CopyableRapidsBuffer {
+
+    override def meta: TableMeta = _meta
   }
 }
 

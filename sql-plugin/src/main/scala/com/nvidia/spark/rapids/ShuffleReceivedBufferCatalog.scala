@@ -84,7 +84,7 @@ class ShuffleReceivedBufferCatalog(
       catalog.addBufferWithMeta(
         bufferId,
         buffer,
-        tableMeta,
+        Some(tableMeta),
         initialSpillPriority,
         needsSync)
     }

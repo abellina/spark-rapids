@@ -137,6 +137,7 @@ class RapidsDiskStore(val diskBlockManager: RapidsDiskBlockManager)
         throw new IllegalStateException(s"${rapidsBuffer} does " +
           s"not support channel writable")
     }
+    // TODO: AB
     //TrampolineUtil.incTaskMetricsDiskBytesSpilled(uncompressedSize)
     //val metrics = GpuTaskMetrics.get
     //metrics.incDiskBytesAllocated(uncompressedSize)
@@ -278,98 +279,17 @@ class RapidsDiskStore(val diskBlockManager: RapidsDiskBlockManager)
                                  fileOffset: Long,
                                  uncompressedSize: Long,
                                  onDiskSizeInBytes: Long,
-                                 meta: TableMeta,
+                                 _meta: TableMeta,
                                  spillPriority: Long,
                                  catalog: RapidsBufferCatalog,
                                  override val base: RapidsMemoryBuffer,
                                  diskStore: RapidsDiskStore)
-    extends RapidsBufferBaseWithMeta(id, meta, spillPriority)
+    extends RapidsDiskBuffer(id, fileOffset,
+        uncompressedSize, onDiskSizeInBytes, spillPriority, catalog, base, diskStore)
+      with RapidsBufferWithMeta
       with CopyableRapidsBuffer {
 
-    def getCopyIterator(stream: Cuda.Stream): RapidsBufferCopyIterator =
-      new RapidsBufferCopyIterator(
-        singleShotBuffer = Some(getMemoryBuffer(stream)))
-
-    override def copyTo(store: RapidsBufferStore, stream: Cuda.Stream): RapidsBuffer = {
-      store.createBuffer(this, catalog, stream, base)
-    }
-
-    // FIXME: Need to be clean up. Tracked in https://github.com/NVIDIA/spark-rapids/issues/9496
-    override val memoryUsedBytes: Long = uncompressedSize
-
-    override def getDeviceMemoryBuffer(stream: Cuda.Stream): DeviceMemoryBuffer = {
-      withResource(getMemoryBuffer(stream)) { hb =>
-        closeOnExcept(DeviceMemoryBuffer.allocate(hb.getLength, stream)) { db =>
-          db.copyFromMemoryBuffer(0, hb, 0, db.getLength, stream)
-          db
-        }
-      }
-    }
-
-    // used in UCX shuffle and copy iterator
-    override def getMemoryBuffer(stream: Cuda.Stream): MemoryBuffer = synchronized {
-      require(onDiskSizeInBytes > 0,
-        s"$this attempted an invalid 0-byte mmap of a file")
-      val diskBlockManager = diskStore.diskBlockManager
-      val path = id.getDiskPath(diskBlockManager)
-      val serializerManager = diskBlockManager.getSerializerManager()
-      val memBuffer = if (serializerManager.isRapidsSpill(id)) {
-        // Only go through serializerManager's stream wrapper for spill case
-        closeOnExcept(HostAlloc.alloc(uncompressedSize)) {
-          decompressed => GpuTaskMetrics.get.readSpillFromDiskTime {
-            withResource(FileChannel.open(path.toPath, StandardOpenOption.READ)) { c =>
-              c.position(fileOffset)
-              withResource(Channels.newInputStream(c)) { compressed =>
-                withResource(serializerManager.wrapStream(id, compressed)) { in =>
-                  withResource(new HostMemoryOutputStream(decompressed)) { out =>
-                    IOUtils.copy(in, out)
-                  }
-                  decompressed
-                }
-              }
-            }
-          }
-        }
-      } else {
-        // Reserved mmap read fashion for UCX shuffle path. Also it's skipping encryption and
-        // compression.
-        HostMemoryBuffer.mapFile(path, MapMode.READ_WRITE, fileOffset, onDiskSizeInBytes)
-      }
-      memBuffer
-    }
-
-    override def close(): Unit = synchronized {
-      super.close()
-    }
-
-    override protected def releaseResources(): Unit = {
-      logDebug(s"releasing resources for disk buffer $id of size $memoryUsedBytes bytes")
-      val metrics = GpuTaskMetrics.get
-      metrics.decDiskBytesAllocated(memoryUsedBytes)
-      logDebug(reportDiskAllocMetrics(metrics))
-
-      // Buffers that share paths must be cleaned up elsewhere
-      if (id.canShareDiskPaths) {
-        diskStore.removeSharedBufferFile(id)
-      } else {
-        val path = id.getDiskPath(diskStore.diskBlockManager)
-        if (!path.delete() && path.exists()) {
-          logWarning(s"Unable to delete spill path $path")
-        }
-      }
-    }
-
-    override def getColumnarBatch(
-        sparkTypes: Array[DataType],
-        stream: Cuda.Stream): ColumnarBatch = {
-      withResource(getDeviceMemoryBuffer(stream)) { db =>
-        RapidsBuffer.columnarBatchFromDeviceBuffer(db, sparkTypes, meta)
-      }
-    }
-
-    override def getHostMemoryBuffer(stream: Cuda.Stream): HostMemoryBuffer = {
-      getMemoryBuffer(stream).asInstanceOf[HostMemoryBuffer]
-    }
+    override def meta: TableMeta = _meta
   }
 
   /**

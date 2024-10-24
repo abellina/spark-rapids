@@ -266,10 +266,10 @@ class RapidsDeviceMemoryStoreSuite extends AnyFunSuite with MockitoSugar {
             store.addBuffer(
               bufferId,
               ct.getBuffer,
-              meta,
               spillPriority,
               false,
-              catalog)
+              catalog,
+              Some(meta))
             assertResult(buffSize)(store.currentSize)
             assertResult(0)(store.currentSpillableSize)
           }
@@ -293,10 +293,10 @@ class RapidsDeviceMemoryStoreSuite extends AnyFunSuite with MockitoSugar {
           val buffer = store.addBuffer(
             bufferId,
             ct.getBuffer,
-            meta,
             spillPriority,
-            false,
-            catalog)
+            needsSync = false,
+            catalog,
+            Some(meta))
           assertResult(buffSize)(store.currentSize)
           assertResult(0)(store.currentSpillableSize)
           buffer
@@ -330,7 +330,7 @@ class RapidsDeviceMemoryStoreSuite extends AnyFunSuite with MockitoSugar {
             catalog.addBufferWithMeta(
               bufferId,
               ct.getBuffer,
-              meta,
+              Some(meta),
               spillPriority,
               false)
           }
@@ -357,7 +357,7 @@ class RapidsDeviceMemoryStoreSuite extends AnyFunSuite with MockitoSugar {
               catalog.addBufferWithMeta(
                 bufferId,
                 ct.getBuffer,
-                meta,
+                Some(meta),
                 initialSpillPriority = 3,
                 needsSync = false)
             }
@@ -389,7 +389,7 @@ class RapidsDeviceMemoryStoreSuite extends AnyFunSuite with MockitoSugar {
                 catalog.addBufferWithMeta(
                   bufferId,
                   ct.getBuffer,
-                  meta,
+                  Some(meta),
                   initialSpillPriority = 3,
                   false)
               }

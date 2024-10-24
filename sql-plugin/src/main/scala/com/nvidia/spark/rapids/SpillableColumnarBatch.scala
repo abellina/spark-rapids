@@ -116,9 +116,9 @@ class SpillableColumnarBatchImpl (
   }
 
   override def getColumnarBatch(stream: Cuda.Stream = Cuda.DEFAULT_STREAM): ColumnarBatch = {
-    withRapidsBuffer { rapidsBufferBase =>
+    withRapidsBuffer { rapidsBuffer =>
       GpuSemaphore.acquireIfNecessary(TaskContext.get())
-      rapidsBufferBase.getColumnarBatch(sparkTypes, stream)
+      rapidsBuffer.getColumnarBatch(sparkTypes, stream)
     }
   }
 
