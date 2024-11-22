@@ -185,19 +185,28 @@ class RapidsShuffleServer(transport: RapidsShuffleTransport,
         var continue = true
         while (!pendingTransfersQueue.isEmpty && continue) {
           // TODO: throttle on too big a send total so we don't acquire the world (in flight limit)
-          val sendBounceBuffers =
-            transport.tryGetSendBounceBuffers(1, 1)
-          if (sendBounceBuffers.nonEmpty) {
-            val pendingTransfer = pendingTransfersQueue.poll()
-            bssToIssue.append(new BufferSendState(
+          val pendingTransfer = pendingTransfersQueue.peek()
+          if (pendingTransfer.tx.useBounceBuffers) {
+            val sendBounceBuffers =
+              transport.tryGetSendBounceBuffers(1, 1)
+            if (sendBounceBuffers.nonEmpty) {
+              pendingTransfersQueue.remove(pendingTransfer)
+              bssToIssue.append(new BounceBufferBufferSendState(
+                pendingTransfer.tx,
+                sendBounceBuffers.head, // there's only one bounce buffer here for now
+                pendingTransfer.requestHandler,
+                serverStream))
+            } else {
+              // TODO: make this a metric => "blocked while waiting on bounce buffers"
+              logTrace(s"Can't acquire send bounce buffers")
+              continue = false
+            }
+          } else {
+            pendingTransfersQueue.remove(pendingTransfer)
+            bssToIssue.append(new DirectBufferSendState(
               pendingTransfer.tx,
-              sendBounceBuffers.head, // there's only one bounce buffer here for now
               pendingTransfer.requestHandler,
               serverStream))
-          } else {
-            // TODO: make this a metric => "blocked while waiting on bounce buffers"
-            logTrace(s"Can't acquire send bounce buffers")
-            continue = false
           }
         }
         if (bssToIssue.nonEmpty) {
@@ -331,7 +340,7 @@ class RapidsShuffleServer(transport: RapidsShuffleTransport,
           // For each `BufferSendState` we ask for a bounce buffer fill up
           // so the server is servicing N (`bufferSendStates`) requests
           try {
-            val buffersToSend = bufferSendState.getBufferToSend()
+            val buffersToSend = bufferSendState.getBufferToSend
             bssBuffers.append((bufferSendState, buffersToSend))
           } catch {
             case ex: RapidsShuffleSendPrepareException =>
@@ -396,24 +405,6 @@ class RapidsShuffleServer(transport: RapidsShuffleTransport,
                     s"Still pending: ${pendingTransfersQueue.size}.")
                   addToContinueQueue(Seq(bufferSendState))
                 } else {
-                  val transferResponse = bufferSendState.getTransferResponse()
-
-                  val requestTx = bufferSendState.getRequestTransaction
-                  logDebug(s"Handling transfer request $requestTx for executor " +
-                    s"$peerExecutorId with $buffersToSend")
-
-                  // send the transfer response
-                  requestTx.respond(transferResponse.acquire(), withResource(_) { responseTx =>
-                    withResource(transferResponse) { _ =>
-                      responseTx.getStatus match {
-                        case TransactionStatus.Cancelled | TransactionStatus.Error =>
-                          logError(s"Error while handling TransferResponse: " +
-                            s"${responseTx.getErrorMessage}")
-                        case _ =>
-                      }
-                    }
-                  })
-
                   // wake up the bssExec since bounce buffers became available
                   logDebug(s"Buffer send state " +
                     s"${TransportUtils.toHex(bufferSendState.getPeerBufferReceiveHeader)} " +

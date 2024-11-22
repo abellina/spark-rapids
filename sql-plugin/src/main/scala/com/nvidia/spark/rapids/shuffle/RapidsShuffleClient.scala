@@ -294,23 +294,11 @@ class RapidsShuffleClient(
         i.tableMeta.bufferMeta().id()
       }))
 
-    connection.request(MessageType.TransferRequest, transferReq.acquire(), withResource(_) { tx =>
+    connection.send(MessageType.TransferRequest, transferReq.acquire(), withResource(_) { tx =>
       withResource(transferReq) { _ =>
         tx.getStatus match {
           case TransactionStatus.Success =>
-            withResource(tx.releaseMessage()) { mtb =>
-              // make sure all bufferTxs are still valid (e.g. resp says that they have STARTED)
-              val transferResponse = ShuffleMetadata.getTransferResponse(mtb.getBuffer())
-              (0 until transferResponse.responsesLength()).foreach(r => {
-                val response = transferResponse.responses(r)
-                if (response.state() != TransferState.STARTED) {
-                  // we could either re-issue the request, cancelling and releasing memory
-                  // or we could re-issue, and leave the old receive waiting
-                  // for now, leaving the old receive waiting.
-                  throw new IllegalStateException("NOT IMPLEMENTED")
-                }
-              })
-            }
+            logDebug(s"done with tx ${tx}")
           case _ =>
             toIssue.errorOccurred(tx.getErrorMessage.getOrElse("TransferRequest failed"))
         }
@@ -419,6 +407,7 @@ class RapidsShuffleClient(
     } catch {
       case t: Throwable =>
         withResource(bufferReceiveState) { _ =>
+          throw t
           bufferReceiveState.errorOccurred(
             s"Error while handling buffer receive for BRS: " +
             s"${TransportUtils.toHex(bufferReceiveState.id)}", t)

@@ -51,12 +51,23 @@ import org.apache.spark.shuffle.rapids.RapidsShuffleSendPrepareException
  * @param requestHandler - impl of trait that interfaces to the catalog
  * @param serverStream - CUDA stream to use for copies.
  */
-class BufferSendState(
+
+trait BufferSendState extends AutoCloseable {
+  def hasMoreSends: Boolean
+  def getBufferToSend: MemoryBuffer
+  def releaseAcquiredToCatalog(): Unit
+  def peerExecutorId: Long
+  def getPeerBufferReceiveHeader: Long
+  def getTransferResponse: RefCountedDirectByteBuffer
+  def getRequestTransaction: Transaction
+}
+
+class BounceBufferBufferSendState(
     transaction: Transaction,
     sendBounceBuffers: SendBounceBuffers,
     requestHandler: RapidsShuffleRequestHandler,
     serverStream: Cuda.Stream = Cuda.DEFAULT_STREAM)
-    extends AutoCloseable with Logging {
+    extends BufferSendState with AutoCloseable with Logging {
 
   class SendBlock(val bufferHandle: RapidsShuffleHandle) extends BlockWithSize {
     // we assume that the size of the buffer won't change as it goes to host/disk
@@ -254,5 +265,49 @@ class BufferSendState(
   def releaseAcquiredToCatalog(): Unit = synchronized {
     acquiredBuffs.foreach(_.close())
     acquiredBuffs = Seq.empty
+  }
+}
+
+class DirectBufferSendState(
+  transaction: Transaction,
+  requestHandler: RapidsShuffleRequestHandler,
+  stream: Cuda.Stream) extends BufferSendState {
+
+  private[this] val (peerBufferReceiveHeader: Long,
+  buffToSend: RapidsShuffleHandle, bufferMeta: BufferMeta) = {
+    withResource(transaction.releaseMessage()) { mtb =>
+      val transferRequest = ShuffleMetadata.getTransferRequest(mtb.getBuffer())
+      require(transferRequest.requestsLength() == 1, "direct sends require 1 tr")
+      val peerBufferReceiveHeader = transferRequest.id()
+
+      val btr = new BufferTransferRequest() // for reuse
+      val bufferTransferRequest = transferRequest.requests(btr, 0)
+      val handle = requestHandler.getShuffleHandle(bufferTransferRequest.bufferId())
+      (peerBufferReceiveHeader, handle, handle.tableMeta.bufferMeta())
+    }
+  }
+
+  var sent: Boolean = false
+  override def hasMoreSends: Boolean = !sent
+  override def getBufferToSend(): MemoryBuffer = {
+    sent = true
+    buffToSend.spillable.materialize
+  }
+  override def releaseAcquiredToCatalog(): Unit = {
+  }
+  override def peerExecutorId: Long = transaction.peerExecutorId()
+
+  def getPeerBufferReceiveHeader: Long = {
+    peerBufferReceiveHeader
+  }
+
+  def getTransferResponse(): RefCountedDirectByteBuffer = synchronized {
+    new RefCountedDirectByteBuffer(
+      ShuffleMetadata.buildBufferTransferResponse(Seq(bufferMeta)))
+  }
+
+  override def getRequestTransaction: Transaction = transaction
+  override def close(): Unit = {
+    releaseAcquiredToCatalog()
   }
 }

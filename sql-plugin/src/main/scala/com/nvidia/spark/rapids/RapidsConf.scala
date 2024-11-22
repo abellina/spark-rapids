@@ -17,20 +17,17 @@ package com.nvidia.spark.rapids
 
 import java.io.{File, FileOutputStream}
 import java.util
-
 import scala.collection.JavaConverters._
 import scala.collection.mutable.{HashMap, ListBuffer}
-
 import ai.rapids.cudf.Cuda
 import com.nvidia.spark.rapids.jni.RmmSpark.OomInjectionType
 import com.nvidia.spark.rapids.lore.{LoreId, OutputLoreId}
-
 import org.apache.spark.SparkConf
 import org.apache.spark.internal.Logging
 import org.apache.spark.network.util.{ByteUnit, JavaUtils}
 import org.apache.spark.sql.catalyst.analysis.FunctionRegistry
 import org.apache.spark.sql.internal.SQLConf
-import org.apache.spark.sql.rapids.RapidsPrivateUtil
+import org.apache.spark.sql.rapids.{GpuShuffleEnv, RapidsPrivateUtil}
 
 object ConfHelper {
   def toBoolean(s: String, key: String): Boolean = {
@@ -534,10 +531,12 @@ val GPU_COREDUMP_PIPE_PATTERN = conf("spark.rapids.gpu.coreDump.pipePattern")
 
   val RMM_POOL = conf("spark.rapids.memory.gpu.pool")
     .doc("Select the RMM pooling allocator to use. Valid values are \"DEFAULT\", \"ARENA\", " +
-      "\"ASYNC\", and \"NONE\". With \"DEFAULT\", the RMM pool allocator is used; with " +
-      "\"ARENA\", the RMM arena allocator is used; with \"ASYNC\", the new CUDA stream-ordered " +
-      "memory allocator in CUDA 11.2+ is used. If set to \"NONE\", pooling is disabled and RMM " +
-      "just passes through to CUDA memory allocation directly.")
+      "\"ASYNC\", \"ASYNC_POOL\", and \"NONE\". With \"DEFAULT\", the RMM ASYNC allocator is " +
+      " used; with \"ARENA\", the RMM arena allocator is used; with \"ASYNC\", the CUDA " +
+      "stream-ordered memory allocator in CUDA 11.2+ is used. A variant of \"ASYNC\", " +
+      "\"ASYNC_FABRIC\", uses the stream-ordered memory allocator but with support for " +
+      "IPC using fabric handles in CUDA 12.4+. If set to \"NONE\", pooling is disabled " +
+      "and RMM just passes through to CUDA memory allocation directly.")
     .startupOnly()
     .stringConf
     .createWithDefault("ASYNC")
@@ -1838,6 +1837,12 @@ val GPU_COREDUMP_PIPE_PATTERN = conf("spark.rapids.gpu.coreDump.pipePattern")
     .bytesConf(ByteUnit.BYTE)
     .createWithDefault(4 * 1024  * 1024)
 
+  val SHUFFLE_UCX_BOUNCE_BUFFERS_FABRIC_TYPE = conf("spark.rapids.shuffle.ucx.bounceBuffers.fabricType")
+    .internal()
+    .startupOnly()
+    .stringConf
+    .createWithDefault("cuda")
+
   val SHUFFLE_UCX_BOUNCE_BUFFERS_DEVICE_COUNT =
     conf("spark.rapids.shuffle.ucx.bounceBuffers.device.count")
     .doc("The number of bounce buffers to pre-allocate from device memory")
@@ -2769,6 +2774,15 @@ class RapidsConf(conf: Map[String, String]) extends Logging {
     }
   }
 
+  lazy val isRapidsShuffleConfigured: Boolean = {
+    conf.get("spark.shuffle.manager")
+      .exists(sm => sm.equals(GpuShuffleEnv.RAPIDS_SHUFFLE_CLASS))
+  }
+
+  lazy val ucxListenerTCPPortBindMaxRetries: Integer = {
+    Integer.parseInt(conf.getOrElse("spark.port.maxRetries", "16"))
+  }
+
   lazy val testingAllowedNonGpu: Seq[String] = get(TEST_ALLOWED_NONGPU)
 
   lazy val validateExecsInGpuPlan: Seq[String] = get(TEST_VALIDATE_EXECS_ONGPU)
@@ -2801,7 +2815,7 @@ class RapidsConf(conf: Map[String, String]) extends Logging {
 
   lazy val rmmPool: String = {
     var pool = get(RMM_POOL)
-    if ("ASYNC".equalsIgnoreCase(pool)) {
+    if ("ASYNC".equalsIgnoreCase(pool) || "ASYNC_FABRIC".equalsIgnoreCase(pool)) {
       val driverVersion = Cuda.getDriverVersion
       val runtimeVersion = Cuda.getRuntimeVersion
       var fallbackMessage: Option[String] = None
@@ -3114,6 +3128,8 @@ class RapidsConf(conf: Map[String, String]) extends Logging {
   lazy val shuffleUcxMgmtConnTimeout: Int = get(SHUFFLE_UCX_MGMT_CONNECTION_TIMEOUT)
 
   lazy val shuffleUcxBounceBuffersSize: Long = get(SHUFFLE_UCX_BOUNCE_BUFFERS_SIZE)
+
+  lazy val shuffleUcxBounceBuffersFabricType: String = get(SHUFFLE_UCX_BOUNCE_BUFFERS_FABRIC_TYPE)
 
   lazy val shuffleUcxDeviceBounceBuffersCount: Int = get(SHUFFLE_UCX_BOUNCE_BUFFERS_DEVICE_COUNT)
 

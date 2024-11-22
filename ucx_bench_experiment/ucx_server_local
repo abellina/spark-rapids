@@ -1,0 +1,1 @@
+UCX_TCP_CM_REUSEADDR=y java -cp /home/abellina/work/spark-rapids/dist/target/rapids-4-spark_2.12-24.12.0-SNAPSHOT-cuda11.jar:/home/abellina/work/all_sparks/spark-3.5.2-bin-hadoop3/jars/* com.nvidia.spark.rapids.shuffle.ucx.UCXBenchJ /home/abellina/work/spark-rapids/ucx_bench_experiment/config.properties -s 100 localhost 12345
