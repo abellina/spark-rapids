@@ -154,6 +154,33 @@ class UCXClientConnection(peerExecutorId: Long, ucx: UCX, transport: UCXShuffleT
 
   override def getPeerExecutorId: Long = peerExecutorId
 
+  override def send(
+      messageType: MessageType.Value,
+      message: ByteBuffer,
+      cb: TransactionCallback): Transaction = {
+    val tx = createTransaction
+    tx.start(UCXTransactionType.Request, 1, cb)
+
+    // this header is unique, so we can send it with the request
+    // expecting it to be echoed back in the response
+    val requestHeader = UCXConnection.composeRequestHeader(ucx.localExecutorId, tx.txId)
+
+    val requestAm = UCXActiveMessage(
+      UCXConnection.composeRequestAmId(messageType), requestHeader, false)
+
+    ucx.sendActiveMessage(peerExecutorId, requestAm, message,
+      new UcxCallback {
+        override def onError(ucsStatus: Int, errorMsg: String): Unit = {
+          tx.completeWithError(errorMsg)
+        }
+
+        override def onSuccess(request: UcpRequest): Unit = {
+          tx.completeWithSuccess(messageType, None, None)
+        }
+      })
+    tx
+  }
+
   override def request(messageType: MessageType.Value, request: ByteBuffer,
                        cb: TransactionCallback): Transaction = {
     val tx = createTransaction

@@ -29,11 +29,6 @@ class GpuShuffleEnv(rapidsConf: RapidsConf) extends Logging {
 
   private lazy val conf = SparkEnv.get.conf
 
-  private lazy val isRapidsShuffleConfigured: Boolean = {
-    conf.contains("spark.shuffle.manager") &&
-      conf.get("spark.shuffle.manager") == GpuShuffleEnv.RAPIDS_SHUFFLE_CLASS
-  }
-
   lazy val rapidsShuffleCodec: Option[TableCompressionCodec] = {
     val codecName = rapidsConf.shuffleCompressionCodec.toLowerCase(Locale.ROOT)
     if (codecName == "none") {
@@ -45,7 +40,7 @@ class GpuShuffleEnv(rapidsConf: RapidsConf) extends Logging {
   }
 
   def init(): Unit = {
-    if (isRapidsShuffleConfigured) {
+    if (rapidsConf.isRapidsShuffleConfigured) {
       shuffleCatalog =
           new ShuffleBufferCatalog()
       shuffleReceivedBufferCatalog =
@@ -132,7 +127,7 @@ object GpuShuffleEnv extends Logging {
     }
     // executors have `env` defined when this is checked
     // in tests
-    val isConfiguredInEnv = Option(env).exists(_.isRapidsShuffleConfigured)
+    val isConfiguredInEnv = conf.isRapidsShuffleConfigured
     (isConfiguredInEnv || isRapidsManager) &&
       (conf.isMultiThreadedShuffleManagerMode ||
         (conf.isGPUShuffle && !isExternalShuffleEnabled &&
@@ -179,6 +174,10 @@ object GpuShuffleEnv extends Logging {
   }
 
   def getReceivedCatalog: ShuffleReceivedBufferCatalog = env.getReceivedCatalog
+
+  def setReceivedBufferCatalog(testCatalog: ShuffleReceivedBufferCatalog): Unit = {
+    env.shuffleReceivedBufferCatalog = testCatalog
+  }
 
   def rapidsShuffleCodec: Option[TableCompressionCodec] = env.rapidsShuffleCodec
 

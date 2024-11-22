@@ -32,6 +32,15 @@ case class ConsumedBatchFromBounceBuffer(
     meta: TableMeta,
     handler: RapidsShuffleFetchHandler)
 
+trait BufferReceiveState extends AutoCloseable {
+  def id: Long
+  def hasMoreBlocks: Boolean
+  def consumeWindow(): Seq[ConsumedBatchFromBounceBuffer]
+  def getBufferWhenReady(finalizeCb: TransportBuffer => Unit, size: Long): Unit
+  def errorOccurred(errMsg: String, throwable: Throwable = null): Unit
+  def getRequests: Seq[PendingTransferRequest]
+}
+
 /**
  * A helper case class to maintain the state associated with a transfer request to a peer.
  *
@@ -52,25 +61,25 @@ case class ConsumedBatchFromBounceBuffer(
  * @param transportOnClose - a callback invoked when the `BufferReceiveState` closes
  * @param stream - CUDA stream to use for allocations and copies
  */
-class BufferReceiveState(
-    val id: Long,
+class BounceBufferBufferReceiveState(
+    override val id: Long,
     bounceBuffer: BounceBuffer,
     requests: Seq[PendingTransferRequest],
     transportOnClose: () => Unit,
     stream: Cuda.Stream = Cuda.DEFAULT_STREAM)
-    extends AutoCloseable with Logging {
+    extends BufferReceiveState with Logging {
 
-  val transportBuffer = new CudfTransportBuffer(bounceBuffer.buffer)
+  private val transportBuffer = new CudfTransportBuffer(bounceBuffer.buffer)
   // we use this to keep a list (should be depth 1) of "requests for receives"
   //  => the transport is ready to receive again, but we are not done consuming the
   //     buffers from the previous receive, so we must delay the transport.
-  var toFinalize = new util.ArrayDeque[TransportBuffer => Unit]()
+  private var toFinalize = new util.ArrayDeque[TransportBuffer => Unit]()
 
   // if this is > 0, we are waiting to consume, so we need to queue up in `toFinalize`
   // any callbacks
-  var toConsume = 0
+  private var toConsume = 0
 
-  class ReceiveBlock(val request: PendingTransferRequest) extends BlockWithSize {
+  private class ReceiveBlock(val request: PendingTransferRequest) extends BlockWithSize {
     override def size: Long = request.getLength
   }
 
@@ -93,8 +102,15 @@ class BufferReceiveState(
   private[this] var bounceBufferByteOffset = 0L
 
   // get block ranges for us to work with
-  private[this] val windowedBlockIterator = new WindowedBlockIterator[ReceiveBlock](
-    requests.map(r => new ReceiveBlock(r)), bounceBuffer.buffer.getLength)
+  private[this] val windowedBlockIterator =
+    try {
+      new WindowedBlockIterator[ReceiveBlock](
+        requests.map(r => new ReceiveBlock(r)), bounceBuffer.buffer.getLength)
+    } catch {
+      case t: Throwable =>
+        println(t)
+        throw t
+    }
 
   private[this] var hasMoreBuffers_ = windowedBlockIterator.hasNext
 
@@ -122,7 +138,9 @@ class BufferReceiveState(
       bounceBuffer.close()
     }
     if (workingOn != null) {
-      logWarning(s"BufferReceiveState closing, but there are unfinished batches")
+      // TODO: AB: this was just a warning before
+      throw new IllegalStateException(
+      s"BufferReceiveState closing, but there are unfinished batches")
       workingOn.close()
     }
     transportOnClose()
@@ -132,13 +150,13 @@ class BufferReceiveState(
    * Calls `transferError` on each `RapidsShuffleFetchHandler`
    * @param errMsg - the message to pass onto the handlers
    */
-  def errorOccurred(errMsg: String, throwable: Throwable = null): Unit = synchronized {
+  override def errorOccurred(errMsg: String, throwable: Throwable = null): Unit = synchronized {
     // for current and future blocks, tell handlers of error
     (currentBlocks ++ windowedBlockIterator.toSeq.flatten)
       .foreach(_.block.request.handler.transferError(errMsg, throwable))
   }
 
-  def hasMoreBlocks: Boolean = synchronized { hasMoreBuffers_ }
+  override def hasMoreBlocks: Boolean = synchronized { hasMoreBuffers_ }
 
   private def advance(): Unit = {
     if (!hasMoreBuffers_) {
@@ -248,4 +266,43 @@ class BufferReceiveState(
       }
     }
   }
+}
+
+class DirectBufferReceiveState(
+    override val id: Long,
+    var buffer: DeviceMemoryBuffer,
+    request: PendingTransferRequest,
+    transportOnClose: () => Unit)
+  extends BufferReceiveState {
+
+  private var consumed = false
+
+  override def consumeWindow(): Seq[ConsumedBatchFromBounceBuffer] = {
+    consumed = true
+    Seq(ConsumedBatchFromBounceBuffer(
+      buffer,
+      request.tableMeta,
+      request.handler))
+  }
+
+  override def close(): Unit = {
+    transportOnClose()
+  }
+
+  override def getBufferWhenReady(finalizeCb: TransportBuffer => Unit, size: Long): Unit = {
+    finalizeCb(new TransportBuffer {
+      override def getAddress(): Long = buffer.getAddress
+      override def getLength(): Long = buffer.getLength
+      override def close(): Unit = {}
+    })
+  }
+
+  override def hasMoreBlocks: Boolean = !consumed
+
+  override def errorOccurred(errMsg: String, throwable: Throwable): Unit = {
+    println(s"ERROR ${errMsg}")
+    throw throwable
+  }
+
+  override def getRequests: Seq[PendingTransferRequest] = Seq(request)
 }
