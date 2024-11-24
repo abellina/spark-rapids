@@ -35,7 +35,6 @@ import org.openucx.jucx._
 import org.openucx.jucx.ucp._
 import org.openucx.jucx.ucs.UcsConstants
 
-import org.apache.spark.SparkEnv
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.rapids.storage.RapidsStorageUtils
 import org.apache.spark.storage.BlockManagerId
@@ -959,7 +958,7 @@ class UCX(transport: UCXShuffleTransport, executor: BlockManagerId, rapidsConf: 
         new UcpListenerParams()
           .setConnectionHandler(this)
 
-      val maxRetries = SparkEnv.get.conf.getInt("spark.port.maxRetries", 16)
+      val maxRetries = rapidsConf.ucxListenerTCPPortBindMaxRetries
       val startPort = if (rapidsConf.shuffleUcxListenerStartPort != 0) {
         rapidsConf.shuffleUcxListenerStartPort
       } else {

@@ -1,4 +1,5 @@
 export UCX_RNDV_FRAG_MEM_TYPE=cuda
+export UCX_TCP_CM_REUSEADDR=y
 export UCX_RNDV_SCHEME=put_zcopy
 export SPARK_RAPIDS_JAR=$PWD/../dist/target/rapids-4-spark_2.12-24.10.0-SNAPSHOT-cuda11.jar
 export UCX_BENCH_CLASSPATH=$SPARK_RAPIDS_JAR:$SPARK_HOME/jars/*

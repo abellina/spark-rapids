@@ -419,6 +419,7 @@ class RapidsShuffleClient(
     } catch {
       case t: Throwable =>
         withResource(bufferReceiveState) { _ =>
+          throw t
           bufferReceiveState.errorOccurred(
             s"Error while handling buffer receive for BRS: " +
             s"${TransportUtils.toHex(bufferReceiveState.id)}", t)

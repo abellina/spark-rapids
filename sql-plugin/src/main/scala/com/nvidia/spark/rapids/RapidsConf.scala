@@ -17,20 +17,17 @@ package com.nvidia.spark.rapids
 
 import java.io.{File, FileOutputStream}
 import java.util
-
 import scala.collection.JavaConverters._
 import scala.collection.mutable.{HashMap, ListBuffer}
-
 import ai.rapids.cudf.Cuda
 import com.nvidia.spark.rapids.jni.RmmSpark.OomInjectionType
 import com.nvidia.spark.rapids.lore.{LoreId, OutputLoreId}
-
 import org.apache.spark.SparkConf
 import org.apache.spark.internal.Logging
 import org.apache.spark.network.util.{ByteUnit, JavaUtils}
 import org.apache.spark.sql.catalyst.analysis.FunctionRegistry
 import org.apache.spark.sql.internal.SQLConf
-import org.apache.spark.sql.rapids.RapidsPrivateUtil
+import org.apache.spark.sql.rapids.{GpuShuffleEnv, RapidsPrivateUtil}
 
 object ConfHelper {
   def toBoolean(s: String, key: String): Boolean = {
@@ -2696,6 +2693,15 @@ class RapidsConf(conf: Map[String, String]) extends Logging {
         logDebug(s"Parsed ${ret} from ${injectConfStr} via injectConfMap=${injectConfMap}");
         ret
     }
+  }
+
+  lazy val isRapidsShuffleConfigured: Boolean = {
+    conf.get("spark.shuffle.manager")
+      .exists(sm => sm.equals(GpuShuffleEnv.RAPIDS_SHUFFLE_CLASS))
+  }
+
+  lazy val ucxListenerTCPPortBindMaxRetries: Integer = {
+    Integer.parseInt(conf.getOrElse("spark.port.maxRetries", "16"))
   }
 
   lazy val testingAllowedNonGpu: Seq[String] = get(TEST_ALLOWED_NONGPU)

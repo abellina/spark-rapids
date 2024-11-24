@@ -5,14 +5,13 @@ import java.util.concurrent.Executors
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
-
-import com.nvidia.spark.rapids.{GpuDeviceManager, MetaUtils, RapidsConf, RapidsShuffleHandle, ShimLoader, ThreadFactoryBuilder}
+import com.nvidia.spark.rapids.{GpuDeviceManager, MetaUtils, RapidsConf, RapidsShuffleHandle, ShimLoader, ShuffleReceivedBufferCatalog, ThreadFactoryBuilder}
 import com.nvidia.spark.rapids.Arm.withResource
 import com.nvidia.spark.rapids.format.TableMeta
 import com.nvidia.spark.rapids.shuffle.{RapidsShuffleFetchHandler, RapidsShuffleRequestHandler}
-import com.nvidia.spark.rapids.spill.{SpillableDeviceBufferHandle, SpillFramework}
-
+import com.nvidia.spark.rapids.spill.{SpillFramework, SpillableDeviceBufferHandle}
 import org.apache.spark.internal.Logging
+import org.apache.spark.sql.rapids.GpuShuffleEnv
 import org.apache.spark.sql.rapids.execution.TrampolineUtil
 import org.apache.spark.storage.ShuffleBlockBatchId
 
@@ -48,10 +47,12 @@ class UCXBench(
     val sb = new StringBuilder()
     sb.append("\n*********************************************\n")
     sb.append("****** NVIDIA spark-rapids UCXBench p2p \n")
-    sb.append(s"*** mode=${if (server) "SERVER" else "CLIENT"} maxInFlight=$maxInFlight numIter: $numIter\n") 
+    sb.append(s"*** mode=${if (server) "SERVER" else "CLIENT"} " +
+      s"maxInFlight=$maxInFlight numIter: $numIter\n")
     sb.append(s"*** localHost=$localHost localPort=$localPort\n")
-    if (!server)
+    if (!server) {
       sb.append(s"*** peerHost=$peerHost peerPort=$peerPort\n")
+    }
     
     sb.append(s"*** Configuration: \n")
     configMap.foreach { case (k,v) => 
@@ -66,8 +67,8 @@ class UCXBench(
 
     SpillFramework.initialize(rapidsConf)
 
-    //val receiveCatalog = new ShuffleReceivedBufferCatalog(RapidsBufferCatalog.singleton)
-    //GpuShuffleEnv.setReceivedBufferCatalog(receiveCatalog)
+    val receiveCatalog = new ShuffleReceivedBufferCatalog()
+    GpuShuffleEnv.setReceivedBufferCatalog(receiveCatalog)
 
     val ucx = new UCXShuffleTransport(
       TrampolineUtil.newBlockManagerId(
@@ -186,7 +187,7 @@ object UCXBench extends Logging {
     val peerHost = if (isServer) null else args(5)
     val peerPort = if (isServer) null else args(6)
     val maxInFlight: Integer = if (isServer) null else args(7).toInt
-    val b = 
+    val b =
       ShimLoader.newUCXShuffleBench(
         configPath, localHost, localPort, peerHost, peerPort, maxInFlight, numIter)
         .asInstanceOf[UCXBench]

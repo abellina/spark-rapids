@@ -9,6 +9,7 @@ com/nvidia/spark/rapids/ExplainPlanBase.class
 com/nvidia/spark/rapids/optimizer/SQLOptimizerPlugin*
 com/nvidia/spark/rapids/ShimLoaderTemp*
 com/nvidia/spark/rapids/SparkShims*
+com/nvidia/spark/rapids/shuffle/ucx/UCXBench*
 org/apache/spark/sql/rapids/AdaptiveSparkPlanHelperShim*
 org/apache/spark/sql/rapids/ExecutionPlanCaptureCallback*
 rapids/*.py

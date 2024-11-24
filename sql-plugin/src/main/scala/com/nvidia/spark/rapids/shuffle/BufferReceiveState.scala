@@ -93,8 +93,15 @@ class BufferReceiveState(
   private[this] var bounceBufferByteOffset = 0L
 
   // get block ranges for us to work with
-  private[this] val windowedBlockIterator = new WindowedBlockIterator[ReceiveBlock](
-    requests.map(r => new ReceiveBlock(r)), bounceBuffer.buffer.getLength)
+    private[this] val windowedBlockIterator =
+    try {
+      new WindowedBlockIterator[ReceiveBlock](
+        requests.map(r => new ReceiveBlock(r)), bounceBuffer.buffer.getLength)
+    } catch {
+      case t: Throwable =>
+        println(t)
+        throw t
+    }
 
   private[this] var hasMoreBuffers_ = windowedBlockIterator.hasNext
 
@@ -122,7 +129,9 @@ class BufferReceiveState(
       bounceBuffer.close()
     }
     if (workingOn != null) {
-      logWarning(s"BufferReceiveState closing, but there are unfinished batches")
+      // TODO: AB: this was just a warning before
+      throw new IllegalStateException(
+      s"BufferReceiveState closing, but there are unfinished batches")
       workingOn.close()
     }
     transportOnClose()

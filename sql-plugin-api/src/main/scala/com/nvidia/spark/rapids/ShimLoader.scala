@@ -376,4 +376,32 @@ object ShimLoader {
   def loadGpuColumnVector(): Class[_] = {
     ShimReflectionUtils.loadClass("com.nvidia.spark.rapids.GpuColumnVector")
   }
+
+  def newUCXShuffleBench(configPath: String,
+                         localHost: String,
+                         localPort: String,
+                         peerHost: String,
+                         peerPort: String,
+                         maxInFlight: Integer,
+                         numIter: Integer): Any = {
+    val classLoader = getShimClassLoader()
+    val ucxBenchClassName = "com.nvidia.spark.rapids.shuffle.ucx.UCXBench"
+    val ucxBenchClass= classLoader.loadClass(ucxBenchClassName)
+    ucxBenchClass.getConstructor(
+        classOf[java.lang.String],
+        classOf[java.lang.String],
+        classOf[java.lang.String],
+        classOf[java.lang.String],
+        classOf[java.lang.String],
+        classOf[java.lang.Integer],
+        classOf[java.lang.Integer])
+      .newInstance(
+        configPath,
+        localHost,
+        localPort,
+        peerHost,
+        peerPort,
+        maxInFlight,
+        numIter)
+  }
 }
