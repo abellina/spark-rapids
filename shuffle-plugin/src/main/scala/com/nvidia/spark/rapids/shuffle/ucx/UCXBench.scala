@@ -65,8 +65,6 @@ class UCXBench(
 
     GpuDeviceManager.initializeMemory(None, Some(rapidsConf))
 
-    SpillFramework.initialize(rapidsConf)
-
     val receiveCatalog = new ShuffleReceivedBufferCatalog()
     GpuShuffleEnv.setReceivedBufferCatalog(receiveCatalog)
 

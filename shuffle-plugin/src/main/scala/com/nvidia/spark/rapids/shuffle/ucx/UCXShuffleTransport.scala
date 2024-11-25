@@ -22,7 +22,7 @@ import java.util.concurrent._
 import scala.collection.mutable
 import scala.collection.mutable.ArrayBuffer
 
-import ai.rapids.cudf.{BaseDeviceMemoryBuffer, CudaMemoryBuffer, DeviceMemoryBuffer, HostMemoryBuffer, MemoryBuffer}
+import ai.rapids.cudf.{BaseDeviceMemoryBuffer, Cuda, CudaFabricMemoryBuffer, CudaMemoryBuffer, DeviceMemoryBuffer, HostMemoryBuffer, MemoryBuffer, Rmm, RmmCudaAsyncMemoryResource}
 import com.nvidia.spark.rapids.{GpuDeviceManager, HashedPriorityQueue, RapidsConf}
 import com.nvidia.spark.rapids.ThreadFactoryBuilder
 import com.nvidia.spark.rapids.jni.RmmSpark
@@ -131,9 +131,17 @@ class UCXShuffleTransport(shuffleServerId: BlockManagerId, rapidsConf: RapidsCon
       deviceNumBuffers: Int,
       hostNumBuffers: Int): Unit = {
 
+    var pool: RmmCudaAsyncMemoryResource = null
+
     val deviceAllocator: Long => BaseDeviceMemoryBuffer = (size: Long) => {
       // CUDA async allocator is not compatible with GPUDirectRDMA, so need to use `cudaMalloc`.
-      if (rapidsConf.rmmPool.equalsIgnoreCase("ASYNC")) {
+      val fabricType = rapidsConf.shuffleUcxBounceBuffersFabricType
+      if (fabricType.equalsIgnoreCase("fabric")) {
+        CudaFabricMemoryBuffer.allocate(size)
+      } else if (fabricType.equalsIgnoreCase("fabric-pooled")) {
+        pool = new RmmCudaAsyncMemoryResource(size, size, true)
+        Rmm.allocFromResource(pool, size, Cuda.DEFAULT_STREAM)
+      } else if (fabricType.equalsIgnoreCase("cuda")) {
         CudaMemoryBuffer.allocate(size)
       } else {
         DeviceMemoryBuffer.allocate(size)
