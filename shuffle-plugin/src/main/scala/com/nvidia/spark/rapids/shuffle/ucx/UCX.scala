@@ -132,7 +132,7 @@ class UCX(transport: UCXShuffleTransport, executor: BlockManagerId, rapidsConf: 
    * Initializes the UCX context and local worker and starts up the worker progress thread.
    * UCX worker/endpoint relationship.
    */
-  def init(): Unit = {
+  def init(cb: () => Unit): Unit = {
     synchronized {
       if (initialized) {
         throw new IllegalStateException("UCX already initialized")
@@ -153,6 +153,7 @@ class UCX(transport: UCXShuffleTransport, executor: BlockManagerId, rapidsConf: 
     }
 
     progressThread.execute(() => {
+      cb()
       // utility function to make all the progress possible in each iteration
       // this could change in the future to 1 progress call per loop, or be used
       // entirely differently once polling is figured out
@@ -673,6 +674,7 @@ class UCX(transport: UCXShuffleTransport, executor: BlockManagerId, rapidsConf: 
         registeredMemory.synchronized {
           try {
             buffers.foreach { buffer =>
+              logWarning(s"registering memory buffer ${buffer}. Address ${buffer.getAddress}")
               val mmapParam = new UcpMemMapParams()
                   .setAddress(buffer.getAddress)
                   .setLength(buffer.getLength)

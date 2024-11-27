@@ -109,7 +109,7 @@ class UCXBench(
           .setDaemon(true)
           .build)
 
-      val reqsInFlight = new LinkedBlockingQueue[Int](maxInFlight)
+      var reqsInFlight: LinkedBlockingQueue[Int] = null
       val fetchHandler = new RapidsShuffleFetchHandler {
         override def start(expectedBatches: Int): Unit = {
         }
@@ -136,31 +136,36 @@ class UCXBench(
 
       Thread.sleep(1000L)
 
-      clientProducer.execute(() => {
-        while (true) {
-          val doFetch = reqsInFlight.offer(1, 1, TimeUnit.SECONDS)
-          if (doFetch) {
-            client.doFetch(ShuffleBlockBatchId(1, 1L, 1, 1) :: Nil, fetchHandler)
+      if (numIter > 0 ) {
+        reqsInFlight = new LinkedBlockingQueue[Int](maxInFlight)
+        clientProducer.execute(() => {
+          while (true) {
+            val doFetch = reqsInFlight.offer(1, 1, TimeUnit.SECONDS)
+            if (doFetch) {
+              client.doFetch(ShuffleBlockBatchId(1, 1L, 1, 1) :: Nil, fetchHandler)
+            }
           }
-        }
-      })
+        })
+      }
       
       var ix = 0
       var continue = true
-      while (continue) {
-        Thread.sleep(1000L)
-        val sofar = received.getAndSet(0L)
-        logInfo(s"$ix: received ${sofar/1024/1024} MB/s, inflight: ${reqsInFlight.size()}")
-        ix += 1
-        if (numIter != null && numIter > 0 && ix > numIter) {
-          logInfo("done!")
-          continue = false
+      if (numIter > 0) {
+        while (continue) {
+          Thread.sleep(1000L)
+          val sofar = received.getAndSet(0L)
+          logInfo(s"$ix: received ${sofar / 1024 / 1024} MB/s, inflight: ${reqsInFlight.size()}")
+          ix += 1
+          if (numIter != null && numIter > 0 && ix > numIter) {
+            logInfo("done!")
+            continue = false
+          }
         }
       }
     } else {
       Thread.sleep(5000L)
       var ix = 0
-      var continue = true
+      var continue = numIter > 0
       while (continue) {
         Thread.sleep(1000L)
         if (receivedFirst) {

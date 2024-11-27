@@ -22,7 +22,7 @@ import java.util.concurrent._
 import scala.collection.mutable
 import scala.collection.mutable.ArrayBuffer
 
-import ai.rapids.cudf.{BaseDeviceMemoryBuffer, Cuda, CudaFabricMemoryBuffer, CudaMemoryBuffer, DeviceMemoryBuffer, HostMemoryBuffer, MemoryBuffer, Rmm, RmmCudaAsyncMemoryResource}
+import ai.rapids.cudf.{BaseDeviceMemoryBuffer, Cuda, CudaFabricMemoryBuffer, CudaMemoryBuffer, DeviceMemoryBuffer, HostMemoryBuffer, MemoryBuffer, Rmm, RmmCudaAsyncMemoryResource, RmmCudaFabricAsyncMemoryResource}
 import com.nvidia.spark.rapids.{GpuDeviceManager, HashedPriorityQueue, RapidsConf}
 import com.nvidia.spark.rapids.ThreadFactoryBuilder
 import com.nvidia.spark.rapids.jni.RmmSpark
@@ -70,25 +70,33 @@ class UCXShuffleTransport(shuffleServerId: BlockManagerId, rapidsConf: RapidsCon
 
   private[this] lazy val ucx = {
     logWarning("UCX Shuffle Transport Enabled")
-    val ucxImpl = new UCX(this, shuffleServerId, rapidsConf)
-    ucxImpl.init()
 
+    ai.rapids.cudf.Cuda.cuInit()
     initBounceBufferPools(bounceBufferSize,
       deviceNumBuffers, hostNumBuffers)
 
-    // Perform transport (potentially IB) registration early
-    // NOTE: on error we log and close things, which should fail other parts of the job in a bad
-    // way in reality we should take a stab at lowering the requirement, and registering a smaller
-    // buffer.
+    val ucxImpl = new UCX(this, shuffleServerId, rapidsConf)
+    ucxImpl.init(() => {
+
+      // Perform transport (potentially IB) registration early
+      // NOTE: on error we log and close things, which should fail other parts of the job in a bad
+      // way in reality we should take a stab at lowering the requirement, and registering a smaller
+      // buffer.
+
+    })
+
     val mgrs = Seq(deviceSendBuffMgr, deviceReceiveBuffMgr, hostSendBuffMgr)
     ucxImpl.register(mgrs.map(_.getRootBuffer()), ex => {
-      if (ex.isDefined) {
-        logError(s"Error registering bounce buffers", ex.get)
-        ucxImpl.close()
-      }
+       if (ex.isDefined) {
+         logError(s"Error registering bounce buffers", ex.get)
+         ucxImpl.close()
+       }
     })
+
+    Cuda.DEFAULT_STREAM.sync()
+
     ucxImpl
-  }
+}
 
   private val altList = new HashedPriorityQueue[PendingTransferRequest](
     1000,
@@ -131,15 +139,20 @@ class UCXShuffleTransport(shuffleServerId: BlockManagerId, rapidsConf: RapidsCon
       deviceNumBuffers: Int,
       hostNumBuffers: Int): Unit = {
 
-    var pool: RmmCudaAsyncMemoryResource = null
+    var pool: RmmCudaFabricAsyncMemoryResource = null
 
     val deviceAllocator: Long => BaseDeviceMemoryBuffer = (size: Long) => {
       // CUDA async allocator is not compatible with GPUDirectRDMA, so need to use `cudaMalloc`.
       val fabricType = rapidsConf.shuffleUcxBounceBuffersFabricType
       if (fabricType.equalsIgnoreCase("fabric")) {
+        logWarning("using a fabric buffer")
         CudaFabricMemoryBuffer.allocate(size)
       } else if (fabricType.equalsIgnoreCase("fabric-pooled")) {
-        pool = new RmmCudaAsyncMemoryResource(size, size, true)
+        logWarning("using a fabric pool")
+        val totalSize = bounceBufferSize * deviceNumBuffers * 2
+        if (pool == null) {
+          pool = new RmmCudaFabricAsyncMemoryResource(totalSize, totalSize)
+        }
         Rmm.allocFromResource(pool, size, Cuda.DEFAULT_STREAM)
       } else if (fabricType.equalsIgnoreCase("cuda")) {
         CudaMemoryBuffer.allocate(size)
