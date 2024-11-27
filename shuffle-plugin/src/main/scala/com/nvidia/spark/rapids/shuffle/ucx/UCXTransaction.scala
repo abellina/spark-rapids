@@ -20,11 +20,10 @@ import java.nio.ByteBuffer
 import java.util.concurrent.{ConcurrentLinkedQueue, TimeUnit}
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.locks.ReentrantLock
-
 import ai.rapids.cudf.{NvtxColor, NvtxRange}
+import com.nvidia.spark.rapids.ShuffleMetadata
 import com.nvidia.spark.rapids.shuffle.{MessageType, MetadataTransportBuffer, Transaction, TransactionCallback, TransactionStats, TransactionStatus, TransportBuffer, TransportUtils}
 import org.openucx.jucx.ucp.UcpRequest
-
 import org.apache.spark.internal.Logging
 
 /**
@@ -348,6 +347,21 @@ private[ucx] class UCXTransaction(conn: UCXConnection, val txId: Long)
       case _ =>
         throw new IllegalStateException(s"Expected a metadata buffer, but got ${msg}")
     }
+  }
+
+  override def useBounceBuffers: Boolean = {
+    if (activeMessageData.isEmpty) {
+      throw new IllegalStateException("need to call usebouncebuffers before releasing message")
+    }
+    val msg = activeMessageData.get
+    val mtb = msg match {
+      case mtb: MetadataTransportBuffer => mtb
+      case _ =>
+        throw new IllegalStateException(s"Expected a metadata buffer, but got ${msg}")
+    }
+
+    val transferRequest = ShuffleMetadata.getTransferRequest(mtb.getBuffer())
+    transferRequest.requestsLength() > 1
   }
 
   private[ucx] def setHeader(id: Option[Long]): Unit = header = id

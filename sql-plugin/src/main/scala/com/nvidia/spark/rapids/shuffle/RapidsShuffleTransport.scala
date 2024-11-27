@@ -291,6 +291,8 @@ trait Transaction extends AutoCloseable {
    * @return a `Transaction` object that can be used to wait for this response to complete
    */
   def respond(response: ByteBuffer, cb: TransactionCallback): Transaction
+
+  def useBounceBuffers: Boolean
 }
 
 /**

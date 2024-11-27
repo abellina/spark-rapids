@@ -368,6 +368,7 @@ object GpuDeviceManager extends Logging {
         logInfo("Using legacy default stream")
       }
 
+      Cuda.cuInit()
       Cuda.setDevice(gpuId)
       try {
         poolSizeLimit = poolAllocation
