@@ -150,7 +150,12 @@ trait ClientConnection {
    * @return the executorId as a long
    */
   def getPeerExecutorId: Long
-}
+
+  def send(
+            messageType: MessageType.Value,
+            message: ByteBuffer,
+            cb: TransactionCallback): Transaction
+  }
 
 object TransactionStatus extends Enumeration {
   val NotStarted, InProgress, Complete, Success, Error, Cancelled = Value

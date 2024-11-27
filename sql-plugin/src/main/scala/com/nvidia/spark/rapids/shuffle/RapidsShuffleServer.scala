@@ -405,24 +405,6 @@ class RapidsShuffleServer(transport: RapidsShuffleTransport,
                     s"Still pending: ${pendingTransfersQueue.size}.")
                   addToContinueQueue(Seq(bufferSendState))
                 } else {
-                  val transferResponse = bufferSendState.getTransferResponse
-
-                  val requestTx = bufferSendState.getRequestTransaction
-                  logDebug(s"Handling transfer request $requestTx for executor " +
-                    s"$peerExecutorId with $buffersToSend")
-
-                  // send the transfer response
-                  requestTx.respond(transferResponse.acquire(), withResource(_) { responseTx =>
-                    withResource(transferResponse) { _ =>
-                      responseTx.getStatus match {
-                        case TransactionStatus.Cancelled | TransactionStatus.Error =>
-                          logError(s"Error while handling TransferResponse: " +
-                            s"${responseTx.getErrorMessage}")
-                        case _ =>
-                      }
-                    }
-                  })
-
                   // wake up the bssExec since bounce buffers became available
                   logDebug(s"Buffer send state " +
                     s"${TransportUtils.toHex(bufferSendState.getPeerBufferReceiveHeader)} " +
