@@ -18,12 +18,10 @@ package com.nvidia.spark.rapids.shuffle.ucx
 
 import java.nio.ByteBuffer
 import java.util.concurrent.ConcurrentHashMap
-
 import ai.rapids.cudf.MemoryBuffer
-import com.nvidia.spark.rapids.shuffle._
+import com.nvidia.spark.rapids.shuffle.{MessageType, _}
 import org.openucx.jucx.UcxCallback
 import org.openucx.jucx.ucp.UcpRequest
-
 import org.apache.spark.internal.Logging
 
 /**
@@ -48,6 +46,37 @@ class UCXServerConnection(ucx: UCX, transport: UCXShuffleTransport)
   extends UCXConnection(ucx) with ServerConnection with Logging {
   override def startManagementPort(host: String): Int = {
     ucx.startListener(host)
+  }
+
+  override def registerReceiveHandler(
+    messageType: MessageType.Value,
+    cb: TransactionCallback): Unit = {
+
+    val hdrMask: Long = 0L
+    val hdrWildcard: Long = 0L
+
+    ucx.registerReceiveHandler(
+      UCXConnection.composeRequestAmId(messageType),
+      0L,
+      0L,
+      () => new UCXAmCallback {
+        override def onError(am: UCXActiveMessage, error: UCXError): Unit = {
+          println("on error..")
+        }
+        override def onMessageStarted(receiveAm: UcpRequest): Unit = {
+          println(s"onMessageStarted")
+        }
+        override def onSuccess(am: UCXActiveMessage, buff: TransportBuffer): Unit = {
+          println(s"onSuccess ${am} buff ${buff}")
+        }
+        override def onCancel(am: UCXActiveMessage): Unit = {
+          println("on cancel..")
+        }
+        override def onMessageReceived(size: Long, header: Long,
+          finalizeCb: TransportBuffer => Unit): Unit = {
+          println(s"onmessagereceived size: ${size} header: ${header}")
+        }
+      })
   }
 
   override def registerRequestHandler(messageType: MessageType.Value,
@@ -158,6 +187,32 @@ class UCXClientConnection(peerExecutorId: Long, ucx: UCX, transport: UCXShuffleT
       messageType: MessageType.Value,
       message: ByteBuffer,
       cb: TransactionCallback): Transaction = {
+    val tx = createTransaction
+    tx.start(UCXTransactionType.Request, 1, cb)
+
+    // this header is unique, so we can send it with the request
+    // expecting it to be echoed back in the response
+    val requestHeader = UCXConnection.composeRequestHeader(ucx.localExecutorId, tx.txId)
+
+    val requestAm = UCXActiveMessage(
+      UCXConnection.composeRequestAmId(messageType), requestHeader, false)
+
+    ucx.sendActiveMessage(peerExecutorId, requestAm, message,
+      new UcxCallback {
+        override def onError(ucsStatus: Int, errorMsg: String): Unit = {
+          tx.completeWithError(errorMsg)
+        }
+
+        override def onSuccess(request: UcpRequest): Unit = {
+          tx.completeWithSuccess(messageType, None, None)
+        }
+      })
+    tx
+  }
+
+  override def send(messageType: MessageType.Value,
+                    message: MemoryBuffer,
+                    cb: TransactionCallback): Transaction = {
     val tx = createTransaction
     tx.start(UCXTransactionType.Request, 1, cb)
 

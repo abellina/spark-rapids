@@ -56,6 +56,7 @@ trait ServerConnection {
    * @param cb triggered for a success or error on this request
    */
   def registerRequestHandler(messageType: MessageType.Value, cb: TransactionCallback): Unit
+  def registerReceiveHandler(messageType: MessageType.Value, cb: TransactionCallback): Unit
 
   /**
    * Send a message using a `ByteBuffer` (for metadata)
@@ -112,6 +113,8 @@ object MessageType extends Enumeration {
    */
   val TransferRequest = Value
 
+  val TransferStartRequest = Value
+
   /**
    * Messages with this type are shuffle blocks
    */
@@ -154,6 +157,11 @@ trait ClientConnection {
   def send(
             messageType: MessageType.Value,
             message: ByteBuffer,
+            cb: TransactionCallback): Transaction
+
+  def send(
+            messageType: MessageType.Value,
+            message: MemoryBuffer,
             cb: TransactionCallback): Transaction
   }
 

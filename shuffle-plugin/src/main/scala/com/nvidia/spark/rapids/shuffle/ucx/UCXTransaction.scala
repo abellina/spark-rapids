@@ -310,7 +310,6 @@ private[ucx] class UCXTransaction(conn: UCXConnection, val txId: Long)
     setMessageType(messageType)
     setErrorMessage(errorMessage)
     setHeader(header)
-    txCallback(status)
   }
 
   def completeWithError(errorMsg: String): Unit = {

@@ -17,17 +17,19 @@
 package com.nvidia.spark.rapids.shuffle
 
 import java.util.concurrent.{ConcurrentHashMap, Executor}
-
 import scala.collection.mutable.ArrayBuffer
-
-import ai.rapids.cudf.{DeviceMemoryBuffer, NvtxColor, NvtxRange}
+import ai.rapids.cudf.{DeviceMemoryBuffer, HostMemoryBuffer, NvtxColor, NvtxRange}
 import com.nvidia.spark.rapids._
 import com.nvidia.spark.rapids.Arm.withResource
 import com.nvidia.spark.rapids.format.{MetadataResponse, TableMeta, TransferState}
-
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.rapids.GpuShuffleEnv
 import org.apache.spark.storage.ShuffleBlockBatchId
+
+import java.io.ObjectOutputStream
+
+
+case class TransferStartRequest(blocks: Seq[ShuffleBlockBatchId])
 
 /**
  * trait used by client consumers ([[RapidsShuffleIterator]]) to gather what the
@@ -184,7 +186,21 @@ class RapidsShuffleClient(
             s"${ShuffleMetadata.printRequest(
               ShuffleMetadata.getMetadataRequest(metaReq.getBuffer()))}")
 
-        // make request
+        val transferStartReq = TransferStartRequest(shuffleRequests)
+        val meta = HostMemoryBuffer.allocate(1024, false)
+        val bbos = new HostMemoryOutputStream(meta)
+        val oob = new ObjectOutputStream(bbos)
+        oob.writeObject(transferStartReq)
+        oob.close()
+        val written = bbos.getPos
+        val metaSliced = withResource(meta) { _.slice(0, written) }
+
+        connection.send(MessageType.TransferStartRequest, metaSliced, tx => {
+          withResource(tx) { _ =>
+            metaSliced.close()
+          }
+        })
+
         connection.request(MessageType.MetadataRequest, metaReq.acquire(), tx => {
           withResource(metaReq) { _ =>
             asyncOrBlock(HandleMetadataResponse(tx, shuffleRequests, handler))

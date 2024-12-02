@@ -16,6 +16,7 @@
 
 package com.nvidia.spark.rapids.shuffle
 
+import java.io.{ByteArrayInputStream, ObjectInputStream}
 import java.util.concurrent.{ConcurrentLinkedQueue, Executor}
 
 import scala.collection.mutable.ArrayBuffer
@@ -134,6 +135,7 @@ class RapidsShuffleServer(transport: RapidsShuffleTransport,
     // register request type interest against the transport
     registerRequestHandler(MessageType.MetadataRequest)
     registerRequestHandler(MessageType.TransferRequest)
+    registerReceiveHandler(MessageType.TransferStartRequest)
   }
 
   def handleOp(serverTask: Any): Unit = {
@@ -250,6 +252,34 @@ class RapidsShuffleServer(transport: RapidsShuffleTransport,
             logDebug(s"Got a transfer request ${pendingTransfer} from ${tx}. " +
               s"Pending requests [new=${pendingTransfersQueue.size}, " +
               s"continuing=${bssContinueQueue.size}]")
+        }
+      }
+    })
+  }
+
+  private def registerReceiveHandler(messageType: MessageType.Value): Unit = {
+    println(s"Registering ${messageType} receive callback")
+    serverConnection.registerReceiveHandler(messageType, tx => {
+      withResource(new NvtxRange("Handle Receive", NvtxColor.ORANGE)) { _ =>
+        messageType match {
+          case MessageType.TransferStartRequest =>
+            val metaTransportBuffer = tx.releaseMessage()
+            val bytebuff = metaTransportBuffer.getBuffer()
+            val bis = new ByteArrayInputStream(bytebuff.array())
+            val ois = new ObjectInputStream(bis)
+            val req = ois.readObject().asInstanceOf[TransferStartRequest]
+            println(s"blocks requested: ${req.blocks}")
+
+            /*val pendingTransfer = PendingTransferResponse(tx, requestHandler)
+           bssExec.synchronized {
+             pendingTransfersQueue.add(pendingTransfer)
+             bssExec.notifyAll()
+           }
+           logDebug(s"Got a transfer request ${pendingTransfer} from ${tx}. " +
+             s"Pending requests [new=${pendingTransfersQueue.size}, " +
+             s"continuing=${bssContinueQueue.size}]")*/
+          case _ =>
+            println(s"ERROR BAD MESSAGE TYPE ${messageType}")
         }
       }
     })
