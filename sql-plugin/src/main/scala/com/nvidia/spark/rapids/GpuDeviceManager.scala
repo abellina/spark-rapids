@@ -321,7 +321,7 @@ object GpuDeviceManager extends Logging {
           case c if "async".equalsIgnoreCase(c) =>
             features += "ASYNC"
             init | RmmAllocationMode.CUDA_ASYNC
-          case c if "async-fabric".equalsIgnoreCase(c) =>
+          case c if "async_fabric".equalsIgnoreCase(c) =>
             features += "ASYNC_FABRIC"
             init | RmmAllocationMode.CUDA_ASYNC_FABRIC
           case c if "none".equalsIgnoreCase(c) =>
