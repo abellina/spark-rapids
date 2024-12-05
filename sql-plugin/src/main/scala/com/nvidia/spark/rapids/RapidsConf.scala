@@ -1837,12 +1837,6 @@ val GPU_COREDUMP_PIPE_PATTERN = conf("spark.rapids.gpu.coreDump.pipePattern")
     .bytesConf(ByteUnit.BYTE)
     .createWithDefault(4 * 1024  * 1024)
 
-  val SHUFFLE_UCX_BOUNCE_BUFFERS_FABRIC_TYPE = conf("spark.rapids.shuffle.ucx.bounceBuffers.fabricType")
-    .internal()
-    .startupOnly()
-    .stringConf
-    .createWithDefault("cuda")
-
   val SHUFFLE_UCX_BOUNCE_BUFFERS_DEVICE_COUNT =
     conf("spark.rapids.shuffle.ucx.bounceBuffers.device.count")
     .doc("The number of bounce buffers to pre-allocate from device memory")
@@ -3128,8 +3122,6 @@ class RapidsConf(conf: Map[String, String]) extends Logging {
   lazy val shuffleUcxMgmtConnTimeout: Int = get(SHUFFLE_UCX_MGMT_CONNECTION_TIMEOUT)
 
   lazy val shuffleUcxBounceBuffersSize: Long = get(SHUFFLE_UCX_BOUNCE_BUFFERS_SIZE)
-
-  lazy val shuffleUcxBounceBuffersFabricType: String = get(SHUFFLE_UCX_BOUNCE_BUFFERS_FABRIC_TYPE)
 
   lazy val shuffleUcxDeviceBounceBuffersCount: Int = get(SHUFFLE_UCX_BOUNCE_BUFFERS_DEVICE_COUNT)
 
