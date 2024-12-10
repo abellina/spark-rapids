@@ -9,16 +9,6 @@ com/nvidia/spark/rapids/ExplainPlanBase.class
 com/nvidia/spark/rapids/optimizer/SQLOptimizerPlugin*
 com/nvidia/spark/rapids/ShimLoaderTemp*
 com/nvidia/spark/rapids/SparkShims*
-com/nvidia/spark/rapids/shuffle/ucx/*
-com/nvidia/spark/rapids/shuffle/RapidsShuffle*
-com/nvidia/spark/rapids/RapidsConf*
-com/nvidia/spark/rapids/ConfEntry*
-com/nvidia/spark/rapids/*Conf*
-com/nvidia/spark/rapids/OptionalConfEntry*
-com/nvidia/spark/rapids/Typed*
-com/nvidia/spark/rapids/Conf*
-com/nvidia/spark/rapids/ShuffleReceivedBufferCatalog*
-com/nvidia/spark/rapids/spill/*
 org/apache/spark/sql/rapids/AdaptiveSparkPlanHelperShim*
 org/apache/spark/sql/rapids/ExecutionPlanCaptureCallback*
 rapids/*.py
