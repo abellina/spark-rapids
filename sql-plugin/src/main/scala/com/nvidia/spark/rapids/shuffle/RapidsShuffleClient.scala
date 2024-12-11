@@ -390,11 +390,11 @@ class RapidsShuffleClient(
               }
 
               if (!bufferReceiveState.hasMoreBlocks) {
-                logDebug(s"BufferReceiveState: " +
+                logInfo(s"BufferReceiveState: " +
                   s"${TransportUtils.toHex(bufferReceiveState.id)} is DONE, closing.")
                 bufferReceiveState.close()
               } else {
-                logDebug(s"BufferReceiveState: " +
+                logInfo(s"BufferReceiveState: " +
                   s"${TransportUtils.toHex(bufferReceiveState.id)} is NOT done, continuing.")
               }
             }

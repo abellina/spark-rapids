@@ -273,12 +273,13 @@ class DirectBufferReceiveState(
     var buffer: DeviceMemoryBuffer,
     request: PendingTransferRequest,
     transportOnClose: () => Unit)
-  extends BufferReceiveState {
+  extends BufferReceiveState with Logging {
 
   private var consumed = false
 
   override def consumeWindow(): Seq[ConsumedBatchFromBounceBuffer] = {
     consumed = true
+    logInfo(s"consumeWindow with buffer ${buffer}")
     Seq(ConsumedBatchFromBounceBuffer(
       buffer,
       request.tableMeta,
@@ -300,7 +301,7 @@ class DirectBufferReceiveState(
   override def hasMoreBlocks: Boolean = !consumed
 
   override def errorOccurred(errMsg: String, throwable: Throwable): Unit = {
-    println(s"ERROR ${errMsg}")
+    logError(s"ERROR ${errMsg}")
     throw throwable
   }
 
