@@ -186,7 +186,7 @@ class RapidsShuffleServer(transport: RapidsShuffleTransport,
         while (!pendingTransfersQueue.isEmpty && continue) {
           // TODO: throttle on too big a send total so we don't acquire the world (in flight limit)
           val pendingTransfer = pendingTransfersQueue.peek()
-          if (true || pendingTransfer.tx.useBounceBuffers) {
+          if (!rapidsConf.forceDirectUCXTransfer && pendingTransfer.tx.useBounceBuffers) {
             val sendBounceBuffers =
               transport.tryGetSendBounceBuffers(1, 1)
             if (sendBounceBuffers.nonEmpty) {
@@ -270,8 +270,8 @@ class RapidsShuffleServer(transport: RapidsShuffleTransport,
           } else {
             val req = ShuffleMetadata.getMetadataRequest(mtb.getBuffer())
 
-            logInfo(s"Received request req:\n: ${ShuffleMetadata.printRequest(req)}")
-            logInfo(s"HandleMetadataRequest for peerExecutorId ${tx.peerExecutorId()} and " +
+            logDebug(s"Received request req:\n: ${ShuffleMetadata.printRequest(req)}")
+            logDebug(s"HandleMetadataRequest for peerExecutorId ${tx.peerExecutorId()} and " +
               s"tx ${tx}")
 
             // NOTE: MetaUtils will have a simpler/better way of handling creating a response.
@@ -291,7 +291,7 @@ class RapidsShuffleServer(transport: RapidsShuffleTransport,
             val respBuffer = new RefCountedDirectByteBuffer(metadataResponse)
             val materializedResponse = ShuffleMetadata.getMetadataResponse(metadataResponse)
 
-            logInfo(s"Response will be at header ${TransportUtils.toHex(tx.getHeader)}:\n" +
+            logDebug(s"Response will be at header ${TransportUtils.toHex(tx.getHeader)}:\n" +
               s"${ShuffleMetadata.printResponse("responding", materializedResponse)}")
 
             val responseTx = tx.respond(respBuffer.getBuffer(),
@@ -300,13 +300,13 @@ class RapidsShuffleServer(transport: RapidsShuffleTransport,
                   case TransactionStatus.Success =>
                     withResource(respBuffer) { _ =>
                       val stats = responseTx.getStats
-                      logInfo(s"Sent metadata ${stats.sendSize} in ${stats.txTimeMs} ms")
+                      logDebug(s"Sent metadata ${stats.sendSize} in ${stats.txTimeMs} ms")
                     }
                   case TransactionStatus.Error =>
                     logError(s"Error sending metadata response in tx $tx")
                 }
               })
-            logInfo(s"Waiting for send metadata to complete: $responseTx")
+            logDebug(s"Waiting for send metadata to complete: $responseTx")
           }
         }
       }

@@ -648,6 +648,14 @@ class UCX(transport: UCXShuffleTransport, executor: BlockManagerId, rapidsConf: 
     }
   }
 
+  def onWorkerThreadSync(task: () => Unit): Unit = {
+    onWorkerThreadAsync(task)
+    while (workerTasks.size() > 0) {
+      logInfo("onWorkerThreadSync")
+      Thread.sleep(1000)
+    }
+  }
+
   /**
    * Return rkeys (if we have registered memory)
    */
@@ -668,7 +676,7 @@ class UCX(transport: UCXShuffleTransport, executor: BlockManagerId, rapidsConf: 
     registeredMemory.synchronized {
       pendingRegistration = true
 
-      onWorkerThreadAsync(() => {
+      onWorkerThreadSync(() => {
         var error: Throwable = null
         registeredMemory.synchronized {
           try {

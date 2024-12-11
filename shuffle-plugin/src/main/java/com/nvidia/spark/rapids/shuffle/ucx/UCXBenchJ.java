@@ -9,9 +9,11 @@ public class UCXBenchJ {
         int numIter = Integer.parseInt(args[2]);
         String localHost = args[3];
         String localPort = args[4];
-        String peerHost = isServer ? null : args[5];
-        String peerPort = isServer ? null : args[6];
-        int maxInFlight = isServer ? 0 : Integer.parseInt(args[7]);
+        long msgSize = Long.parseLong(args[5]);
+        int maxInFlight = Integer.parseInt(args[6]);
+        String peerHost = isServer ? null : args[7];
+        String peerPort = isServer ? null : args[8];
+
         UCXBench instance =
             (UCXBench) ShimLoader$.MODULE$.newUCXShuffleBench(
                 configPath,
@@ -20,7 +22,8 @@ public class UCXBenchJ {
                 peerHost,
                 peerPort,
                 maxInFlight,
-                numIter);
+                numIter,
+                msgSize);
         instance.start();
     }
 }

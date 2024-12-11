@@ -279,7 +279,6 @@ class DirectBufferReceiveState(
 
   override def consumeWindow(): Seq[ConsumedBatchFromBounceBuffer] = {
     consumed = true
-    logInfo(s"consumeWindow with buffer ${buffer}")
     Seq(ConsumedBatchFromBounceBuffer(
       buffer,
       request.tableMeta,

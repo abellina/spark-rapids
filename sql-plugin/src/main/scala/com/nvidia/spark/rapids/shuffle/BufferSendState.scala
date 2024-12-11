@@ -203,7 +203,7 @@ class BounceBufferBufferSendState(
             RangeBuffer(blockRange, buff)
           }
 
-          logDebug(s"Occupancy for bounce buffer is " +
+          logInfo(s"Occupancy for bounce buffer is " +
             s"[device=${deviceBuffs}, host=${hostBuffs}] Bytes")
 
           bounceBuffToUse = if (deviceBuffs >= hostBuffs || hostBounceBuffer == null) {

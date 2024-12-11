@@ -52,7 +52,7 @@ class ShuffleReceivedBufferCatalog() extends Logging {
       buffer: DeviceMemoryBuffer,
       tableMeta: TableMeta,
       initialSpillPriority: Long): RapidsShuffleHandle = {
-    logInfo(s"added buffer ${buffer}")
+    //logInfo(s"added buffer ${buffer}")
     RapidsShuffleHandle(SpillableDeviceBufferHandle(buffer), tableMeta)
   }
 
@@ -63,7 +63,7 @@ class ShuffleReceivedBufferCatalog() extends Logging {
    * @return RapidsShuffleHandle associated with this buffer
    */
   def addDegenerateBatch(meta: TableMeta): RapidsShuffleHandle  = {
-    logInfo(s"added degenerate meta")
+    //logInfo(s"added degenerate meta")
     RapidsShuffleHandle(null, meta)
   }
 

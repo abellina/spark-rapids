@@ -71,8 +71,9 @@ class UCXShuffleTransport(shuffleServerId: BlockManagerId, rapidsConf: RapidsCon
   private[this] lazy val ucx = {
     logWarning("UCX Shuffle Transport Enabled")
 
-    initBounceBufferPools(bounceBufferSize,
-      deviceNumBuffers, hostNumBuffers)
+    if (!rapidsConf.forceDirectUCXTransfer) {
+      initBounceBufferPools(bounceBufferSize, deviceNumBuffers, hostNumBuffers)
+    }
 
     val ucxImpl = new UCX(this, shuffleServerId, rapidsConf)
     ucxImpl.init()
@@ -81,16 +82,18 @@ class UCXShuffleTransport(shuffleServerId: BlockManagerId, rapidsConf: RapidsCon
     // NOTE: on error we log and close things, which should fail other parts of the job in a bad
     // way in reality we should take a stab at lowering the requirement, and registering a smaller
     // buffer.
-    val mgrs = Seq(deviceSendBuffMgr, deviceReceiveBuffMgr, hostSendBuffMgr)
-    ucxImpl.register(mgrs.map(_.getRootBuffer()), ex => {
-      if (ex.isDefined) {
-        logError(s"Error registering bounce buffers", ex.get)
-        ucxImpl.close()
-      }
-    })
-
+    if (!rapidsConf.forceDirectUCXTransfer) {
+      val mgrs = Seq(deviceSendBuffMgr, deviceReceiveBuffMgr, hostSendBuffMgr)
+      Cuda.deviceSynchronize()
+      ucxImpl.register(mgrs.map(_.getRootBuffer()), ex =>
+        if (ex.isDefined) {
+          logError(s"Error registering pool ", ex.get)
+          ucxImpl.close()
+        })
+      Cuda.deviceSynchronize()
+    }
     ucxImpl
-}
+  }
 
   private val altList = new HashedPriorityQueue[PendingTransferRequest](
     1000,
@@ -426,7 +429,6 @@ class UCXShuffleTransport(shuffleServerId: BlockManagerId, rapidsConf: RapidsCon
 
         var requestIx = 0
         while (requestIx < requestsToHandle.size) {
-          logInfo(s"got some requests")
           var hasBounceBuffers = true
           var fitsInFlight = true
           val skipBBReq =
@@ -440,8 +442,7 @@ class UCXShuffleTransport(shuffleServerId: BlockManagerId, rapidsConf: RapidsCon
           while (requestIx < requestsToHandle.size && fitsInFlight) {
             reqToHandle = requestsToHandle(requestIx)
             if (wouldFitInFlightLimit(reqToHandle.getLength)) {
-              if (false && reqToHandle.getLength > bounceBufferSize) {
-                logInfo(s"direct bounce buffer req ${reqToHandle}")
+              if (rapidsConf.forceDirectUCXTransfer || reqToHandle.getLength > bounceBufferSize) {
                 markBytesInFlight(reqToHandle.getLength)
                 skipBBReq.append((
                   reqToHandle.client,
@@ -500,7 +501,6 @@ class UCXShuffleTransport(shuffleServerId: BlockManagerId, rapidsConf: RapidsCon
 
           if (skipBBReq.nonEmpty) {
             skipBBReq.foreach { case (client, req, buff) =>
-              logInfo(s"direct BB receive issue ${buff.getLength}")
               val brsId = UCXConnection.composeBufferHeader(
                 client.connection.getPeerExecutorId, ucx.assignUniqueId())
               val brs = new DirectBufferReceiveState(brsId, buff, req,

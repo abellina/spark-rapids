@@ -25,14 +25,15 @@ class UCXBench(
   peerHost: String,
   peerPort: String,
   maxInFlight: Integer,
-  numIter: Integer) 
+  numIter: Integer,
+  msgSize: java.lang.Long)
     extends Logging {
 
   def start(): Unit = {
     val server = peerHost == null
     val myId = if (server) { "0" } else { "1" }
-    val rowCount = 1000000
-    val batchSize = rowCount * 8
+    val rowCount = (msgSize / 8).toInt
+    val batchSize = msgSize
 
     val properties = new Properties()
     val source = scala.io.Source.fromURL(s"file://$configPath")
@@ -48,14 +49,14 @@ class UCXBench(
     sb.append("\n*********************************************\n")
     sb.append("****** NVIDIA spark-rapids UCXBench p2p \n")
     sb.append(s"*** mode=${if (server) "SERVER" else "CLIENT"} " +
-      s"maxInFlight=$maxInFlight numIter: $numIter\n")
+      s"maxInFlight=$maxInFlight numIter: $numIter msgSize: $msgSize\n")
     sb.append(s"*** localHost=$localHost localPort=$localPort\n")
     if (!server) {
       sb.append(s"*** peerHost=$peerHost peerPort=$peerPort\n")
     }
     
     sb.append(s"*** Configuration: \n")
-    configMap.foreach { case (k,v) => 
+    configMap.foreach { case (k,v) =>
       sb.append(s"*** $k = $v\n")
     }
     sb.append("*********************************************\n")
@@ -74,27 +75,31 @@ class UCXBench(
       rapidsConf
     )
 
-    val longs = new Array[Long](rowCount)
-    val ct =
-      withResource(ai.rapids.cudf.ColumnVector.fromLongs(longs:_*)) { cv =>
-        withResource(new ai.rapids.cudf.Table(cv)) { tbl =>
-          tbl.contiguousSplit()
-        }
-    }.head
+    val handleMetaArray = (0 until maxInFlight).map { id =>
+      val longs = new Array[Long](rowCount)
+      val ct =
+        withResource(ai.rapids.cudf.ColumnVector.fromLongs(longs:_*)) { cv =>
+          withResource(new ai.rapids.cudf.Table(cv)) { tbl =>
+            tbl.contiguousSplit()
+          }
+        }.head
+      val tableMeta = MetaUtils.buildTableMeta(id, ct)
+      val handle = SpillableDeviceBufferHandle(ct.getBuffer)
+      (handle, tableMeta)
+    }.toArray
 
-    val tableMeta = MetaUtils.buildTableMeta(1, ct)
     var receivedFirst = false
-    val handle = SpillableDeviceBufferHandle(ct.getBuffer)
-
     val ucxServer = ucx.makeServer(new RapidsShuffleRequestHandler {
       override def getShuffleBufferMetas(
           shuffleBlockBatchId: ShuffleBlockBatchId): Seq[TableMeta] = {
         receivedFirst = true
-        Seq(tableMeta)
+        val id = shuffleBlockBatchId.mapId.toInt
+        Seq(handleMetaArray(id)._2)
       }
 
       override def getShuffleHandle(tableId: Int): RapidsShuffleHandle = {
-        RapidsShuffleHandle(handle, tableMeta)
+        val (handle, meta) = handleMetaArray(tableId)
+        RapidsShuffleHandle(handle, meta)
       }
     })
     ucxServer.start()
@@ -139,10 +144,13 @@ class UCXBench(
       if (numIter > 0 ) {
         reqsInFlight = new LinkedBlockingQueue[Int](maxInFlight)
         clientProducer.execute(() => {
+          var idToReq = 0
           while (true) {
             val doFetch = reqsInFlight.offer(1, 1, TimeUnit.SECONDS)
             if (doFetch) {
-              client.doFetch(ShuffleBlockBatchId(1, 1L, 1, 1) :: Nil, fetchHandler)
+              client.doFetch(
+                ShuffleBlockBatchId(1, idToReq % maxInFlight, 1, 1) :: Nil, fetchHandler)
+              idToReq = idToReq + 1
             }
           }
         })
@@ -177,23 +185,5 @@ class UCXBench(
         }
       }
     }
-  }
-}
-
-object UCXBench extends Logging {
-  def main(args: Array[String]): Unit = {
-    val configPath = args(0)
-    val isServer = args(1) == "-s"
-    val numIter: Integer = args(2).toInt
-    val localHost = args(3)
-    val localPort = args(4)
-    val peerHost = if (isServer) null else args(5)
-    val peerPort = if (isServer) null else args(6)
-    val maxInFlight: Integer = if (isServer) null else args(7).toInt
-    val b =
-      ShimLoader.newUCXShuffleBench(
-        configPath, localHost, localPort, peerHost, peerPort, maxInFlight, numIter)
-        .asInstanceOf[UCXBench]
-    b.start()
   }
 }

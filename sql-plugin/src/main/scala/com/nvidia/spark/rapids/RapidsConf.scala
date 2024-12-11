@@ -1808,6 +1808,11 @@ val GPU_COREDUMP_PIPE_PATTERN = conf("spark.rapids.gpu.coreDump.pipePattern")
     .booleanConf
     .createWithDefault(true)
 
+  val SHUFFLE_UCX_FORCE_DIRECT_TRANSFER = conf("spark.rapids.shuffle.ucx.forceDirect")
+    .startupOnly()
+    .booleanConf
+    .createWithDefault(true)
+
   val SHUFFLE_UCX_LISTENER_START_PORT = conf("spark.rapids.shuffle.ucx.listenerStartPort")
     .doc("Starting port to try to bind the UCX listener.")
     .internal()
@@ -3117,6 +3122,8 @@ class RapidsConf(conf: Map[String, String]) extends Logging {
 
   lazy val shuffleUcxListenerStartPort: Int = get(SHUFFLE_UCX_LISTENER_START_PORT)
 
+  lazy val forceDirectUCXTransfer: Boolean = get(SHUFFLE_UCX_FORCE_DIRECT_TRANSFER)
+
   lazy val shuffleUcxMgmtHost: String = get(SHUFFLE_UCX_MGMT_SERVER_HOST)
 
   lazy val shuffleUcxMgmtConnTimeout: Int = get(SHUFFLE_UCX_MGMT_CONNECTION_TIMEOUT)
@@ -3385,6 +3392,7 @@ class RapidsConf(conf: Map[String, String]) extends Logging {
   def isConfExplicitlySet(key: String): Boolean = {
     conf.contains(key)
   }
+
 }
 
 case class OomInjectionConf(
