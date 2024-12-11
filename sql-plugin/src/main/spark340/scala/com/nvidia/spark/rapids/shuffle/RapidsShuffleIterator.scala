@@ -233,7 +233,7 @@ class RapidsShuffleIterator(
             batchesInFlight = batchesInFlight + expectedBatches
             totalBatchesExpected = totalBatchesExpected + expectedBatches
             clientExpectedBatches = expectedBatches
-            logDebug(s"Task: $taskAttemptIdStr Client $blockManagerId " +
+            logInfo(s"Task: $taskAttemptIdStr Client $blockManagerId " +
                 s"Expecting $expectedBatches batches, $batchesInFlight batches currently in " +
                 s"flight, total expected by this client: $clientExpectedBatches, total " +
                 s"resolved by this client: $clientResolvedBatches")
