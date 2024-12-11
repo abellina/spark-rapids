@@ -180,7 +180,7 @@ class RapidsShuffleClient(
         val metaReq = new RefCountedDirectByteBuffer(
           ShuffleMetadata.buildShuffleMetadataRequest(shuffleRequests))
 
-        logDebug(s"Requesting block_ids=[$shuffleRequests] from connection $connection, req: \n " +
+        logInfo(s"Requesting block_ids=[$shuffleRequests] from connection $connection, req: \n " +
             s"${ShuffleMetadata.printRequest(
               ShuffleMetadata.getMetadataRequest(metaReq.getBuffer()))}")
 
@@ -219,7 +219,7 @@ class RapidsShuffleClient(
                   val metadataResponse =
                     ShuffleMetadata.getMetadataResponse(resp.getBuffer())
 
-                  logDebug(s"Received from ${tx} response: \n:" +
+                  logInfo(s"Received from ${tx} response: \n:" +
                     s"${ShuffleMetadata.printResponse("received response", metadataResponse)}")
 
                   // signal to the handler how many batches are expected
@@ -316,7 +316,7 @@ class RapidsShuffleClient(
   private def queueTransferRequests(metaResponse: MetadataResponse,
                                     handler: RapidsShuffleFetchHandler): Unit = {
     val allTables = metaResponse.tableMetasLength()
-    logDebug(s"Queueing transfer requests for ${allTables} tables " +
+    logInfo(s"Queueing transfer requests for ${allTables} tables " +
       s"from ${connection.getPeerExecutorId}")
 
     val ptrs = new ArrayBuffer[PendingTransferRequest](allTables)

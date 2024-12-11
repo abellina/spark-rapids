@@ -169,7 +169,11 @@ class ShuffleBufferCatalog extends Logging {
         bufferIds.foreach { id =>
           tableMap.remove(id.tableId)
           val handleAndMeta = bufferIdToHandle.remove(id)
-          handleAndMeta._1.foreach(_.close())
+          handleAndMeta._1.foreach { h => 
+            if (h != null) {
+              h.close() 
+            }
+          }
         }
       }
       info.forEachValue(Long.MaxValue, bufferRemover)

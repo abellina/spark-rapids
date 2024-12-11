@@ -83,13 +83,11 @@ class UCXShuffleTransport(shuffleServerId: BlockManagerId, rapidsConf: RapidsCon
     // buffer.
     val mgrs = Seq(deviceSendBuffMgr, deviceReceiveBuffMgr, hostSendBuffMgr)
     ucxImpl.register(mgrs.map(_.getRootBuffer()), ex => {
-       if (ex.isDefined) {
-         logError(s"Error registering bounce buffers", ex.get)
-         ucxImpl.close()
-       }
+      if (ex.isDefined) {
+        logError(s"Error registering bounce buffers", ex.get)
+        ucxImpl.close()
+      }
     })
-
-    Cuda.DEFAULT_STREAM.sync()
 
     ucxImpl
 }
@@ -428,6 +426,7 @@ class UCXShuffleTransport(shuffleServerId: BlockManagerId, rapidsConf: RapidsCon
 
         var requestIx = 0
         while (requestIx < requestsToHandle.size) {
+          logInfo(s"got some requests")
           var hasBounceBuffers = true
           var fitsInFlight = true
           val skipBBReq =
@@ -441,12 +440,14 @@ class UCXShuffleTransport(shuffleServerId: BlockManagerId, rapidsConf: RapidsCon
           while (requestIx < requestsToHandle.size && fitsInFlight) {
             reqToHandle = requestsToHandle(requestIx)
             if (wouldFitInFlightLimit(reqToHandle.getLength)) {
-              if (reqToHandle.getLength > bounceBufferSize) {
+              if (false && reqToHandle.getLength > bounceBufferSize) {
+                logInfo(s"direct bounce buffer req ${reqToHandle}")
                 markBytesInFlight(reqToHandle.getLength)
                 skipBBReq.append((
                   reqToHandle.client,
                   reqToHandle,
                   DeviceMemoryBuffer.allocate(reqToHandle.getLength)))
+                requestIx += 1
               } else {
                 val existingReq =
                   perClientReq.get(reqToHandle.client)
@@ -499,6 +500,7 @@ class UCXShuffleTransport(shuffleServerId: BlockManagerId, rapidsConf: RapidsCon
 
           if (skipBBReq.nonEmpty) {
             skipBBReq.foreach { case (client, req, buff) =>
+              logInfo(s"direct BB receive issue ${buff.getLength}")
               val brsId = UCXConnection.composeBufferHeader(
                 client.connection.getPeerExecutorId, ucx.assignUniqueId())
               val brs = new DirectBufferReceiveState(brsId, buff, req,
