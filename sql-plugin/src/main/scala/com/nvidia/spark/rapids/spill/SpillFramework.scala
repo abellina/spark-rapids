@@ -160,6 +160,8 @@ trait StoreHandle extends AutoCloseable {
    *   removed on shutdown, or by handle.close, but 0-byte handles are not spillable.
    */
   val approxSizeInBytes: Long
+
+  protected var closed: Boolean = false
 }
 
 trait SpillableHandle extends StoreHandle {
@@ -305,8 +307,15 @@ class SpillableHostBufferHandle private (
       } else if (disk.isDefined) {
         diskHandle = disk.get
       } else {
-        throw new IllegalStateException(
-          "attempting to materialize a closed handle")
+        // spilling or closed
+        while (disk.isEmpty && !closed) {
+          wait()
+        }
+        if (closed) {
+          throw new IllegalStateException(
+            "attempting to materialize a closed handle")
+        }
+        diskHandle = disk.get
       }
     }
     if (materialized == null) {
@@ -318,35 +327,56 @@ class SpillableHostBufferHandle private (
     materialized
   }
 
+  private var toSpill: HostMemoryBuffer = _
+
+  override def releaseHostResource(): Unit = {
+    super.releaseHostResource()
+    synchronized {
+      if (toSpill != null) {
+        toSpill.close()
+        toSpill = null
+      }
+    }
+  }
+
   override def spill(): Long = {
     if (!spillable) {
       0L
     } else {
-      val spilled = synchronized {
+      var thisToSpill: HostMemoryBuffer = null
+      synchronized {
         if (disk.isEmpty && host.isDefined) {
-          withResource(DiskHandleStore.makeBuilder) { diskHandleBuilder =>
-            val outputChannel = diskHandleBuilder.getChannel
-            GpuTaskMetrics.get.spillToDiskTime {
-              val iter = new HostByteBufferIterator(host.get)
-              iter.foreach { bb =>
-                try {
-                  while (bb.hasRemaining) {
-                    outputChannel.write(bb)
-                  }
-                } finally {
-                  RapidsStorageUtils.dispose(bb)
-                }
-              }
-            }
-            disk = Some(diskHandleBuilder.build)
-            sizeInBytes
-          }
-        } else {
-          0L
+          thisToSpill = host.get
+          host = None
         }
       }
-      releaseHostResource()
-      spilled
+      if (thisToSpill != null) {
+        val spilledSize = thisToSpill.getLength
+        withResource(DiskHandleStore.makeBuilder) { diskHandleBuilder =>
+          val outputChannel = diskHandleBuilder.getChannel
+          GpuTaskMetrics.get.spillToDiskTime {
+            val iter = new HostByteBufferIterator(thisToSpill)
+            iter.foreach { bb =>
+              try {
+                while (bb.hasRemaining) {
+                  outputChannel.write(bb)
+                }
+              } finally {
+                RapidsStorageUtils.dispose(bb)
+              }
+            }
+          }
+          synchronized {
+            disk = Some(diskHandleBuilder.build)
+            toSpill = thisToSpill
+            notifyAll()
+          }
+        }
+        releaseHostResource()
+        spilledSize
+      } else {
+        0L
+      }
     }
   }
 
@@ -355,6 +385,7 @@ class SpillableHostBufferHandle private (
     synchronized {
       disk.foreach(_.close())
       disk = None
+      notifyAll()
     }
   }
 
@@ -436,8 +467,15 @@ class SpillableDeviceBufferHandle private (
         materialized = dev.get
         materialized.incRefCount()
       } else {
-        throw new IllegalStateException(
-          "attempting to materialize a closed handle")
+        // spilling or closed
+        while (host.isEmpty && !closed) {
+          wait()
+        }
+        if (closed) {
+          throw new IllegalStateException(
+            "attempting to materialize a closed handle")
+        }
+        hostHandle = host.get
       }
     }
     // if `materialized` is null, we spilled. This is a terminal
@@ -452,17 +490,40 @@ class SpillableDeviceBufferHandle private (
     materialized
   }
 
+  private var toSpill: DeviceMemoryBuffer = _
+
+  override def releaseDeviceResource(): Unit = {
+    super.releaseDeviceResource()
+    synchronized {
+      if (toSpill != null) {
+        toSpill.close()
+        toSpill = null
+      }
+    }
+  }
+
   override def spill(): Long = {
     if (!spillable) {
       0L
     } else {
+      var thisToSpill: DeviceMemoryBuffer = null
       synchronized {
         if (host.isEmpty && dev.isDefined) {
-          host = Some(SpillableHostBufferHandle.createHostHandleFromDeviceBuff(dev.get))
-          sizeInBytes
-        } else {
-          0L
+          thisToSpill = dev.get
+          dev = None
         }
+      }
+      if (thisToSpill != null) {
+        val spilledSize = thisToSpill.getLength
+        val hostHandle = SpillableHostBufferHandle.createHostHandleFromDeviceBuff(thisToSpill)
+        synchronized {
+          host = Some(hostHandle)
+          toSpill = thisToSpill
+          notifyAll()
+        }
+        spilledSize
+      } else {
+        0L
       }
     }
   }
@@ -470,8 +531,10 @@ class SpillableDeviceBufferHandle private (
   override def close(): Unit = {
     releaseDeviceResource()
     synchronized {
+      closed = true
       host.foreach(_.close())
       host = None
+      notifyAll()
     }
   }
 }
