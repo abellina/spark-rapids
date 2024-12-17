@@ -55,6 +55,7 @@ class ShuffleBufferCatalog extends Logging {
       maybeBuffer.foreach(buffer => {
         synchronized {
           // this used to do batching, which we still may want
+          logInfo(s"Spilling buffer ${buffer} size ${buffer.sizeInBytes}")
           if (buffer.spill() == 0) {
             spillQueue.offer(buffer)
           }
