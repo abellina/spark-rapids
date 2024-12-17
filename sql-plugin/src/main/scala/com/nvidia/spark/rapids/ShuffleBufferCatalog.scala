@@ -58,6 +58,8 @@ class ShuffleBufferCatalog extends Logging {
           logInfo(s"Spilling buffer ${buffer} size ${buffer.sizeInBytes}")
           if (buffer.spill() == 0) {
             spillQueue.offer(buffer)
+          } else  {
+            buffer.releaseDeviceResource()
           }
         }
       })
