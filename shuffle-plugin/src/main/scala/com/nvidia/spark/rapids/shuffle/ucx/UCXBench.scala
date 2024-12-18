@@ -25,7 +25,8 @@ class UCXBench(
   peerHost: String,
   peerPort: String,
   maxInFlight: Integer,
-  numIter: Integer) 
+  numIter: Integer,
+  msgSize: java.lang.Long)
     extends Logging {
 
   def start(): Unit = {
@@ -177,23 +178,5 @@ class UCXBench(
         }
       }
     }
-  }
-}
-
-object UCXBench extends Logging {
-  def main(args: Array[String]): Unit = {
-    val configPath = args(0)
-    val isServer = args(1) == "-s"
-    val numIter: Integer = args(2).toInt
-    val localHost = args(3)
-    val localPort = args(4)
-    val peerHost = if (isServer) null else args(5)
-    val peerPort = if (isServer) null else args(6)
-    val maxInFlight: Integer = if (isServer) null else args(7).toInt
-    val b =
-      ShimLoader.newUCXShuffleBench(
-        configPath, localHost, localPort, peerHost, peerPort, maxInFlight, numIter)
-        .asInstanceOf[UCXBench]
-    b.start()
   }
 }
