@@ -517,8 +517,8 @@ object GpuDeviceManager extends Logging {
             "Cannot initialize memory due to previous shutdown failing")
         } else if (singletonMemoryInitialized == Uninitialized) {
           val gpu = gpuId.getOrElse(findGpuAndAcquire())
-          initializeRmm(gpu, rapidsConf)
           initializeOffHeapLimits(gpu, rapidsConf)
+          initializeRmm(gpu, rapidsConf)
           singletonMemoryInitialized = Initialized
         }
       }

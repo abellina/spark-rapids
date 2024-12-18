@@ -277,8 +277,10 @@ object SpillableHostBufferHandle extends Logging {
       SpillFramework.stores.hostStore.makeBuilder(handle)) { builder =>
       while (chunkedPacker.hasNext) {
         val (bb, len) = chunkedPacker.next()
-        builder.copyNext(bb.dmb, len, Cuda.DEFAULT_STREAM)
-        // copyNext is synchronous w.r.t. the cuda stream passed,
+        withResource(bb) { _ =>
+          builder.copyNext(bb.dmb, len, Cuda.DEFAULT_STREAM)
+          // copyNext is synchronous w.r.t. the cuda stream passed,
+        }
       }
       builder.build
     }
@@ -1788,27 +1790,20 @@ class ChunkedPacker(table: Table,
     chunkedPack.hasNext
   }
 
-  var bounceBuffer: DeviceBounceBuffer = null
-
   override def next(): (DeviceBounceBuffer, Long) = {
-    if (bounceBuffer == null) {
-      bounceBuffer = bounceBufferPool.nextBuffer()
+    closeOnExcept(bounceBufferPool.nextBuffer()) { bounceBuffer =>
+      if (closed) {
+        throw new IllegalStateException(s"ChunkedPacker is closed")
+      }
+      val bytesWritten = chunkedPack.next(bounceBuffer.dmb)
+      // we increment the refcount because the caller has no idea where
+      // this memory came from, so it should close it.
+      (bounceBuffer, bytesWritten)
     }
-    if (closed) {
-      throw new IllegalStateException(s"ChunkedPacker is closed")
-    }
-    val bytesWritten = chunkedPack.next(bounceBuffer.dmb)
-    // we increment the refcount because the caller has no idea where
-    // this memory came from, so it should close it.
-    (bounceBuffer, bytesWritten)
   }
 
   override def close(): Unit = {
     if (!closed) {
-      if (bounceBuffer != null) {
-        bounceBuffer.close()
-        bounceBuffer = null
-      }
       closed = true
       chunkedPack.close()
     }
