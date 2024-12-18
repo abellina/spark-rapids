@@ -187,6 +187,18 @@ trait SpillableHandle extends StoreHandle {
    * @return true if currently spillable, false otherwise
    */
   private[spill] def spillable: Boolean = approxSizeInBytes > 0
+
+  protected def tryGetHandle[T](maybeHandle: Option[T]): T = {
+    // spilling or closed
+    while (maybeHandle.isEmpty && !closed) {
+      wait()
+    }
+    if (closed) {
+      throw new IllegalStateException(
+        "attempting to materialize a closed handle")
+    }
+    maybeHandle.get
+  }
 }
 
 /**
@@ -197,13 +209,17 @@ trait SpillableHandle extends StoreHandle {
 trait DeviceSpillableHandle[T <: AutoCloseable] extends SpillableHandle {
   private[spill] var dev: Option[T]
 
+  protected var toSpill: Option[T] = None
+
   private[spill] override def spillable: Boolean = synchronized {
     super.spillable && dev.isDefined
   }
 
-  protected def releaseDeviceResource(): Unit = {
+  def releaseDeviceResource(): Unit = {
     SpillFramework.removeFromDeviceStore(this)
     synchronized {
+      toSpill.foreach(_.close())
+      toSpill = None
       dev.foreach(_.close())
       dev = None
     }
@@ -230,6 +246,8 @@ trait DeviceSpillableHandle[T <: AutoCloseable] extends SpillableHandle {
 trait HostSpillableHandle[T <: AutoCloseable] extends SpillableHandle {
   private[spill] var host: Option[T]
 
+  protected var toSpill: Option[T] = None
+
   private[spill] override def spillable: Boolean = synchronized {
     super.spillable && host.isDefined
   }
@@ -237,6 +255,8 @@ trait HostSpillableHandle[T <: AutoCloseable] extends SpillableHandle {
   protected def releaseHostResource(): Unit = {
     SpillFramework.removeFromHostStore(this)
     synchronized {
+      toSpill.foreach(_.close())
+      toSpill = None
       host.foreach(_.close())
       host = None
     }
@@ -307,36 +327,16 @@ class SpillableHostBufferHandle private (
       } else if (disk.isDefined) {
         diskHandle = disk.get
       } else {
-        // spilling or closed
-        while (disk.isEmpty && !closed) {
-          wait()
-        }
-        if (closed) {
-          throw new IllegalStateException(
-            "attempting to materialize a closed handle")
-        }
-        diskHandle = disk.get
+        diskHandle = tryGetHandle[DiskHandle](disk)
       }
     }
-    if (materialized == null) {
+    if (diskHandle != null) {
       materialized = closeOnExcept(HostMemoryBuffer.allocate(sizeInBytes)) { hmb =>
         diskHandle.materializeToHostMemoryBuffer(hmb)
         hmb
       }
     }
     materialized
-  }
-
-  private var toSpill: HostMemoryBuffer = _
-
-  override def releaseHostResource(): Unit = {
-    super.releaseHostResource()
-    synchronized {
-      if (toSpill != null) {
-        toSpill.close()
-        toSpill = null
-      }
-    }
   }
 
   override def spill(): Long = {
@@ -366,9 +366,10 @@ class SpillableHostBufferHandle private (
               }
             }
           }
+          val diskHandle = diskHandleBuilder.build
           synchronized {
-            disk = Some(diskHandleBuilder.build)
-            toSpill = thisToSpill
+            disk = Some(diskHandle)
+            toSpill = Some(thisToSpill)
             notifyAll()
           }
         }
@@ -383,6 +384,7 @@ class SpillableHostBufferHandle private (
   override def close(): Unit = {
     releaseHostResource()
     synchronized {
+      closed = true
       disk.foreach(_.close())
       disk = None
       notifyAll()
@@ -399,8 +401,8 @@ class SpillableHostBufferHandle private (
       } else if (disk.isDefined) {
         diskHandle = disk.get
       } else {
-        throw new IllegalStateException(
-          "attempting to materialize a closed handle")
+        // spilling or closed
+        diskHandle = tryGetHandle[DiskHandle](disk)
       }
     }
     if (hostBuffer != null) {
@@ -461,21 +463,12 @@ class SpillableDeviceBufferHandle private (
     var hostHandle: SpillableHostBufferHandle = null
     synchronized {
       if (host.isDefined) {
-        // since we spilled, host must be set.
         hostHandle = host.get
       } else if (dev.isDefined) {
         materialized = dev.get
         materialized.incRefCount()
       } else {
-        // spilling or closed
-        while (host.isEmpty && !closed) {
-          wait()
-        }
-        if (closed) {
-          throw new IllegalStateException(
-            "attempting to materialize a closed handle")
-        }
-        hostHandle = host.get
+        hostHandle = tryGetHandle[SpillableHostBufferHandle](host)
       }
     }
     // if `materialized` is null, we spilled. This is a terminal
@@ -488,18 +481,6 @@ class SpillableDeviceBufferHandle private (
       }
     }
     materialized
-  }
-
-  private var toSpill: DeviceMemoryBuffer = _
-
-  override def releaseDeviceResource(): Unit = {
-    super.releaseDeviceResource()
-    synchronized {
-      if (toSpill != null) {
-        toSpill.close()
-        toSpill = null
-      }
-    }
   }
 
   override def spill(): Long = {
@@ -518,7 +499,7 @@ class SpillableDeviceBufferHandle private (
         val hostHandle = SpillableHostBufferHandle.createHostHandleFromDeviceBuff(thisToSpill)
         synchronized {
           host = Some(hostHandle)
-          toSpill = thisToSpill
+          toSpill = Some(thisToSpill)
           notifyAll()
         }
         spilledSize
@@ -628,8 +609,10 @@ class SpillableColumnarBatchHandle private (
   override def close(): Unit = {
     releaseDeviceResource()
     synchronized {
+      closed = true
       host.foreach(_.close())
       host = None
+      notifyAll()
     }
   }
 }
@@ -694,11 +677,10 @@ class SpillableColumnarBatchFromBufferHandle private (
       } else if (dev.isDefined) {
         materialized = GpuColumnVector.incRefCounts(dev.get)
       } else {
-        throw new IllegalStateException(
-          "attempting to materialize a closed handle")
+        hostHandle = tryGetHandle[SpillableHostBufferHandle](host)
       }
     }
-    if (materialized == null) {
+    if (hostHandle != null) {
       val devBuffer = closeOnExcept(DeviceMemoryBuffer.allocate(hostHandle.sizeInBytes)) { dmb =>
         hostHandle.materializeToDeviceMemoryBuffer(dmb)
         dmb
@@ -717,16 +699,26 @@ class SpillableColumnarBatchFromBufferHandle private (
     if (!spillable) {
       0
     } else {
+      var thisToSpill: ColumnarBatch = null
       synchronized {
         if (host.isEmpty && dev.isDefined) {
-          val cvFromBuffer = dev.get.column(0).asInstanceOf[GpuColumnVectorFromBuffer]
-          meta = Some(cvFromBuffer.getTableMeta)
-          host = Some(SpillableHostBufferHandle.createHostHandleFromDeviceBuff(
-            cvFromBuffer.getBuffer))
-          sizeInBytes
-        } else {
-          0L
+          thisToSpill = dev.get
+          dev = None
         }
+      }
+      if (thisToSpill != null) {
+        val cvFromBuffer = thisToSpill.column(0).asInstanceOf[GpuColumnVectorFromBuffer]
+        val hostHandle =
+          SpillableHostBufferHandle.createHostHandleFromDeviceBuff(cvFromBuffer.getBuffer)
+        synchronized {
+          meta = Some(cvFromBuffer.getTableMeta)
+          host = Some(hostHandle)
+          toSpill = Some(thisToSpill)
+          notifyAll()
+        }
+        sizeInBytes
+      } else {
+        0L
       }
     }
   }
@@ -734,8 +726,10 @@ class SpillableColumnarBatchFromBufferHandle private (
   override def close(): Unit = {
     releaseDeviceResource()
     synchronized {
+      closed = true
       host.foreach(_.close())
       host = None
+      notifyAll()
     }
   }
 }
@@ -818,6 +812,7 @@ class SpillableCompressedColumnarBatchHandle private (
   override def close(): Unit = {
     releaseDeviceResource()
     synchronized {
+      closed = true
       host.foreach(_.close())
       host = None
       meta = None
@@ -908,6 +903,7 @@ class SpillableHostColumnarBatchHandle private (
   override def close(): Unit = {
     releaseHostResource()
     synchronized {
+      closed = true
       disk.foreach(_.close())
       disk = None
     }
@@ -1060,24 +1056,29 @@ trait SpillableStore[T <: SpillableHandle]
     }
 
     def trySpill(): Long = {
-      var amountSpilled = 0L
-      val it = spillableHandles.iterator()
-      while (it.hasNext) {
-        val handle = it.next()
-        val spilled = handle.spill()
-        if (spilled > 0) {
-          // this thread was successful at spilling handle.
-          amountSpilled += spilled
-          spilledHandles.add(handle)
-        } else {
-          // else, either:
-          // - this thread lost the race and the handle was closed
-          // - another thread spilled it
-          // - the handle isn't spillable anymore, due to ref count.
-          it.remove()
+      withResource(new NvtxRange("trySpill", NvtxColor.YELLOW)) { _ =>
+        var amountSpilled = 0L
+        val it = spillableHandles.iterator()
+        while (it.hasNext) {
+          val handle = it.next()
+          withResource(new NvtxRange("spill", NvtxColor.BLUE)) { _ =>
+            logInfo(s"spilling handle ${handle}")
+            val spilled = handle.spill()
+            if (spilled > 0) {
+              // this thread was successful at spilling handle.
+              amountSpilled += spilled
+              spilledHandles.add(handle)
+            } else {
+              // else, either:
+              // - this thread lost the race and the handle was closed
+              // - another thread spilled it
+              // - the handle isn't spillable anymore, due to ref count.
+              it.remove()
+            }
+          }
         }
+        amountSpilled
       }
-      amountSpilled
     }
 
     def getSpilled: util.ArrayList[T] = {
@@ -1086,18 +1087,23 @@ trait SpillableStore[T <: SpillableHandle]
   }
 
   private def makeSpillPlan(spillNeeded: Long): SpillPlan = {
-    val plan = new SpillPlan()
-    var amountToSpill = 0L
-    val allHandles = handles.keySet().iterator()
-    // two threads could be here trying to spill and creating a list of spillables
-    while (allHandles.hasNext && amountToSpill < spillNeeded) {
-      val handle = allHandles.next()
-      if (handle.spillable) {
-        amountToSpill += handle.approxSizeInBytes
-        plan.add(handle)
+    withResource(new NvtxRange("makeSpillPlan", NvtxColor.PURPLE)) { _ =>
+      val plan = new SpillPlan()
+      var amountToSpill = 0L
+      val allHandles = handles.keySet().iterator()
+      // two threads could be here trying to spill and creating a list of spillables
+
+      while (allHandles.hasNext && amountToSpill < spillNeeded) {
+        withResource(new NvtxRange("adding handle to plan", NvtxColor.GREEN)) { _ =>
+          val handle = allHandles.next()
+          if (handle.spillable) {
+            amountToSpill += handle.approxSizeInBytes
+            plan.add(handle)
+          }
+        }
       }
+      plan
     }
-    plan
   }
 
   protected def postSpill(plan: SpillPlan): Unit = {}
