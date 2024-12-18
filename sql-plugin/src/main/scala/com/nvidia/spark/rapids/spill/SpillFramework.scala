@@ -585,6 +585,7 @@ class SpillableColumnarBatchHandle private (
             chunkedPacker.getPackedMeta)
         }
         synchronized {
+          toSpill = Some(thisToSpill)
           host = Some(hostHandle)
           meta = Some(packedMeta)
           notifyAll()
