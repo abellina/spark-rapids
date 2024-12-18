@@ -572,31 +572,35 @@ class SpillableColumnarBatchHandle private (
     if (!spillable) {
       0L
     } else {
+      var thisToSpill : ColumnarBatch = null
       synchronized {
         if (host.isEmpty && dev.isDefined) {
-          withChunkedPacker { chunkedPacker =>
-            meta = Some(chunkedPacker.getPackedMeta)
-            host = Some(SpillableHostBufferHandle.createHostHandleWithPacker(chunkedPacker))
-          }
-          // We return the size we were created with. This is not the actual size
-          // of this batch when it is packed, and it is used by the calling code
-          // to figure out more or less how much did we free in the device.
-          approxSizeInBytes
-        } else {
-          0L
+          thisToSpill = dev.get
+          dev = None
         }
+      }
+      if (thisToSpill != null) {
+        val (hostHandle, packedMeta) = withChunkedPacker(thisToSpill) { chunkedPacker =>
+          (SpillableHostBufferHandle.createHostHandleWithPacker(chunkedPacker),
+            chunkedPacker.getPackedMeta)
+        }
+        synchronized {
+          host = Some(hostHandle)
+          meta = Some(packedMeta)
+          notifyAll()
+        }
+        // We return the size we were created with. This is not the actual size
+        // of this batch when it is packed, and it is used by the calling code
+        // to figure out more or less how much did we free in the device.
+        approxSizeInBytes
+      } else {
+        0L
       }
     }
   }
 
-  private def withChunkedPacker[T](body: ChunkedPacker => T): T = {
-    val tbl = synchronized {
-      if (dev.isEmpty) {
-        throw new IllegalStateException("cannot get copier without a batch")
-      }
-      GpuColumnVector.from(dev.get)
-    }
-    withResource(tbl) { _ =>
+  private def withChunkedPacker[T](thisToSpill: ColumnarBatch)(body: ChunkedPacker => T): T = {
+    withResource(GpuColumnVector.from(thisToSpill)) { tbl =>
       withResource(new ChunkedPacker(tbl, SpillFramework.chunkedPackBounceBufferPool)) { packer =>
         body(packer)
       }
@@ -935,11 +939,9 @@ class DiskHandle private(
 
   private def withInputChannel[T](body: FileChannel => T): T = synchronized {
     val file = SpillFramework.stores.diskStore.diskBlockManager.getFile(blockId)
-    GpuTaskMetrics.get.readSpillFromDiskTime {
-      withResource(new FileInputStream(file)) { fs =>
-        withResource(fs.getChannel) { channel =>
-          body(channel)
-        }
+    withResource(new FileInputStream(file)) { fs =>
+      withResource(fs.getChannel) { channel =>
+        body(channel)
       }
     }
   }
@@ -1632,7 +1634,9 @@ object SpillFramework extends Logging {
 
   def withHostSpillBounceBuffer[T](body: HostMemoryBuffer => T): T =
     hostSpillBounceBuffer.synchronized {
-      body(hostSpillBounceBuffer)
+      withResource(new NvtxRange("holding host spill bb", NvtxColor.RED)) { _ =>
+        body(hostSpillBounceBuffer)
+      }
     }
 
   var chunkedPackBounceBufferPool: DeviceBounceBufferPool = _
