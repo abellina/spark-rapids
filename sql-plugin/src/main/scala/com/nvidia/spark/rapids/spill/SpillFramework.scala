@@ -188,16 +188,16 @@ trait SpillableHandle extends StoreHandle {
    */
   private[spill] def spillable: Boolean = approxSizeInBytes > 0
 
-  protected def tryGetHandle[T](maybeHandle: Option[T]): T = {
+  protected def tryGetHandle[T](maybeHandle: () => Option[T]): T = {
     // spilling or closed
-    while (maybeHandle.isEmpty && !closed) {
+    while (maybeHandle().isEmpty && !closed) {
       wait()
     }
     if (closed) {
       throw new IllegalStateException(
         "attempting to materialize a closed handle")
     }
-    maybeHandle.get
+    maybeHandle().get
   }
 }
 
@@ -327,7 +327,7 @@ class SpillableHostBufferHandle private (
       } else if (disk.isDefined) {
         diskHandle = disk.get
       } else {
-        diskHandle = tryGetHandle[DiskHandle](disk)
+        diskHandle = tryGetHandle[DiskHandle](() => disk)
       }
     }
     if (diskHandle != null) {
@@ -402,7 +402,7 @@ class SpillableHostBufferHandle private (
         diskHandle = disk.get
       } else {
         // spilling or closed
-        diskHandle = tryGetHandle[DiskHandle](disk)
+        diskHandle = tryGetHandle[DiskHandle](() => disk)
       }
     }
     if (hostBuffer != null) {
@@ -468,7 +468,7 @@ class SpillableDeviceBufferHandle private (
         materialized = dev.get
         materialized.incRefCount()
       } else {
-        hostHandle = tryGetHandle[SpillableHostBufferHandle](host)
+        hostHandle = tryGetHandle[SpillableHostBufferHandle](() => host)
       }
     }
     // if `materialized` is null, we spilled. This is a terminal
@@ -677,7 +677,7 @@ class SpillableColumnarBatchFromBufferHandle private (
       } else if (dev.isDefined) {
         materialized = GpuColumnVector.incRefCounts(dev.get)
       } else {
-        hostHandle = tryGetHandle[SpillableHostBufferHandle](host)
+        hostHandle = tryGetHandle[SpillableHostBufferHandle](() => host)
       }
     }
     if (hostHandle != null) {
