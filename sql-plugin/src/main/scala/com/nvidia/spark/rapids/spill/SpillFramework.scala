@@ -277,11 +277,8 @@ object SpillableHostBufferHandle extends Logging {
       SpillFramework.stores.hostStore.makeBuilder(handle)) { builder =>
       while (chunkedPacker.hasNext) {
         val (bb, len) = chunkedPacker.next()
-        withResource(bb) { _ =>
-          builder.copyNext(bb.dmb, len, Cuda.DEFAULT_STREAM)
-          // copyNext is synchronous w.r.t. the cuda stream passed,
-          // no need to synchronize here.
-        }
+        builder.copyNext(bb.dmb, len, Cuda.DEFAULT_STREAM)
+        // copyNext is synchronous w.r.t. the cuda stream passed,
       }
       builder.build
     }
@@ -552,10 +549,10 @@ class SpillableColumnarBatchHandle private (
       } else if (dev.isDefined) {
         materialized = GpuColumnVector.incRefCounts(dev.get)
       } else {
-        throw new IllegalStateException(
-          "attempting to materialize a closed handle")
+        hostHandle = tryGetHandle[SpillableHostBufferHandle](() => host)
       }
     }
+
     if (materialized == null) {
       val devBuffer = closeOnExcept(DeviceMemoryBuffer.allocate(hostHandle.sizeInBytes)) { dmb =>
         hostHandle.materializeToDeviceMemoryBuffer(dmb)
@@ -1062,7 +1059,6 @@ trait SpillableStore[T <: SpillableHandle]
         while (it.hasNext) {
           val handle = it.next()
           withResource(new NvtxRange("spill", NvtxColor.BLUE)) { _ =>
-            logInfo(s"spilling handle ${handle}")
             val spilled = handle.spill()
             if (spilled > 0) {
               // this thread was successful at spilling handle.
@@ -1787,20 +1783,27 @@ class ChunkedPacker(table: Table,
     chunkedPack.hasNext
   }
 
+  var bounceBuffer: DeviceBounceBuffer = null
+
   override def next(): (DeviceBounceBuffer, Long) = {
-    withResource(bounceBufferPool.nextBuffer()) { bounceBuffer =>
-      if (closed) {
-        throw new IllegalStateException(s"ChunkedPacker is closed")
-      }
-      val bytesWritten = chunkedPack.next(bounceBuffer.dmb)
-      // we increment the refcount because the caller has no idea where
-      // this memory came from, so it should close it.
-      (bounceBuffer, bytesWritten)
+    if (bounceBuffer == null) {
+      bounceBuffer = bounceBufferPool.nextBuffer()
     }
+    if (closed) {
+      throw new IllegalStateException(s"ChunkedPacker is closed")
+    }
+    val bytesWritten = chunkedPack.next(bounceBuffer.dmb)
+    // we increment the refcount because the caller has no idea where
+    // this memory came from, so it should close it.
+    (bounceBuffer, bytesWritten)
   }
 
   override def close(): Unit = {
     if (!closed) {
+      if (bounceBuffer != null) {
+        bounceBuffer.close()
+        bounceBuffer = null
+      }
       closed = true
       chunkedPack.close()
     }
