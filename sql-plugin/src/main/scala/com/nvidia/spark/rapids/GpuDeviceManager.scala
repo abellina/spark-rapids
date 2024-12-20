@@ -482,8 +482,12 @@ object GpuDeviceManager extends Logging {
       // library, and in prod it would be nice to know about it.
       logWarning("The default cuDF host pool was already configured")
     }
+    Cudf.setKernelPinnedCopyThreshold(conf.kernelPinnedCopyThreshold)
+    Cudf.setPinnedAllocationThreshold(conf.pinnedAllocationThreshold)
+    logWarning(s"cuDF pinned alloc threshold=${conf.pinnedAllocationThreshold} " +
+               s"kernel pinned copy threshold=${conf.kernelPinnedCopyThreshold}")
     if (!PinnedMemoryPool.isInitialized && pinnedSize > 0) {
-      logInfo(s"Initializing pinned memory pool (${pinnedSize / 1024 / 1024.0} MiB)")
+      logInfo(s"Initializing pinned memory pool (${pinnedSize / 1024 / 1024.0} MiB) ")
       PinnedMemoryPool.initialize(pinnedSize, gpuId, setCuioDefaultResource)
     }
     // Host memory limits must be set after the pinned memory pool is initialized

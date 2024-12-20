@@ -542,6 +542,17 @@ val GPU_COREDUMP_PIPE_PATTERN = conf("spark.rapids.gpu.coreDump.pipePattern")
     .stringConf
     .createWithDefault("ASYNC")
 
+
+  val PINNED_ALLOCATION_THRESHOLD = conf("spark.rapids.memory.pinnedAllocationThreshold")
+    .startupOnly()
+    .bytesConf(ByteUnit.BYTE)
+    .createWithDefault(0)
+
+  val KERNEL_PINNED_COPY_THRESHOLD = conf("spark.rapids.memory.kernelPinnedCopyThreshold")
+    .startupOnly()
+    .bytesConf(ByteUnit.BYTE)
+    .createWithDefault(0)
+
   val CONCURRENT_GPU_TASKS = conf("spark.rapids.sql.concurrentGpuTasks")
       .doc("Set the number of tasks that can execute concurrently per GPU. " +
           "Tasks may temporarily block when the number of concurrent tasks in the executor " +
@@ -2791,6 +2802,10 @@ class RapidsConf(conf: Map[String, String]) extends Logging {
   lazy val validateExecsInGpuPlan: Seq[String] = get(TEST_VALIDATE_EXECS_ONGPU)
 
   lazy val logQueryTransformations: Boolean = get(LOG_TRANSFORMATIONS)
+
+  lazy val kernelPinnedCopyThreshold: Long = get(KERNEL_PINNED_COPY_THRESHOLD)
+
+  lazy val pinnedAllocationThreshold: Long = get(PINNED_ALLOCATION_THRESHOLD)
 
   lazy val rmmDebugLocation: String = get(RMM_DEBUG)
 
