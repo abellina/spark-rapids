@@ -541,6 +541,16 @@ val GPU_COREDUMP_PIPE_PATTERN = conf("spark.rapids.gpu.coreDump.pipePattern")
     .stringConf
     .createWithDefault("ASYNC")
 
+  val PINNED_ALLOCATION_THRESHOLD = conf("spark.rapids.memory.pinnedAllocationThreshold")
+    .startupOnly()
+    .bytesConf(ByteUnit.BYTE)
+    .createWithDefault(0)
+
+  val KERNEL_COPY_THRESHOLD = conf("spark.rapids.memory.kernelPinnedCopyThreshold")
+    .startupOnly()
+    .bytesConf(ByteUnit.BYTE)
+    .createWithDefault(0)
+
   val CONCURRENT_GPU_TASKS = conf("spark.rapids.sql.concurrentGpuTasks")
       .doc("Set the number of tasks that can execute concurrently per GPU. " +
           "Tasks may temporarily block when the number of concurrent tasks in the executor " +
@@ -3332,6 +3342,9 @@ class RapidsConf(conf: Map[String, String]) extends Logging {
 
   lazy val isAsyncOutputWriteEnabled: Boolean = get(ENABLE_ASYNC_OUTPUT_WRITE)
 
+  lazy val pinnedAllocationThreshold: Long = get(PINNED_ALLOCATION_THRESHOLD)
+  lazy val kernelPinnedCopyThreshold: Long = get(KERNEL_COPY_THRESHOLD)
+
   private val optimizerDefaults = Map(
     // this is not accurate because CPU projections do have a cost due to appending values
     // to each row that is produced, but this needs to be a really small number because
@@ -3395,6 +3408,7 @@ class RapidsConf(conf: Map[String, String]) extends Logging {
   def isConfExplicitlySet(key: String): Boolean = {
     conf.contains(key)
   }
+
 }
 
 case class OomInjectionConf(

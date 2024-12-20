@@ -426,7 +426,6 @@ class UCXShuffleTransport(shuffleServerId: BlockManagerId, rapidsConf: RapidsCon
 
         var requestIx = 0
         while (requestIx < requestsToHandle.size) {
-          logInfo(s"got some requests")
           var hasBounceBuffers = true
           var fitsInFlight = true
           val skipBBReq =
@@ -440,8 +439,8 @@ class UCXShuffleTransport(shuffleServerId: BlockManagerId, rapidsConf: RapidsCon
           while (requestIx < requestsToHandle.size && fitsInFlight) {
             reqToHandle = requestsToHandle(requestIx)
             if (wouldFitInFlightLimit(reqToHandle.getLength)) {
-              if (false && reqToHandle.getLength > bounceBufferSize) {
-                logInfo(s"direct bounce buffer req ${reqToHandle}")
+              if (reqToHandle.getLength > bounceBufferSize) {
+                logDebug(s"direct bounce buffer req ${reqToHandle}")
                 markBytesInFlight(reqToHandle.getLength)
                 skipBBReq.append((
                   reqToHandle.client,
@@ -500,7 +499,7 @@ class UCXShuffleTransport(shuffleServerId: BlockManagerId, rapidsConf: RapidsCon
 
           if (skipBBReq.nonEmpty) {
             skipBBReq.foreach { case (client, req, buff) =>
-              logInfo(s"direct BB receive issue ${buff.getLength}")
+              logDebug(s"direct BB receive issue ${buff.getLength}")
               val brsId = UCXConnection.composeBufferHeader(
                 client.connection.getPeerExecutorId, ucx.assignUniqueId())
               val brs = new DirectBufferReceiveState(brsId, buff, req,

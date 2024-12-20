@@ -180,7 +180,7 @@ class RapidsShuffleClient(
         val metaReq = new RefCountedDirectByteBuffer(
           ShuffleMetadata.buildShuffleMetadataRequest(shuffleRequests))
 
-        logInfo(s"Requesting block_ids=[$shuffleRequests] from connection $connection, req: \n " +
+        logDebug(s"Requesting block_ids=[$shuffleRequests] from connection $connection, req: \n " +
             s"${ShuffleMetadata.printRequest(
               ShuffleMetadata.getMetadataRequest(metaReq.getBuffer()))}")
 
@@ -219,7 +219,7 @@ class RapidsShuffleClient(
                   val metadataResponse =
                     ShuffleMetadata.getMetadataResponse(resp.getBuffer())
 
-                  logInfo(s"Received from ${tx} response: \n:" +
+                  logDebug(s"Received from ${tx} response: \n:" +
                     s"${ShuffleMetadata.printResponse("received response", metadataResponse)}")
 
                   // signal to the handler how many batches are expected
@@ -316,7 +316,7 @@ class RapidsShuffleClient(
   private def queueTransferRequests(metaResponse: MetadataResponse,
                                     handler: RapidsShuffleFetchHandler): Unit = {
     val allTables = metaResponse.tableMetasLength()
-    logInfo(s"Queueing transfer requests for ${allTables} tables " +
+    logDebug(s"Queueing transfer requests for ${allTables} tables " +
       s"from ${connection.getPeerExecutorId}")
 
     val ptrs = new ArrayBuffer[PendingTransferRequest](allTables)
@@ -390,11 +390,11 @@ class RapidsShuffleClient(
               }
 
               if (!bufferReceiveState.hasMoreBlocks) {
-                logInfo(s"BufferReceiveState: " +
+                logDebug(s"BufferReceiveState: " +
                   s"${TransportUtils.toHex(bufferReceiveState.id)} is DONE, closing.")
                 bufferReceiveState.close()
               } else {
-                logInfo(s"BufferReceiveState: " +
+                logDebug(s"BufferReceiveState: " +
                   s"${TransportUtils.toHex(bufferReceiveState.id)} is NOT done, continuing.")
               }
             }
@@ -437,7 +437,7 @@ class RapidsShuffleClient(
   }
 
   override def close(): Unit = {
-    logInfo(s"Closing pending requests for ${connection.getPeerExecutorId}")
+    logDebug(s"Closing pending requests for ${connection.getPeerExecutorId}")
     liveHandlers.forEach { handler =>
       logWarning(s"Signaling ${handler} that ${connection.getPeerExecutorId} errored")
       handler.transferError(s"Connection to ${connection.getPeerExecutorId} closed")

@@ -395,6 +395,9 @@ object GpuDeviceManager extends Logging {
         logInfo("Using legacy default stream")
       }
 
+      Cudf.setPinnedAllocationThreshold(conf.pinnedAllocationThreshold)
+      Cudf.setKernelPinnedCopyThreshold(conf.kernelPinnedCopyThreshold)
+
       Cuda.setDevice(gpuId)
       try {
         poolSizeLimit = poolAllocation
