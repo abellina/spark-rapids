@@ -436,13 +436,14 @@ class UCX(transport: UCXShuffleTransport, executor: BlockManagerId, rapidsConf: 
                 require(!reg.useRndv,
                   s"Handling an eager Active Message, but expected rndv for: " +
                     s"amId ${TransportUtils.toHex(reg.activeMessageId)}")
-                logDebug(s"Handling an EAGER active message receive $amData")
+                logInfo(s"Handling an EAGER active message receive $amData")
                 val resp = UcxUtils.getByteBufferView(amData.getDataAddress, amData.getLength)
 
                 // copy the data onto a buffer we own because it is going to be reused
                 // in UCX
                 cb.onMessageReceived(amData.getLength, header, {
                   case mtb: MetadataTransportBuffer =>
+                    logInfo(s"onMessageReceived eager ${amData.getLength}");
                     mtb.copy(resp)
                     cb.onSuccess(am, mtb)
                   case _ =>
@@ -457,7 +458,7 @@ class UCX(transport: UCXShuffleTransport, executor: BlockManagerId, rapidsConf: 
                 // RNDV case: we get a direct buffer and UCX will fill it with data at `receive`
                 // callback
                 cb.onMessageReceived(amData.getLength, header, (resp: TransportBuffer) => {
-                  logDebug(s"Receiving Active Message ${am} using data address " +
+                  logInfo(s"Receiving Active Message ${am} using data address " +
                     s"${TransportUtils.toHex(resp.getAddress())}")
 
                   // we must call `receive` on the `amData` object within the progress thread
@@ -483,7 +484,7 @@ class UCX(transport: UCXShuffleTransport, executor: BlockManagerId, rapidsConf: 
                         override def onSuccess(request: UcpRequest): Unit = {
                           withResource(new NvtxRange("AM Success", NvtxColor.ORANGE)) { _ =>
                             withResource(amData) { _ =>
-                              logDebug(s"Success with Active Message ${am} using data address " +
+                              logInfo(s"Success with Active Message ${am} using data address " +
                                 s"${TransportUtils.toHex(resp.getAddress())}")
                               cb.onSuccess(am, resp)
                             }
@@ -664,7 +665,11 @@ class UCX(transport: UCXShuffleTransport, executor: BlockManagerId, rapidsConf: 
    * @param buffers to register
    * @param mmapCallback callback invoked when the memory map operation completes or fails
    */
-  def register(buffers: Seq[MemoryBuffer], mmapCallback: MemoryRegistrationCallback): Unit =
+  def register(buffers: Seq[MemoryBuffer], mmapCallback: MemoryRegistrationCallback): Unit = {
+    registerInternal(buffers.map{ b => (b.getAddress, b.getLength )}, mmapCallback)
+  }
+
+  def registerInternal(buffers: Seq[(Long, Long)], mmapCallback: MemoryRegistrationCallback): Unit =
     registeredMemory.synchronized {
       pendingRegistration = true
 
@@ -673,10 +678,11 @@ class UCX(transport: UCXShuffleTransport, executor: BlockManagerId, rapidsConf: 
         registeredMemory.synchronized {
           try {
             buffers.foreach { buffer =>
-              logWarning(s"registering memory buffer ${buffer}. Address ${buffer.getAddress}")
+              logWarning(s"registering memory buffer ${buffer}. " +
+              s"Address ${TransportUtils.toHex(buffer._1)}")
               val mmapParam = new UcpMemMapParams()
-                  .setAddress(buffer.getAddress)
-                  .setLength(buffer.getLength)
+                .setAddress(buffer._1)
+                .setLength(buffer._2)
 
               //note that this can throw, lets call back and let caller figure out how to handle
               try {

@@ -343,6 +343,9 @@ object GpuDeviceManager extends Logging {
           case c if "async_fabric".equalsIgnoreCase(c) =>
             features += "ASYNC_FABRIC"
             init | RmmAllocationMode.CUDA_ASYNC_FABRIC
+          case c if "arena_fabric".equalsIgnoreCase(c) =>
+            features += "ARENA_FABRIC"
+            init | RmmAllocationMode.CUDA_ARENA_FABRIC
           case c if "none".equalsIgnoreCase(c) =>
             // Pooling is disabled.
             init
@@ -406,7 +409,8 @@ object GpuDeviceManager extends Logging {
         case firstEx: CudfException if isAsyncAllocator => {
           logWarning("Failed to initialize RMM with ASYNC allocator. " +
             "Initializing with ARENA allocator as a fallback option.")
-          init = init & (~(RmmAllocationMode.CUDA_ASYNC | RmmAllocationMode.CUDA_ASYNC_FABRIC))
+          init = init & (~(RmmAllocationMode.CUDA_ASYNC |
+                            RmmAllocationMode.CUDA_ASYNC_FABRIC | RmmAllocationMode.CUDA_ARENA_FABRIC))
           init = init | RmmAllocationMode.ARENA
           try {
             Rmm.initialize(init, logConf, poolAllocation)

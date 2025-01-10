@@ -44,15 +44,12 @@ class ShuffleReceivedBufferCatalog() extends Logging {
    * @param buffer buffer that will be owned by the store
    * @param tableMeta metadata describing the buffer layout
    * @param initialSpillPriority starting spill priority value for the buffer
-   * @param needsSync tells the store a synchronize in the current stream is required
-   *                  before storing this buffer
    * @return RapidsShuffleHandle associated with this buffer
    */
   def addBuffer(
       buffer: DeviceMemoryBuffer,
       tableMeta: TableMeta,
       initialSpillPriority: Long): RapidsShuffleHandle = {
-    logInfo(s"added buffer ${buffer}")
     RapidsShuffleHandle(SpillableDeviceBufferHandle(buffer), tableMeta)
   }
 
@@ -63,7 +60,6 @@ class ShuffleReceivedBufferCatalog() extends Logging {
    * @return RapidsShuffleHandle associated with this buffer
    */
   def addDegenerateBatch(meta: TableMeta): RapidsShuffleHandle  = {
-    logInfo(s"added degenerate meta")
     RapidsShuffleHandle(null, meta)
   }
 

@@ -1560,7 +1560,11 @@ object SpillFramework extends Logging {
   // public for tests. Some tests not in the `spill` package require setting this
   // because they need fine control over allocations.
   var storesInternal: SpillableStores = _
-  
+
+  //val egmSize = 200L*1024*1024*1024
+
+  //var egm: RmmArenaMemoryResource[RmmCudaAsyncMemoryResource] = _
+
   def stores: SpillableStores = {
     if (storesInternal == null) {
       throw new IllegalStateException(
@@ -1595,6 +1599,11 @@ object SpillFramework extends Logging {
     } else {
       Some(rapidsConf.hostSpillStorageSize)
     }
+    //logInfo("started with egm memory")
+
+    //egm = new RmmArenaMemoryResource[RmmCudaAsyncMemoryResource](
+    //  new RmmCudaAsyncMemoryResource(egmSize, egmSize, true, true), egmSize, false)
+
     // this should hopefully be pinned, but it would work without
     hostSpillBounceBuffer = HostMemoryBuffer.allocate(rapidsConf.spillToDiskBounceBufferSize)
 

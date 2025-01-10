@@ -252,12 +252,13 @@ class UCXClientConnection(peerExecutorId: Long, ucx: UCX, transport: UCXShuffleT
     val hdrWildcard = UCXConnection.composeBufferHeader(peerExecutorId, 0L)
     // register a handler that must match "sends" from a peer, hence the use of `composeSendAmId`
     ucx.registerReceiveHandler(UCXConnection.composeSendAmId(receiveType),
-      UCXConnection.upperBitsMask, hdrWildcard, () => new UCXAmCallback {
+      UCXConnection.upperBitsMask, hdrWildcard, receiveCallbackGen = () => new UCXAmCallback {
         private val tx = createTransaction
         tx.start(UCXTransactionType.Receive, 1, transport.handleBufferTransaction)
 
         override def onError(am: UCXActiveMessage, error: UCXError): Unit = {
-          tx.completeWithError(error.errorMsg)
+          logInfo(s"onError ${error.errorMsg} for ${am.header}")
+          tx.completeWithError(error.errorMsg, hdr = Some(am.header))
         }
 
         override def onMessageStarted(receiveAm: UcpRequest): Unit = {
@@ -266,16 +267,18 @@ class UCXClientConnection(peerExecutorId: Long, ucx: UCX, transport: UCXShuffleT
 
         override def onSuccess(am: UCXActiveMessage, buff: TransportBuffer): Unit = {
           // the buffer doesn't belong to this transaction, hence the last argument is None.
+          logInfo(s"message success ${am.header}")
           tx.completeWithSuccess(MessageType.Buffer, Option(am.header), None)
         }
 
         override def onCancel(am: UCXActiveMessage): Unit = {
+          logInfo(s"message cancelled ${am.header}")
           tx.completeCancelled(MessageType.Buffer, am.header)
         }
 
         override def onMessageReceived(size: Long, header: Long,
                                        finalizeCb: TransportBuffer => Unit): Unit = {
-          logDebug(s"Received message from ${peerExecutorId} size ${size} " +
+          logInfo(s"Received message from ${peerExecutorId} size ${size} " +
             s"header ${TransportUtils.toHex(header)}")
           transport.handleBufferReceive(size, header, finalizeCb)
         }

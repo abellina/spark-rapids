@@ -305,7 +305,6 @@ private[ucx] class UCXTransaction(conn: UCXConnection, val txId: Long)
                header: Option[Long] = None,
                message: Option[TransportBuffer] = None,
                errorMessage: Option[String] = None): Unit = {
-    setHeader(header)
     setActiveMessageData(message)
     setMessageType(messageType)
     setErrorMessage(errorMessage)
@@ -313,9 +312,10 @@ private[ucx] class UCXTransaction(conn: UCXConnection, val txId: Long)
     txCallback(status)
   }
 
-  def completeWithError(errorMsg: String): Unit = {
+  def completeWithError(errorMsg: String, hdr: Option[Long] = None): Unit = {
     complete(TransactionStatus.Error,
-      errorMessage = Option(errorMsg))
+      errorMessage = Option(errorMsg),
+      header = hdr)
   }
 
   def completeCancelled(messageType: MessageType.Value, hdr: Long): Unit = {
@@ -367,6 +367,9 @@ private[ucx] class UCXTransaction(conn: UCXConnection, val txId: Long)
   private[ucx] def setHeader(id: Option[Long]): Unit = header = id
 
   override def getHeader: Long = {
+    if (errorMessage.isDefined) {
+      logError(s"Error message set to ${errorMessage.get}")
+    }
     require(header.nonEmpty,
       "Attempted to get an Active Message header, but it was not set!")
     header.get

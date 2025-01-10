@@ -375,6 +375,7 @@ class RapidsShuffleIterator(
           NvtxColor.PURPLE)
         try {
           val (cb, memoryUsedBytes) = catalog.getColumnarBatchAndRemove(handle, sparkTypes)
+          logInfo(s"got batch from handle ${handle} size ${memoryUsedBytes}")
           metricsUpdater.update(blockedTime, 1, memoryUsedBytes, cb.numRows())
           cb
         } finally {

@@ -186,7 +186,7 @@ class RapidsShuffleServer(transport: RapidsShuffleTransport,
         while (!pendingTransfersQueue.isEmpty && continue) {
           // TODO: throttle on too big a send total so we don't acquire the world (in flight limit)
           val pendingTransfer = pendingTransfersQueue.peek()
-          if (pendingTransfer.tx.useBounceBuffers) {
+          if (false && pendingTransfer.tx.useBounceBuffers) {
             val sendBounceBuffers =
               transport.tryGetSendBounceBuffers(1, 1)
             if (sendBounceBuffers.nonEmpty) {
@@ -389,24 +389,23 @@ class RapidsShuffleServer(transport: RapidsShuffleTransport,
       bssBuffers.foreach { case (bufferSendState, buffersToSend) =>
         val peerExecutorId = bufferSendState.peerExecutorId
         val sendHeader = bufferSendState.getPeerBufferReceiveHeader
-        // make sure we close the buffer slice
-        withResource(buffersToSend) { _ =>
-          // [Scala 2.13] The compiler does not seem to be able to do the implicit SAM
-          // conversion after expanding the call in the method call below. So we have to define the 
-          // callback here in a val and type it to TransactionCallback
-          val txCallback: TransactionCallback = tx => withResource(tx) { bufferTx =>
+        // [Scala 2.13] The compiler does not seem to be able to do the implicit SAM
+        // conversion after expanding the call in the method call below. So we have to define the
+        // callback here in a val and type it to TransactionCallback
+        val txCallback: TransactionCallback = tx => withResource(tx) { bufferTx =>
+          withResource(buffersToSend) { _ =>
             bufferTx.getStatus match {
               case TransactionStatus.Success =>
-                logDebug(s"Done with the send for $bufferSendState with $buffersToSend")
+                logInfo(s"Done with the send for $bufferSendState with $buffersToSend")
 
                 if (bufferSendState.hasMoreSends) {
                   // continue issuing sends.
-                  logDebug(s"Buffer send state $bufferSendState is NOT done. " +
+                  logInfo(s"Buffer send state $bufferSendState is NOT done. " +
                     s"Still pending: ${pendingTransfersQueue.size}.")
                   addToContinueQueue(Seq(bufferSendState))
                 } else {
                   // wake up the bssExec since bounce buffers became available
-                  logDebug(s"Buffer send state " +
+                  logInfo(s"Buffer send state " +
                     s"${TransportUtils.toHex(bufferSendState.getPeerBufferReceiveHeader)} " +
                     s"is done, closing. Still pending: ${pendingTransfersQueue.size}.")
                   bssExec.synchronized {
@@ -423,11 +422,12 @@ class RapidsShuffleServer(transport: RapidsShuffleTransport,
                 }
             }
           }
-
-          serverConnection.send(peerExecutorId, MessageType.Buffer,
-            // TODO: it may be nice to hide `sendHeader` in `Transaction`
-            sendHeader, buffersToSend, txCallback)
         }
+
+        logInfo(s"sending ${buffersToSend}")
+        serverConnection.send(peerExecutorId, MessageType.Buffer,
+          // TODO: it may be nice to hide `sendHeader` in `Transaction`
+          sendHeader, buffersToSend, txCallback)
       }
     }
   }

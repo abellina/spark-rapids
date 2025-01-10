@@ -266,7 +266,7 @@ class RapidsShuffleClient(
    */
   private[shuffle] def doIssueBufferReceives(bufferReceiveState: BufferReceiveState): Unit = {
     try {
-      logDebug(s"Adding ${connection.getPeerExecutorId} BRS " +
+      logInfo(s"Issuing ${connection.getPeerExecutorId} BRS" +
         s"${TransportUtils.toHex(bufferReceiveState.id)}")
 
       // send a transfer request to kick off receives
@@ -287,7 +287,7 @@ class RapidsShuffleClient(
    */
   private[this] def sendTransferRequest(id: Long, toIssue: BufferReceiveState): Unit = {
     val requestsToIssue = toIssue.getRequests
-    logDebug(s"Sending a transfer request for ${TransportUtils.toHex(toIssue.id)}")
+    logInfo(s"Sending a transfer request for ${TransportUtils.toHex(toIssue.id)} from ${connection.getPeerExecutorId}")
 
     val transferReq = new RefCountedDirectByteBuffer(
       ShuffleMetadata.buildTransferRequest(id, requestsToIssue.map { i =>
@@ -298,7 +298,7 @@ class RapidsShuffleClient(
       withResource(transferReq) { _ =>
         tx.getStatus match {
           case TransactionStatus.Success =>
-            logDebug(s"done with tx ${tx}")
+            logInfo(s"done with tx ${tx} from ${connection.getPeerExecutorId}")
           case _ =>
             toIssue.errorOccurred(tx.getErrorMessage.getOrElse("TransferRequest failed"))
         }

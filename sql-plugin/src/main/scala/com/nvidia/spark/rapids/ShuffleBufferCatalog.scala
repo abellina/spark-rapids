@@ -56,9 +56,7 @@ class ShuffleBufferCatalog extends Logging {
         synchronized {
           // this used to do batching, which we still may want
           logInfo(s"Spilling buffer ${buffer} size ${buffer.sizeInBytes}")
-          if (buffer.spill() == 0) {
-            spillQueue.offer(buffer)
-          } else  {
+          if (buffer.spill() != 0) {
             buffer.releaseDeviceResource()
           }
         }
@@ -274,8 +272,16 @@ class ShuffleBufferCatalog extends Logging {
     if (entries == null) {
       throw new NoSuchElementException(s"unknown shuffle block $blockId")
     }
-    entries.synchronized { 
-      entries.map(bufferIdToHandle.get).map { case (_, meta) =>
+
+    entries.synchronized {
+      entries.map { e =>
+        logInfo(s"looking up ${e} in bufferIdToHandle")
+        val res = bufferIdToHandle.get(e)
+        if (res == null) {
+          logInfo(s"looking up ${e} in bufferIdToHandle returned null!!")
+        }
+        res
+      }.map { case (_, meta) =>
         meta
       }
     }.toSeq

@@ -252,6 +252,7 @@ class BounceBufferBufferSendState(
       }
     }
 
+    logInfo(s"getBufferToSend bounced: ${buffsToSend}")
     logDebug(s"Sending ${buffsToSend} for transfer request, " +
         s" [peer_executor_id=${transaction.peerExecutorId()}]")
 
@@ -271,7 +272,7 @@ class BounceBufferBufferSendState(
 class DirectBufferSendState(
   transaction: Transaction,
   requestHandler: RapidsShuffleRequestHandler,
-  stream: Cuda.Stream) extends BufferSendState {
+  stream: Cuda.Stream) extends BufferSendState with Logging {
 
   private[this] val (peerBufferReceiveHeader: Long,
   buffToSend: RapidsShuffleHandle, bufferMeta: BufferMeta) = {
@@ -291,7 +292,9 @@ class DirectBufferSendState(
   override def hasMoreSends: Boolean = !sent
   override def getBufferToSend(): MemoryBuffer = {
     sent = true
-    buffToSend.spillable.materialize
+    val db = buffToSend.spillable.materialize()
+    logInfo(s"getBufferToSend direct: ${db}")
+    db
   }
   override def releaseAcquiredToCatalog(): Unit = {
   }

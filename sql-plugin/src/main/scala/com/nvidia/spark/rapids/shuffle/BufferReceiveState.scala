@@ -278,8 +278,8 @@ class DirectBufferReceiveState(
   private var consumed = false
 
   override def consumeWindow(): Seq[ConsumedBatchFromBounceBuffer] = {
+    logInfo(s"At consume window for ${buffer}")
     consumed = true
-    logInfo(s"consumeWindow with buffer ${buffer}")
     Seq(ConsumedBatchFromBounceBuffer(
       buffer,
       request.tableMeta,
@@ -287,6 +287,7 @@ class DirectBufferReceiveState(
   }
 
   override def close(): Unit = {
+    logInfo(s"closing DirectBufferReceiveState for ${buffer}")
     transportOnClose()
   }
 

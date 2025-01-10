@@ -18,17 +18,14 @@ package com.nvidia.spark.rapids.shuffle.ucx
 
 import java.nio.ByteBuffer
 import java.util.concurrent._
-
 import scala.collection.mutable
 import scala.collection.mutable.ArrayBuffer
-
-import ai.rapids.cudf.{BaseDeviceMemoryBuffer, Cuda, CudaMemoryBuffer, DeviceMemoryBuffer, HostMemoryBuffer, MemoryBuffer, Rmm, RmmCudaAsyncMemoryResource}
+import ai.rapids.cudf.{BaseDeviceMemoryBuffer, Cuda, CudaMemoryBuffer, DeviceMemoryBuffer, HostMemoryBuffer, MemoryBuffer, Rmm, RmmArenaMemoryResource, RmmCudaAsyncMemoryResource, RmmTrackingResourceAdaptor}
 import com.nvidia.spark.rapids.{GpuDeviceManager, HashedPriorityQueue, RapidsConf}
 import com.nvidia.spark.rapids.ThreadFactoryBuilder
-import com.nvidia.spark.rapids.jni.RmmSpark
+import com.nvidia.spark.rapids.jni.{RmmSpark, SparkResourceAdaptor}
 import com.nvidia.spark.rapids.shuffle._
 import com.nvidia.spark.rapids.shuffle.{BounceBufferManager, BufferReceiveState, ClientConnection, PendingTransferRequest, RapidsShuffleClient, RapidsShuffleRequestHandler, RapidsShuffleServer, RapidsShuffleTransport, RefCountedDirectByteBuffer}
-
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.rapids.execution.TrampolineUtil
 import org.apache.spark.storage.BlockManagerId
@@ -76,6 +73,32 @@ class UCXShuffleTransport(shuffleServerId: BlockManagerId, rapidsConf: RapidsCon
 
     val ucxImpl = new UCX(this, shuffleServerId, rapidsConf)
     ucxImpl.init()
+
+    val mr = {
+      Rmm.getCurrentDeviceResource match {
+        case sra: SparkResourceAdaptor =>
+          val dmr = sra.getWrapped
+          dmr.getWrapped match  {
+            case t: RmmTrackingResourceAdaptor[_] =>
+              t.getWrapped
+            case o => o
+          }
+        case other => other
+      }
+    }
+    mr match {
+      case arena: RmmArenaMemoryResource[_]=>
+        val ptr = Rmm.arenaGetRootAllocationPointer(arena.getHandle)
+        val sz = Rmm.arenaGetRootAllocationSize(arena.getHandle)
+        logInfo(s"registering arena pool ${TransportUtils.toHex(ptr)} an sz ${sz}")
+        ucxImpl.registerInternal(Seq((ptr, sz)), ex =>
+          if (ex.isDefined) {
+            logError(s"Error registering fabric pool", ex.get)
+            ucxImpl.close()
+          }
+        )
+      case o => logInfo(s"NOT arena ${o}")
+    }
 
     // Perform transport (potentially IB) registration early
     // NOTE: on error we log and close things, which should fail other parts of the job in a bad
@@ -380,7 +403,7 @@ class UCXShuffleTransport(shuffleServerId: BlockManagerId, rapidsConf: RapidsCon
 
   def handleBufferReceive(size: Long, header: Long,
       finalizeCb: TransportBuffer => Unit): Unit = {
-    logDebug(s"Handling: ${TransportUtils.toHex(header)} with size $size")
+    logInfo(s"Handling: ${TransportUtils.toHex(header)} with size $size")
     val clientAndBrs = pendingBrs.get(header)
     require(clientAndBrs != null,
       s"Unknown header for a buffer receive: ${TransportUtils.toHex(header)}")
@@ -439,8 +462,8 @@ class UCXShuffleTransport(shuffleServerId: BlockManagerId, rapidsConf: RapidsCon
           while (requestIx < requestsToHandle.size && fitsInFlight) {
             reqToHandle = requestsToHandle(requestIx)
             if (wouldFitInFlightLimit(reqToHandle.getLength)) {
-              if (reqToHandle.getLength > bounceBufferSize) {
-                logDebug(s"direct bounce buffer req ${reqToHandle}")
+              if (true || reqToHandle.getLength > bounceBufferSize) {
+                logInfo(s"direct bounce buffer req ${reqToHandle}")
                 markBytesInFlight(reqToHandle.getLength)
                 skipBBReq.append((
                   reqToHandle.client,
@@ -499,9 +522,11 @@ class UCXShuffleTransport(shuffleServerId: BlockManagerId, rapidsConf: RapidsCon
 
           if (skipBBReq.nonEmpty) {
             skipBBReq.foreach { case (client, req, buff) =>
-              logDebug(s"direct BB receive issue ${buff.getLength}")
               val brsId = UCXConnection.composeBufferHeader(
                 client.connection.getPeerExecutorId, ucx.assignUniqueId())
+              logInfo(s"direct BB receive issue ${buff} ${buff.getLength} "+
+               s"hdr ${TransportUtils.toHex(brsId)}")
+
               val brs = new DirectBufferReceiveState(brsId, buff, req,
               () => bufferReceiveStateComplete(brsId))
               pendingBrs.put(brs.id, ClientAndBufferReceiveState(client, brs))

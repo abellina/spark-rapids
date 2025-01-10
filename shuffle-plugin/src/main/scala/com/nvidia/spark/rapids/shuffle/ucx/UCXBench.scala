@@ -32,8 +32,8 @@ class UCXBench(
   def start(): Unit = {
     val server = peerHost == null
     val myId = if (server) { "0" } else { "1" }
-    val rowCount = 1000000
-    val batchSize = rowCount * 8
+    val batchSize = msgSize
+    val rowCount = (batchSize/8).toInt
 
     val properties = new Properties()
     val source = scala.io.Source.fromURL(s"file://$configPath")
