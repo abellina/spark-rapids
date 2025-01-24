@@ -130,6 +130,7 @@ abstract class RapidsCachingWriterBase[K, V](
     val nvtxRange = new NvtxRange("RapidsCachingWriter.close", NvtxColor.CYAN)
     try {
       if (!success) {
+        logError(s"FAILED cached write! $mapId")
         cleanStorage()
         None
       } else {

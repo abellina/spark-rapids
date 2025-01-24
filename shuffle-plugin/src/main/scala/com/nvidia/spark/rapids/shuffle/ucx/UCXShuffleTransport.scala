@@ -463,12 +463,16 @@ class UCXShuffleTransport(shuffleServerId: BlockManagerId, rapidsConf: RapidsCon
             reqToHandle = requestsToHandle(requestIx)
             if (wouldFitInFlightLimit(reqToHandle.getLength)) {
               if (true || reqToHandle.getLength > bounceBufferSize) {
-                logInfo(s"direct bounce buffer req ${reqToHandle}")
+                logInfo(s"direct req ${reqToHandle}")
                 markBytesInFlight(reqToHandle.getLength)
-                skipBBReq.append((
-                  reqToHandle.client,
-                  reqToHandle,
-                  DeviceMemoryBuffer.allocate(reqToHandle.getLength)))
+                val existingReq =
+                  perClientReq.get(reqToHandle.client)
+                if (existingReq.isEmpty) {
+                  skipBBReq.append((
+                    reqToHandle.client,
+                    reqToHandle,
+                    DeviceMemoryBuffer.allocate(reqToHandle.getLength)))
+                }
                 requestIx += 1
               } else {
                 val existingReq =

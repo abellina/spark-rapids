@@ -104,6 +104,7 @@ class ShuffleBufferCatalog extends Logging {
     while (bufferIt.hasNext) {
       val buffer = bufferIt.next()
       val (maybeHandle, _) = bufferIdToHandle.remove(buffer)
+      logInfo(s"removing buffer ${buffer} tableId ${buffer.tableId}")
       tableMap.remove(buffer.tableId)
       maybeHandle.foreach(_.close())
     }
@@ -191,6 +192,7 @@ class ShuffleBufferCatalog extends Logging {
       val bufferRemover: Consumer[ArrayBuffer[ShuffleBufferId]] = { bufferIds =>
         // NOTE: Not synchronizing array buffer because this shuffle should be inactive.
         bufferIds.foreach { id =>
+          logInfo(s"unregisterShuffle: removing tableId ${id} ${id.tableId}")
           tableMap.remove(id.tableId)
           val handleAndMeta = bufferIdToHandle.remove(id)
           handleAndMeta._1.foreach { h => 
@@ -232,6 +234,7 @@ class ShuffleBufferCatalog extends Logging {
     val bufferIDs = blockIdToBuffersIds(blockId)
     bufferIDs.iterator.map { bId =>
       GpuSemaphore.acquireIfNecessary(TaskContext.get)
+      logInfo(s"getting bufferId ${bId}")
       val (maybeHandle, meta) = bufferIdToHandle.get(bId)
       maybeHandle.map { handle =>
         withResource(handle.materialize()) { buff =>
@@ -297,6 +300,7 @@ class ShuffleBufferCatalog extends Logging {
     val tableId = tableIdCounter.getAndUpdate(ShuffleBufferCatalog.TABLE_ID_UPDATER)
     val id = ShuffleBufferId(blockId, tableId)
     val prev = tableMap.put(tableId, id)
+    logInfo(s"storing tableId ${tableId} -> $id")
     if (prev != null) {
       throw new IllegalStateException(s"table ID $tableId is already in use")
     }

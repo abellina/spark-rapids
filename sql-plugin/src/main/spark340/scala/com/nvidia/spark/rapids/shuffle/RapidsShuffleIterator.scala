@@ -351,7 +351,8 @@ class RapidsShuffleIterator(
     // thread to schedule the fetches for us, it may be something we consider in the future, given
     // memory pressure.
     // No good way to get a metric in here for semaphore time.
-    taskContext.foreach(GpuSemaphore.acquireIfNecessary(_))
+    taskContext.foreach(GpuSemaphore.releaseIfNecessary(_))
+    RmmSpark.currentThreadIsDedicatedToTask(taskAttemptId)
 
     if (!started) {
       // kick off if we haven't already
@@ -374,6 +375,7 @@ class RapidsShuffleIterator(
         val nvtxRangeAfterGettingBatch = new NvtxRange("RapidsShuffleIterator.gotBatch",
           NvtxColor.PURPLE)
         try {
+          taskContext.foreach(GpuSemaphore.acquireIfNecessary(_))
           val (cb, memoryUsedBytes) = catalog.getColumnarBatchAndRemove(handle, sparkTypes)
           logInfo(s"got batch from handle ${handle} size ${memoryUsedBytes}")
           metricsUpdater.update(blockedTime, 1, memoryUsedBytes, cb.numRows())

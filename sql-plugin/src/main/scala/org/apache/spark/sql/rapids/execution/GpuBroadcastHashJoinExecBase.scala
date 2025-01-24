@@ -187,14 +187,17 @@ abstract class GpuBroadcastHashJoinExecBase(
     val rdd = streamedPlan.executeColumnar()
     val buildSchema = buildPlan.schema
     rdd.mapPartitions { it =>
-      val (builtBatch, streamIter) =
-        getBroadcastBuiltBatchAndStreamIter(
-          broadcastRelation,
-          buildSchema,
-          new CollectTimeIterator("broadcast join stream", it, streamTime),
-          allMetrics)
-      // builtBatch will be closed in doJoin
-      doJoin(builtBatch, streamIter, targetSize, numOutputRows, numOutputBatches, opTime, joinTime)
+      withResource(new NvtxRange("calling doJoin", NvtxColor.PURPLE)) { _ =>
+        val (builtBatch, streamIter) =
+          getBroadcastBuiltBatchAndStreamIter(
+            broadcastRelation,
+            buildSchema,
+            new CollectTimeIterator("broadcast join stream", it, streamTime),
+            allMetrics)
+        // builtBatch will be closed in doJoin
+        doJoin(builtBatch, streamIter, targetSize,
+          numOutputRows, numOutputBatches, opTime, joinTime)
+      }
     }
   }
 
