@@ -270,12 +270,13 @@ class BounceBufferBufferReceiveState(
 
 class DirectBufferReceiveState(
     override val id: Long,
-    var buffer: DeviceMemoryBuffer,
     request: PendingTransferRequest,
     transportOnClose: () => Unit)
   extends BufferReceiveState with Logging {
 
   private var consumed = false
+
+  private var buffer: DeviceMemoryBuffer = null
 
   override def consumeWindow(): Seq[ConsumedBatchFromBounceBuffer] = {
     logInfo(s"At consume window for ${buffer}")
@@ -292,6 +293,10 @@ class DirectBufferReceiveState(
   }
 
   override def getBufferWhenReady(finalizeCb: TransportBuffer => Unit, size: Long): Unit = {
+    if (buffer == null) {
+      buffer = DeviceMemoryBuffer.allocate(size)
+      Cuda.DEFAULT_STREAM.sync()
+    }
     finalizeCb(new TransportBuffer {
       override def getAddress(): Long = buffer.getAddress
       override def getLength(): Long = buffer.getLength

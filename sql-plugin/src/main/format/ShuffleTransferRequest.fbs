@@ -28,4 +28,8 @@ table TransferRequest {
   requests : [BufferTransferRequest];
 }
 
+table TransferRequests {
+  transfer_requests: [TransferRequest];
+}
+
 root_type TransferRequest;

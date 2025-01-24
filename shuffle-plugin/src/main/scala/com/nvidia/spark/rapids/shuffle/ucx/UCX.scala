@@ -436,14 +436,14 @@ class UCX(transport: UCXShuffleTransport, executor: BlockManagerId, rapidsConf: 
                 require(!reg.useRndv,
                   s"Handling an eager Active Message, but expected rndv for: " +
                     s"amId ${TransportUtils.toHex(reg.activeMessageId)}")
-                logInfo(s"Handling an EAGER active message receive $amData")
+                logDebug(s"Handling an EAGER active message receive $amData")
                 val resp = UcxUtils.getByteBufferView(amData.getDataAddress, amData.getLength)
 
                 // copy the data onto a buffer we own because it is going to be reused
                 // in UCX
                 cb.onMessageReceived(amData.getLength, header, {
                   case mtb: MetadataTransportBuffer =>
-                    logInfo(s"onMessageReceived eager ${amData.getLength}");
+                    logDebug(s"onMessageReceived eager ${amData.getLength}");
                     mtb.copy(resp)
                     cb.onSuccess(am, mtb)
                   case _ =>
@@ -484,7 +484,7 @@ class UCX(transport: UCXShuffleTransport, executor: BlockManagerId, rapidsConf: 
                         override def onSuccess(request: UcpRequest): Unit = {
                           withResource(new NvtxRange("AM Success", NvtxColor.ORANGE)) { _ =>
                             withResource(amData) { _ =>
-                              logInfo(s"Success with Active Message ${am} using data address " +
+                              logDebug(s"Success with Active Message ${am} using data address " +
                                 s"${TransportUtils.toHex(resp.getAddress())}")
                               cb.onSuccess(am, resp)
                             }

@@ -20,8 +20,7 @@ import ai.rapids.cudf.{Cuda, DeviceMemoryBuffer, MemoryBuffer}
 import com.nvidia.spark.rapids.{RapidsShuffleHandle, ShuffleMetadata}
 import com.nvidia.spark.rapids.Arm.withResource
 import com.nvidia.spark.rapids.RapidsPluginImplicits._
-import com.nvidia.spark.rapids.format.{BufferMeta, BufferTransferRequest}
-
+import com.nvidia.spark.rapids.format.{BufferMeta, BufferTransferRequest, TransferRequest}
 import org.apache.spark.internal.Logging
 import org.apache.spark.shuffle.rapids.RapidsShuffleSendPrepareException
 
@@ -270,22 +269,19 @@ class BounceBufferBufferSendState(
 }
 
 class DirectBufferSendState(
+  transferRequest: TransferRequest,
   transaction: Transaction,
   requestHandler: RapidsShuffleRequestHandler,
   stream: Cuda.Stream) extends BufferSendState with Logging {
 
   private[this] val (peerBufferReceiveHeader: Long,
   buffToSend: RapidsShuffleHandle, bufferMeta: BufferMeta) = {
-    withResource(transaction.releaseMessage()) { mtb =>
-      val transferRequest = ShuffleMetadata.getTransferRequest(mtb.getBuffer())
-      require(transferRequest.requestsLength() == 1, "direct sends require 1 tr")
-      val peerBufferReceiveHeader = transferRequest.id()
-
-      val btr = new BufferTransferRequest() // for reuse
-      val bufferTransferRequest = transferRequest.requests(btr, 0)
-      val handle = requestHandler.getShuffleHandle(bufferTransferRequest.bufferId())
-      (peerBufferReceiveHeader, handle, handle.tableMeta.bufferMeta())
-    }
+    require(transferRequest.requestsLength() == 1, "direct sends require 1 tr")
+    val peerBufferReceiveHeader = transferRequest.id()
+    val btr = new BufferTransferRequest() // for reuse
+    val bufferTransferRequest = transferRequest.requests(btr, 0)
+    val handle = requestHandler.getShuffleHandle(bufferTransferRequest.bufferId())
+    (peerBufferReceiveHeader, handle, handle.tableMeta.bufferMeta())
   }
 
   var sent: Boolean = false

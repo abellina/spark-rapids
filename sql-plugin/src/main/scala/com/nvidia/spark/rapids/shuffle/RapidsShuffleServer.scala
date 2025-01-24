@@ -134,6 +134,7 @@ class RapidsShuffleServer(transport: RapidsShuffleTransport,
     // register request type interest against the transport
     registerRequestHandler(MessageType.MetadataRequest)
     registerRequestHandler(MessageType.TransferRequest)
+    registerRequestHandler(MessageType.TransferRequestVec)
   }
 
   def handleOp(serverTask: Any): Unit = {
@@ -186,27 +187,33 @@ class RapidsShuffleServer(transport: RapidsShuffleTransport,
         while (!pendingTransfersQueue.isEmpty && continue) {
           // TODO: throttle on too big a send total so we don't acquire the world (in flight limit)
           val pendingTransfer = pendingTransfersQueue.peek()
-          if (false && pendingTransfer.tx.useBounceBuffers) {
-            val sendBounceBuffers =
-              transport.tryGetSendBounceBuffers(1, 1)
-            if (sendBounceBuffers.nonEmpty) {
+          pendingTransfer match {
+            case pts: PendingTransferResponseSingle =>
+              val sendBounceBuffers =
+                transport.tryGetSendBounceBuffers(1, 1)
+              if (sendBounceBuffers.nonEmpty) {
+                pendingTransfersQueue.remove(pendingTransfer)
+                bssToIssue.append(new BounceBufferBufferSendState(
+                  pts.tx,
+                  sendBounceBuffers.head, // there's only one bounce buffer here for now
+                  pts.requestHandler,
+                  serverStream))
+              } else {
+                logTrace(s"Can't acquire send bounce buffers")
+                continue = false
+              }
+            case ptv: PendingTransferResponseVec =>
               pendingTransfersQueue.remove(pendingTransfer)
-              bssToIssue.append(new BounceBufferBufferSendState(
-                pendingTransfer.tx,
-                sendBounceBuffers.head, // there's only one bounce buffer here for now
-                pendingTransfer.requestHandler,
-                serverStream))
-            } else {
-              // TODO: make this a metric => "blocked while waiting on bounce buffers"
-              logTrace(s"Can't acquire send bounce buffers")
-              continue = false
-            }
-          } else {
-            pendingTransfersQueue.remove(pendingTransfer)
-            bssToIssue.append(new DirectBufferSendState(
-              pendingTransfer.tx,
-              pendingTransfer.requestHandler,
-              serverStream))
+              withResource(ptv.tx.releaseMessage()) { mtb =>
+                val transferRequests = ShuffleMetadata.getTransferRequests(mtb.getBuffer())
+                (0 until transferRequests.transferRequestsLength()).foreach { i =>
+                  bssToIssue.append(new DirectBufferSendState(
+                    transferRequests.transferRequests(i),
+                    ptv.tx,
+                    ptv.requestHandler,
+                    serverStream))
+                }
+              }
           }
         }
         if (bssToIssue.nonEmpty) {
@@ -242,7 +249,16 @@ class RapidsShuffleServer(transport: RapidsShuffleTransport,
           case MessageType.MetadataRequest =>
             asyncOrBlock(HandleMeta(tx))
           case MessageType.TransferRequest =>
-            val pendingTransfer = PendingTransferResponse(tx, requestHandler)
+            val pendingTransfer = PendingTransferResponseSingle(tx, requestHandler)
+            bssExec.synchronized {
+              pendingTransfersQueue.add(pendingTransfer)
+              bssExec.notifyAll()
+            }
+            logDebug(s"Got a transfer request ${pendingTransfer} from ${tx}. " +
+              s"Pending requests [new=${pendingTransfersQueue.size}, " +
+              s"continuing=${bssContinueQueue.size}]")
+          case MessageType.TransferRequestVec =>
+            val pendingTransfer = PendingTransferResponseVec(tx, requestHandler)
             bssExec.synchronized {
               pendingTransfersQueue.add(pendingTransfer)
               bssExec.notifyAll()
@@ -255,7 +271,14 @@ class RapidsShuffleServer(transport: RapidsShuffleTransport,
     })
   }
 
-  case class PendingTransferResponse(tx: Transaction, requestHandler: RapidsShuffleRequestHandler)
+  trait PendingTransferResponse
+
+  case class PendingTransferResponseSingle(
+    tx: Transaction, requestHandler: RapidsShuffleRequestHandler)
+    extends PendingTransferResponse
+  case class PendingTransferResponseVec(
+    tx: Transaction, requestHandler: RapidsShuffleRequestHandler)
+    extends PendingTransferResponse
 
   /**
    * Handles the very first message that a client will send, in order to request Table/Buffer info.

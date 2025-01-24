@@ -388,13 +388,20 @@ class UCXShuffleTransport(shuffleServerId: BlockManagerId, rapidsConf: RapidsCon
 
   // helper class to hold transfer requests that have a bounce buffer
   // and should be ready to be handled by a `BufferReceiveState`
-  class PerClientReadyRequests(val bounceBuffer: BounceBuffer) {
+  trait PerClientReadyRequests {
     val transferRequests = new ArrayBuffer[PendingTransferRequest]()
     var runningSize = 0L
     def addRequest(req: PendingTransferRequest): Unit = {
       transferRequests.append(req)
       runningSize += req.getLength
     }
+  }
+
+  class BounceBufferPerClientReadyRequests(val bounceBuffer: BounceBuffer)
+      extends PerClientReadyRequests {
+  }
+
+  class DirectPerClientReadyRequests extends PerClientReadyRequests  {
   }
 
   private case class ClientAndBufferReceiveState(client: RapidsShuffleClient,
@@ -452,8 +459,9 @@ class UCXShuffleTransport(shuffleServerId: BlockManagerId, rapidsConf: RapidsCon
           var hasBounceBuffers = true
           var fitsInFlight = true
           val skipBBReq =
-            new ArrayBuffer[(RapidsShuffleClient, PendingTransferRequest, DeviceMemoryBuffer)]()
-          val perClientReq = mutable.Map[RapidsShuffleClient, PerClientReadyRequests]()
+            mutable.Map[RapidsShuffleClient, DirectPerClientReadyRequests]()
+            //new ArrayBuffer[(RapidsShuffleClient, PendingTransferRequest, DeviceMemoryBuffer)]()
+          val perClientReq = mutable.Map[RapidsShuffleClient, BounceBufferPerClientReadyRequests]()
           var reqToHandle: PendingTransferRequest = null
           val putBack = new ArrayBuffer[PendingTransferRequest]()
           //NOTE: If the in-flight limit is high, we will run through every request
@@ -465,13 +473,13 @@ class UCXShuffleTransport(shuffleServerId: BlockManagerId, rapidsConf: RapidsCon
               if (true || reqToHandle.getLength > bounceBufferSize) {
                 logInfo(s"direct req ${reqToHandle}")
                 markBytesInFlight(reqToHandle.getLength)
-                val existingReq =
-                  perClientReq.get(reqToHandle.client)
-                if (existingReq.isEmpty) {
-                  skipBBReq.append((
-                    reqToHandle.client,
-                    reqToHandle,
-                    DeviceMemoryBuffer.allocate(reqToHandle.getLength)))
+                val reqs = skipBBReq.get(reqToHandle.client)
+                if (reqs.isEmpty) {
+                  val perClientReadyRequests = new DirectPerClientReadyRequests()
+                  perClientReadyRequests.addRequest(reqToHandle)
+                  skipBBReq += reqToHandle.client -> perClientReadyRequests
+                } else {
+                  reqs.get.addRequest(reqToHandle)
                 }
                 requestIx += 1
               } else {
@@ -482,7 +490,7 @@ class UCXShuffleTransport(shuffleServerId: BlockManagerId, rapidsConf: RapidsCon
                   val bbs = tryGetReceiveBounceBuffers(1, 1)
                   if (bbs.nonEmpty) {
                     markBytesInFlight(reqToHandle.getLength)
-                    val perClientReadyRequests = new PerClientReadyRequests(bbs.head)
+                    val perClientReadyRequests = new BounceBufferPerClientReadyRequests(bbs.head)
                     perClientReadyRequests.addRequest(reqToHandle)
                     perClientReq += reqToHandle.client -> perClientReadyRequests
                     requestIx += 1
@@ -525,16 +533,17 @@ class UCXShuffleTransport(shuffleServerId: BlockManagerId, rapidsConf: RapidsCon
           }
 
           if (skipBBReq.nonEmpty) {
-            skipBBReq.foreach { case (client, req, buff) =>
-              val brsId = UCXConnection.composeBufferHeader(
-                client.connection.getPeerExecutorId, ucx.assignUniqueId())
-              logInfo(s"direct BB receive issue ${buff} ${buff.getLength} "+
-               s"hdr ${TransportUtils.toHex(brsId)}")
-
-              val brs = new DirectBufferReceiveState(brsId, buff, req,
-              () => bufferReceiveStateComplete(brsId))
-              pendingBrs.put(brs.id, ClientAndBufferReceiveState(client, brs))
-              client.issueBufferReceives(brs)
+            skipBBReq.foreach { case (client, perClientRequests) =>
+              val dbrs = perClientRequests.transferRequests.map { tr =>
+                val brsId = UCXConnection.composeBufferHeader(
+                  client.connection.getPeerExecutorId, ucx.assignUniqueId())
+                logInfo(s"direct BB receive issue hdr ${TransportUtils.toHex(brsId)}")
+                val dbrs = new DirectBufferReceiveState(
+                  brsId, tr, () => bufferReceiveStateComplete(brsId))
+                pendingBrs.put(dbrs.id, ClientAndBufferReceiveState(client, dbrs))
+                dbrs
+              }
+              client.issueBufferReceives(dbrs)
             }
           }
 

@@ -111,6 +111,7 @@ object MessageType extends Enumeration {
    * A server will respond with: `TransferResponse`
    */
   val TransferRequest = Value
+  val TransferRequestVec = Value
 
   /**
    * Messages with this type are shuffle blocks

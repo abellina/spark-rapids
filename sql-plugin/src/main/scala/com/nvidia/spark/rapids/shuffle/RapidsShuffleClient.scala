@@ -253,6 +253,10 @@ class RapidsShuffleClient(
     doIssueBufferReceives(bufferReceiveState)
   }
 
+  def issueBufferReceives(bufferReceiveState: Seq[BufferReceiveState]): Unit = {
+    doIssueBufferReceives(bufferReceiveState)
+  }
+
   def handleBufferReceive(tx: Transaction, bufferReceiveState: BufferReceiveState): Unit = {
     asyncOnCopyThread(HandleBounceBufferReceive(tx, bufferReceiveState))
   }
@@ -270,11 +274,26 @@ class RapidsShuffleClient(
         s"${TransportUtils.toHex(bufferReceiveState.id)}")
 
       // send a transfer request to kick off receives
-      sendTransferRequest(bufferReceiveState.id, bufferReceiveState)
+      sendTransferRequest(Seq(bufferReceiveState))
     } catch {
       case t: Throwable =>
         withResource(bufferReceiveState) { _ =>
           bufferReceiveState.errorOccurred("Error issuing buffer receives", t)
+        }
+    }
+  }
+
+  private[shuffle] def doIssueBufferReceives(bufferReceiveState: Seq[BufferReceiveState]): Unit = {
+    try {
+      logInfo(s"Issuing multi ${connection.getPeerExecutorId} BRS" +
+        s"ids: ${bufferReceiveState.map(b => TransportUtils.toHex(b.id)).mkString(",")}")
+
+      // send a transfer request to kick off receives
+      sendTransferRequest(bufferReceiveState)
+    } catch {
+      case t: Throwable =>
+        withResource(bufferReceiveState) { _ =>
+          bufferReceiveState.foreach(_.errorOccurred("Error issuing buffer receives", t))
         }
     }
   }
@@ -285,22 +304,19 @@ class RapidsShuffleClient(
    * @param toIssue sequence of [[PendingTransferRequest]] we want included in the server
    *                transfers
    */
-  private[this] def sendTransferRequest(id: Long, toIssue: BufferReceiveState): Unit = {
-    val requestsToIssue = toIssue.getRequests
-    logInfo(s"Sending a transfer request for ${TransportUtils.toHex(toIssue.id)} from ${connection.getPeerExecutorId}")
-
-    val transferReq = new RefCountedDirectByteBuffer(
-      ShuffleMetadata.buildTransferRequest(id, requestsToIssue.map { i =>
-        i.tableMeta.bufferMeta().id()
+  private[this] def sendTransferRequest(toIssue: Seq[BufferReceiveState]): Unit = {
+    val transferReqs = new RefCountedDirectByteBuffer(
+      ShuffleMetadata.buildTransferRequests(toIssue.map { brs =>
+        (brs.id, brs.getRequests.map(_.tableMeta.bufferMeta().id()))
       }))
 
-    connection.send(MessageType.TransferRequest, transferReq.acquire(), withResource(_) { tx =>
-      withResource(transferReq) { _ =>
+    connection.send(MessageType.TransferRequestVec, transferReqs.acquire(), withResource(_) { tx =>
+      withResource(transferReqs) { _ =>
         tx.getStatus match {
           case TransactionStatus.Success =>
             logInfo(s"done with tx ${tx} from ${connection.getPeerExecutorId}")
           case _ =>
-            toIssue.errorOccurred(tx.getErrorMessage.getOrElse("TransferRequest failed"))
+            toIssue.foreach(_.errorOccurred(tx.getErrorMessage.getOrElse("TransferRequest failed")))
         }
       }
     })
