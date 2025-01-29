@@ -397,7 +397,7 @@ class UCXShuffleTransport(shuffleServerId: BlockManagerId, rapidsConf: RapidsCon
     }
   }
 
-  class BounceBufferPerClientReadyRequests(val bounceBuffer: BounceBuffer)
+  class BounceBufferPerClientReadyRequests()
       extends PerClientReadyRequests {
   }
 
@@ -461,7 +461,8 @@ class UCXShuffleTransport(shuffleServerId: BlockManagerId, rapidsConf: RapidsCon
           val skipBBReq =
             mutable.Map[RapidsShuffleClient, DirectPerClientReadyRequests]()
             //new ArrayBuffer[(RapidsShuffleClient, PendingTransferRequest, DeviceMemoryBuffer)]()
-          val perClientReq = mutable.Map[RapidsShuffleClient, BounceBufferPerClientReadyRequests]()
+          val perClientReq =
+            mutable.Map[RapidsShuffleClient, ArrayBuffer[BounceBufferPerClientReadyRequests]]()
           var reqToHandle: PendingTransferRequest = null
           val putBack = new ArrayBuffer[PendingTransferRequest]()
           //NOTE: If the in-flight limit is high, we will run through every request
@@ -483,34 +484,26 @@ class UCXShuffleTransport(shuffleServerId: BlockManagerId, rapidsConf: RapidsCon
                 }
                 requestIx += 1
               } else {
-                val existingReq =
+                val existingReq: Option[ArrayBuffer[BounceBufferPerClientReadyRequests]] =
                   perClientReq.get(reqToHandle.client)
-                if (existingReq.isEmpty) {
-                  // need to get bounce buffers
-                  val bbs = tryGetReceiveBounceBuffers(1, 1)
-                  if (bbs.nonEmpty) {
-                    markBytesInFlight(reqToHandle.getLength)
-                    val perClientReadyRequests = new BounceBufferPerClientReadyRequests(bbs.head)
-                    perClientReadyRequests.addRequest(reqToHandle)
-                    perClientReq += reqToHandle.client -> perClientReadyRequests
-                    requestIx += 1
-                  } else {
-                    // TODO: make this a metric => "blocked while waiting on bounce buffers"
-                    logTrace("Can't acquire bounce buffers for receive.")
-                    hasBounceBuffers = false
-                    putBack.append(reqToHandle)
-                    requestIx += 1
-                  }
-                } else if (existingReq.get.runningSize < bounceBufferSize) {
-                  // bounce buffers already acquired, and the requested amount so far
-                  // is less than 1 bounce buffer lengths, therefore the pending request
-                  // is added to the `PerClientReadyRequests`.
+                if (existingReq.isEmpty ||
+                    (existingReq.get.last.runningSize + reqToHandle.getLength > bounceBufferSize)) {
                   markBytesInFlight(reqToHandle.getLength)
-                  existingReq.foreach(_.addRequest(reqToHandle))
+                  val perClientReadyRequests = new BounceBufferPerClientReadyRequests()
+                  perClientReadyRequests.addRequest(reqToHandle)
+                  if (existingReq.isEmpty) {
+                    val reqs = new ArrayBuffer[BounceBufferPerClientReadyRequests]()
+                    reqs.append(perClientReadyRequests)
+                    perClientReq += reqToHandle.client -> reqs
+                  } else {
+                    existingReq.get.append(perClientReadyRequests)
+                  }
                   requestIx += 1
                 } else {
+                  // request fits in the last req
+                  markBytesInFlight(reqToHandle.getLength)
+                  existingReq.foreach(_.last.addRequest(reqToHandle))
                   requestIx += 1
-                  putBack.append(reqToHandle)
                 }
               }
             } else {
@@ -551,14 +544,15 @@ class UCXShuffleTransport(shuffleServerId: BlockManagerId, rapidsConf: RapidsCon
             perClientReq.foreach { case (client, perClientRequests) =>
               // The transport uses this `brsId` as the active message header for this
               // `BufferReceiveState`
-              val brsId = UCXConnection.composeBufferHeader(
-                client.connection.getPeerExecutorId, ucx.assignUniqueId())
-              val brs = new BounceBufferBufferReceiveState(brsId,
-                perClientRequests.bounceBuffer,
-                perClientRequests.transferRequests.toSeq,
-                () => bufferReceiveStateComplete(brsId))
-              pendingBrs.put(brs.id, ClientAndBufferReceiveState(client, brs))
-              client.issueBufferReceives(brs)
+              perClientRequests.foreach { reqs =>
+                val brsId = UCXConnection.composeBufferHeader(
+                  client.connection.getPeerExecutorId, ucx.assignUniqueId())
+                val brs = new BounceBufferBufferReceiveState(brsId,
+                  reqs.transferRequests.toSeq,
+                  () => bufferReceiveStateComplete(brsId))
+                pendingBrs.put(brs.id, ClientAndBufferReceiveState(client, brs))
+                client.issueBufferReceives(brs)
+              }
             }
           } else if (!hasBounceBuffers) {
             deviceReceiveBuffMgr.synchronized {

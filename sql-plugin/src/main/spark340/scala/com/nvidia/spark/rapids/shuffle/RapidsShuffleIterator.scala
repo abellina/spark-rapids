@@ -332,6 +332,8 @@ class RapidsShuffleIterator(
     Option(resolvedBatches.poll(timeoutSeconds, TimeUnit.SECONDS))
   }
 
+  def wouldBlock: Boolean = resolvedBatches.isEmpty
+
   override def next(): ColumnarBatch = {
     val range = new NvtxRange(s"RapidshuffleIterator.next", NvtxColor.RED)
 
@@ -351,13 +353,17 @@ class RapidsShuffleIterator(
     // thread to schedule the fetches for us, it may be something we consider in the future, given
     // memory pressure.
     // No good way to get a metric in here for semaphore time.
-    taskContext.foreach(GpuSemaphore.releaseIfNecessary(_))
     RmmSpark.currentThreadIsDedicatedToTask(taskAttemptId)
 
     if (!started) {
       // kick off if we haven't already
+      taskContext.foreach(GpuSemaphore.releaseIfNecessary(_))
       start()
       started = true
+    }
+
+    if (wouldBlock) {
+      taskContext.foreach(GpuSemaphore.releaseIfNecessary(_))
     }
 
     val blockedStart = System.currentTimeMillis()

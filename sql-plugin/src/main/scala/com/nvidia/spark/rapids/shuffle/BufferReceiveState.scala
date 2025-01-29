@@ -63,13 +63,12 @@ trait BufferReceiveState extends AutoCloseable {
  */
 class BounceBufferBufferReceiveState(
     override val id: Long,
-    bounceBuffer: BounceBuffer,
     requests: Seq[PendingTransferRequest],
     transportOnClose: () => Unit,
     stream: Cuda.Stream = Cuda.DEFAULT_STREAM)
     extends BufferReceiveState with Logging {
 
-  private val transportBuffer = new CudfTransportBuffer(bounceBuffer.buffer)
+  //private val transportBuffer = new CudfTransportBuffer(bounceBuffer.buffer)
   // we use this to keep a list (should be depth 1) of "requests for receives"
   //  => the transport is ready to receive again, but we are not done consuming the
   //     buffers from the previous receive, so we must delay the transport.
@@ -78,6 +77,8 @@ class BounceBufferBufferReceiveState(
   // if this is > 0, we are waiting to consume, so we need to queue up in `toFinalize`
   // any callbacks
   private var toConsume = 0
+
+  private val totalSize = requests.map(_.getLength).sum
 
   private class ReceiveBlock(val request: PendingTransferRequest) extends BlockWithSize {
     override def size: Long = request.getLength
@@ -105,7 +106,7 @@ class BounceBufferBufferReceiveState(
   private[this] val windowedBlockIterator =
     try {
       new WindowedBlockIterator[ReceiveBlock](
-        requests.map(r => new ReceiveBlock(r)), bounceBuffer.buffer.getLength)
+        requests.map(r => new ReceiveBlock(r)), totalSize)
     } catch {
       case t: Throwable =>
         println(t)
@@ -114,11 +115,11 @@ class BounceBufferBufferReceiveState(
 
   private[this] var hasMoreBuffers_ = windowedBlockIterator.hasNext
 
+  private var transportBuffer: CudfTransportBuffer = _
   def getBufferWhenReady(finalizeCb: TransportBuffer => Unit, size: Long): Unit =
     synchronized {
-      require(transportBuffer.getLength() >= size,
-        "Asked to receive a buffer greater than the available bounce buffer.")
-
+      require(transportBuffer == null)
+      transportBuffer = new CudfTransportBuffer(Rmm.alloc(size, Cuda.DEFAULT_STREAM))
       if (toConsume == 0) {
         logDebug(s"Calling callback immediately for ${TransportUtils.toHex(id)}")
         finalizeCb(transportBuffer)
@@ -134,9 +135,6 @@ class BounceBufferBufferReceiveState(
   def getRequests: Seq[PendingTransferRequest] = requests
 
   override def close(): Unit = synchronized {
-    if (bounceBuffer != null) {
-      bounceBuffer.close()
-    }
     if (workingOn != null) {
       // TODO: AB: this was just a warning before
       throw new IllegalStateException(
@@ -192,55 +190,37 @@ class BounceBufferBufferReceiveState(
     // e.g. after the synchronized block, or after we sync with GPU in this function.
     toConsume -= 1
     withResource(new NvtxRange("consumeWindow", NvtxColor.PURPLE)) { _ =>
-      logInfo(s"$this at consumeWindow")
+      //logInfo(s"$this at consumeWindow")
       advance()
       closeOnExcept(new ArrayBuffer[DeviceMemoryBuffer]()) { toClose =>
         val results = currentBlocks.flatMap { b =>
           val pendingTransferRequest = b.block.request
-          RmmSpark.shuffleThreadWorkingOnTasks(pendingTransferRequest.handler.getTaskIds)
+          //RmmSpark.shuffleThreadWorkingOnTasks(pendingTransferRequest.handler.getTaskIds)
           val fullSize = pendingTransferRequest.tableMeta.bufferMeta().size()
 
           var contigBuffer: DeviceMemoryBuffer = null
 
           // Receive buffers are always in the device, and so it is safe to assume
           // that they are `BaseDeviceMemoryBuffer`s here.
-          val deviceBounceBuffer = bounceBuffer.buffer.asInstanceOf[BaseDeviceMemoryBuffer]
+          val deviceBounceBuffer =
+            transportBuffer.getMemoryBuffer.asInstanceOf[DeviceMemoryBuffer]
 
           if (fullSize == b.rangeSize()) {
             // we have the full buffer!
-            contigBuffer = Rmm.alloc(b.rangeSize(), stream)
-            toClose.append(contigBuffer)
+            contigBuffer =
+              deviceBounceBuffer.slice(bounceBufferByteOffset, b.rangeSize())
 
-            contigBuffer.copyFromDeviceBufferAsync(0, deviceBounceBuffer,
-              bounceBufferByteOffset, b.rangeSize(), stream)
+            //contigBuffer.copyFromDeviceBufferAsync(0, deviceBounceBuffer,
+            // bounceBufferByteOffset, b.rangeSize(), stream)
           } else {
-            if (workingOn != null) {
-              workingOn.copyFromDeviceBufferAsync(workingOnOffset, deviceBounceBuffer,
-                bounceBufferByteOffset, b.rangeSize(), stream)
-
-              workingOnOffset += b.rangeSize()
-              if (workingOnOffset == fullSize) {
-                contigBuffer = workingOn
-                workingOn = null
-                workingOnOffset = 0
-              }
-            } else {
-              // need to keep it around
-              workingOn = Rmm.alloc(fullSize, stream)
-              toClose.append(workingOn)
-
-              workingOn.copyFromDeviceBufferAsync(0, deviceBounceBuffer,
-                bounceBufferByteOffset, b.rangeSize(), stream)
-
-              workingOnOffset += b.rangeSize()
-            }
+            throw new IllegalStateException("not allowing bounce buffer continuation")
           }
           bounceBufferByteOffset += b.rangeSize()
           if (bounceBufferByteOffset >= deviceBounceBuffer.getLength) {
             bounceBufferByteOffset = 0
           }
 
-          logInfo(s"$this returning from consumeWindow ${contigBuffer}")
+          //logInfo(s"$this returning from consumeWindow ${contigBuffer}")
           if (contigBuffer != null) {
             Some(ConsumedBatchFromBounceBuffer(
               contigBuffer, pendingTransferRequest.tableMeta, pendingTransferRequest.handler))
@@ -252,11 +232,11 @@ class BounceBufferBufferReceiveState(
         // Sync once, instead of for each copy.
         // We need to synchronize, because we can't ask ucx to overwrite our bounce buffer
         // unless all that data has truly moved to our final buffer in our stream
-        stream.sync()
+        //stream.sync()
 
-        results.foreach { result =>
-          RmmSpark.poolThreadFinishedForTasks(result.handler.getTaskIds)
-        }
+        //results.foreach { result =>
+        // RmmSpark.poolThreadFinishedForTasks(result.handler.getTaskIds)
+        //}
 
         // cpu is in sync, we can recycle the bounce buffer
         if (!toFinalize.isEmpty) {
