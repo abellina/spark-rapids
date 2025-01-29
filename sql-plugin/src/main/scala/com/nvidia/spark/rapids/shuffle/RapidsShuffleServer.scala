@@ -196,8 +196,7 @@ class RapidsShuffleServer(transport: RapidsShuffleTransport,
                 bssToIssue.append(new BounceBufferBufferSendState(
                   pts.tx,
                   sendBounceBuffers.head, // there's only one bounce buffer here for now
-                  pts.requestHandler,
-                  serverStream))
+                  pts.requestHandler))
               } else {
                 logTrace(s"Can't acquire send bounce buffers")
                 continue = false
@@ -211,7 +210,7 @@ class RapidsShuffleServer(transport: RapidsShuffleTransport,
                     transferRequests.transferRequests(i),
                     ptv.tx,
                     ptv.requestHandler,
-                    serverStream))
+                    Cuda.DEFAULT_STREAM))
                 }
               }
           }
@@ -228,9 +227,6 @@ class RapidsShuffleServer(transport: RapidsShuffleTransport,
       }
     }
   })
-
-  // NOTE: this stream will likely move to its own non-blocking stream in the future
-  val serverStream = Cuda.DEFAULT_STREAM
 
   /**
    * Handler for a metadata request. It queues request handlers for either
@@ -351,106 +347,61 @@ class RapidsShuffleServer(transport: RapidsShuffleTransport,
    */
   def doHandleTransferRequest(bufferSendStates: Seq[BufferSendState]): Unit = {
     closeOnExcept(bufferSendStates) { _ =>
-      val bssBuffers =
-        new ArrayBuffer[(BufferSendState, MemoryBuffer)](bufferSendStates.size)
-
-      var toTryAgain: ArrayBuffer[BufferSendState] = null
-      var supressedErrors: ArrayBuffer[Throwable] = null
       bufferSendStates.foreach { bufferSendState =>
         withResource(new NvtxRange(s"doHandleTransferRequest", NvtxColor.CYAN)) { _ =>
           require(bufferSendState.hasMoreSends, "Attempting to handle a complete transfer request.")
 
           // For each `BufferSendState` we ask for a bounce buffer fill up
           // so the server is servicing N (`bufferSendStates`) requests
-          try {
-            val buffersToSend = bufferSendState.getBufferToSend
-            bssBuffers.append((bufferSendState, buffersToSend))
-          } catch {
-            case ex: RapidsShuffleSendPrepareException =>
-              // We failed to prepare the send (copy to bounce buffer), and got an exception.
-              // Put the `bufferSendState` back in the continue queue, so it can be retried.
-              // If no `BufferSendState` could be handled without error, nothing is retried.
-              // TODO: we should respond with a failure to the client.
-              // Please see: https://github.com/NVIDIA/spark-rapids/issues/3040
-              if (toTryAgain == null) {
-                toTryAgain = new ArrayBuffer[BufferSendState]()
-                supressedErrors = new ArrayBuffer[Throwable]()
-              }
-              toTryAgain.append(bufferSendState)
-              supressedErrors.append(ex)
-          }
-        }
-      }
+          val buffersToSend = bufferSendState.getBufferToSend
+          Cuda.DEFAULT_STREAM.sync()
+          // need to release at this point, we do this after the sync so
+          // we are sure we actually copied everything to the bounce buffer
+          bufferSendState.releaseAcquiredToCatalog()
 
-      if (toTryAgain != null) {
-        // we failed at least 1 time to copy to the bounce buffer
-        if (bssBuffers.isEmpty) {
-          // we were not able to handle anything, error out.
-          val ise = new IllegalStateException("Unable to prepare any sends. " +
-              "This issue can occur when requesting too many shuffle blocks. " +
-              "The sends will not be retried.")
-          supressedErrors.foreach(ise.addSuppressed)
-          throw ise
-        } else {
-          // we at least handled 1 `BufferSendState`, lets continue to retry
-          logWarning(s"Unable to prepare ${toTryAgain.size} sends. " +
-              "This issue can occur when requesting many shuffle blocks. " +
-              "The sends will be retried.")
-        }
+          val peerExecutorId = bufferSendState.peerExecutorId
+          val sendHeader = bufferSendState.getPeerBufferReceiveHeader
+          // [Scala 2.13] The compiler does not seem to be able to do the implicit SAM
+          // conversion after expanding the call in the method call below. So we have to define the
+          // callback here in a val and type it to TransactionCallback
+          val txCallback: TransactionCallback = tx => withResource(tx) { bufferTx =>
+            withResource(buffersToSend) { _ =>
+              bufferTx.getStatus match {
+                case TransactionStatus.Success =>
+                  logDebug(s"Done with the send for " +
+                    s"$bufferSendState with $buffersToSend")
 
-        // If we are still able to handle at least one `BufferSendState`, add any
-        // others that also failed due back to the queue.
-        addToContinueQueue(toTryAgain.toSeq)
-      }
-
-      serverStream.sync()
-
-      // need to release at this point, we do this after the sync so
-      // we are sure we actually copied everything to the bounce buffer
-      bufferSendStates.foreach(_.releaseAcquiredToCatalog())
-
-      bssBuffers.foreach { case (bufferSendState, buffersToSend) =>
-        val peerExecutorId = bufferSendState.peerExecutorId
-        val sendHeader = bufferSendState.getPeerBufferReceiveHeader
-        // [Scala 2.13] The compiler does not seem to be able to do the implicit SAM
-        // conversion after expanding the call in the method call below. So we have to define the
-        // callback here in a val and type it to TransactionCallback
-        val txCallback: TransactionCallback = tx => withResource(tx) { bufferTx =>
-          withResource(buffersToSend) { _ =>
-            bufferTx.getStatus match {
-              case TransactionStatus.Success =>
-                logInfo(s"Done with the send for $bufferSendState with $buffersToSend")
-
-                if (bufferSendState.hasMoreSends) {
-                  // continue issuing sends.
-                  logInfo(s"Buffer send state $bufferSendState is NOT done. " +
-                    s"Still pending: ${pendingTransfersQueue.size}.")
-                  addToContinueQueue(Seq(bufferSendState))
-                } else {
-                  // wake up the bssExec since bounce buffers became available
-                  logInfo(s"Buffer send state " +
-                    s"${TransportUtils.toHex(bufferSendState.getPeerBufferReceiveHeader)} " +
-                    s"is done, closing. Still pending: ${pendingTransfersQueue.size}.")
+                  if (bufferSendState.hasMoreSends) {
+                    // continue issuing sends.
+                    logDebug(s"Buffer send state $bufferSendState is NOT done. " +
+                      s"Still pending: ${pendingTransfersQueue.size}.")
+                    addToContinueQueue(Seq(bufferSendState))
+                  } else {
+                    // wake up the bssExec since bounce buffers became available
+                    logDebug(s"Buffer send state " +
+                      s"${TransportUtils.toHex(bufferSendState.getPeerBufferReceiveHeader)} " +
+                      s"is done, closing. Still pending: ${pendingTransfersQueue.size}.")
+                    bssExec.synchronized {
+                      bufferSendState.close()
+                      bssExec.notifyAll()
+                    }
+                  }
+                case _ =>
+                  // errored or cancelled
+                  logError(s"Error while sending buffers $bufferTx.")
                   bssExec.synchronized {
                     bufferSendState.close()
                     bssExec.notifyAll()
                   }
-                }
-              case _ =>
-                // errored or cancelled
-                logError(s"Error while sending buffers $bufferTx.")
-                bssExec.synchronized {
-                  bufferSendState.close()
-                  bssExec.notifyAll()
-                }
+              }
             }
           }
-        }
 
-        logInfo(s"sending ${buffersToSend}")
-        serverConnection.send(peerExecutorId, MessageType.Buffer,
-          // TODO: it may be nice to hide `sendHeader` in `Transaction`
-          sendHeader, buffersToSend, txCallback)
+          logDebug(s"sending ${buffersToSend}")
+          serverConnection.send(peerExecutorId, MessageType.Buffer,
+            // TODO: it may be nice to hide `sendHeader` in `Transaction`
+            sendHeader, buffersToSend, txCallback)
+        }
       }
     }
   }

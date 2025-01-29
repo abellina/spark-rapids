@@ -377,7 +377,7 @@ class RapidsShuffleIterator(
         try {
           taskContext.foreach(GpuSemaphore.acquireIfNecessary(_))
           val (cb, memoryUsedBytes) = catalog.getColumnarBatchAndRemove(handle, sparkTypes)
-          logInfo(s"got batch from handle ${handle} size ${memoryUsedBytes}")
+          logDebug(s"got batch from handle ${handle} size ${memoryUsedBytes}")
           metricsUpdater.update(blockedTime, 1, memoryUsedBytes, cb.numRows())
           cb
         } finally {

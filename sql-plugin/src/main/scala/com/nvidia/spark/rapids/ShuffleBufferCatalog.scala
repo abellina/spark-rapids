@@ -52,15 +52,21 @@ class ShuffleBufferCatalog extends Logging {
   private val runnable: Runnable = () => {
     while (true) {
       val maybeBuffer = Option(spillQueue.poll(10, TimeUnit.SECONDS))
+      var numBuffers = 0
+      var totalSize = 0L
+      //val start = System.currentTimeMillis()
       maybeBuffer.foreach(buffer => {
         synchronized {
           // this used to do batching, which we still may want
-          logInfo(s"Spilling buffer ${buffer} size ${buffer.sizeInBytes}")
           if (buffer.spill() != 0) {
+            totalSize += buffer.sizeInBytes
+            numBuffers += 1
             buffer.releaseDeviceResource()
           }
         }
       })
+      //val end = System.currentTimeMillis() - start
+      //logInfo(s"Spilled ${numBuffers} buffers size ${totalSize} in ${end} ms")
     }
   }
   executor.submit(runnable)
@@ -234,7 +240,7 @@ class ShuffleBufferCatalog extends Logging {
     val bufferIDs = blockIdToBuffersIds(blockId)
     bufferIDs.iterator.map { bId =>
       GpuSemaphore.acquireIfNecessary(TaskContext.get)
-      logInfo(s"getting bufferId ${bId}")
+      //logInfo(s"getting bufferId ${bId}")
       val (maybeHandle, meta) = bufferIdToHandle.get(bId)
       maybeHandle.map { handle =>
         withResource(handle.materialize()) { buff =>
@@ -278,10 +284,10 @@ class ShuffleBufferCatalog extends Logging {
 
     entries.synchronized {
       entries.map { e =>
-        logInfo(s"looking up ${e} in bufferIdToHandle")
+        //logInfo(s"looking up ${e} in bufferIdToHandle")
         val res = bufferIdToHandle.get(e)
         if (res == null) {
-          logInfo(s"looking up ${e} in bufferIdToHandle returned null!!")
+          logError(s"looking up ${e} in bufferIdToHandle returned null!!")
         }
         res
       }.map { case (_, meta) =>
@@ -300,7 +306,7 @@ class ShuffleBufferCatalog extends Logging {
     val tableId = tableIdCounter.getAndUpdate(ShuffleBufferCatalog.TABLE_ID_UPDATER)
     val id = ShuffleBufferId(blockId, tableId)
     val prev = tableMap.put(tableId, id)
-    logInfo(s"storing tableId ${tableId} -> $id")
+    //logInfo(s"storing tableId ${tableId} -> $id")
     if (prev != null) {
       throw new IllegalStateException(s"table ID $tableId is already in use")
     }

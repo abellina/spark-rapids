@@ -21,8 +21,11 @@ import com.nvidia.spark.rapids.{RapidsShuffleHandle, ShuffleMetadata}
 import com.nvidia.spark.rapids.Arm.withResource
 import com.nvidia.spark.rapids.RapidsPluginImplicits._
 import com.nvidia.spark.rapids.format.{BufferMeta, BufferTransferRequest, TransferRequest}
+import com.nvidia.spark.rapids.spill.{SpillFramework, SpillableDeviceBufferHandle}
 import org.apache.spark.internal.Logging
 import org.apache.spark.shuffle.rapids.RapidsShuffleSendPrepareException
+
+import scala.collection.mutable.ArrayBuffer
 
 /**
  * A helper case class to maintain the server side state in response to a transfer
@@ -64,8 +67,7 @@ trait BufferSendState extends AutoCloseable {
 class BounceBufferBufferSendState(
     transaction: Transaction,
     sendBounceBuffers: SendBounceBuffers,
-    requestHandler: RapidsShuffleRequestHandler,
-    serverStream: Cuda.Stream = Cuda.DEFAULT_STREAM)
+    requestHandler: RapidsShuffleRequestHandler)
     extends BufferSendState with AutoCloseable with Logging {
 
   class SendBlock(val bufferHandle: RapidsShuffleHandle) extends BlockWithSize {
@@ -126,7 +128,7 @@ class BounceBufferBufferSendState(
   // ranges that we currently copying from (initialize with the first range)
   private[this] var blockRanges: Seq[BlockRange[SendBlock]] = windowedBlockIterator.next()
 
-  private[this] var acquiredBuffs: Seq[RangeBuffer] = Seq.empty
+  private[this] var acquiredBuffs: ArrayBuffer[AutoCloseable] = new ArrayBuffer[AutoCloseable]()
 
   def getRequestTransaction: Transaction = synchronized {
     transaction
@@ -183,45 +185,25 @@ class BounceBufferBufferSendState(
     val buffsToSend = {
       if (hasMoreBlocks) {
         var deviceBuffs = 0L
-        var hostBuffs = 0L
-
         var needsCleanup = false
         try {
-          acquiredBuffs = blockRanges.safeMap { blockRange =>
-            // we acquire these buffers now, and keep them until the caller releases them
-            // using `releaseAcquiredToCatalog`
-            //these are closed later, after we synchronize streams
-            val spillable = blockRange.block.bufferHandle.spillable
-            val buff = spillable.materialize()
-            buff match {
-              case _: DeviceMemoryBuffer =>
-                deviceBuffs += blockRange.rangeSize()
-              case _ =>
-                hostBuffs += blockRange.rangeSize()
-            }
-            RangeBuffer(blockRange, buff)
-          }
-
-          logDebug(s"Occupancy for bounce buffer is " +
-            s"[device=${deviceBuffs}, host=${hostBuffs}] Bytes")
-
-          bounceBuffToUse = if (deviceBuffs >= hostBuffs || hostBounceBuffer == null) {
-            deviceBounceBuffer.buffer
-          } else {
-            hostBounceBuffer.buffer
-          }
-
-          acquiredBuffs.foreach { case RangeBuffer(blockRange, memoryBuffer) =>
-            needsCleanup = true
+          bounceBuffToUse = deviceBounceBuffer.buffer
+          logDebug(s"$this about to issue copies for ${blockRanges.size} blocks")
+          blockRanges.foreach { blockRange =>
+            deviceBuffs += blockRange.rangeSize()
             require(blockRange.rangeSize() <= bounceBuffToUse.getLength - buffOffset)
-            bounceBuffToUse.copyFromMemoryBufferAsync(
-              buffOffset,
-              memoryBuffer,
-              blockRange.rangeStart,
-              blockRange.rangeSize(),
-              serverStream)
+            val ac = blockRange.block.bufferHandle.spillable
+              .copyAsync(
+                bounceBuffToUse.asInstanceOf[DeviceMemoryBuffer],
+                buffOffset,
+                blockRange.rangeStart,
+                blockRange.rangeSize(),
+                Cuda.DEFAULT_STREAM)
+            ac.foreach{a => acquiredBuffs.append(a)}
+            needsCleanup = true
             buffOffset += blockRange.rangeSize()
           }
+          logDebug(s"$this done issuing copies for ${blockRanges.size} blocks")
           needsCleanup = false
         } catch {
           case ex: Exception =>
@@ -251,9 +233,9 @@ class BounceBufferBufferSendState(
       }
     }
 
-    logInfo(s"getBufferToSend bounced: ${buffsToSend}")
-    logDebug(s"Sending ${buffsToSend} for transfer request, " +
-        s" [peer_executor_id=${transaction.peerExecutorId()}]")
+   //logInfo(s"getBufferToSend bounced: ${buffsToSend}")
+   logDebug(s"Sending ${buffsToSend} for transfer request, " +
+       s" [peer_executor_id=${transaction.peerExecutorId()}]")
 
     buffsToSend
   }
@@ -264,7 +246,7 @@ class BounceBufferBufferSendState(
    */
   def releaseAcquiredToCatalog(): Unit = synchronized {
     acquiredBuffs.foreach(_.close())
-    acquiredBuffs = Seq.empty
+    acquiredBuffs.clear()
   }
 }
 
@@ -288,9 +270,7 @@ class DirectBufferSendState(
   override def hasMoreSends: Boolean = !sent
   override def getBufferToSend(): MemoryBuffer = {
     sent = true
-    val db = buffToSend.spillable.materialize()
-    logInfo(s"getBufferToSend direct: ${db}")
-    db
+    buffToSend.spillable.materialize()
   }
   override def releaseAcquiredToCatalog(): Unit = {
   }

@@ -458,7 +458,7 @@ class UCX(transport: UCXShuffleTransport, executor: BlockManagerId, rapidsConf: 
                 // RNDV case: we get a direct buffer and UCX will fill it with data at `receive`
                 // callback
                 cb.onMessageReceived(amData.getLength, header, (resp: TransportBuffer) => {
-                  logInfo(s"Receiving Active Message ${am} using data address " +
+                  logDebug(s"Receiving Active Message ${am} using data address " +
                     s"${TransportUtils.toHex(resp.getAddress())}")
 
                   // we must call `receive` on the `amData` object within the progress thread

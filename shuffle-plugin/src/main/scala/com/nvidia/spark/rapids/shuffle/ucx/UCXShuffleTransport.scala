@@ -410,7 +410,7 @@ class UCXShuffleTransport(shuffleServerId: BlockManagerId, rapidsConf: RapidsCon
 
   def handleBufferReceive(size: Long, header: Long,
       finalizeCb: TransportBuffer => Unit): Unit = {
-    logInfo(s"Handling: ${TransportUtils.toHex(header)} with size $size")
+    logDebug(s"Handling: ${TransportUtils.toHex(header)} with size $size")
     val clientAndBrs = pendingBrs.get(header)
     require(clientAndBrs != null,
       s"Unknown header for a buffer receive: ${TransportUtils.toHex(header)}")
@@ -470,8 +470,8 @@ class UCXShuffleTransport(shuffleServerId: BlockManagerId, rapidsConf: RapidsCon
           while (requestIx < requestsToHandle.size && fitsInFlight) {
             reqToHandle = requestsToHandle(requestIx)
             if (wouldFitInFlightLimit(reqToHandle.getLength)) {
-              if (true || reqToHandle.getLength > bounceBufferSize) {
-                logInfo(s"direct req ${reqToHandle}")
+              if (reqToHandle.getLength > bounceBufferSize) {
+                logDebug(s"direct req ${reqToHandle}")
                 markBytesInFlight(reqToHandle.getLength)
                 val reqs = skipBBReq.get(reqToHandle.client)
                 if (reqs.isEmpty) {
@@ -537,7 +537,7 @@ class UCXShuffleTransport(shuffleServerId: BlockManagerId, rapidsConf: RapidsCon
               val dbrs = perClientRequests.transferRequests.map { tr =>
                 val brsId = UCXConnection.composeBufferHeader(
                   client.connection.getPeerExecutorId, ucx.assignUniqueId())
-                logInfo(s"direct BB receive issue hdr ${TransportUtils.toHex(brsId)}")
+                logDebug(s"direct BB receive issue hdr ${TransportUtils.toHex(brsId)}")
                 val dbrs = new DirectBufferReceiveState(
                   brsId, tr, () => bufferReceiveStateComplete(brsId))
                 pendingBrs.put(dbrs.id, ClientAndBufferReceiveState(client, dbrs))

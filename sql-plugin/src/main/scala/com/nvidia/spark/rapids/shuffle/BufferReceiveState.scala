@@ -192,6 +192,7 @@ class BounceBufferBufferReceiveState(
     // e.g. after the synchronized block, or after we sync with GPU in this function.
     toConsume -= 1
     withResource(new NvtxRange("consumeWindow", NvtxColor.PURPLE)) { _ =>
+      logInfo(s"$this at consumeWindow")
       advance()
       closeOnExcept(new ArrayBuffer[DeviceMemoryBuffer]()) { toClose =>
         val results = currentBlocks.flatMap { b =>
@@ -239,6 +240,7 @@ class BounceBufferBufferReceiveState(
             bounceBufferByteOffset = 0
           }
 
+          logInfo(s"$this returning from consumeWindow ${contigBuffer}")
           if (contigBuffer != null) {
             Some(ConsumedBatchFromBounceBuffer(
               contigBuffer, pendingTransferRequest.tableMeta, pendingTransferRequest.handler))
@@ -278,8 +280,8 @@ class DirectBufferReceiveState(
 
   private var buffer: DeviceMemoryBuffer = null
 
-  override def consumeWindow(): Seq[ConsumedBatchFromBounceBuffer] = {
-    logInfo(s"At consume window for ${buffer}")
+  override def consumeWindow(): Seq[ConsumedBatchFromBounceBuffer] = synchronized {
+    logDebug(s"At consume window for ${buffer}")
     consumed = true
     Seq(ConsumedBatchFromBounceBuffer(
       buffer,
@@ -287,15 +289,17 @@ class DirectBufferReceiveState(
       request.handler))
   }
 
-  override def close(): Unit = {
-    logInfo(s"closing DirectBufferReceiveState for ${buffer}")
+  override def close(): Unit = synchronized {
+    logDebug(s"closing DirectBufferReceiveState for ${buffer}")
     transportOnClose()
   }
 
-  override def getBufferWhenReady(finalizeCb: TransportBuffer => Unit, size: Long): Unit = {
+  override def getBufferWhenReady(
+    finalizeCb: TransportBuffer => Unit, size: Long): Unit = synchronized {
     if (buffer == null) {
-      buffer = DeviceMemoryBuffer.allocate(size)
-      Cuda.DEFAULT_STREAM.sync()
+      logDebug(s"allocating in getBufferWhenReady for ${this}: "+
+        s"${request.getLength} and was told ${size}")
+      buffer = DeviceMemoryBuffer.allocate(request.getLength)
     }
     finalizeCb(new TransportBuffer {
       override def getAddress(): Long = buffer.getAddress

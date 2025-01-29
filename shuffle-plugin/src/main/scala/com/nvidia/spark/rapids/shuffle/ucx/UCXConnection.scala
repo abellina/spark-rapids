@@ -257,7 +257,7 @@ class UCXClientConnection(peerExecutorId: Long, ucx: UCX, transport: UCXShuffleT
         tx.start(UCXTransactionType.Receive, 1, transport.handleBufferTransaction)
 
         override def onError(am: UCXActiveMessage, error: UCXError): Unit = {
-          logInfo(s"onError ${error.errorMsg} for ${am.header}")
+          logError(s"onError ${error.errorMsg} for ${am.header}")
           tx.completeWithError(error.errorMsg, hdr = Some(am.header))
         }
 
@@ -267,18 +267,18 @@ class UCXClientConnection(peerExecutorId: Long, ucx: UCX, transport: UCXShuffleT
 
         override def onSuccess(am: UCXActiveMessage, buff: TransportBuffer): Unit = {
           // the buffer doesn't belong to this transaction, hence the last argument is None.
-          logInfo(s"message success ${am.header}")
+          logDebug(s"message success ${am.header}")
           tx.completeWithSuccess(MessageType.Buffer, Option(am.header), None)
         }
 
         override def onCancel(am: UCXActiveMessage): Unit = {
-          logInfo(s"message cancelled ${am.header}")
+          logDebug(s"message cancelled ${am.header}")
           tx.completeCancelled(MessageType.Buffer, am.header)
         }
 
         override def onMessageReceived(size: Long, header: Long,
                                        finalizeCb: TransportBuffer => Unit): Unit = {
-          logInfo(s"Received message from ${peerExecutorId} size ${size} " +
+          logDebug(s"Received message from ${peerExecutorId} size ${size} " +
             s"header ${TransportUtils.toHex(header)}")
           transport.handleBufferReceive(size, header, finalizeCb)
         }

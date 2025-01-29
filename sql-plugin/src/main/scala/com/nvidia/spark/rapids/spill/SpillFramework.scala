@@ -23,9 +23,7 @@ import java.nio.file.StandardOpenOption
 import java.util
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
-
-import scala.collection.mutable
-
+import scala.collection.{GenIterable, mutable}
 import ai.rapids.cudf._
 import com.nvidia.spark.rapids.{GpuColumnVector, GpuColumnVectorFromBuffer, GpuCompressedColumnVector, GpuDeviceManager, HostAlloc, HostMemoryOutputStream, MemoryBufferToHostByteBufferIterator, RapidsConf, RapidsHostColumnVector}
 import com.nvidia.spark.rapids.Arm.{closeOnExcept, withResource}
@@ -33,7 +31,6 @@ import com.nvidia.spark.rapids.RapidsPluginImplicits.AutoCloseableSeq
 import com.nvidia.spark.rapids.format.TableMeta
 import com.nvidia.spark.rapids.internal.HostByteBufferIterator
 import org.apache.commons.io.IOUtils
-
 import org.apache.spark.{SparkConf, SparkEnv, TaskContext}
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.rapids.{GpuTaskMetrics, RapidsDiskBlockManager}
@@ -390,7 +387,8 @@ class SpillableHostBufferHandle private (
     }
   }
 
-  private[spill] def materializeToDeviceMemoryBuffer(dmb: DeviceMemoryBuffer): Unit = {
+  private[spill] def materializeToDeviceMemoryBuffer(
+      dmb: DeviceMemoryBuffer, doSync: Boolean = true): Unit = {
     var hostBuffer: HostMemoryBuffer = null
     var diskHandle: DiskHandle = null
     synchronized {
@@ -405,14 +403,20 @@ class SpillableHostBufferHandle private (
       }
     }
     if (hostBuffer != null) {
+      require(dmb.getLength == hostBuffer.getLength,
+        s"length of DMB is ${dmb.getLength}, length of host ${hostBuffer} is ${hostBuffer.getLength}")
       GpuTaskMetrics.get.readSpillFromHostTime {
         withResource(hostBuffer) { _ =>
-          dmb.copyFromHostBuffer(
+          dmb.copyFromHostBufferAsync(
             /*dstOffset*/ 0,
             /*src*/ hostBuffer,
             /*srcOffset*/ 0,
-            /*length*/ hostBuffer.getLength)
+            /*length*/ hostBuffer.getLength,
+            Cuda.DEFAULT_STREAM)
         }
+      }
+      if (doSync) {
+        Cuda.DEFAULT_STREAM.sync()
       }
     } else {
       // cannot find a full host buffer, get chunked api
@@ -428,6 +432,42 @@ class SpillableHostBufferHandle private (
   private[spill] def setDisk(handle: DiskHandle): Unit = synchronized {
     disk = Some(handle)
   }
+
+  def copyAsync(
+    dstBuffer: DeviceMemoryBuffer,
+    dstOffset: Long,
+    srcOffset: Long,
+    copySize: Long,
+    stream: Cuda.Stream): Option[AutoCloseable] = {
+    var hostBuffer: HostMemoryBuffer = null
+    var diskHandle: DiskHandle = null
+    synchronized {
+      if (host.isDefined) {
+        hostBuffer = host.get
+        hostBuffer.incRefCount()
+      } else if (disk.isDefined) {
+        diskHandle = disk.get
+      } else {
+        // spilling or closed
+        diskHandle = tryGetHandle[DiskHandle](() => disk)
+      }
+    }
+    if (hostBuffer != null) {
+      GpuTaskMetrics.get.readSpillFromHostTime {
+        dstBuffer.copyFromHostBufferAsync(
+          dstOffset,
+          hostBuffer,
+          srcOffset,
+          copySize,
+          stream)
+        Some(hostBuffer)
+      }
+    } else {
+      // cannot find a full host buffer, get chunked api
+      // from disk
+      diskHandle.copyAsync(dstBuffer, dstOffset, srcOffset, copySize, stream)
+    }
+  }
 }
 
 object SpillableDeviceBufferHandle {
@@ -435,6 +475,12 @@ object SpillableDeviceBufferHandle {
     val handle = new SpillableDeviceBufferHandle(dmb.getLength, dev = Some(dmb))
     SpillFramework.stores.deviceStore.track(handle)
     handle
+  }
+
+  def batchMaterialize(handles: Seq[SpillableDeviceBufferHandle]): Seq[DeviceMemoryBuffer] = {
+    val res = handles.map(_.materialize(doSync = false))
+    Cuda.DEFAULT_STREAM.sync()
+    res
   }
 }
 
@@ -457,7 +503,7 @@ class SpillableDeviceBufferHandle private (
     }
   }
 
-  def materialize(): DeviceMemoryBuffer = {
+  def materialize(doSync: Boolean = true): DeviceMemoryBuffer = {
     var materialized: DeviceMemoryBuffer = null
     var hostHandle: SpillableHostBufferHandle = null
     synchronized {
@@ -474,8 +520,9 @@ class SpillableDeviceBufferHandle private (
     // state, as we are not allowing unspill, and we don't need
     // to hold locks while we copy back from here.
     if (materialized == null) {
-      materialized = closeOnExcept(DeviceMemoryBuffer.allocate(sizeInBytes)) { dmb =>
-        hostHandle.materializeToDeviceMemoryBuffer(dmb)
+      materialized =
+      closeOnExcept(DeviceMemoryBuffer.allocate(sizeInBytes, Cuda.DEFAULT_STREAM)) { dmb =>
+        hostHandle.materializeToDeviceMemoryBuffer(dmb, doSync)
         dmb
       }
     }
@@ -515,6 +562,41 @@ class SpillableDeviceBufferHandle private (
       host.foreach(_.close())
       host = None
       notifyAll()
+    }
+  }
+
+  def copyAsync(
+    dstBuffer: DeviceMemoryBuffer,
+    dstOffset: Long,
+    srcOffset: Long,
+    copySize: Long,
+    stream: Cuda.Stream): Option[AutoCloseable] = {
+
+    var materialized: DeviceMemoryBuffer = null
+    var hostHandle: SpillableHostBufferHandle = null
+    synchronized {
+      if (host.isDefined) {
+        hostHandle = host.get
+      } else if (dev.isDefined) {
+        materialized = dev.get
+        materialized.incRefCount()
+      } else {
+        hostHandle = tryGetHandle[SpillableHostBufferHandle](() => host)
+      }
+    }
+    // if `materialized` is null, we spilled. This is a terminal
+    // state, as we are not allowing unspill, and we don't need
+    // to hold locks while we copy back from here.
+    if (materialized == null) {
+      hostHandle.copyAsync(dstBuffer, dstOffset, srcOffset, copySize, stream)
+    } else {
+      dstBuffer.copyFromDeviceBufferAsync(
+        dstOffset,
+        materialized,
+        srcOffset,
+        copySize,
+        stream)
+      Some(materialized)
     }
   }
 }
@@ -949,12 +1031,14 @@ class DiskHandle private(
     }
   }
 
-  def withInputWrappedStream[T](body: InputStream => T): T = synchronized {
+  def withInputWrappedStream[T](body: InputStream => T): T = withInputWrappedStream(0L)(body)
+
+  def withInputWrappedStream[T](copyOffset: Long)(body: InputStream => T): T = synchronized {
     val diskBlockManager = SpillFramework.stores.diskStore.diskBlockManager
     val serializerManager = diskBlockManager.getSerializerManager()
     GpuTaskMetrics.get.readSpillFromDiskTime {
       withInputChannel { inputChannel =>
-        inputChannel.position(offset)
+        inputChannel.position(offset + copyOffset)
         withResource(Channels.newInputStream(inputChannel)) { compressed =>
           withResource(serializerManager.wrapStream(blockId, compressed)) { in =>
             body(in)
@@ -999,6 +1083,40 @@ class DiskHandle private(
         }
       }
     }
+  }
+
+  def copyAsync(
+    dstBuffer: DeviceMemoryBuffer,
+    dstOffset: Long,
+    srcOffset: Long,
+    copySize: Long,
+    stream: Cuda.Stream): Option[AutoCloseable] = {
+    var copyOffset = dstOffset
+    var copyRemaining = copySize
+    withInputWrappedStream(srcOffset) { in =>
+      SpillFramework.withHostSpillBounceBuffer { hmb =>
+        val bbLength = hmb.getLength.toInt
+        withResource(new HostMemoryOutputStream(hmb)) { out =>
+          var sizeRead = IOUtils.copyLarge(in, out, 0, Math.min(bbLength, copyRemaining))
+          while (sizeRead > 0) {
+            // this syncs at every copy, since for now we are
+            // reusing a single host spill bounce buffer
+            dstBuffer.copyFromHostBufferAsync(
+              /*dstOffset*/ copyOffset,
+              /*src*/ hmb,
+              /*srcOffset*/ 0,
+              /*length*/ sizeRead,
+              stream)
+            stream.sync()
+            out.seek(0) // start over
+            copyOffset += sizeRead
+            copyRemaining -= sizeRead
+            sizeRead = IOUtils.copyLarge(in, out, 0, Math.min(bbLength, copyRemaining))
+          }
+        }
+      }
+    }
+    None
   }
 }
 
@@ -1673,6 +1791,7 @@ object SpillFramework extends Logging {
       Option(storesInternal).map(_.diskStore)
     }.foreach(_.remove(handle))
   }
+
 }
 
 /**
