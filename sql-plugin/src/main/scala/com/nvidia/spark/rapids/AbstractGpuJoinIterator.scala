@@ -224,22 +224,22 @@ abstract class SplittableJoinIterator(
       opTime.ns {
         withResource(scb) { scb =>
           val numJoinRows = computeNumJoinRows(scb)
-
+          println(s"numJoinRows: ${numJoinRows}")
           // We want the gather maps size to be around the target size. There are two gather maps
           // that are made up of ints, so compute how many rows on the stream side will produce the
           // desired gather maps size.
-          val maxJoinRows = Math.max(1, targetSize / (2 * Integer.BYTES))
-          if (numJoinRows > maxJoinRows && scb.numRows > 1) {
-            // Need to split the batch to reduce the gather maps size. This takes a simplistic
-            // approach of assuming the data is uniformly distributed in the stream table.
-            val numSplits = Math.min(scb.numRows,
-              Math.ceil(numJoinRows.toDouble / maxJoinRows).toInt)
-            splitAndSave(scb.getBatch, numSplits)
+          //val maxJoinRows = Math.max(1, targetSize / (2 * Integer.BYTES))
+          //if (numJoinRows > maxJoinRows && scb.numRows > 1) {
+          //  // Need to split the batch to reduce the gather maps size. This takes a simplistic
+          //  // approach of assuming the data is uniformly distributed in the stream table.
+          //  val numSplits = Math.min(scb.numRows,
+          //    Math.ceil(numJoinRows.toDouble / maxJoinRows).toInt)
+          //  println(s"maxJoinRows: ${maxJoinRows} numRows: ${scb.numRows} numSplits: ${numSplits} numJoinRows: ${numJoinRows}")
+          //  splitAndSave(scb.getBatch, numSplits)
 
-            // Return no gatherer so the outer loop will try again
-            return None
-          }
-
+          //  // Return no gatherer so the outer loop will try again
+          //  return None
+          //}
           createGatherer(scb, Some(numJoinRows))
         }
       }
