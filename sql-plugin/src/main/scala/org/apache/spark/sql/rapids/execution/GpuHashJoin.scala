@@ -23,8 +23,7 @@ import com.nvidia.spark.rapids.RapidsPluginImplicits.AutoCloseableProducingSeq
 import com.nvidia.spark.rapids.RmmRapidsRetryIterator.{withRestoreOnRetry, withRetryNoSplit}
 import com.nvidia.spark.rapids.jni.GpuOOM
 import com.nvidia.spark.rapids.shims.ShimBinaryExecNode
-
-import org.apache.spark.sql.catalyst.expressions.{Attribute, AttributeReference, Expression, NamedExpression}
+import org.apache.spark.sql.catalyst.expressions.{Ascending, Attribute, AttributeReference, Expression, NamedExpression, SortOrder}
 import org.apache.spark.sql.catalyst.plans.{Cross, ExistenceJoin, FullOuter, Inner, InnerLike, JoinType, LeftAnti, LeftExistence, LeftOuter, LeftSemi, RightOuter}
 import org.apache.spark.sql.types._
 import org.apache.spark.sql.vectorized.ColumnarBatch
@@ -308,7 +307,7 @@ object JoinBuildSideStats {
         keysTable.distinctCount(NullEquality.EQUAL)
       }
       val isDistinct = builtCount == buildKeys.numRows()
-      val magnificationFactor = buildKeys.numRows().toDouble / builtCount
+      val magnificationFactor = (buildKeys.numRows().toDouble / builtCount)
       JoinBuildSideStats(magnificationFactor, isDistinct)
     }
   }
@@ -356,6 +355,7 @@ abstract class BaseHashJoinIterator(
     joinType match {
       // Full Outer join is implemented via LeftOuter/RightOuter, so use same estimate.
       case _: InnerLike | LeftOuter | RightOuter | FullOuter =>
+        println(s"stream mag factor: ${buildStats.streamMagnificationFactor}")
         Math.ceil(cb.numRows * buildStats.streamMagnificationFactor).toLong
       case _ => cb.numRows
     }
@@ -449,10 +449,26 @@ abstract class BaseHashJoinIterator(
       buildKeys: ColumnarBatch,
       buildData: LazySpillableColumnarBatch,
       streamCb: LazySpillableColumnarBatch): Option[JoinGatherer] = {
-    withResource(GpuProjectExec.project(streamCb.getBatch, boundStreamKeys)) { streamKeys =>
-      // ensure we make the stream side spillable again
-      streamCb.allowSpilling()
-      joinGatherer(buildKeys, LazySpillableColumnarBatch.spillOnly(buildData), streamKeys, streamCb)
+    if (sys.env("SMJ_PRESORT") != "true") {
+      withResource(GpuProjectExec.project(streamCb.getBatch, boundStreamKeys)) { streamKeys =>
+        // ensure we make the stream side spillable again
+        streamCb.allowSpilling()
+        joinGatherer(buildKeys, LazySpillableColumnarBatch.spillOnly(buildData), streamKeys, streamCb)
+      }
+    } else {
+      val sorter = new GpuSorter(boundStreamKeys.map(SortOrder(_, Ascending)), streamAttributes)
+      val lazySorted = withResource(sorter.fullySortBatch(streamCb.getBatch, NoopMetric)) { sorted =>
+        LazySpillableColumnarBatch(sorted, "lazy_sorted")
+      }
+      streamCb.close() // done with this
+
+      withResource(GpuProjectExec.project(lazySorted.getBatch, boundStreamKeys)) { streamKeys =>
+        joinGatherer(
+          buildKeys,
+          LazySpillableColumnarBatch.spillOnly(buildData),
+          streamKeys,
+          lazySorted)
+      }
     }
   }
 
@@ -524,7 +540,11 @@ class HashJoinIterator(
             } else {
               rightKeys.innerDistinctJoinGatherMaps(leftKeys, compareNullsEqual).reverse
             }
-          case _: InnerLike => leftKeys.innerJoinGatherMaps(rightKeys, compareNullsEqual)
+          case _: InnerLike =>
+            leftKeys.innerJoinGatherMaps(
+              rightKeys, compareNullsEqual,
+              sys.env("SMJ") == "true",
+              sys.env("SMJ_PRESORT") == "true")
           case LeftSemi => Array(leftKeys.leftSemiJoinGatherMap(rightKeys, compareNullsEqual))
           case LeftAnti => Array(leftKeys.leftAntiJoinGatherMap(rightKeys, compareNullsEqual))
           case _ =>
@@ -701,7 +721,11 @@ class HashJoinStreamSideIterator(
         // always be on the right
         rightKeys.leftJoinGatherMaps(leftKeys, compareNullsEqual).reverse
       case Inner =>
-        leftKeys.innerJoinGatherMaps(rightKeys, compareNullsEqual)
+        leftKeys.innerJoinGatherMaps(
+          rightKeys,
+          compareNullsEqual,
+          sys.env("SMJ") == "true",
+          sys.env("SMJ_PRESORT") == "true")
       case t =>
         throw new IllegalStateException(s"unsupported join type: $t")
     }
@@ -1189,8 +1213,16 @@ trait GpuHashJoin extends GpuJoinExec {
       builtBatch
     }
 
-    val spillableBuiltBatch = withResource(nullFiltered) {
-      LazySpillableColumnarBatch(_, "built")
+    val spillableBuiltBatch = if (sys.env("SMJ_PRESORT") != "true") {
+      withResource(nullFiltered) {
+        LazySpillableColumnarBatch(_, "built")
+      }
+    } else {
+      val sorter = new GpuSorter(boundBuildKeys.map(SortOrder(_, Ascending)), buildPlan.output)
+      val sortedCb = withResource(nullFiltered) { _ => sorter.fullySortBatch(nullFiltered, NoopMetric) }
+      withResource(sortedCb) {
+        LazySpillableColumnarBatch(_, "built")
+      }
     }
 
     val lazyStream = stream.map { cb =>

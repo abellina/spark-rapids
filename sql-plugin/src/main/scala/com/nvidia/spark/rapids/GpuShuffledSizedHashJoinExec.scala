@@ -16,8 +16,7 @@
 
 package com.nvidia.spark.rapids
 
-import scala.collection.{mutable, BitSet}
-
+import scala.collection.{BitSet, mutable}
 import ai.rapids.cudf.{ContiguousTable, HostMemoryBuffer, NvtxColor, NvtxRange}
 import ai.rapids.cudf.JCudfSerialization.SerializedTableHeader
 import com.nvidia.spark.rapids.Arm.{closeOnExcept, withResource}
@@ -28,10 +27,9 @@ import com.nvidia.spark.rapids.RmmRapidsRetryIterator.withRetryNoSplit
 import com.nvidia.spark.rapids.ScalableTaskCompletion.onTaskCompletion
 import com.nvidia.spark.rapids.jni.kudo.KudoTableHeader
 import com.nvidia.spark.rapids.shims.GpuHashPartitioning
-
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.catalyst.InternalRow
-import org.apache.spark.sql.catalyst.expressions.{Attribute, Expression}
+import org.apache.spark.sql.catalyst.expressions.{Ascending, Attribute, Expression, SortOrder}
 import org.apache.spark.sql.catalyst.plans._
 import org.apache.spark.sql.catalyst.plans.physical.Distribution
 import org.apache.spark.sql.execution.SparkPlan
@@ -493,10 +491,25 @@ abstract class GpuShuffledSizedHashJoinExec[HOST_BATCH_TYPE <: AutoCloseable] ex
     } else {
       GpuColumnVector.emptyBatchFromTypes(info.exprs.buildTypes)
     }
-    val spillableBuiltBatch = withResource(batch) { batch =>
-      assert(!buildIter.hasNext, "build side should have a single batch")
-      LazySpillableColumnarBatch(batch, "built")
+    val spillableBuiltBatch = if (sys.env("SMJ_PRESORT") != "true") {
+      withResource(batch) { batch =>
+        assert(!buildIter.hasNext, "build side should have a single batch")
+        LazySpillableColumnarBatch(batch, "built")
+      }
+    } else {
+      require(!buildIter.hasNext, "build side should have a single batch")
+
+      val sorter = new GpuSorter(
+        info.exprs.boundBuildKeys.map(SortOrder(_, Ascending)),
+        info.exprs.buildOutput)
+      val sortedCb = withResource(batch) { _ =>
+        sorter.fullySortBatch(batch, NoopMetric)
+      }
+      withResource(sortedCb) {
+        LazySpillableColumnarBatch(_, "built")
+      }
     }
+
     createJoinIterator(info, spillableBuiltBatch, lazyStream, gpuBatchSizeBytes, opTime,
       metricsMap(JOIN_TIME))
   }
