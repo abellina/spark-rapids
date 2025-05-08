@@ -515,6 +515,7 @@ class RapidsExecutorPlugin extends ExecutorPlugin with Logging {
   private lazy val extraExecutorPlugins =
     RapidsPluginUtils.extraPlugins.map(_.executorPlugin()).filterNot(_ == null)
   private val activeTaskNvtx = new ConcurrentHashMap[Thread, NvtxRange]()
+  private val inactiveThreadNvtx = new ConcurrentHashMap[Thread, NvtxRange]()
 
   override def init(
       pluginContext: PluginContext,
@@ -736,6 +737,10 @@ class RapidsExecutorPlugin extends ExecutorPlugin with Logging {
     val stageId = taskCtx.stageId()
     val taskAttemptId = taskCtx.taskAttemptId()
     val attemptNumber = taskCtx.attemptNumber()
+    val inactiveRange = inactiveThreadNvtx.remove(Thread.currentThread())
+    if (inactiveRange != null) {
+      inactiveRange.close()
+    }
     activeTaskNvtx.put(Thread.currentThread(),
       new NvtxRange(s"Stage $stageId Task $taskAttemptId-$attemptNumber", NvtxColor.DARK_GREEN))
   }
@@ -744,6 +749,10 @@ class RapidsExecutorPlugin extends ExecutorPlugin with Logging {
     val nvtx = activeTaskNvtx.remove(Thread.currentThread())
     if (nvtx != null) {
       nvtx.close()
+    }
+    if (!inactiveThreadNvtx.containsKey(Thread.currentThread())) {
+      inactiveThreadNvtx.put(Thread.currentThread(),
+        new NvtxRange(s"No tasks scheduled", NvtxColor.RED))
     }
   }
 }
