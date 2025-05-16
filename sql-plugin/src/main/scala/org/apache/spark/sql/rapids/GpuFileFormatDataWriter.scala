@@ -903,6 +903,11 @@ class GpuDynamicPartitionDataConcurrentWriter(
               writerStatus.deviceBytes += dataScb.sizeInBytes
             }
           }
+          // as we accumulate batches in the writer, we want to keep asking whether we should
+          // be flushing to reduce our memory footprint.
+          if (writerStatus.deviceBytes > partitionFlushSize) {
+            writeOneCacheAndClose(writerId, writerStatus)
+          }
           idx += 1
         }
         if (idx < groups.length) {
