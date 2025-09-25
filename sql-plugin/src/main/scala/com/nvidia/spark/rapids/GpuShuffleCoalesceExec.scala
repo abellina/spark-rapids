@@ -255,16 +255,18 @@ class KudoTableOperator(kudo: Option[KudoSerializer], readOption: CoalesceReadOp
   }
 
   override def concatOnHost(columns: Array[KudoSerializedTableColumn]): CoalescedHostResult = {
-    require(columns.nonEmpty, "no tables to be concatenated")
-    val numCols = columns.head.spillableKudoTable.header.getNumColumns
-    if (numCols == 0) {
-      val totalRowsNum = columns.map(getNumRows).sum
-      RowCountOnlyMergeResult(totalRowsNum)
-    } else {
-      // "lock" all input tables in memory before merge
-      withResource(columns.safeMap(_.spillableKudoTable.makeKudoTable)) { kudoTables =>
-        val result = kudo.get.mergeOnHost(kudoTables, buildMergeOptions())
-        KudoHostMergeResultWrapper(result)
+    withResource(new NvtxRange("concatOnHost", NvtxColor.RED)) { _ =>
+      require(columns.nonEmpty, "no tables to be concatenated")
+      val numCols = columns.head.spillableKudoTable.header.getNumColumns
+      if (numCols == 0) {
+        val totalRowsNum = columns.map(getNumRows).sum
+        RowCountOnlyMergeResult(totalRowsNum)
+      } else {
+        // "lock" all input tables in memory before merge
+        withResource(columns.safeMap(_.spillableKudoTable.makeKudoTable)) { kudoTables =>
+          val result = kudo.get.mergeOnHost(kudoTables, buildMergeOptions())
+          KudoHostMergeResultWrapper(result)
+        }
       }
     }
   }
