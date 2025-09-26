@@ -16,7 +16,6 @@
 
 package com.nvidia.spark.rapids.jni.kudo
 
-import ai.rapids.cudf.Schema
 import com.nvidia.spark.rapids.{CoalescedHostResult, GpuColumnVector, RmmRapidsRetryIterator, SpillableHostBuffer, SpillPriorities}
 import com.nvidia.spark.rapids.Arm.withResource
 
@@ -32,14 +31,18 @@ import org.apache.spark.sql.vectorized.ColumnarBatch
  * a KudoHostMergeResultWrapper.
  */
 case class KudoHostMergeResultWrapper private(
-    schema: Schema, columnInfoList: Array[ColumnViewInfo], spillableHostBuffer: SpillableHostBuffer)
+    inner: KudoHostMergeResult)
   extends CoalescedHostResult {
+
+  val spillableHostBuffer =
+    SpillableHostBuffer(inner.getHostBuf,
+      inner.getHostBuf.getLength, SpillPriorities.ACTIVE_BATCHING_PRIORITY)
 
   /** Convert itself to a GPU batch */
   override def toGpuBatch(dataTypes: Array[DataType]): ColumnarBatch = {
     RmmRapidsRetryIterator.withRetryNoSplit {
       val table = withResource(spillableHostBuffer.getHostBuffer()) { buf =>
-        KudoHostMergeResult.toTableStatic(buf, schema, columnInfoList)
+        KudoHostMergeResult.toTableStatic(buf, inner.getSchema, inner.getColumnInfoList)
       }
       withResource(table) { _ =>
         GpuColumnVector.from(table, dataTypes)
@@ -51,14 +54,4 @@ case class KudoHostMergeResultWrapper private(
   override def getDataSize: Long = spillableHostBuffer.length
 
   override def close(): Unit = spillableHostBuffer.close()
-}
-
-object KudoHostMergeResultWrapper {
-  def apply(inner: KudoHostMergeResult): KudoHostMergeResultWrapper = {
-    KudoHostMergeResultWrapper(inner.getSchema, inner.getColumnInfoList,
-      SpillableHostBuffer(inner.getHostBuf,
-        inner.getHostBuf.getLength, SpillPriorities.ACTIVE_BATCHING_PRIORITY
-      )
-    )
-  }
 }

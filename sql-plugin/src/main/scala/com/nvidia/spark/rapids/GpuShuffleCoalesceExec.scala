@@ -23,13 +23,11 @@ import scala.reflect.ClassTag
 import ai.rapids.cudf.{JCudfSerialization, NvtxColor, NvtxRange}
 import ai.rapids.cudf.JCudfSerialization.HostConcatResult
 import com.nvidia.spark.rapids.Arm.{closeOnExcept, withResource}
-import com.nvidia.spark.rapids.FileUtils.createTempFile
 import com.nvidia.spark.rapids.RapidsPluginImplicits._
 import com.nvidia.spark.rapids.RmmRapidsRetryIterator.withRetryNoSplit
 import com.nvidia.spark.rapids.ScalableTaskCompletion.onTaskCompletion
-import com.nvidia.spark.rapids.jni.kudo.{DumpOption, KudoHostMergeResultWrapper, KudoSerializer, MergeOptions}
+import com.nvidia.spark.rapids.jni.kudo.{DumpOption, KudoHostMergeResultWrapper, KudoSerializer}
 import com.nvidia.spark.rapids.shims.ShimUnaryExecNode
-import org.apache.hadoop.conf.Configuration
 
 import org.apache.spark.TaskContext
 import org.apache.spark.rdd.RDD
@@ -240,20 +238,6 @@ class KudoTableOperator(kudo: Option[KudoSerializer], readOption: CoalesceReadOp
     column.spillableKudoTable.header
     .getNumRows
 
-  private def buildMergeOptions(): MergeOptions = {
-    val dumpOption = readOption.kudoDebugMode
-    val dumpPrefix = readOption.kudoDebugDumpPrefix
-    if (dumpOption != DumpOption.Never && dumpPrefix.isDefined) {
-      lazy val stageId = TaskContext.get().stageId()
-      lazy val taskId = TaskContext.get().taskAttemptId()
-      lazy val updatedPrefix = s"${dumpPrefix.get}_stage_${stageId}_task_${taskId}"
-      lazy val (out, path) = createTempFile(new Configuration(), updatedPrefix, ".bin")
-      new MergeOptions(dumpOption, () => out, path.toString)
-    } else {
-      new MergeOptions(dumpOption, null, null)
-    }
-  }
-
   override def concatOnHost(columns: Array[KudoSerializedTableColumn]): CoalescedHostResult = {
     withResource(new NvtxRange("concatOnHost", NvtxColor.RED)) { _ =>
       require(columns.nonEmpty, "no tables to be concatenated")
@@ -264,8 +248,9 @@ class KudoTableOperator(kudo: Option[KudoSerializer], readOption: CoalesceReadOp
       } else {
         // "lock" all input tables in memory before merge
         withResource(columns.safeMap(_.spillableKudoTable.makeKudoTable)) { kudoTables =>
-          val result = kudo.get.mergeOnHost(kudoTables, buildMergeOptions())
-          KudoHostMergeResultWrapper(result)
+          import scala.collection.JavaConverters._
+          val result = kudo.get.mergeOnHost(kudoTables.toList.asJava)
+          KudoHostMergeResultWrapper(result.getLeft())
         }
       }
     }
@@ -307,7 +292,6 @@ abstract class HostCoalesceIteratorBase[T <: AutoCloseable : ClassTag](
   private def concatenateTablesInHost(): CoalescedHostResult = {
     val result = withResource(new MetricRange(concatTimeMetric)) { _ =>
       val input = for (_ <- 0 until numTablesInBatch) yield serializedTables.removeFirst()
-
       withRetryNoSplit(input) { tables =>
         tableOperator.concatOnHost(tables.toArray)
       }
