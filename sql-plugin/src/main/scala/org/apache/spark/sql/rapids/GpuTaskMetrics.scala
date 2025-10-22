@@ -19,18 +19,16 @@ package org.apache.spark.sql.rapids
 import java.{lang => jl}
 import java.io.ObjectInputStream
 import java.util.Locale
-import java.util.concurrent.TimeUnit
-
-import scala.collection.mutable
-
+import java.util.concurrent.{ConcurrentHashMap, TimeUnit}
 import ai.rapids.cudf.{NvtxColor, NvtxRange}
 import com.nvidia.spark.rapids.Arm.withResource
 import com.nvidia.spark.rapids.ScalableTaskCompletion.onTaskCompletion
 import com.nvidia.spark.rapids.jni.RmmSpark
-
 import org.apache.spark.{SparkContext, TaskContext}
 import org.apache.spark.internal.Logging
 import org.apache.spark.util.{AccumulatorV2, LongAccumulator, Utils}
+
+import java.util.concurrent.atomic.AtomicLong
 
 case class NanoTime(value: java.lang.Long) {
   override def toString: String = {
@@ -207,21 +205,22 @@ class GpuTaskMetrics extends Serializable {
   private val maxHostMemoryBytes = new HighWatermarkAccumulator
   private val maxDiskMemoryBytes = new HighWatermarkAccumulator
 
-  private var maxHostBytesAllocated: Long = 0
+  private val maxHostBytesAllocated = new AtomicLong(0)
 
-  private var maxDiskBytesAllocated: Long = 0
+  private val maxDiskBytesAllocated = new AtomicLong(0)
 
-  def getDiskBytesAllocated: Long = GpuTaskMetrics.diskBytesAllocated
+  def getDiskBytesAllocated: Long = GpuTaskMetrics.diskBytesAllocated.get
 
-  def getMaxDiskBytesAllocated: Long = maxDiskBytesAllocated
+  def getMaxDiskBytesAllocated: Long = maxDiskBytesAllocated.get
 
-  def getHostBytesAllocated: Long = GpuTaskMetrics.hostBytesAllocated
+  def getHostBytesAllocated: Long = GpuTaskMetrics.hostBytesAllocated.get
 
-  def getMaxHostBytesAllocated: Long = maxHostBytesAllocated
+  def getMaxHostBytesAllocated: Long = maxHostBytesAllocated.get
 
   def incHostBytesAllocated(bytes: Long): Unit = {
     GpuTaskMetrics.incHostBytesAllocated(bytes)
-    maxHostBytesAllocated = maxHostBytesAllocated.max(GpuTaskMetrics.hostBytesAllocated)
+    val snap = GpuTaskMetrics.hostBytesAllocated.get()
+    maxHostBytesAllocated.set(snap.max(maxHostBytesAllocated.get()))
   }
 
   def decHostBytesAllocated(bytes: Long): Unit = {
@@ -230,7 +229,8 @@ class GpuTaskMetrics extends Serializable {
 
   def incDiskBytesAllocated(bytes: Long): Unit = {
     GpuTaskMetrics.incDiskBytesAllocated(bytes)
-    maxDiskBytesAllocated = maxDiskBytesAllocated.max(GpuTaskMetrics.diskBytesAllocated)
+    val snap = GpuTaskMetrics.diskBytesAllocated.get()
+    maxDiskBytesAllocated.set(snap.max(maxDiskBytesAllocated.get()))
   }
 
   def decDiskBytesAllocated(bytes: Long): Unit = {
@@ -343,11 +343,13 @@ class GpuTaskMetrics extends Serializable {
       // add method instead of adding a dedicated max method to the accumulator.
       maxDeviceMemoryBytes.add(maxMem)
     }
-    if (maxHostBytesAllocated > 0) {
-      maxHostMemoryBytes.add(maxHostBytesAllocated)
+    val maxHostBytesAllocated_ = maxHostBytesAllocated.get
+    if (maxHostBytesAllocated_ > 0) {
+      maxHostMemoryBytes.add(maxHostBytesAllocated_)
     }
-    if (maxDiskBytesAllocated > 0) {
-      maxDiskMemoryBytes.add(maxDiskBytesAllocated)
+    val maxDiskBytesAllocated_ = maxDiskBytesAllocated.get
+    if (maxDiskBytesAllocated_ > 0) {
+      maxDiskMemoryBytes.add(maxDiskBytesAllocated_)
     }
   }
 
@@ -361,47 +363,44 @@ class GpuTaskMetrics extends Serializable {
  * Provides task level metrics
  */
 object GpuTaskMetrics extends Logging {
-  private val taskLevelMetrics = mutable.Map[Long, GpuTaskMetrics]()
+  private val taskLevelMetrics = new ConcurrentHashMap[Long, GpuTaskMetrics]()
 
-  private var hostBytesAllocated: Long = 0
-  private var diskBytesAllocated: Long = 0
+  private val hostBytesAllocated = new AtomicLong(0)
+  private val diskBytesAllocated = new AtomicLong(0)
 
-  private def incHostBytesAllocated(bytes: Long): Unit = synchronized {
-    hostBytesAllocated += bytes
+  private def incHostBytesAllocated(bytes: Long): Unit = {
+    hostBytesAllocated.addAndGet(bytes)
   }
 
-  private def decHostBytesAllocated(bytes: Long): Unit = synchronized {
-    hostBytesAllocated -= bytes
+  private def decHostBytesAllocated(bytes: Long): Unit = {
+    hostBytesAllocated.addAndGet(-bytes)
   }
 
-  def incDiskBytesAllocated(bytes: Long): Unit = synchronized {
-    diskBytesAllocated += bytes
+  def incDiskBytesAllocated(bytes: Long): Unit = {
+    diskBytesAllocated.addAndGet(bytes)
   }
 
-  def decDiskBytesAllocated(bytes: Long): Unit = synchronized {
-    diskBytesAllocated -= bytes
+  def decDiskBytesAllocated(bytes: Long): Unit = {
+    diskBytesAllocated.addAndGet(bytes)
   }
 
-  def registerOnTask(metrics: GpuTaskMetrics): Unit = synchronized {
+  def registerOnTask(metrics: GpuTaskMetrics): Unit = {
     val tc = TaskContext.get()
     if (tc != null) {
       val id = tc.taskAttemptId()
       // avoid double registering the task metrics...
-      if (!taskLevelMetrics.contains(id)) {
-        taskLevelMetrics.put(id, metrics)
+      if (taskLevelMetrics.putIfAbsent(id, metrics) == null) {
         onTaskCompletion(tc, tc =>
-          synchronized {
-            taskLevelMetrics.remove(tc.taskAttemptId())
-          }
+          taskLevelMetrics.remove(tc.taskAttemptId())
         )
       }
     }
   }
 
-  def get: GpuTaskMetrics = synchronized {
+  def get: GpuTaskMetrics = {
     val tc = TaskContext.get()
     val metrics = if (tc != null) {
-      taskLevelMetrics.get(tc.taskAttemptId())
+      Option(taskLevelMetrics.get(tc.taskAttemptId()))
     } else {
       None
     }
