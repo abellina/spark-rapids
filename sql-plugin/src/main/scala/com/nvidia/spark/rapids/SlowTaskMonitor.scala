@@ -92,37 +92,25 @@ object SlowTaskMonitor extends Logging {
   /**
    * Register a task as active when it starts.
    */
-  def onTaskStart(): Unit = {
+  def registerTask(taskAttemptId: Long, stageId: Int, partitionId: Int,
+      thread: Thread, startTime: Long): Unit = {
     if (enabled) {
-      val tc = TaskContext.get()
-      if (tc != null) {
-        val taskInfo = TaskInfo(
-          taskAttemptId = tc.taskAttemptId(),
-          stageId = tc.stageId(),
-          partitionId = tc.partitionId(),
-          thread = Thread.currentThread(),
-          startTime = currentTimeMillis()
-        )
-        activeTasks.put(tc.taskAttemptId(), taskInfo)
-        logDebug(s"Registered task ${tc.taskAttemptId()} for slow task monitoring")
-      }
+      val taskInfo = TaskInfo(taskAttemptId, stageId, partitionId, thread, startTime)
+      activeTasks.put(taskAttemptId, taskInfo)
+      logDebug(s"Registered task $taskAttemptId for slow task monitoring")
     }
   }
   
   /**
-   * For testing: directly register a task with a specific start time.
+   * Unregister a task when it completes (successfully or with failure).
    */
-  private[rapids] def registerTask(taskAttemptId: Long, stageId: Int, partitionId: Int,
-      thread: Thread, startTime: Long): Unit = {
-    val taskInfo = TaskInfo(taskAttemptId, stageId, partitionId, thread, startTime)
-    activeTasks.put(taskAttemptId, taskInfo)
-  }
-  
-  /**
-   * For testing: directly unregister a task.
-   */
-  private[rapids] def unregisterTask(taskAttemptId: Long): Unit = {
-    activeTasks.remove(taskAttemptId)
+  def unregisterTask(taskAttemptId: Long): Unit = {
+    if (enabled) {
+      val removed = activeTasks.remove(taskAttemptId)
+      if (removed != null) {
+        logDebug(s"Unregistered task $taskAttemptId from slow task monitoring")
+      }
+    }
   }
   
   /**
@@ -135,21 +123,6 @@ object SlowTaskMonitor extends Logging {
    */
   private[rapids] def isTaskMarkedAsSlow(taskAttemptId: Long): Boolean = {
     Option(activeTasks.get(taskAttemptId)).exists(_.slowReported)
-  }
-
-  /**
-   * Unregister a task when it completes (successfully or with failure).
-   */
-  def onTaskEnd(): Unit = {
-    if (enabled) {
-      val tc = TaskContext.get()
-      if (tc != null) {
-        val removed = activeTasks.remove(tc.taskAttemptId())
-        if (removed != null) {
-          logDebug(s"Unregistered task ${tc.taskAttemptId()} from slow task monitoring")
-        }
-      }
-    }
   }
 
   /**
@@ -194,22 +167,7 @@ object SlowTaskMonitor extends Logging {
    * Log a summarized stack trace for a slow task, focusing on relevant frames.
    */
   private def logStackTrace(taskInfo: TaskInfo): Unit = {
-    try {
-      val stackTrace = taskInfo.thread.getStackTrace
-      val summary = summarizeStackTrace(stackTrace)
-      
-      logWarning(s"Stack trace summary for slow task ${taskInfo.taskAttemptId}:\n$summary")
-    } catch {
-      case e: Exception =>
-        logError(s"Failed to collect stack trace for task ${taskInfo.taskAttemptId}", e)
-    }
-  }
-
-  /**
-   * Summarize a stack trace by showing the top frames.
-   * Returns a concise summary showing where the task is slow.
-   */
-  private def summarizeStackTrace(stackTrace: Array[StackTraceElement]): String = {
+    val stackTrace = taskInfo.thread.getStackTrace
     val sb = new StringBuilder
     
     sb.append("  Top of stack:\n")
@@ -227,7 +185,8 @@ object SlowTaskMonitor extends Logging {
     }
     
     sb.append(s"  Total stack depth: ${stackTrace.length} frames")
-    sb.toString()
+    val summary = sb.toString()
+    logWarning(s"Stack trace summary for slow task ${taskInfo.taskAttemptId}:\n$summary")
   }
 
   /**

@@ -515,7 +515,10 @@ class RapidsExecutorPlugin extends ExecutorPlugin with Logging {
   var rapidsShuffleHeartbeatEndpoint: RapidsShuffleHeartbeatEndpoint = null
   private lazy val extraExecutorPlugins =
     RapidsPluginUtils.extraPlugins.map(_.executorPlugin()).filterNot(_ == null)
-  private val activeTaskNvtx = new ConcurrentHashMap[Thread, NvtxRange]()
+  
+  // Track both NVTX range and task attempt ID for cleanup
+  private case class TaskMonitoringInfo(nvtxRange: NvtxRange, taskAttemptId: Long)
+  private val activeTaskMonitoring = new ConcurrentHashMap[Thread, TaskMonitoringInfo]()
 
   private var isAsyncProfilerEnabled = false
 
@@ -737,13 +740,12 @@ class RapidsExecutorPlugin extends ExecutorPlugin with Logging {
         logDebug(s"Executor onTaskFailed: ${other.toString}")
     }
     extraExecutorPlugins.foreach(_.onTaskFailed(failureReason))
-    SlowTaskMonitor.onTaskEnd()
-    endTaskNvtx()
+    endTaskMonitoring()
   }
 
   override def onTaskStart(): Unit = {
     val tc = TaskContext.get
-    startTaskNvtx(tc)
+    startTaskMonitoring(tc)
     // Set the priority for the task as soon as it is launched
     TaskPriority.getTaskPriority(tc.taskAttemptId())
     onTaskCompletion(tc, tc => {
@@ -758,27 +760,40 @@ class RapidsExecutorPlugin extends ExecutorPlugin with Logging {
     // For the task main thread, we want to make sure that it's registered in the OOM state
     // machine throughout the task lifecycle.
     TaskRegistryTracker.registerThreadForRetry()
-    SlowTaskMonitor.onTaskStart()
+    
   }
 
   override def onTaskSucceeded(): Unit = {
     extraExecutorPlugins.foreach(_.onTaskSucceeded())
-    SlowTaskMonitor.onTaskEnd()
-    endTaskNvtx()
+    endTaskMonitoring()
   }
 
-  private def startTaskNvtx(taskCtx: TaskContext): Unit = {
+  private def startTaskMonitoring(taskCtx: TaskContext): Unit = {
     val stageId = taskCtx.stageId()
     val taskAttemptId = taskCtx.taskAttemptId()
     val attemptNumber = taskCtx.attemptNumber()
-    activeTaskNvtx.put(Thread.currentThread(),
-      new NvtxRange(s"Stage $stageId Task $taskAttemptId-$attemptNumber", NvtxColor.DARK_GREEN))
+    val partitionId = taskCtx.partitionId()
+    val currentThread = Thread.currentThread()
+    
+    val nvtxRange = new NvtxRange(
+      s"Stage $stageId Task $taskAttemptId-$attemptNumber", NvtxColor.DARK_GREEN)
+    
+    activeTaskMonitoring.put(currentThread, TaskMonitoringInfo(nvtxRange, taskAttemptId))
+    
+    SlowTaskMonitor.registerTask(
+      taskAttemptId,
+      stageId,
+      partitionId,
+      currentThread,
+      System.currentTimeMillis()
+    )
   }
 
-  private def endTaskNvtx(): Unit = {
-    val nvtx = activeTaskNvtx.remove(Thread.currentThread())
-    if (nvtx != null) {
-      nvtx.close()
+  private def endTaskMonitoring(): Unit = {
+    val monitoringInfo = activeTaskMonitoring.remove(Thread.currentThread())
+    if (monitoringInfo != null) {
+      monitoringInfo.nvtxRange.close()
+      SlowTaskMonitor.unregisterTask(monitoringInfo.taskAttemptId)
     }
   }
 }

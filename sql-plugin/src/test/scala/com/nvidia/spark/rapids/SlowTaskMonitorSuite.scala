@@ -131,16 +131,20 @@ class SlowTaskMonitorSuite extends AnyFunSuite with BeforeAndAfterEach {
     SlowTaskMonitor.shutdown()
   }
 
-  test("onTaskStart and onTaskEnd without TaskContext does not throw") {
+  test("register and unregister task works correctly") {
     val conf = new SparkConf()
       .set(RapidsConf.SLOW_TASK_TIMEOUT_SECONDS.key, "10")
     val rapidsConf = new RapidsConf(conf)
     
     SlowTaskMonitor.initialize(rapidsConf)
     
-    // These should not throw even without a TaskContext
-    SlowTaskMonitor.onTaskStart()
-    SlowTaskMonitor.onTaskEnd()
+    val taskId = 999L
+    SlowTaskMonitor.registerTask(taskId, stageId = 1, partitionId = 0,
+      Thread.currentThread(), System.currentTimeMillis())
+    assert(SlowTaskMonitor.getActiveTaskCount == 1)
+    
+    SlowTaskMonitor.unregisterTask(taskId)
+    assert(SlowTaskMonitor.getActiveTaskCount == 0)
     
     SlowTaskMonitor.shutdown()
   }
