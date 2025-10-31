@@ -167,26 +167,31 @@ object SlowTaskMonitor extends Logging {
    * Log a summarized stack trace for a slow task, focusing on relevant frames.
    */
   private def logStackTrace(taskInfo: TaskInfo): Unit = {
-    val stackTrace = taskInfo.thread.getStackTrace
-    val sb = new StringBuilder
-    
-    sb.append("  Top of stack:\n")
-    stackTrace.take(stackDepth).foreach { frame =>
-      sb.append(s"    at ${frame.getClassName}.${frame.getMethodName}")
-      if (frame.isNativeMethod) {
-        sb.append(" (native)")
-      } else if (frame.getFileName != null) {
-        sb.append(s" (${frame.getFileName}:${frame.getLineNumber})")
+    try {
+      val stackTrace = taskInfo.thread.getStackTrace
+      val sb = new StringBuilder
+
+      sb.append("  Top of stack:\n")
+      stackTrace.take(stackDepth).foreach { frame =>
+        sb.append(s"    at ${frame.getClassName}.${frame.getMethodName}")
+        if (frame.isNativeMethod) {
+          sb.append(" (native)")
+        } else if (frame.getFileName != null) {
+          sb.append(s" (${frame.getFileName}:${frame.getLineNumber})")
+        }
+        sb.append("\n")
       }
-      sb.append("\n")
+      if (stackTrace.length > stackDepth) {
+        sb.append(s"    ... ${stackTrace.length - stackDepth} more frames\n")
+      }
+
+      sb.append(s"  Total stack depth: ${stackTrace.length} frames")
+      val summary = sb.toString()
+      logWarning(s"Stack trace summary for slow task ${taskInfo.taskAttemptId}:\n$summary")
+    } catch {
+      case e: Exception =>
+        logError("Error while logging stack trace for slow task", e)
     }
-    if (stackTrace.length > stackDepth) {
-      sb.append(s"    ... ${stackTrace.length - stackDepth} more frames\n")
-    }
-    
-    sb.append(s"  Total stack depth: ${stackTrace.length} frames")
-    val summary = sb.toString()
-    logWarning(s"Stack trace summary for slow task ${taskInfo.taskAttemptId}:\n$summary")
   }
 
   /**
