@@ -159,8 +159,7 @@ object SlowTaskMonitor extends Logging {
   private[rapids] def checkForSlowTasks(): Unit = {
     try {
       val currentTime = currentTimeMillis()
-      
-      activeTasks.values().asScala.foreach { taskInfo =>
+      activeTasks.forEach { (_, taskInfo) =>
         val runningTime = currentTime - taskInfo.startTime
         
         if (runningTime >= timeoutMillis) {
