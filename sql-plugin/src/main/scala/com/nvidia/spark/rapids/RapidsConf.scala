@@ -894,6 +894,32 @@ val GPU_COREDUMP_PIPE_PATTERN = conf("spark.rapids.gpu.coreDump.pipePattern")
     .integerConf
     .createWithDefault(5)
 
+  // SLOW TASK DETECTION
+
+  val SLOW_TASK_TIMEOUT_SECONDS = conf("spark.rapids.slowTaskDetection.timeoutSeconds")
+    .doc("The time in seconds after which a running task is considered 'slow' and will " +
+      "trigger stack trace collection. When a task runs longer than this timeout without " +
+      "completing, the executor will periodically collect and log stack traces to help " +
+      "diagnose what the task is doing. Set to 0 to disable slow task detection. " +
+      "Default is 0 (disabled).")
+    .integerConf
+    .checkValue(_ >= 0, "Slow task timeout must be non-negative")
+    .createWithDefault(0)
+
+  val SLOW_TASK_CHECK_INTERVAL_SECONDS = conf("spark.rapids.slowTaskDetection.checkIntervalSeconds")
+    .doc("The interval in seconds at which to check for slow tasks and collect stack traces " +
+      "once a task is detected as slow. Default is 30 seconds.")
+    .integerConf
+    .checkValue(_ > 0, "Slow task check interval must be positive")
+    .createWithDefault(30)
+
+  val SLOW_TASK_STACK_DEPTH = conf("spark.rapids.slowTaskDetection.stackDepth")
+    .doc("The number of stack frames to show when logging slow task stack traces. " +
+      "Default is 10 frames.")
+    .integerConf
+    .checkValue(_ > 0, "Stack depth must be positive")
+    .createWithDefault(10)
+
   // ENABLE/DISABLE PROCESSING
 
   val SQL_ENABLED = conf("spark.rapids.sql.enabled")

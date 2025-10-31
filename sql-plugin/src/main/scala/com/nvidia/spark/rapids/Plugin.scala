@@ -603,6 +603,7 @@ class RapidsExecutorPlugin extends ExecutorPlugin with Logging {
       GpuSemaphore.initialize(conf.maxConcurrentGpuTasks)
       FileCache.init(pluginContext)
       TrafficController.initialize(conf)
+      SlowTaskMonitor.initialize(conf)
     } catch {
       // Exceptions in executor plugin can cause a single thread to die but the executor process
       // sticks around without any useful info until it hearbeat times out. Print what happened
@@ -709,6 +710,7 @@ class RapidsExecutorPlugin extends ExecutorPlugin with Logging {
     FileCache.shutdown()
     GpuCoreDumpHandler.shutdown()
     TrafficController.shutdown()
+    SlowTaskMonitor.shutdown()
   }
 
   override def onTaskFailed(failureReason: TaskFailedReason): Unit = {
@@ -735,6 +737,7 @@ class RapidsExecutorPlugin extends ExecutorPlugin with Logging {
         logDebug(s"Executor onTaskFailed: ${other.toString}")
     }
     extraExecutorPlugins.foreach(_.onTaskFailed(failureReason))
+    SlowTaskMonitor.onTaskEnd()
     endTaskNvtx()
   }
 
@@ -755,10 +758,12 @@ class RapidsExecutorPlugin extends ExecutorPlugin with Logging {
     // For the task main thread, we want to make sure that it's registered in the OOM state
     // machine throughout the task lifecycle.
     TaskRegistryTracker.registerThreadForRetry()
+    SlowTaskMonitor.onTaskStart()
   }
 
   override def onTaskSucceeded(): Unit = {
     extraExecutorPlugins.foreach(_.onTaskSucceeded())
+    SlowTaskMonitor.onTaskEnd()
     endTaskNvtx()
   }
 
