@@ -45,6 +45,7 @@ def conf_for_env(env_name):
     return res
 
 _DRIVER_ENV = env_for_conf('spark.driver.extraJavaOptions')
+_EXECUTOR_ENV = env_for_conf('spark.executor.extraJavaOptions')
 _SPARK_JARS = env_for_conf("spark.jars")
 _SPARK_JARS_PACKAGES = env_for_conf("spark.jars.packages")
 spark_jars_env = {
@@ -131,6 +132,14 @@ def pytest_sessionstart(session):
             _sb.config(conf_for_env(key), value)
 
     driver_opts = os.environ.get(_DRIVER_ENV, "")
+    driver_opts += " -Dcom.nvidia.spark.rapids.runningTests=true"
+    executor_opts = os.environ.get(_EXECUTOR_ENV, "")
+    executor_opts += " -Dcom.nvidia.spark.rapids.runningTests=true"
+
+    print(f"DRIVER_ENV: {_DRIVER_ENV}")
+    print(f"EXECUTOR_ENV: {_EXECUTOR_ENV}") 
+    print(f"driver_opts: {driver_opts}")
+    print(f"executor_opts: {executor_opts}")
 
     if ('PYTEST_XDIST_WORKER' in os.environ):
         wid = os.environ['PYTEST_XDIST_WORKER']
@@ -143,6 +152,7 @@ def pytest_sessionstart(session):
         _sb.config('spark.driver.extraJavaOptions', driver_opts)
         _handle_event_log_dir(_sb, 'gw0')
 
+    _sb.config('spark.executor.extraJavaOptions', executor_opts)
     # enableHiveSupport() is needed for parquet bucket tests
     _s = _sb.enableHiveSupport() \
             .appName('rapids spark plugin integration tests (python)').getOrCreate()
