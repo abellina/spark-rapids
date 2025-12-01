@@ -109,6 +109,9 @@ private class HostAlloc(nonPinnedLimit: Long) extends HostMemoryAllocator with L
     }
     ret
   }
+  def getAllocated: (Long, Long)  = synchronized {
+    (currentPinnedAllocated, currentNonPinnedAllocated)
+  }
 
   private def tryAllocNonPinned(amount: Long): Option[HostMemoryBuffer] = {
     val ret = if (isUnlimited) {
@@ -293,6 +296,9 @@ object HostAlloc extends Logging {
 
   def alloc(amount: Long, preferPinned: Boolean = true): HostMemoryBuffer = {
     getSingleton.alloc(amount, preferPinned)
+  }
+  def getAllocated: (Long, Long)  = synchronized {
+    getSingleton.getAllocated
   }
 
   def addEventHandler(buff: HostMemoryBuffer,

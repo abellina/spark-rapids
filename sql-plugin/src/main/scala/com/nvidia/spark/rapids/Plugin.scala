@@ -20,14 +20,12 @@ import java.lang.reflect.InvocationTargetException
 import java.net.URL
 import java.time.ZoneId
 import java.util.Properties
-import java.util.concurrent.ConcurrentHashMap
-
+import java.util.concurrent.{ConcurrentHashMap, ExecutorService, Executors}
 import scala.collection.JavaConverters._
 import scala.collection.mutable
 import scala.sys.process._
 import scala.util.Try
-
-import ai.rapids.cudf.{Cuda, CudaException, CudaFatalException, CudfException, MemoryCleaner, NvtxColor, NvtxRange}
+import ai.rapids.cudf.{Cuda, CudaException, CudaFatalException, CudfException, MemoryCleaner, NvtxColor, NvtxCounter, NvtxPayloadSchema, NvtxPayloadSchemaEntry, NvtxRange}
 import com.nvidia.spark.DFUDFPlugin
 import com.nvidia.spark.rapids.RapidsConf.AllowMultipleJars
 import com.nvidia.spark.rapids.RapidsPluginUtils.buildInfoEvent
@@ -37,7 +35,6 @@ import com.nvidia.spark.rapids.io.async.TrafficController
 import com.nvidia.spark.rapids.jni.{GpuTimeZoneDB, RmmSpark, TaskPriority}
 import com.nvidia.spark.rapids.python.PythonWorkerSemaphore
 import org.apache.commons.lang3.exception.ExceptionUtils
-
 import org.apache.spark.{ExceptionFailure, SparkConf, SparkContext, TaskContext, TaskFailedReason}
 import org.apache.spark.api.plugin.{DriverPlugin, ExecutorPlugin, PluginContext, SparkPlugin}
 import org.apache.spark.internal.Logging
@@ -630,6 +627,7 @@ class RapidsExecutorPlugin extends ExecutorPlugin with Logging {
       GpuSemaphore.initialize(conf.maxConcurrentGpuTasks)
       FileCache.init(pluginContext)
       TrafficController.initialize(conf)
+      ResourceMonitor.init()
     } catch {
       // Exceptions in executor plugin can cause a single thread to die but the executor process
       // sticks around without any useful info until it hearbeat times out. Print what happened
@@ -859,5 +857,45 @@ object RapidsExecutorPlugin extends Logging {
       val zipped = expPatchInts.zipAll(actPatchInts, 0, 0)
       zipped.forall { case (e, a) => e <= a }
     }
+  }
+}
+
+object ResourceMonitor {
+  var t: ExecutorService = null
+  val schemaTotal = NvtxPayloadSchema.register(Array(
+    new NvtxPayloadSchemaEntry(NvtxPayloadSchemaEntry.PAYLOAD_ENTRY_TYPE_DOUBLE, "totalMemory")),
+    8)
+  val schemaFree = NvtxPayloadSchema.register(Array(
+  new NvtxPayloadSchemaEntry(NvtxPayloadSchemaEntry.PAYLOAD_ENTRY_TYPE_DOUBLE, "freeMemory")),
+  8)
+  val schemaUsed = NvtxPayloadSchema.register(Array(
+  new NvtxPayloadSchemaEntry(NvtxPayloadSchemaEntry.PAYLOAD_ENTRY_TYPE_DOUBLE, "usedMemory")),
+    8)
+  val pinnedAllocated = NvtxPayloadSchema.register(Array(
+    new NvtxPayloadSchemaEntry(NvtxPayloadSchemaEntry.PAYLOAD_ENTRY_TYPE_DOUBLE, "pinnedAllocated")),
+    8)
+  val pageableAllocated = NvtxPayloadSchema.register(Array(
+    new NvtxPayloadSchemaEntry(NvtxPayloadSchemaEntry.PAYLOAD_ENTRY_TYPE_DOUBLE, "pageableAllocated")),
+    8)
+  val counterTotal = NvtxCounter.createWithSchema("onheap memory", schemaTotal)
+  val counterFree = NvtxCounter.createWithSchema("onheap memory", schemaFree)
+  val counterUsed = NvtxCounter.createWithSchema("onheap memory", schemaUsed)
+  val counterPinnedAllocated = NvtxCounter.createWithSchema("offheap memory", pinnedAllocated)
+  val counterPageableAllocated = NvtxCounter.createWithSchema("offheap memory", pageableAllocated)
+  def init(): Unit = {
+  t = Executors.newFixedThreadPool(1)
+  val runtime = Runtime.getRuntime
+  t.execute(() => {
+    while(true) {
+      println(s"total ${runtime.totalMemory()} free ${runtime.freeMemory()}")
+      counterTotal.sampleInt64(runtime.totalMemory())
+      counterFree.sampleInt64(runtime.freeMemory())
+      counterUsed.sampleInt64(runtime.totalMemory() - runtime.freeMemory())
+      val (pinned, pageable) = HostAlloc.getAllocated
+      counterPinnedAllocated.sampleInt64(pinned)
+      counterPageableAllocated.sampleInt64(pageable)
+      Thread.sleep(500)
+    }
+  })
   }
 }

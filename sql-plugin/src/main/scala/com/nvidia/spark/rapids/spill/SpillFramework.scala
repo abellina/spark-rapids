@@ -1249,6 +1249,11 @@ object HandleComparator extends util.Comparator[StoreHandle] {
 
 trait HandleStore[T <: StoreHandle] extends AutoCloseable with Logging {
   protected lazy val handles = new HashedPriorityQueue[T](HandleComparator)
+  protected val storeName: String
+  val entry = new NvtxPayloadSchemaEntry(NvtxPayloadSchemaEntry.PAYLOAD_ENTRY_TYPE_DOUBLE, "stored")
+  val schema = NvtxPayloadSchema.register(Array(entry), 8)
+  private lazy val nvtxCounter = NvtxCounter.createWithSchema(s"${storeName}", schema)
+  private var storeApproxSize: Long = 0L
 
   def numHandles: Int = synchronized {
     handles.size()
@@ -1270,13 +1275,21 @@ trait HandleStore[T <: StoreHandle] extends AutoCloseable with Logging {
     if (handles.contains(handle)) {
       false
     } else {
+      storeApproxSize += handle.approxSizeInBytes
+      println(s"store ${storeName} size: ${storeApproxSize}B")
+      nvtxCounter.sampleInt64(storeApproxSize)
       handles.offer(handle)
       true
     }
   }
 
   protected def doRemove(handle: T): Boolean = synchronized {
-    handles.remove(handle)
+    val removed = handles.remove(handle)
+    if (removed) {
+      storeApproxSize -= handle.approxSizeInBytes
+      nvtxCounter.sampleInt64(storeApproxSize)
+    }
+    removed
   }
 
   override def close(): Unit = synchronized {
@@ -1403,6 +1416,7 @@ class SpillableHostStore(val maxSize: Option[Long] = None)
   extends SpillableStore[HostSpillableHandle[_]]
     with Logging {
 
+  override protected val storeName = "host store"
   private[spill] var totalSize: Long = 0L
 
   private def tryTrack(handle: HostSpillableHandle[_]): Boolean = {
@@ -1667,6 +1681,7 @@ class SpillableHostStore(val maxSize: Option[Long] = None)
 
 class SpillableDeviceStore extends SpillableStore[DeviceSpillableHandle[_]] {
   override protected def spillNvtxRange: NvtxId = NvtxRegistry.DEVICE_SPILL
+  override protected val storeName = "device store"
 
   override def postSpill(plan: SpillPlan): Unit = {
     // spillables is the list of handles that have to be closed
@@ -1680,6 +1695,7 @@ class SpillableDeviceStore extends SpillableStore[DeviceSpillableHandle[_]] {
 class DiskHandleStore(conf: SparkConf)
     extends HandleStore[DiskHandle] with Logging {
   val diskBlockManager: RapidsDiskBlockManager = new RapidsDiskBlockManager(conf)
+  override protected val storeName = "disk store"
 
   def getFile(blockId: BlockId): File = {
     diskBlockManager.getFile(blockId)

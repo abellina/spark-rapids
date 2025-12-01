@@ -65,6 +65,7 @@
         <module>aggregator</module>
         <module>datagen</module>
         <module>dist</module>
+        <module>history-server-plugin</module>
         <module>integration_tests</module>
         <module>shuffle-plugin</module>
         <module>sql-plugin</module>
