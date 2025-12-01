@@ -6,17 +6,17 @@ import org.apache.spark.ui.SparkUI
 
 import scala.collection.mutable
 
+object CustomEventsPlugin {
+  val customEvents = mutable.ListBuffer[CustomEventData]()
+}
 /**
  * Custom tab plugin for Spark History Server.
  * This plugin analyzes custom event log events and displays them in a custom tab.
  */
 class CustomEventsPlugin extends AppHistoryServerPlugin {
-
-  private val customEvents = mutable.ListBuffer[CustomEventData]()
-
   override def setupUI(ui: SparkUI): Unit = {
     // Add custom tab to the UI
-    val customTab = new CustomEventsTab(ui, customEvents.toList)
+    val customTab = new CustomEventsTab(ui, CustomEventsPlugin.customEvents.toList)
     ui.attachTab(customTab)
   }
 
@@ -25,7 +25,7 @@ class CustomEventsPlugin extends AppHistoryServerPlugin {
       store: ElementTrackingStore): Seq[SparkListener] = {
     
     // Create and return a custom listener
-    val listener = new CustomEventsListener(customEvents)
+    val listener = new CustomEventsListener(CustomEventsPlugin.customEvents)
     Seq(listener)
   }
 
