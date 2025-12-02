@@ -29,35 +29,16 @@ class CustomEventsPage(parent: CustomEventsTab, customEvents: List[CustomEventDa
       <div class="row-fluid">
         <div class="span12">
           <h4>Custom Events Analysis</h4>
-          <p>This tab shows custom event log events captured during application execution.</p>
-
-          <div id="custom-events-summary">
-            <h5>Event Summary</h5>
-            <ul>
-              <li>Total Events: {customEvents.size}</li>
-              <li>Event Types: {customEvents.map(_.eventType).distinct.size}</li>
-              <li>Application Start Events: {customEvents.count(_.eventType == "ApplicationStart")}</li>
-              <li>Job Events: {customEvents.count(e => e.eventType == "JobStart" || e.eventType == "JobEnd")}</li>
-              <li>Stage Events: {customEvents.count(_.eventType == "StageCompleted")}</li>
-              <li>Task Events: {customEvents.count(_.eventType == "TaskEnd")}</li>
-            </ul>
-          </div>
-
-          <div id="custom-events-table">
-            <h5>Event Details</h5>
-            {renderEventsTable()}
-          </div>
-
-          <div id="custom-events-charts">
-            <h5>Event Timeline</h5>
-            <div id="timeline-chart" style="width: 100%; height: 300px;">
-              <p>Timeline visualization would be rendered here with JavaScript</p>
-            </div>
-          </div>
+          <p>This tab shows RAPIDS runtime metrics captured during application execution.</p>
 
           <div id="metric-charts">
             <h5>RAPIDS Metrics</h5>
-            <div id="jvm-offheap-chart" style="width: 100%; height: 300px; margin-top: 20px;"></div>
+            <div id="executor-filters" style="margin-bottom: 10px;"></div>
+            <div id="jvm-chart" style="width: 100%; height: 300px; margin-top: 20px;"></div>
+            <div id="offheap-chart" style="width: 100%; height: 300px; margin-top: 20px;"></div>
+            <div id="sys-mem-chart" style="width: 100%; height: 300px; margin-top: 20px;"></div>
+            <div id="cpu-chart" style="width: 100%; height: 250px; margin-top: 20px;"></div>
+            <div id="gpu-tasks-chart" style="width: 100%; height: 250px; margin-top: 20px;"></div>
             <div id="gpu-chart" style="width: 100%; height: 300px; margin-top: 20px;"></div>
           </div>
         </div>
@@ -70,31 +51,15 @@ class CustomEventsPage(parent: CustomEventsTab, customEvents: List[CustomEventDa
       <script type="text/javascript">
         {scala.xml.Unparsed("""
           $(document).ready(function() {
-            // Initialize DataTable for better table interaction
-            if ($.fn.DataTable) {
-              $('#events-table').DataTable({
-                "order": [[ 0, "desc" ]],
-                "pageLength": 25,
-                "lengthMenu": [[10, 25, 50, 100, -1], [10, 25, 50, 100, "All"]]
-              });
-            }
-
-            // Fetch and render timeline data
-            fetchTimelineData();
-
             // Fetch and render RAPIDS metric data
             fetchMetricData();
           });
 
-          function fetchTimelineData() {
-            $.getJSON('/history/' + getAppId() + '/customevents/api/timeline', function(data) {
-              renderTimeline(data);
-            });
-          }
-
           function fetchMetricData() {
-            $.getJSON('/history/' + getAppId() + '/customevents/api/metrics', function(data) {
-              renderMetricCharts(data);
+            $.getJSON('/history/' + getAppId() + '/customevents/api/json/metrics', function(data) {
+              window._rapidsMetricData = data;
+              initExecutorFilters(data);
+              renderMetricCharts();
             });
           }
 
@@ -105,61 +70,204 @@ class CustomEventsPage(parent: CustomEventsTab, customEvents: List[CustomEventDa
             return match ? match[1] : '';
           }
 
-          function renderTimeline(data) {
-            // Simple timeline rendering
-            var chartDiv = $('#timeline-chart');
-            if (data && data.events && data.events.length > 0) {
-              var html = '<table class="table table-bordered table-condensed">';
-              html += '<thead><tr><th>Time</th><th>Event Type</th><th>Count</th></tr></thead><tbody>';
-              
-              var eventCounts = {};
-              data.events.forEach(function(event) {
-                var key = event.eventType;
-                eventCounts[key] = (eventCounts[key] || 0) + 1;
-              });
-
-              for (var eventType in eventCounts) {
-                html += '<tr><td>-</td><td>' + eventType + '</td><td>' + eventCounts[eventType] + '</td></tr>';
-              }
-              
-              html += '</tbody></table>';
-              chartDiv.html(html);
-            } else {
-              chartDiv.html('<p>No timeline data available</p>');
-            }
-          }
-
-          function renderMetricCharts(data) {
-            if (!window.Highcharts || !data || !data.series) {
+          function initExecutorFilters(data) {
+            var container = $('#executor-filters');
+            container.empty();
+            if (!data || !data.executors || data.executors.length === 0) {
+              container.append('<span>No executor metric data available</span>');
               return;
             }
 
-            function getSeries(name) {
-              return (data.series && data.series[name]) ? data.series[name] : [];
+            container.append('<span style="margin-right: 8px;">Executors:</span>');
+
+            // Initialize selected executors on first load
+            if (!window._selectedExecutors) {
+              window._selectedExecutors = new Set(data.executors);
             }
 
-            Highcharts.chart('jvm-offheap-chart', {
-              title: { text: 'JVM / Off-heap Memory' },
+            data.executors.forEach(function(execId) {
+              var checkboxId = 'exec-filter-' + execId;
+              var checked = window._selectedExecutors.has(execId) ? 'checked' : '';
+              container.append(
+                '<label style="margin-right: 10px;">' +
+                  '<input type="checkbox" id="' + checkboxId + '" data-exec="' + execId + '" ' +
+                  checked + ' /> ' + execId +
+                '</label>');
+            });
+
+            container.find('input[type=checkbox]').change(function() {
+              var execId = $(this).data('exec');
+              if (this.checked) {
+                window._selectedExecutors.add(execId);
+              } else {
+                window._selectedExecutors.delete(execId);
+              }
+              renderMetricCharts();
+            });
+          }
+
+          function renderMetricCharts() {
+            var data = window._rapidsMetricData;
+            if (!window.Highcharts || !data || !data.seriesByExecutor) {
+              return;
+            }
+
+            var selected = window._selectedExecutors || new Set();
+
+            function getSeriesForMetric(metricName) {
+              var allSeries = [];
+              selected.forEach(function(execId) {
+                var execSeries = (data.seriesByExecutor[execId] &&
+                  data.seriesByExecutor[execId][metricName]) || [];
+                if (execSeries.length > 0) {
+                  allSeries.push({
+                    name: execId + ' ' + metricName,
+                    data: execSeries
+                  });
+                }
+              });
+              return allSeries;
+            }
+
+            // JVM chart: jvmTotal, jvmUsed
+            var jvmChart = Highcharts.chart('jvm-chart', {
+              title: { text: 'JVM Memory' },
               xAxis: { type: 'datetime' },
               yAxis: { title: { text: 'Bytes' } },
               legend: { enabled: true },
-              series: [
-                { name: 'jvmTotal', data: getSeries('jvmTotal') },
-                { name: 'jvmFree', data: getSeries('jvmFree') },
-                { name: 'offHeapPinned', data: getSeries('offHeapPinned') },
-                { name: 'offHeapPageable', data: getSeries('offHeapPageable') }
-              ]
+              series: []
             });
 
-            Highcharts.chart('gpu-chart', {
+            if (jvmChart) {
+              var jvmMetrics = ['jvmTotal', 'jvmUsed'];
+              jvmMetrics.forEach(function(metricName) {
+                var metricSeries = getSeriesForMetric(metricName);
+                metricSeries.forEach(function(s) {
+                  if (metricName === 'jvmTotal') {
+                    // Draw total heap as a red shaded area so jvmUsed
+                    // appears visually "within" it.
+                    s.type = 'area';
+                    s.color = '#ff0000';
+                    s.fillOpacity = 0.15;
+                    s.lineWidth = 1;
+                    s.zIndex = 0;
+                  } else if (metricName === 'jvmUsed') {
+                    // Emphasize used heap as a solid line above the area.
+                    s.zIndex = 1;
+                    s.lineWidth = 2;
+                  }
+                  jvmChart.addSeries(s, false);
+                });
+              });
+              jvmChart.redraw();
+            }
+
+            // Off-heap chart: pinned and pageable
+            var offheapChart = Highcharts.chart('offheap-chart', {
+              title: { text: 'Off-heap Memory' },
+              xAxis: { type: 'datetime' },
+              yAxis: { title: { text: 'Bytes' } },
+              legend: { enabled: true },
+              series: []
+            });
+
+            if (offheapChart) {
+              var offheapMetrics = ['offHeapPinned', 'offHeapPageable'];
+              offheapMetrics.forEach(function(metricName) {
+                var metricSeries = getSeriesForMetric(metricName);
+                metricSeries.forEach(function(s) {
+                  offheapChart.addSeries(s, false);
+                });
+              });
+              offheapChart.redraw();
+            }
+
+            // System memory chart: system used and free
+            var sysMemChart = Highcharts.chart('sys-mem-chart', {
+              title: { text: 'System Memory' },
+              xAxis: { type: 'datetime' },
+              yAxis: { title: { text: 'Bytes' } },
+              legend: { enabled: true },
+              series: []
+            });
+
+            if (sysMemChart) {
+              var sysMemMetrics = ['sysMemUsed', 'sysMemFree'];
+              sysMemMetrics.forEach(function(metricName) {
+                var metricSeries = getSeriesForMetric(metricName);
+                metricSeries.forEach(function(s) {
+                  sysMemChart.addSeries(s, false);
+                });
+              });
+              sysMemChart.redraw();
+            }
+
+            // CPU usage chart: cpuPercent
+            var cpuChart = Highcharts.chart('cpu-chart', {
+              title: { text: 'System CPU Usage' },
+              xAxis: { type: 'datetime' },
+              yAxis: {
+                title: { text: 'CPU %' },
+                max: 100,
+                min: 0
+              },
+              legend: { enabled: true },
+              series: []
+            });
+
+            if (cpuChart) {
+              var cpuMetrics = ['cpuPercent'];
+              cpuMetrics.forEach(function(metricName) {
+                var metricSeries = getSeriesForMetric(metricName);
+                metricSeries.forEach(function(s) {
+                  cpuChart.addSeries(s, false);
+                });
+              });
+              cpuChart.redraw();
+            }
+
+            // GPU concurrent tasks chart
+            var gpuTasksChart = Highcharts.chart('gpu-tasks-chart', {
+              title: { text: 'GPU Concurrent Tasks' },
+              xAxis: { type: 'datetime' },
+              yAxis: {
+                title: { text: 'Tasks' },
+                min: 0
+              },
+              legend: { enabled: true },
+              series: []
+            });
+
+            if (gpuTasksChart) {
+              var gpuTasksMetrics = ['gpuConcurrentTasks'];
+              gpuTasksMetrics.forEach(function(metricName) {
+                var metricSeries = getSeriesForMetric(metricName);
+                metricSeries.forEach(function(s) {
+                  gpuTasksChart.addSeries(s, false);
+                });
+              });
+              gpuTasksChart.redraw();
+            }
+
+            // GPU chart
+            var gpuChart = Highcharts.chart('gpu-chart', {
               title: { text: 'GPU Memory' },
               xAxis: { type: 'datetime' },
               yAxis: { title: { text: 'Bytes' } },
               legend: { enabled: true },
-              series: [
-                { name: 'gpuMemUsed', data: getSeries('gpuMemUsed') }
-              ]
+              series: []
             });
+
+            if (gpuChart) {
+              var gpuMetrics = ['gpuMemUsed'];
+              gpuMetrics.forEach(function(metricName) {
+                var metricSeries = getSeriesForMetric(metricName);
+                metricSeries.forEach(function(s) {
+                  gpuChart.addSeries(s, false);
+                });
+              });
+              gpuChart.redraw();
+            }
           }
         """)}
       </script>
@@ -168,33 +276,6 @@ class CustomEventsPage(parent: CustomEventsTab, customEvents: List[CustomEventDa
       content ++ highchartsScript ++ scriptContent, parent)
   }
 
-  private def renderEventsTable(): Node = {
-    <table class="table table-bordered table-striped table-condensed" id="events-table">
-      <thead>
-        <tr>
-          <th>Timestamp</th>
-          <th>Event Type</th>
-          <th>Details</th>
-        </tr>
-      </thead>
-      <tbody>
-        {customEvents.sortBy(-_.timestamp).take(100).map(renderEventRow)}
-      </tbody>
-    </table>
-  }
-
-  private def renderEventRow(event: CustomEventData): Node = {
-    val formattedTime = new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS")
-      .format(new java.util.Date(event.timestamp))
-    
-    val details = event.eventData.map { case (k, v) => s"$k: $v" }.mkString(", ")
-    
-    <tr>
-      <td>{formattedTime}</td>
-      <td><span class="badge badge-info">{event.eventType}</span></td>
-      <td style="font-size: 11px;">{details}</td>
-    </tr>
-  }
 }
 
 /**
@@ -204,15 +285,26 @@ class CustomEventsApiPage(parent: CustomEventsTab, customEvents: List[CustomEven
     extends WebUIPage("api") {
 
   override def render(request: HttpServletRequest): Seq[Node] = {
-    // Return empty sequence - we'll use renderJson instead
-    Seq.empty
+    // Return JSON directly so that hitting /customevents/api/* without
+    // specifying format=json still returns useful data instead of List().
+    val endpoint = Option(request.getServletPath).getOrElse("")
+
+    val jsonString = endpoint match {
+      case "/timeline" => generateTimelineJson()
+      case "/summary" => generateSummaryJson()
+      case "/events" => generateEventsJson(request)
+      case "/metrics" => generateMetricsJson()
+      case _ => generateApiIndexJson()
+    }
+
+    scala.xml.Unparsed(jsonString)
   }
 
   override def renderJson(request: HttpServletRequest): org.json4s.JsonAST.JValue = {
     //import org.json4s.JsonDSL._
     import org.json4s.jackson.JsonMethods._
     
-    val endpoint = Option(request.getPathInfo).getOrElse("")
+    val endpoint = Option(request.getServletPath).getOrElse("")
     
     val jsonString = endpoint match {
       case "/timeline" => generateTimelineJson()
@@ -322,7 +414,8 @@ class CustomEventsApiPage(parent: CustomEventsTab, customEvents: List[CustomEven
         } yield execId -> namesStr.split(",").map(_.trim).filter(_.nonEmpty).toSeq
       }.groupBy(_._1).mapValues(_.last._2).toMap
 
-    val series = mutable.Map[String, mutable.ArrayBuffer[(Long, Long)]]()
+    // series((executorId, metricName)) -> points
+    val series = mutable.Map[(String, String), mutable.ArrayBuffer[(Long, Long)]]()
 
     // Process each MetricUpdates event: decode hex payload and expand into per-metric series
     customEvents
@@ -347,7 +440,7 @@ class CustomEventsApiPage(parent: CustomEventsTab, customEvents: List[CustomEven
                 while (m < numMetricsPerUpdate && bb.remaining() >= java.lang.Long.BYTES) {
                   val value = bb.getLong()
                   val name = metricNames(m)
-                  val buf = series.getOrElseUpdate(name,
+                  val buf = series.getOrElseUpdate((execId, name),
                     mutable.ArrayBuffer[(Long, Long)]())
                   buf += ((ts, value))
                   m += 1
@@ -359,16 +452,55 @@ class CustomEventsApiPage(parent: CustomEventsTab, customEvents: List[CustomEven
         }
       }
 
-    // Order series and restrict to the metrics we currently know about
-    val knownMetrics = Seq("jvmTotal", "jvmFree", "offHeapPinned", "offHeapPageable", "gpuMemUsed")
+    val knownMetrics = Seq(
+      "jvmTotal",
+      "jvmUsed",
+      "offHeapPinned",
+      "offHeapPageable",
+      "gpuMemUsed",
+      "sysMemUsed",
+      "sysMemFree",
+      "cpuPercent",
+      "gpuConcurrentTasks")
 
-    val seriesEntries = knownMetrics.map { name =>
-      val points = series.getOrElse(name, mutable.ArrayBuffer.empty).sortBy(_._1)
-      val ptsJson = points.map { case (ts, v) => s"[$ts,$v]" }.mkString(",")
-      s""""$name": [$ptsJson]"""
+    // Collect unique executor IDs
+    val execIds = series.keys.map(_._1).toSet.toSeq.sorted
+
+    // Build per-executor, per-metric series JSON
+    val seriesByExecutorEntries = execIds.map { execId =>
+      val metricEntries = knownMetrics.map { name =>
+        name match {
+          case "jvmUsed" =>
+            // Derive jvmUsed = jvmTotal - jvmFree for each timestamp
+            val totalPoints =
+              series.getOrElse((execId, "jvmTotal"), mutable.ArrayBuffer.empty).sortBy(_._1)
+            val freePoints =
+              series.getOrElse((execId, "jvmFree"), mutable.ArrayBuffer.empty).sortBy(_._1)
+            val usedPoints: Seq[(Long, Long)] =
+              if (totalPoints.length == freePoints.length) {
+                totalPoints.zip(freePoints).map {
+                  case ((tsT, vT), (_, vF)) =>
+                    // timestamps should match; use tsT
+                    (tsT, vT - vF)
+                }
+              } else {
+                Seq.empty
+              }
+            val ptsJson = usedPoints.map { case (ts, v) => s"[$ts,$v]" }.mkString(",")
+            s""""jvmUsed": [$ptsJson]"""
+
+          case other =>
+            val points = series.getOrElse((execId, other), mutable.ArrayBuffer.empty).sortBy(_._1)
+            val ptsJson = points.map { case (ts, v) => s"[$ts,$v]" }.mkString(",")
+            s""""$other": [$ptsJson]"""
+        }
+      }.mkString(",")
+      s""""$execId": {$metricEntries}"""
     }.mkString(",")
 
-    s"""{"series": {$seriesEntries}}"""
+    val execIdsJson = execIds.map(id => s""""$id"""").mkString(",")
+
+    s"""{"executors": [$execIdsJson], "seriesByExecutor": {$seriesByExecutorEntries}}"""
   }
 
   private def generateApiIndexJson(): String = {

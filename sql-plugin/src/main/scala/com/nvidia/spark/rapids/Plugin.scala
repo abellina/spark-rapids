@@ -16,6 +16,7 @@
 
 package com.nvidia.spark.rapids
 
+import java.lang.management.ManagementFactory
 import java.lang.reflect.InvocationTargetException
 import java.net.URL
 import java.time.ZoneId
@@ -520,6 +521,13 @@ object RapidsMetricService {
         .build(),
         null))
 
+  // System-level metrics (may not be available on all JVMs)
+  private[this] val osBeanOpt: Option[com.sun.management.OperatingSystemMXBean] =
+    ManagementFactory.getOperatingSystemMXBean match {
+      case b: com.sun.management.OperatingSystemMXBean => Some(b)
+      case _ => None
+    }
+
   // Shared queue of pending metric updates on the executor. Producers enqueue
   // (timestamp, Array[Long]) updates and the timer consumer will batch and
   // send them via ctx.ask.
@@ -551,12 +559,34 @@ object RapidsMetricService {
       val runtime = Runtime.getRuntime
       val (pinned, pageable) = HostAlloc.getAllocated
       val currentTime = System.currentTimeMillis()
+      val (sysUsed, sysFree, cpuPercent) = osBeanOpt.map { os =>
+        val total = os.getTotalPhysicalMemorySize
+        val free = os.getFreePhysicalMemorySize
+        val used = math.max(0L, total - free)
+        val rawCpu = os.getSystemCpuLoad
+        val cpuPct =
+          if (rawCpu >= 0.0) math.round(rawCpu * 100.0).toLong else 0L
+        (used, free, cpuPct)
+      }.getOrElse((0L, 0L, 0L))
+
+      val gpuConcurrentTasks: Long =
+        try {
+          GpuSemaphore.getCurrentConcurrentGpuTasks()
+        } catch {
+          case _: Throwable => 0L
+        }
+
       val values: Array[Long] = Array(
-        runtime.totalMemory(),
-        runtime.freeMemory(),
-        pinned,
-        pageable,
-        Rmm.getTotalBytesAllocated)
+        runtime.totalMemory(),          // jvmTotal
+        runtime.freeMemory(),           // jvmFree
+        pinned,                         // offHeapPinned
+        pageable,                       // offHeapPageable
+        Rmm.getTotalBytesAllocated,     // gpuMemUsed
+        sysUsed,                        // sysMemUsed
+        sysFree,                        // sysMemFree
+        cpuPercent,                     // cpuPercent
+        gpuConcurrentTasks              // gpuConcurrentTasks
+      )
       // Producer: record the latest executor metrics snapshot.
       recordMetricUpdate(currentTime, values)
 
@@ -576,7 +606,11 @@ object RapidsMetricService {
       "jvmFree",
       "offHeapPinned",
       "offHeapPageable",
-      "gpuMemUsed")
+      "gpuMemUsed",
+      "sysMemUsed",
+      "sysMemFree",
+      "cpuPercent",
+      "gpuConcurrentTasks")
     ctx.ask(MetricDefinition(executorId, metricNames))
 
     executorService.scheduleWithFixedDelay(

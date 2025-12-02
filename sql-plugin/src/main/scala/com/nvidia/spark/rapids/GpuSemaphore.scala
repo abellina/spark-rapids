@@ -216,6 +216,9 @@ object GpuSemaphore {
     getInstance.lastSemAcqAndRelTime(context)
   }
 
+  /** Current number of GPU tasks holding permits in this semaphore. */
+  def getCurrentConcurrentGpuTasks(): Long = getInstance.semaphore.currentConcurrentGpuTasks
+
   /**
    * A thread may try to acquire the semaphore without blocking on it. NOTE: A task completion
    * listener will automatically be installed to ensure the semaphore is always released by the

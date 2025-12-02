@@ -116,6 +116,9 @@ class PrioritySemaphore[T](val maxPermits: Long, val maxConcurrentGpuTasksLimit:
     GpuTaskMetrics.get.recordConcurrentGpuTasks(currentConcurrentGpuTasksNum)
   }
 
+  /** Current number of tasks that hold permits (i.e., are active on the GPU). */
+  def currentConcurrentGpuTasks: Long = currentConcurrentGpuTasksNum
+
   def release(numPermits: Long): Unit = {
     lock.lock()
     try {
