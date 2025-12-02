@@ -18,6 +18,7 @@ package com.nvidia.spark.rapids
 
 import java.lang.reflect.InvocationTargetException
 import java.net.URL
+import java.nio.{ByteBuffer, ByteOrder}
 import java.time.ZoneId
 import java.util.Properties
 import java.util.concurrent.{ConcurrentHashMap, ExecutorService, Executors, ScheduledExecutorService, TimeUnit}
@@ -518,9 +519,82 @@ object RapidsMetricService {
         .build(),
         null))
 
-  case class MetricUpdates(executorId: String, metrics: Seq[(Long, String, Long)])
+  /** Defines the metrics tracked for a given executor in positional order. */
+  case class MetricDefinition(executorId: String, metricNames: Seq[String])
       extends SparkListenerEvent {
     override def logEvent: Boolean = true
+  }
+
+  /**
+   * Metric updates encoded as a hex string of (timestamp,value) long pairs.
+   * The metric position in the sequence is defined by a prior MetricDefinition.
+   */
+  case class MetricUpdates(executorId: String, encodedMetricsHex: String)
+      extends SparkListenerEvent {
+    override def logEvent: Boolean = true
+  }
+
+  private[this] val hexArray: Array[Char] = "0123456789abcdef".toCharArray
+
+  private def bytesToHex(bytes: Array[Byte]): String = {
+    val hexChars = new Array[Char](bytes.length * 2)
+    var j = 0
+    while (j < bytes.length) {
+      val v = bytes(j) & 0xff
+      hexChars(j * 2) = hexArray(v >>> 4)
+      hexChars(j * 2 + 1) = hexArray(v & 0x0f)
+      j += 1
+    }
+    new String(hexChars)
+  }
+
+  object MetricUpdates {
+    /**
+     * Helper to build a MetricUpdates message from an array of (timestamp, values) tuples.
+     *
+     * The logical format is:
+     *   Seq((timestamp0, Array(v00, v01, ...)),
+     *       (timestamp1, Array(v10, v11, ...)), ...)
+     *
+     * The binary layout is:
+     *   [int numUpdates]
+     *   [long ts0][long v00][long v01]...
+     *   [long ts1][long v10][long v11]...
+     *   ...
+     * All integers are big-endian. Each values array is assumed to be the same length.
+     */
+    def fromArrays(
+        executorId: String,
+        updates: Array[(Long, Array[Long])]): MetricUpdates = {
+      val numUpdates = updates.length
+      val numMetricsPerUpdate =
+        if (numUpdates == 0) 0 else updates(0)._2.length
+
+      // allocate space for count + all updates
+      val bb = ByteBuffer
+        .allocate(
+          Integer.BYTES + // numUpdates
+            numUpdates * (java.lang.Long.BYTES + numMetricsPerUpdate * java.lang.Long.BYTES))
+        .order(ByteOrder.BIG_ENDIAN)
+
+      // prefix with number of updates
+      bb.putInt(numUpdates)
+
+      // encode each (timestamp, Array[Long]) consecutively
+      var i = 0
+      while (i < numUpdates) {
+        val (ts, values) = updates(i)
+        bb.putLong(ts)
+        var j = 0
+        while (j < numMetricsPerUpdate) {
+          bb.putLong(values(j))
+          j += 1
+        }
+        i += 1
+      }
+
+      MetricUpdates(executorId, bytesToHex(bb.array()))
+    }
   }
 
   class Foo(executorId: String, ctx: PluginContext) extends Runnable {
@@ -528,17 +602,31 @@ object RapidsMetricService {
       val runtime = Runtime.getRuntime
       val (pinned, pageable) = HostAlloc.getAllocated
       val currentTime = System.currentTimeMillis()
-      val updates = Seq(
-          (currentTime, "jvmTotal", runtime.totalMemory()),
-          (currentTime, "jvmFree", runtime.freeMemory()),
-          (currentTime, "jvmUsed", runtime.totalMemory() - runtime.freeMemory()),
-          (currentTime, "jvmPinned", pinned),
-          (currentTime, "jvmPageable", pageable))
-      ctx.ask(MetricUpdates(executorId, updates))
+      val values: Array[Long] = Array(
+        runtime.totalMemory(),
+        runtime.freeMemory(),
+        runtime.totalMemory() - runtime.freeMemory(),
+        pinned,
+        pageable)
+      // For now we send a single (timestamp, Array[Long]) update per message,
+      // but the encoding supports multiple entries.
+      val updates: Array[(Long, Array[Long])] = Array(
+        (currentTime, values))
+      ctx.ask(MetricUpdates.fromArrays(executorId, updates))
     }
   }
 
   def start(executorId: String, ctx: PluginContext): Unit = {
+    // Send metric definition once on executor startup so the driver knows
+    // which metric each positional entry in the updates corresponds to.
+    val metricNames = Seq(
+      "jvmTotal",
+      "jvmFree",
+      "jvmUsed",
+      "jvmPinned",
+      "jvmPageable")
+    ctx.ask(MetricDefinition(executorId, metricNames))
+
     executorService.scheduleWithFixedDelay(
       new Foo(executorId, ctx),
       0,
