@@ -21,7 +21,7 @@ import java.net.URL
 import java.nio.{ByteBuffer, ByteOrder}
 import java.time.ZoneId
 import java.util.Properties
-import java.util.concurrent.{ConcurrentHashMap, ExecutorService, Executors, ScheduledExecutorService, TimeUnit}
+import java.util.concurrent.{ConcurrentHashMap, ConcurrentLinkedQueue, ExecutorService, Executors, ScheduledExecutorService, TimeUnit}
 import scala.collection.JavaConverters._
 import scala.collection.mutable
 import scala.sys.process._
@@ -519,6 +519,12 @@ object RapidsMetricService {
         .build(),
         null))
 
+  // Shared queue of pending metric updates on the executor. Producers enqueue
+  // (timestamp, Array[Long]) updates and the timer consumer will batch and
+  // send them via ctx.ask.
+  private[this] val pendingUpdates =
+    new ConcurrentLinkedQueue[(Long, Array[Long])]()
+
   /** Defines the metrics tracked for a given executor in positional order. */
   case class MetricDefinition(executorId: String, metricNames: Seq[String])
       extends SparkListenerEvent {
@@ -597,6 +603,26 @@ object RapidsMetricService {
     }
   }
 
+  /**
+   * Enqueue a metric update to be picked up by the timer consumer.
+   * This can be called from any producer (scheduled runs, event callbacks, etc.).
+   */
+  def recordMetricUpdate(timestamp: Long, values: Array[Long]): Unit = {
+    // defensively copy in case the caller mutates the array after enqueueing
+    pendingUpdates.add(timestamp -> values.clone())
+  }
+
+  /** Drain all currently pending updates into an array for batching. */
+  private def drainPendingUpdates(): Array[(Long, Array[Long])] = {
+    val buffer = new mutable.ArrayBuffer[(Long, Array[Long])]()
+    var elem = pendingUpdates.poll()
+    while (elem != null) {
+      buffer += elem
+      elem = pendingUpdates.poll()
+    }
+    buffer.toArray
+  }
+
   class Foo(executorId: String, ctx: PluginContext) extends Runnable {
     override def run(): Unit = {
       val runtime = Runtime.getRuntime
@@ -608,11 +634,14 @@ object RapidsMetricService {
         runtime.totalMemory() - runtime.freeMemory(),
         pinned,
         pageable)
-      // For now we send a single (timestamp, Array[Long]) update per message,
-      // but the encoding supports multiple entries.
-      val updates: Array[(Long, Array[Long])] = Array(
-        (currentTime, values))
-      ctx.ask(MetricUpdates.fromArrays(executorId, updates))
+      // Producer: record the latest executor metrics snapshot.
+      recordMetricUpdate(currentTime, values)
+
+      // Consumer: drain all pending updates and send them in a single message.
+      val batch = drainPendingUpdates()
+      if (batch.nonEmpty) {
+        ctx.ask(MetricUpdates.fromArrays(executorId, batch))
+      }
     }
   }
 
