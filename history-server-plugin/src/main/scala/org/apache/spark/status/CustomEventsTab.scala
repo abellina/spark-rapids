@@ -34,6 +34,7 @@ class CustomEventsPage(parent: CustomEventsTab, customEvents: List[CustomEventDa
           <div id="metric-charts">
             <h5>RAPIDS Metrics</h5>
             <div id="executor-filters" style="margin-bottom: 10px;"></div>
+            <div id="mem-composition-chart" style="width: 100%; height: 300px; margin-top: 20px;"></div>
             <div id="jvm-chart" style="width: 100%; height: 300px; margin-top: 20px;"></div>
             <div id="offheap-chart" style="width: 100%; height: 300px; margin-top: 20px;"></div>
             <div id="sys-mem-chart" style="width: 100%; height: 300px; margin-top: 20px;"></div>
@@ -127,6 +128,69 @@ class CustomEventsPage(parent: CustomEventsTab, customEvents: List[CustomEventDa
                 }
               });
               return allSeries;
+            }
+
+            // Memory composition chart: jvmUsed, offHeapPinned, offHeapPageable, systemOtherUsed
+            var memCompChart = Highcharts.chart('mem-composition-chart', {
+              chart: { type: 'area' },
+              title: { text: 'Memory Composition (Used)' },
+              xAxis: { type: 'datetime' },
+              yAxis: {
+                title: { text: 'Bytes' }
+              },
+              legend: { enabled: true },
+              plotOptions: {
+                area: {
+                  stacking: 'normal',
+                  marker: { enabled: false }
+                }
+              },
+              series: []
+            });
+
+            if (memCompChart) {
+              var compMetrics = ['jvmUsed', 'offHeapPinned', 'offHeapPageable', 'systemOtherUsed'];
+              compMetrics.forEach(function(metricName) {
+                var metricSeries = getSeriesForMetric(metricName);
+                metricSeries.forEach(function(s) {
+                  s.type = 'area';
+                  memCompChart.addSeries(s, false);
+                });
+              });
+
+              // Draw system total memory as a non-stacked background line.
+              // Use the first selected executor (if any) to compute
+              // sysMemTotal = sysMemUsed + sysMemFree.
+              var anyExecId = null;
+              selected.forEach(function(execId) {
+                if (!anyExecId && data.seriesByExecutor[execId]) {
+                  anyExecId = execId;
+                }
+              });
+              if (anyExecId && data.seriesByExecutor[anyExecId]) {
+                var used = data.seriesByExecutor[anyExecId]['sysMemUsed'] || [];
+                var free = data.seriesByExecutor[anyExecId]['sysMemFree'] || [];
+                if (used.length === free.length && used.length > 0) {
+                  var totalData = [];
+                  for (var i = 0; i < used.length; i++) {
+                    var ts = used[i][0];
+                    var total = used[i][1] + free[i][1];
+                    totalData.push([ts, total]);
+                  }
+                  memCompChart.addSeries({
+                    name: anyExecId + ' sysMemTotal',
+                    type: 'line',
+                    data: totalData,
+                    color: '#888888',
+                    lineWidth: 1,
+                    zIndex: 0,
+                    enableMouseTracking: false,
+                    marker: { enabled: false }
+                  }, false);
+                }
+              }
+
+              memCompChart.redraw();
             }
 
             // JVM chart: jvmTotal, jvmUsed
@@ -460,6 +524,7 @@ class CustomEventsApiPage(parent: CustomEventsTab, customEvents: List[CustomEven
       "gpuMemUsed",
       "sysMemUsed",
       "sysMemFree",
+      "systemOtherUsed",
       "cpuPercent",
       "gpuConcurrentTasks")
 
@@ -488,6 +553,46 @@ class CustomEventsApiPage(parent: CustomEventsTab, customEvents: List[CustomEven
               }
             val ptsJson = usedPoints.map { case (ts, v) => s"[$ts,$v]" }.mkString(",")
             s""""jvmUsed": [$ptsJson]"""
+
+          case "systemOtherUsed" =>
+            // systemOtherUsed = sysMemUsed - (jvmUsed + offHeapPinned + offHeapPageable)
+            val sysUsedPoints =
+              series.getOrElse((execId, "sysMemUsed"), mutable.ArrayBuffer.empty).sortBy(_._1)
+            val jvmTotalPoints =
+              series.getOrElse((execId, "jvmTotal"), mutable.ArrayBuffer.empty).sortBy(_._1)
+            val jvmFreePoints =
+              series.getOrElse((execId, "jvmFree"), mutable.ArrayBuffer.empty).sortBy(_._1)
+            val pinnedPoints =
+              series.getOrElse((execId, "offHeapPinned"), mutable.ArrayBuffer.empty).sortBy(_._1)
+            val pageablePoints =
+              series.getOrElse((execId, "offHeapPageable"), mutable.ArrayBuffer.empty).sortBy(_._1)
+
+            val otherPoints: Seq[(Long, Long)] =
+              if (sysUsedPoints.length == jvmTotalPoints.length &&
+                  jvmTotalPoints.length == jvmFreePoints.length &&
+                  jvmFreePoints.length == pinnedPoints.length &&
+                  pinnedPoints.length == pageablePoints.length) {
+                sysUsedPoints
+                  .zip(jvmTotalPoints)
+                  .zip(jvmFreePoints)
+                  .zip(pinnedPoints)
+                  .zip(pageablePoints)
+                  .map {
+                    case ((((sysUsedPair, jvmTotalPair), jvmFreePair), pinnedPair), pageablePair) =>
+                      val (ts, sysUsed) = sysUsedPair
+                      val jvmUsed = jvmTotalPair._2 - jvmFreePair._2
+                      val offHeapPinned = pinnedPair._2
+                      val offHeapPageable = pageablePair._2
+                      val rapidsUsed = jvmUsed + offHeapPinned + offHeapPageable
+                      val otherUsed = math.max(0L, sysUsed - rapidsUsed)
+                      (ts, otherUsed)
+                  }
+              } else {
+                Seq.empty
+              }
+
+            val ptsJson = otherPoints.map { case (ts, v) => s"[$ts,$v]" }.mkString(",")
+            s""""systemOtherUsed": [$ptsJson]"""
 
           case other =>
             val points = series.getOrElse((execId, other), mutable.ArrayBuffer.empty).sortBy(_._1)
