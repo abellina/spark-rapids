@@ -22,6 +22,7 @@ import java.net.URL
 import java.time.ZoneId
 import java.util.Properties
 import java.util.concurrent.{ConcurrentHashMap, ConcurrentLinkedQueue, ExecutorService, Executors, ScheduledExecutorService, TimeUnit}
+import java.util.concurrent.atomic.AtomicLong
 import scala.collection.JavaConverters._
 import scala.collection.mutable
 import scala.sys.process._
@@ -534,6 +535,155 @@ object RapidsMetricService {
   private[this] val pendingUpdates =
     new ConcurrentLinkedQueue[(Long, Array[Long])]()
 
+  // Cumulative retry metrics (executor-local)
+  private[this] val totalRetries = new AtomicLong(0L)
+  private[this] val totalSplitRetries = new AtomicLong(0L)
+
+  // Disk utilization sampling (Linux-only, best-effort)
+  private case class DiskStatsSample(
+      readSectors: Long,
+      writeSectors: Long,
+      ioMs: Long,
+      tsMs: Long)
+
+  // major, minor for the disk backing spark.local.dir
+  @volatile private[this] var diskDeviceMajorMinor: Option[(Int, Int)] = None
+  @volatile private[this] var diskDeviceInitialized: Boolean = false
+  @volatile private[this] var lastDiskSample: Option[DiskStatsSample] = None
+
+  private val SECTOR_SIZE_BYTES: Long = 512L
+
+  def incRetries(n: Long): Unit = {
+    if (n > 0) {
+      totalRetries.addAndGet(n)
+    }
+  }
+
+  def incSplitRetries(n: Long): Unit = {
+    if (n > 0) {
+      totalSplitRetries.addAndGet(n)
+    }
+  }
+
+  /** Resolve the disk device (major,minor) backing spark.local.dir, Linux-only. */
+  private def initDiskDeviceIfNeeded(ctx: PluginContext): Unit = {
+    if (diskDeviceInitialized) {
+      return
+    }
+    this.synchronized {
+      if (diskDeviceInitialized) {
+        return
+      }
+      try {
+        val conf = ctx.conf()
+        val localDirStr = conf.get("spark.local.dir",
+          System.getProperty("java.io.tmpdir", "/tmp"))
+        val firstLocalDir = localDirStr.split(",").headOption
+          .map(_.trim).filter(_.nonEmpty).getOrElse("/tmp")
+        val localPath = java.nio.file.Paths.get(firstLocalDir).toAbsolutePath.normalize()
+
+        import scala.collection.JavaConverters._
+        val mountInfoPath = java.nio.file.Paths.get("/proc/self/mountinfo")
+        if (java.nio.file.Files.isReadable(mountInfoPath)) {
+          val lines = java.nio.file.Files.readAllLines(mountInfoPath).asScala
+          // Find the most specific mount point that prefixes localPath
+          var best: Option[(String, (Int, Int))] = None
+          lines.foreach { line =>
+            val parts = line.split(" ")
+            // Expect at least: id parent major:minor root mountPoint ...
+            if (parts.length >= 5) {
+              val majMin = parts(2)
+              val mountPoint = parts(4)
+              val mountPath = java.nio.file.Paths.get(mountPoint)
+              if (localPath.startsWith(mountPath)) {
+                val len = mountPoint.length
+                val Array(majStr, minStr) = majMin.split(":", 2)
+                val major = majStr.toInt
+                val minor = minStr.toInt
+                best match {
+                  case Some((bestMount, _)) =>
+                    if (len > bestMount.length) {
+                      best = Some((mountPoint, (major, minor)))
+                    }
+                  case None =>
+                    best = Some((mountPoint, (major, minor)))
+                }
+              }
+            }
+          }
+          diskDeviceMajorMinor = best.map(_._2)
+        }
+      } catch {
+        case _: Throwable =>
+          diskDeviceMajorMinor = None
+      } finally {
+        diskDeviceInitialized = true
+      }
+    }
+  }
+
+  /**
+   * Sample disk utilization for the device backing spark.local.dir by reading /proc/diskstats.
+   * Returns per-interval deltas: (readBytes, writeBytes, utilPct).
+   */
+  private def sampleDiskStats(ctx: PluginContext, nowMs: Long): (Long, Long, Long) = {
+    initDiskDeviceIfNeeded(ctx)
+    val devOpt = diskDeviceMajorMinor
+    if (!devOpt.isDefined) {
+      return (0L, 0L, 0L)
+    }
+    val (devMajor, devMinor) = devOpt.get
+    try {
+      import scala.collection.JavaConverters._
+      val diskstatsPath = java.nio.file.Paths.get("/proc/diskstats")
+      if (!java.nio.file.Files.isReadable(diskstatsPath)) {
+        return (0L, 0L, 0L)
+      }
+      val lines = java.nio.file.Files.readAllLines(diskstatsPath).asScala
+      val maybeSample = lines.flatMap { line =>
+        val parts = line.trim.split("\\s+")
+        if (parts.length >= 14) {
+          val major = parts(0).toInt
+          val minor = parts(1).toInt
+          if (major == devMajor && minor == devMinor) {
+            val readSectors = parts(5).toLong
+            val writeSectors = parts(9).toLong
+            val ioMs = parts(12).toLong
+            Some(DiskStatsSample(readSectors, writeSectors, ioMs, nowMs))
+          } else {
+            None
+          }
+        } else {
+          None
+        }
+      }.headOption
+
+      maybeSample match {
+        case None => (0L, 0L, 0L)
+        case Some(curr) =>
+          val deltas = lastDiskSample match {
+            case Some(prev) if curr.tsMs > prev.tsMs =>
+              val dt = curr.tsMs - prev.tsMs
+              val dReadBytes =
+                math.max(0L, (curr.readSectors - prev.readSectors) * SECTOR_SIZE_BYTES)
+              val dWriteBytes =
+                math.max(0L, (curr.writeSectors - prev.writeSectors) * SECTOR_SIZE_BYTES)
+              val dIoMs = math.max(0L, curr.ioMs - prev.ioMs)
+              val utilPct =
+                math.max(0L, math.min(100L, (dIoMs * 100L) / dt))
+              (dReadBytes, dWriteBytes, utilPct)
+            case _ =>
+              (0L, 0L, 0L)
+          }
+          lastDiskSample = Some(curr)
+          deltas
+      }
+    } catch {
+      case _: Throwable =>
+        (0L, 0L, 0L)
+    }
+  }
+
   /**
    * Enqueue a metric update to be picked up by the timer consumer.
    * This can be called from any producer (scheduled runs, event callbacks, etc.).
@@ -576,6 +726,12 @@ object RapidsMetricService {
           case _: Throwable => 0L
         }
 
+      val retries = totalRetries.get()
+      val splitRetries = totalSplitRetries.get()
+
+      val (diskReadBytes, diskWriteBytes, diskUtilPct) =
+        sampleDiskStats(ctx, currentTime)
+
       val values: Array[Long] = Array(
         runtime.totalMemory(),          // jvmTotal
         runtime.freeMemory(),           // jvmFree
@@ -585,7 +741,12 @@ object RapidsMetricService {
         sysUsed,                        // sysMemUsed
         sysFree,                        // sysMemFree
         cpuPercent,                     // cpuPercent
-        gpuConcurrentTasks              // gpuConcurrentTasks
+        gpuConcurrentTasks,             // gpuConcurrentTasks
+        retries,                        // retryCount
+        splitRetries,                   // splitRetryCount
+        diskReadBytes,                  // diskReadBytes
+        diskWriteBytes,                 // diskWriteBytes
+        diskUtilPct                     // diskUtilPct (0-100)
       )
       // Producer: record the latest executor metrics snapshot.
       recordMetricUpdate(currentTime, values)
@@ -610,7 +771,12 @@ object RapidsMetricService {
       "sysMemUsed",
       "sysMemFree",
       "cpuPercent",
-      "gpuConcurrentTasks")
+      "gpuConcurrentTasks",
+      "retryCount",
+      "splitRetryCount",
+      "diskReadBytes",
+      "diskWriteBytes",
+      "diskUtilPct")
     ctx.ask(MetricDefinition(executorId, metricNames))
 
     executorService.scheduleWithFixedDelay(

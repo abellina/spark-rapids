@@ -25,7 +25,7 @@ class CustomEventsPage(parent: CustomEventsTab, customEvents: List[CustomEventDa
     extends WebUIPage("") {
 
   override def render(request: HttpServletRequest): Seq[Node] = {
-    val content =
+    val content = 
       <div class="row-fluid">
         <div class="span12">
           <h4>Custom Events Analysis</h4>
@@ -40,6 +40,9 @@ class CustomEventsPage(parent: CustomEventsTab, customEvents: List[CustomEventDa
             <div id="sys-mem-chart" style="width: 100%; height: 300px; margin-top: 20px;"></div>
             <div id="cpu-chart" style="width: 100%; height: 250px; margin-top: 20px;"></div>
             <div id="gpu-tasks-chart" style="width: 100%; height: 250px; margin-top: 20px;"></div>
+            <div id="retries-chart" style="width: 100%; height: 250px; margin-top: 20px;"></div>
+            <div id="disk-io-chart" style="width: 100%; height: 250px; margin-top: 20px;"></div>
+            <div id="disk-util-chart" style="width: 100%; height: 250px; margin-top: 20px;"></div>
             <div id="gpu-chart" style="width: 100%; height: 300px; margin-top: 20px;"></div>
           </div>
         </div>
@@ -48,7 +51,7 @@ class CustomEventsPage(parent: CustomEventsTab, customEvents: List[CustomEventDa
     val highchartsScript =
       <script src="https://code.highcharts.com/highcharts.js"></script>
 
-    val scriptContent =
+    val scriptContent = 
       <script type="text/javascript">
         {scala.xml.Unparsed("""
           $(document).ready(function() {
@@ -313,6 +316,76 @@ class CustomEventsPage(parent: CustomEventsTab, customEvents: List[CustomEventDa
               gpuTasksChart.redraw();
             }
 
+            // Retries chart: retryCount, splitRetryCount
+            var retriesChart = Highcharts.chart('retries-chart', {
+              title: { text: 'Retries' },
+              xAxis: { type: 'datetime' },
+              yAxis: {
+                title: { text: 'Count (cumulative per executor)' },
+                min: 0
+              },
+              legend: { enabled: true },
+              series: []
+            });
+
+            if (retriesChart) {
+              var retryMetrics = ['retryCount', 'splitRetryCount'];
+              retryMetrics.forEach(function(metricName) {
+                var metricSeries = getSeriesForMetric(metricName);
+                metricSeries.forEach(function(s) {
+                  retriesChart.addSeries(s, false);
+                });
+              });
+              retriesChart.redraw();
+            }
+
+            // Disk IO chart: diskReadBytes, diskWriteBytes (per sample interval)
+            var diskIoChart = Highcharts.chart('disk-io-chart', {
+              title: { text: 'Disk IO (sample interval bytes)' },
+              xAxis: { type: 'datetime' },
+              yAxis: {
+                title: { text: 'Bytes per interval' },
+                min: 0
+              },
+              legend: { enabled: true },
+              series: []
+            });
+
+            if (diskIoChart) {
+              var ioMetrics = ['diskReadBytes', 'diskWriteBytes'];
+              ioMetrics.forEach(function(metricName) {
+                var metricSeries = getSeriesForMetric(metricName);
+                metricSeries.forEach(function(s) {
+                  diskIoChart.addSeries(s, false);
+                });
+              });
+              diskIoChart.redraw();
+            }
+
+            // Disk utilization chart: diskUtilPct
+            var diskUtilChart = Highcharts.chart('disk-util-chart', {
+              title: { text: 'Disk Utilization (spark.local.dir device)' },
+              xAxis: { type: 'datetime' },
+              yAxis: {
+                title: { text: '% busy' },
+                max: 100,
+                min: 0
+              },
+              legend: { enabled: true },
+              series: []
+            });
+
+            if (diskUtilChart) {
+              var utilMetrics = ['diskUtilPct'];
+              utilMetrics.forEach(function(metricName) {
+                var metricSeries = getSeriesForMetric(metricName);
+                metricSeries.forEach(function(s) {
+                  diskUtilChart.addSeries(s, false);
+                });
+              });
+              diskUtilChart.redraw();
+            }
+
             // GPU chart
             var gpuChart = Highcharts.chart('gpu-chart', {
               title: { text: 'GPU Memory' },
@@ -526,7 +599,12 @@ class CustomEventsApiPage(parent: CustomEventsTab, customEvents: List[CustomEven
       "sysMemFree",
       "systemOtherUsed",
       "cpuPercent",
-      "gpuConcurrentTasks")
+      "gpuConcurrentTasks",
+      "retryCount",
+      "splitRetryCount",
+      "diskReadBytes",
+      "diskWriteBytes",
+      "diskUtilPct")
 
     // Collect unique executor IDs
     val execIds = series.keys.map(_._1).toSet.toSeq.sorted

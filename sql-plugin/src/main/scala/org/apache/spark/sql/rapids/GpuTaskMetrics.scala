@@ -24,7 +24,7 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
 
 import ai.rapids.cudf.{NvtxColor, NvtxRange}
-import com.nvidia.spark.rapids.{NvtxId, NvtxRegistry}
+import com.nvidia.spark.rapids.{NvtxId, NvtxRegistry, RapidsMetricService}
 import com.nvidia.spark.rapids.Arm.withResource
 import com.nvidia.spark.rapids.ScalableTaskCompletion.onTaskCompletion
 import com.nvidia.spark.rapids.jni.RmmSpark
@@ -378,11 +378,13 @@ class GpuTaskMetrics extends Serializable with Logging {
     val rc = RmmSpark.getAndResetNumRetryThrow(taskAttemptId)
     if (rc > 0) {
       retryCount.add(rc)
+      RapidsMetricService.incRetries(rc)
     }
 
     val src = RmmSpark.getAndResetNumSplitRetryThrow(taskAttemptId)
     if (src > 0) {
       splitAndRetryCount.add(src)
+      RapidsMetricService.incSplitRetries(src)
     }
 
     val timeNs = RmmSpark.getAndResetBlockTimeNs(taskAttemptId)
