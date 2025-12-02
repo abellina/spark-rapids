@@ -1,8 +1,11 @@
 package org.apache.spark.status
 
+import java.nio.{ByteBuffer, ByteOrder}
+
 import org.apache.spark.ui.{SparkUI, SparkUITab, UIUtils, WebUIPage}
 
 import javax.servlet.http.HttpServletRequest
+import scala.collection.mutable
 import scala.xml.Node
 
 /**
@@ -22,12 +25,12 @@ class CustomEventsPage(parent: CustomEventsTab, customEvents: List[CustomEventDa
     extends WebUIPage("") {
 
   override def render(request: HttpServletRequest): Seq[Node] = {
-    val content = 
+    val content =
       <div class="row-fluid">
         <div class="span12">
           <h4>Custom Events Analysis</h4>
           <p>This tab shows custom event log events captured during application execution.</p>
-          
+
           <div id="custom-events-summary">
             <h5>Event Summary</h5>
             <ul>
@@ -47,14 +50,23 @@ class CustomEventsPage(parent: CustomEventsTab, customEvents: List[CustomEventDa
 
           <div id="custom-events-charts">
             <h5>Event Timeline</h5>
-            <div id="timeline-chart" style="width: 100%; height: 400px;">
+            <div id="timeline-chart" style="width: 100%; height: 300px;">
               <p>Timeline visualization would be rendered here with JavaScript</p>
             </div>
+          </div>
+
+          <div id="metric-charts">
+            <h5>RAPIDS Metrics</h5>
+            <div id="jvm-offheap-chart" style="width: 100%; height: 300px; margin-top: 20px;"></div>
+            <div id="gpu-chart" style="width: 100%; height: 300px; margin-top: 20px;"></div>
           </div>
         </div>
       </div>
 
-    val scriptContent = 
+    val highchartsScript =
+      <script src="https://code.highcharts.com/highcharts.js"></script>
+
+    val scriptContent =
       <script type="text/javascript">
         {scala.xml.Unparsed("""
           $(document).ready(function() {
@@ -69,11 +81,20 @@ class CustomEventsPage(parent: CustomEventsTab, customEvents: List[CustomEventDa
 
             // Fetch and render timeline data
             fetchTimelineData();
+
+            // Fetch and render RAPIDS metric data
+            fetchMetricData();
           });
 
           function fetchTimelineData() {
             $.getJSON('/history/' + getAppId() + '/customevents/api/timeline', function(data) {
               renderTimeline(data);
+            });
+          }
+
+          function fetchMetricData() {
+            $.getJSON('/history/' + getAppId() + '/customevents/api/metrics', function(data) {
+              renderMetricCharts(data);
             });
           }
 
@@ -107,10 +128,44 @@ class CustomEventsPage(parent: CustomEventsTab, customEvents: List[CustomEventDa
               chartDiv.html('<p>No timeline data available</p>');
             }
           }
+
+          function renderMetricCharts(data) {
+            if (!window.Highcharts || !data || !data.series) {
+              return;
+            }
+
+            function getSeries(name) {
+              return (data.series && data.series[name]) ? data.series[name] : [];
+            }
+
+            Highcharts.chart('jvm-offheap-chart', {
+              title: { text: 'JVM / Off-heap Memory' },
+              xAxis: { type: 'datetime' },
+              yAxis: { title: { text: 'Bytes' } },
+              legend: { enabled: true },
+              series: [
+                { name: 'jvmTotal', data: getSeries('jvmTotal') },
+                { name: 'jvmFree', data: getSeries('jvmFree') },
+                { name: 'offHeapPinned', data: getSeries('offHeapPinned') },
+                { name: 'offHeapPageable', data: getSeries('offHeapPageable') }
+              ]
+            });
+
+            Highcharts.chart('gpu-chart', {
+              title: { text: 'GPU Memory' },
+              xAxis: { type: 'datetime' },
+              yAxis: { title: { text: 'Bytes' } },
+              legend: { enabled: true },
+              series: [
+                { name: 'gpuMemUsed', data: getSeries('gpuMemUsed') }
+              ]
+            });
+          }
         """)}
       </script>
 
-    UIUtils.headerSparkPage(request, "Custom Events", content ++ scriptContent, parent)
+    UIUtils.headerSparkPage(request, "Custom Events",
+      content ++ highchartsScript ++ scriptContent, parent)
   }
 
   private def renderEventsTable(): Node = {
@@ -163,6 +218,7 @@ class CustomEventsApiPage(parent: CustomEventsTab, customEvents: List[CustomEven
       case "/timeline" => generateTimelineJson()
       case "/summary" => generateSummaryJson()
       case "/events" => generateEventsJson(request)
+      case "/metrics" => generateMetricsJson()
       case _ => generateApiIndexJson()
     }
     
@@ -237,6 +293,82 @@ class CustomEventsApiPage(parent: CustomEventsTab, customEvents: List[CustomEven
     }.mkString(",")
     
     s"""{"events": [$eventsJson], "count": ${filteredEvents.size}}"""
+  }
+
+  private def hexToBytes(hex: String): Array[Byte] = {
+    val cleanHex = hex.trim
+    val len = cleanHex.length
+    if (len % 2 != 0) {
+      return Array.emptyByteArray
+    }
+    val data = new Array[Byte](len / 2)
+    var i = 0
+    while (i < len) {
+      val byteStr = cleanHex.substring(i, i + 2)
+      data(i / 2) = Integer.parseInt(byteStr, 16).toByte
+      i += 2
+    }
+    data
+  }
+
+  private def generateMetricsJson(): String = {
+    // Build a mapping from executorId -> metric names (in positional order)
+    val metricDefs: Map[String, Seq[String]] = customEvents
+      .filter(_.eventType == "MetricDefinition")
+      .flatMap { e =>
+        for {
+          execId <- e.eventData.get("executorId")
+          namesStr <- e.eventData.get("metricNames")
+        } yield execId -> namesStr.split(",").map(_.trim).filter(_.nonEmpty).toSeq
+      }.groupBy(_._1).mapValues(_.last._2).toMap
+
+    val series = mutable.Map[String, mutable.ArrayBuffer[(Long, Long)]]()
+
+    // Process each MetricUpdates event: decode hex payload and expand into per-metric series
+    customEvents
+      .filter(_.eventType == "MetricUpdates")
+      .foreach { e =>
+        for {
+          execId <- e.eventData.get("executorId")
+          encoded <- e.eventData.get("encodedMetricsHex")
+          metricNames <- metricDefs.get(execId)
+        } {
+          val bytes = hexToBytes(encoded)
+          if (bytes.nonEmpty && metricNames.nonEmpty) {
+            val bb = ByteBuffer.wrap(bytes).order(ByteOrder.BIG_ENDIAN)
+            if (bb.remaining() >= Integer.BYTES) {
+              val numUpdates = bb.getInt()
+              val numMetricsPerUpdate = metricNames.length
+              var u = 0
+              while (u < numUpdates &&
+                     bb.remaining() >= java.lang.Long.BYTES * (1 + numMetricsPerUpdate)) {
+                val ts = bb.getLong()
+                var m = 0
+                while (m < numMetricsPerUpdate && bb.remaining() >= java.lang.Long.BYTES) {
+                  val value = bb.getLong()
+                  val name = metricNames(m)
+                  val buf = series.getOrElseUpdate(name,
+                    mutable.ArrayBuffer[(Long, Long)]())
+                  buf += ((ts, value))
+                  m += 1
+                }
+                u += 1
+              }
+            }
+          }
+        }
+      }
+
+    // Order series and restrict to the metrics we currently know about
+    val knownMetrics = Seq("jvmTotal", "jvmFree", "offHeapPinned", "offHeapPageable", "gpuMemUsed")
+
+    val seriesEntries = knownMetrics.map { name =>
+      val points = series.getOrElse(name, mutable.ArrayBuffer.empty).sortBy(_._1)
+      val ptsJson = points.map { case (ts, v) => s"[$ts,$v]" }.mkString(",")
+      s""""$name": [$ptsJson]"""
+    }.mkString(",")
+
+    s"""{"series": {$seriesEntries}}"""
   }
 
   private def generateApiIndexJson(): String = {

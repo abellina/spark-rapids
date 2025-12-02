@@ -32,6 +32,15 @@
     <packaging>jar</packaging>
 
     <dependencies>
+        <!-- RAPIDS SQL Plugin public API (for metric events, etc.) -->
+        <dependency>
+            <groupId>com.nvidia</groupId>
+            <artifactId>rapids-4-spark-sql-plugin-api_${scala.binary.version}</artifactId>
+            <version>${project.version}</version>
+            <classifier>${spark.version.classifier}</classifier>
+            <scope>provided</scope>
+        </dependency>
+
         <!-- Spark Core -->
         <dependency>
             <groupId>org.apache.spark</groupId>

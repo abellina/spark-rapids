@@ -1,5 +1,6 @@
 package org.apache.spark.status
 
+import com.nvidia.spark.rapids.{MetricDefinition, MetricUpdates}
 import org.apache.spark.SparkConf
 import org.apache.spark.scheduler._
 import org.apache.spark.ui.SparkUI
@@ -175,12 +176,40 @@ class CustomEventsListener(customEvents: mutable.ListBuffer[CustomEventData])
   override def onOtherEvent(event: SparkListenerEvent): Unit = {
     // Capture any custom events that might be logged
     event match {
+      case md: MetricDefinition =>
+        val eventData = Map(
+          "executorId" -> md.executorId,
+          "metricNames" -> md.metricNames.mkString(",")
+        )
+
+        customEvents += CustomEventData(
+          timestamp = System.currentTimeMillis(),
+          eventType = "MetricDefinition",
+          eventData = eventData,
+          applicationId = "current",
+          applicationAttemptId = None
+        )
+
+      case mu: MetricUpdates =>
+        val eventData = Map(
+          "executorId" -> mu.executorId,
+          "encodedMetricsHex" -> mu.encodedMetricsHex
+        )
+
+        customEvents += CustomEventData(
+          timestamp = System.currentTimeMillis(),
+          eventType = "MetricUpdates",
+          eventData = eventData,
+          applicationId = "current",
+          applicationAttemptId = None
+        )
+
       case _ =>
         val eventData = Map(
           "eventClass" -> event.getClass.getSimpleName,
           "timestamp" -> System.currentTimeMillis().toString
         )
-        
+
         customEvents += CustomEventData(
           timestamp = System.currentTimeMillis(),
           eventType = "CustomEvent",

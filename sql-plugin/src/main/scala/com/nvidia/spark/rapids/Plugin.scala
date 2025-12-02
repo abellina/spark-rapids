@@ -18,7 +18,6 @@ package com.nvidia.spark.rapids
 
 import java.lang.reflect.InvocationTargetException
 import java.net.URL
-import java.nio.{ByteBuffer, ByteOrder}
 import java.time.ZoneId
 import java.util.Properties
 import java.util.concurrent.{ConcurrentHashMap, ConcurrentLinkedQueue, ExecutorService, Executors, ScheduledExecutorService, TimeUnit}
@@ -26,10 +25,9 @@ import scala.collection.JavaConverters._
 import scala.collection.mutable
 import scala.sys.process._
 import scala.util.Try
-import ai.rapids.cudf.{Cuda, CudaException, CudaFatalException, CudfException, MemoryCleaner, NvtxColor, NvtxCounter, NvtxPayloadSchema, NvtxPayloadSchemaEntry, NvtxRange}
+import ai.rapids.cudf.{Cuda, CudaException, CudaFatalException, CudfException, MemoryCleaner, NvtxColor, NvtxCounter, NvtxPayloadSchema, NvtxPayloadSchemaEntry, NvtxRange, Rmm}
 import com.nvidia.spark.DFUDFPlugin
 import com.nvidia.spark.rapids.RapidsConf.AllowMultipleJars
-import com.nvidia.spark.rapids.RapidsMetricService.MetricUpdates
 import com.nvidia.spark.rapids.RapidsPluginUtils.buildInfoEvent
 import com.nvidia.spark.rapids.ScalableTaskCompletion.onTaskCompletion
 import com.nvidia.spark.rapids.filecache.{FileCache, FileCacheLocalityManager, FileCacheLocalityMsg}
@@ -41,7 +39,6 @@ import org.apache.spark.{ExceptionFailure, SparkConf, SparkContext, SparkEnv, Ta
 import org.apache.spark.api.plugin.{DriverPlugin, ExecutorPlugin, PluginContext, SparkPlugin}
 import org.apache.spark.internal.Logging
 import org.apache.spark.rapids.hybrid.HybridExecutionUtils
-import org.apache.spark.scheduler.SparkListenerEvent
 import org.apache.spark.serializer.{JavaSerializer, KryoSerializer}
 import org.apache.spark.sql.catalyst.rules.Rule
 import org.apache.spark.sql.execution._
@@ -448,8 +445,12 @@ class RapidsDriverPlugin extends DriverPlugin with Logging {
 
   override def receive(msg: Any): AnyRef = {
     msg match {
+      case metricDefinition: MetricDefinition =>
+        TrampolineUtil.postEvent(SparkContext.getOrCreate(), metricDefinition)
+        null
       case metric: MetricUpdates =>
         TrampolineUtil.postEvent(SparkContext.getOrCreate(), metric)
+        null
       case m: FileCacheLocalityMsg =>
         // handleMsg should not block current thread
         FileCacheLocalityManager.get.handleMsg(m)
@@ -525,84 +526,6 @@ object RapidsMetricService {
   private[this] val pendingUpdates =
     new ConcurrentLinkedQueue[(Long, Array[Long])]()
 
-  /** Defines the metrics tracked for a given executor in positional order. */
-  case class MetricDefinition(executorId: String, metricNames: Seq[String])
-      extends SparkListenerEvent {
-    override def logEvent: Boolean = true
-  }
-
-  /**
-   * Metric updates encoded as a hex string of (timestamp,value) long pairs.
-   * The metric position in the sequence is defined by a prior MetricDefinition.
-   */
-  case class MetricUpdates(executorId: String, encodedMetricsHex: String)
-      extends SparkListenerEvent {
-    override def logEvent: Boolean = true
-  }
-
-  private[this] val hexArray: Array[Char] = "0123456789abcdef".toCharArray
-
-  private def bytesToHex(bytes: Array[Byte]): String = {
-    val hexChars = new Array[Char](bytes.length * 2)
-    var j = 0
-    while (j < bytes.length) {
-      val v = bytes(j) & 0xff
-      hexChars(j * 2) = hexArray(v >>> 4)
-      hexChars(j * 2 + 1) = hexArray(v & 0x0f)
-      j += 1
-    }
-    new String(hexChars)
-  }
-
-  object MetricUpdates {
-    /**
-     * Helper to build a MetricUpdates message from an array of (timestamp, values) tuples.
-     *
-     * The logical format is:
-     *   Seq((timestamp0, Array(v00, v01, ...)),
-     *       (timestamp1, Array(v10, v11, ...)), ...)
-     *
-     * The binary layout is:
-     *   [int numUpdates]
-     *   [long ts0][long v00][long v01]...
-     *   [long ts1][long v10][long v11]...
-     *   ...
-     * All integers are big-endian. Each values array is assumed to be the same length.
-     */
-    def fromArrays(
-        executorId: String,
-        updates: Array[(Long, Array[Long])]): MetricUpdates = {
-      val numUpdates = updates.length
-      val numMetricsPerUpdate =
-        if (numUpdates == 0) 0 else updates(0)._2.length
-
-      // allocate space for count + all updates
-      val bb = ByteBuffer
-        .allocate(
-          Integer.BYTES + // numUpdates
-            numUpdates * (java.lang.Long.BYTES + numMetricsPerUpdate * java.lang.Long.BYTES))
-        .order(ByteOrder.BIG_ENDIAN)
-
-      // prefix with number of updates
-      bb.putInt(numUpdates)
-
-      // encode each (timestamp, Array[Long]) consecutively
-      var i = 0
-      while (i < numUpdates) {
-        val (ts, values) = updates(i)
-        bb.putLong(ts)
-        var j = 0
-        while (j < numMetricsPerUpdate) {
-          bb.putLong(values(j))
-          j += 1
-        }
-        i += 1
-      }
-
-      MetricUpdates(executorId, bytesToHex(bb.array()))
-    }
-  }
-
   /**
    * Enqueue a metric update to be picked up by the timer consumer.
    * This can be called from any producer (scheduled runs, event callbacks, etc.).
@@ -631,9 +554,9 @@ object RapidsMetricService {
       val values: Array[Long] = Array(
         runtime.totalMemory(),
         runtime.freeMemory(),
-        runtime.totalMemory() - runtime.freeMemory(),
         pinned,
-        pageable)
+        pageable,
+        Rmm.getTotalBytesAllocated)
       // Producer: record the latest executor metrics snapshot.
       recordMetricUpdate(currentTime, values)
 
@@ -651,9 +574,9 @@ object RapidsMetricService {
     val metricNames = Seq(
       "jvmTotal",
       "jvmFree",
-      "jvmUsed",
-      "jvmPinned",
-      "jvmPageable")
+      "offHeapPinned",
+      "offHeapPageable",
+      "gpuMemUsed")
     ctx.ask(MetricDefinition(executorId, metricNames))
 
     executorService.scheduleWithFixedDelay(
