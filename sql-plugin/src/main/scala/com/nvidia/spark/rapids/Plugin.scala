@@ -20,7 +20,7 @@ import java.lang.reflect.InvocationTargetException
 import java.net.URL
 import java.time.ZoneId
 import java.util.Properties
-import java.util.concurrent.{ConcurrentHashMap, ExecutorService, Executors}
+import java.util.concurrent.{ConcurrentHashMap, ExecutorService, Executors, ScheduledExecutorService, TimeUnit}
 import scala.collection.JavaConverters._
 import scala.collection.mutable
 import scala.sys.process._
@@ -28,6 +28,7 @@ import scala.util.Try
 import ai.rapids.cudf.{Cuda, CudaException, CudaFatalException, CudfException, MemoryCleaner, NvtxColor, NvtxCounter, NvtxPayloadSchema, NvtxPayloadSchemaEntry, NvtxRange}
 import com.nvidia.spark.DFUDFPlugin
 import com.nvidia.spark.rapids.RapidsConf.AllowMultipleJars
+import com.nvidia.spark.rapids.RapidsMetricService.MetricUpdates
 import com.nvidia.spark.rapids.RapidsPluginUtils.buildInfoEvent
 import com.nvidia.spark.rapids.ScalableTaskCompletion.onTaskCompletion
 import com.nvidia.spark.rapids.filecache.{FileCache, FileCacheLocalityManager, FileCacheLocalityMsg}
@@ -35,10 +36,11 @@ import com.nvidia.spark.rapids.io.async.TrafficController
 import com.nvidia.spark.rapids.jni.{GpuTimeZoneDB, RmmSpark, TaskPriority}
 import com.nvidia.spark.rapids.python.PythonWorkerSemaphore
 import org.apache.commons.lang3.exception.ExceptionUtils
-import org.apache.spark.{ExceptionFailure, SparkConf, SparkContext, TaskContext, TaskFailedReason}
+import org.apache.spark.{ExceptionFailure, SparkConf, SparkContext, SparkEnv, TaskContext, TaskFailedReason}
 import org.apache.spark.api.plugin.{DriverPlugin, ExecutorPlugin, PluginContext, SparkPlugin}
 import org.apache.spark.internal.Logging
 import org.apache.spark.rapids.hybrid.HybridExecutionUtils
+import org.apache.spark.scheduler.SparkListenerEvent
 import org.apache.spark.serializer.{JavaSerializer, KryoSerializer}
 import org.apache.spark.sql.catalyst.rules.Rule
 import org.apache.spark.sql.execution._
@@ -445,6 +447,8 @@ class RapidsDriverPlugin extends DriverPlugin with Logging {
 
   override def receive(msg: Any): AnyRef = {
     msg match {
+      case metric: MetricUpdates =>
+        TrampolineUtil.postEvent(SparkContext.getOrCreate(), metric)
       case m: FileCacheLocalityMsg =>
         // handleMsg should not block current thread
         FileCacheLocalityManager.get.handleMsg(m)
@@ -502,6 +506,44 @@ class RapidsDriverPlugin extends DriverPlugin with Logging {
   override def shutdown(): Unit = {
     extraDriverPlugins.foreach(_.shutdown())
     FileCacheLocalityManager.shutdown()
+  }
+}
+
+object RapidsMetricService {
+  private[this] val executorService: ScheduledExecutorService =
+    Executors.newSingleThreadScheduledExecutor(
+      GpuDeviceManager.wrapThreadFactory(new ThreadFactoryBuilder()
+        .setNameFormat("rapids-metrics")
+        .setDaemon(true)
+        .build(),
+        null))
+
+  case class MetricUpdates(executorId: String, metrics: Seq[(Long, String, Long)])
+      extends SparkListenerEvent {
+    override def logEvent: Boolean = true
+  }
+
+  class Foo(executorId: String, ctx: PluginContext) extends Runnable {
+    override def run(): Unit = {
+      val runtime = Runtime.getRuntime
+      val (pinned, pageable) = HostAlloc.getAllocated
+      val currentTime = System.currentTimeMillis()
+      val updates = Seq(
+          (currentTime, "jvmTotal", runtime.totalMemory()),
+          (currentTime, "jvmFree", runtime.freeMemory()),
+          (currentTime, "jvmUsed", runtime.totalMemory() - runtime.freeMemory()),
+          (currentTime, "jvmPinned", pinned),
+          (currentTime, "jvmPageable", pageable))
+      ctx.ask(MetricUpdates(executorId, updates))
+    }
+  }
+
+  def start(executorId: String, ctx: PluginContext): Unit = {
+    executorService.scheduleWithFixedDelay(
+      new Foo(executorId, ctx),
+      0,
+      1000,
+      TimeUnit.MILLISECONDS)
   }
 }
 
@@ -613,6 +655,8 @@ class RapidsExecutorPlugin extends ExecutorPlugin with Logging {
           }
         }
       }
+
+      RapidsMetricService.start(SparkEnv.get.executorId, pluginContext)
 
       // Checks if the current GPU architecture is supported by the
       // spark-rapids-jni and cuDF libraries.
