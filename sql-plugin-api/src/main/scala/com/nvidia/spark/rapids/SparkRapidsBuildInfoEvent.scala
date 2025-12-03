@@ -27,7 +27,8 @@ case class SparkRapidsBuildInfoEvent(
     sparkRapidsBuildInfo: Map[String, String],
     sparkRapidsJniBuildInfo: Map[String, String],
     cudfBuildInfo: Map[String, String],
-    sparkRapidsPrivateBuildInfo: Map[String, String])
+    sparkRapidsPrivateBuildInfo: Map[String, String],
+    monitoredDiskDevice: Option[String] = None)
     extends SparkListenerEvent {
 
   override def logEvent: Boolean = true

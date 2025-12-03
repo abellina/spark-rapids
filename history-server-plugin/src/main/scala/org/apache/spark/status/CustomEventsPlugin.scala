@@ -180,11 +180,18 @@ class CustomEventsListener(customEvents: mutable.ListBuffer[CustomEventData])
         def flatten(prefix: String, m: Map[String, String]): Map[String, String] =
           m.map { case (k, v) => s"$prefix.$k" -> v }
 
-        val eventData =
+        val baseEventData =
           flatten("sparkRapidsBuildInfo", bi.sparkRapidsBuildInfo) ++
             flatten("sparkRapidsJniBuildInfo", bi.sparkRapidsJniBuildInfo) ++
             flatten("cudfBuildInfo", bi.cudfBuildInfo) ++
             flatten("sparkRapidsPrivateBuildInfo", bi.sparkRapidsPrivateBuildInfo)
+
+        val eventData = bi.monitoredDiskDevice match {
+          case Some(dev) =>
+            baseEventData + ("sparkRapidsBuildInfo.monitoredDiskDevice" -> dev)
+          case None =>
+            baseEventData
+        }
 
         customEvents += CustomEventData(
           timestamp = System.currentTimeMillis(),

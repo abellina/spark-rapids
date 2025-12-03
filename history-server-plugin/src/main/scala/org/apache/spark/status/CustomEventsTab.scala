@@ -22,7 +22,7 @@ class CustomEventsTab(parent: SparkUI, customEvents: List[CustomEventData])
 /**
  * Main page for the custom events tab
  */
-class CustomEventsPage(parent: CustomEventsTab, customEvents: List[CustomEventData]) 
+class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData])
     extends WebUIPage("") {
 
   override def render(request: HttpServletRequest): Seq[Node] = {
@@ -44,44 +44,9 @@ class CustomEventsPage(parent: CustomEventsTab, customEvents: List[CustomEventDa
       }
     }
 
-    // Best-effort disk device detection on the history server host based on spark.local.dir
-    val diskDevice: Option[String] = try {
-      val sparkConf = parent.parent.conf
-      val localDirStr = sparkConf.get("spark.local.dir",
-        System.getProperty("java.io.tmpdir", "/tmp"))
-      val firstLocalDir = localDirStr.split(",").headOption
-        .map(_.trim).filter(_.nonEmpty).getOrElse("/tmp")
-      val localPath = java.nio.file.Paths.get(firstLocalDir).toAbsolutePath.normalize()
-
-      import scala.collection.JavaConverters._
-      val mountInfoPath = java.nio.file.Paths.get("/proc/self/mountinfo")
-      if (java.nio.file.Files.isReadable(mountInfoPath)) {
-        val lines = java.nio.file.Files.readAllLines(mountInfoPath).asScala
-        var best: Option[(String, String)] = None
-        lines.foreach { line =>
-          val parts = line.split(" ")
-          if (parts.length >= 5) {
-            val majMin = parts(2)
-            val mountPoint = parts(4)
-            val mountPath = java.nio.file.Paths.get(mountPoint)
-            if (localPath.startsWith(mountPath)) {
-              val len = mountPoint.length
-              best match {
-                case Some((bestMount, _)) =>
-                  if (len > bestMount.length) best = Some((mountPoint, majMin))
-                case None =>
-                  best = Some((mountPoint, majMin))
-              }
-            }
-          }
-        }
-        best.map { case (mp, majMin) => s"$mp (device $majMin)" }
-      } else {
-        None
-      }
-    } catch {
-      case _: Throwable => None
-    }
+    // Monitored disk device as reported by SparkRapidsBuildInfoEvent on the driver
+    val monitoredDiskDevice =
+      getBuildValue("sparkRapidsBuildInfo", "monitoredDiskDevice")
 
     val content =
       <div class="row-fluid">
@@ -99,7 +64,8 @@ class CustomEventsPage(parent: CustomEventsTab, customEvents: List[CustomEventDa
                     jniVersion.map(v => <tr><th>spark-rapids-jni Version</th><td>{v}</td></tr>),
                     jniRevision.map(v => <tr><th>spark-rapids-jni Revision</th><td>{v}</td></tr>),
                     jniArch.map(v => <tr><th>JNI GPU Arch (from build info)</th><td>{v}</td></tr>),
-                    diskDevice.map(v => <tr><th>Monitored Disk Device (spark.local.dir)</th><td>{v}</td></tr>)
+                    monitoredDiskDevice.map(v =>
+                      <tr><th>Monitored Disk Device (spark.local.dir)</th><td>{v}</td></tr>)
                   ).flatten
                 }
               </tbody>
@@ -625,7 +591,7 @@ class CustomEventsPage(parent: CustomEventsTab, customEvents: List[CustomEventDa
       </script>
 
     UIUtils.headerSparkPage(request, "Custom Events",
-      content ++ highchartsScript ++ scriptContent, parent)
+      content ++ highchartsScript ++ scriptContent, tab)
   }
 
 }

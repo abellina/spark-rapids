@@ -86,7 +86,7 @@ object RapidsPluginUtils extends Logging {
     sparkRapidsBuildInfo = loadProps(PLUGIN_PROPS_FILENAME),
     sparkRapidsJniBuildInfo = loadProps(JNI_PROPS_FILENAME),
     cudfBuildInfo = loadProps(CUDF_PROPS_FILENAME),
-    sparkRapidsPrivateBuildInfo =loadProps(PRIVATE_PROPS_FILENAME)
+    sparkRapidsPrivateBuildInfo = loadProps(PRIVATE_PROPS_FILENAME)
   )
 
   {
@@ -99,6 +99,52 @@ object RapidsPluginUtils extends Logging {
     val privateRev = buildInfoEvent.sparkRapidsPrivateBuildInfo.getOrElse("revision", "UNKNOWN")
     logWarning(s"RAPIDS Accelerator $pluginVersion using cudf ${cudfVersion}, " +
       s"private revision ${privateRev}")
+  }
+
+  /**
+   * Best-effort detection of the disk device backing spark.local.dir on this host.
+   * This mirrors the logic used in the executor metrics sampler but runs on the driver
+   * when posting the SparkRapidsBuildInfoEvent, so the history server can display
+   * which disk device is being monitored.
+   */
+  def detectMonitoredDiskDevice(conf: SparkConf): Option[String] = {
+    try {
+      val localDirStr = conf.get("spark.local.dir",
+        System.getProperty("java.io.tmpdir", "/tmp"))
+      val firstLocalDir = localDirStr.split(",").headOption
+        .map(_.trim).filter(_.nonEmpty).getOrElse("/tmp")
+      val localPath = java.nio.file.Paths.get(firstLocalDir).toAbsolutePath.normalize()
+
+      import scala.collection.JavaConverters._
+      val mountInfoPath = java.nio.file.Paths.get("/proc/self/mountinfo")
+      if (java.nio.file.Files.isReadable(mountInfoPath)) {
+        val lines = java.nio.file.Files.readAllLines(mountInfoPath).asScala
+        var best: Option[(String, String)] = None
+        lines.foreach { line =>
+          val parts = line.split(" ")
+          // Expect at least: id parent major:minor root mountPoint ...
+          if (parts.length >= 5) {
+            val majMin = parts(2)
+            val mountPoint = parts(4)
+            val mountPath = java.nio.file.Paths.get(mountPoint)
+            if (localPath.startsWith(mountPath)) {
+              val len = mountPoint.length
+              best match {
+                case Some((bestMount, _)) =>
+                  if (len > bestMount.length) best = Some((mountPoint, majMin))
+                case None =>
+                  best = Some((mountPoint, majMin))
+              }
+            }
+          }
+        }
+        best.map { case (mp, majMin) => s"$mp (device $majMin)" }
+      } else {
+        None
+      }
+    } catch {
+      case _: Throwable => None
+    }
   }
 
   val extraPlugins = getExtraPlugins
@@ -499,7 +545,10 @@ class RapidsDriverPlugin extends DriverPlugin with Logging {
     logDebug("Loading extra driver plugins: " +
       s"${extraDriverPlugins.map(_.getClass.getName).mkString(",")}")
     extraDriverPlugins.foreach(_.init(sc, pluginContext))
-    TrampolineUtil.postEvent(sc, buildInfoEvent)
+    // Enrich the build info event with the monitored disk device (if detectable)
+    val monitoredDiskDevice = RapidsPluginUtils.detectMonitoredDiskDevice(sparkConf)
+    val eventForLog = buildInfoEvent.copy(monitoredDiskDevice = monitoredDiskDevice)
+    TrampolineUtil.postEvent(sc, eventForLog)
     conf.rapidsConfMap
   }
 
