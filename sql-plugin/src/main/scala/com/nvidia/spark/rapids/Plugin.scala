@@ -95,7 +95,7 @@ object RapidsPluginUtils extends Logging {
         if (all == null || all.isEmpty) {
           None
         } else {
-          var name = new ArrayBuffer[String]()
+          val name = new mutable.ArrayBuffer[String]()
           var i = 0
           while (i < all.length) {
             val res = all(i)
