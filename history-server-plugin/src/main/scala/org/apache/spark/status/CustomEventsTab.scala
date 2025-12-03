@@ -51,7 +51,7 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
     val monitoredDiskDevice =
       getBuildValue("sparkRapidsBuildInfo", "monitoredDiskDevice")
 
-    val content =
+    val content = 
       <div class="row-fluid">
         <div class="span12">
           <h4>Custom Events Analysis</h4>
@@ -117,13 +117,14 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
               <div class="span6">
                 <div class="rapids-section">
                   <h5>
-                    Disk
+                    Disk / Network
                     <a href="#" class="rapids-section-toggle" data-target="section-disk-body"
                        style="margin-left: 8px; font-size: 11px;">[hide]</a>
                   </h5>
                   <div id="section-disk-body">
                     <div id="disk-io-chart" style="width: 100%; height: 250px; margin-top: 10px;"></div>
                     <div id="disk-util-chart" style="width: 100%; height: 250px; margin-top: 10px;"></div>
+                    <div id="net-io-chart" style="width: 100%; height: 250px; margin-top: 10px;"></div>
                   </div>
                 </div>
               </div>
@@ -141,7 +142,7 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                   </div>
                 </div>
               </div>
-            </div>
+          </div>
 
             <div class="row-fluid" style="margin-top: 20px;">
               <div class="span12">
@@ -564,6 +565,30 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
               diskUtilChart.redraw();
             }
 
+            // Network IO chart: netReadBytes, netWriteBytes (per sample interval)
+            var netIoChart = Highcharts.chart('net-io-chart', {
+              title: { text: 'Network IO (sample interval bytes)' },
+              xAxis: { type: 'datetime' },
+              yAxis: {
+                title: { text: 'Bytes per interval' },
+                min: 0
+              },
+              legend: { enabled: true },
+              series: []
+            });
+
+            if (netIoChart) {
+              var netMetrics = ['netReadBytes', 'netWriteBytes'];
+              netMetrics.forEach(function(metricName) {
+                var metricSeries = getSeriesForMetric(metricName);
+                metricSeries.forEach(function(s) {
+                  netIoChart.addSeries(s, false);
+                });
+              });
+              addStageBands(netIoChart);
+              netIoChart.redraw();
+            }
+
             // Spill time chart: GPU spill times from GpuTaskMetrics (seconds, per interval)
             var spillTimeChart = Highcharts.chart('spill-time-chart', {
               title: { text: 'GPU Spill Time' },
@@ -861,6 +886,8 @@ class CustomEventsApiPage(parent: CustomEventsTab, customEvents: List[CustomEven
       "diskReadBytes",
       "diskWriteBytes",
       "diskUtilPct",
+      "netReadBytes",
+      "netWriteBytes",
       "gpuSpillToHostTimeNs",
       "gpuSpillToDiskTimeNs",
       "gpuReadSpillFromHostTimeNs",

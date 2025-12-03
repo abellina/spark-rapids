@@ -129,9 +129,9 @@ object RapidsPluginUtils extends Logging {
     SparkRapidsBuildInfoEvent(
       sparkRapidsBuildInfo = pluginInfo,
       sparkRapidsJniBuildInfo = jniInfo,
-      cudfBuildInfo = loadProps(CUDF_PROPS_FILENAME),
+    cudfBuildInfo = loadProps(CUDF_PROPS_FILENAME),
       sparkRapidsPrivateBuildInfo = loadProps(PRIVATE_PROPS_FILENAME)
-    )
+  )
   }
 
   {
@@ -670,6 +670,14 @@ object RapidsMetricService {
 
   private val SECTOR_SIZE_BYTES: Long = 512L
 
+  // Network utilization sampling (Linux-only, best-effort)
+  private case class NetStatsSample(
+      rxBytes: Long,
+      txBytes: Long,
+      tsMs: Long)
+
+  @volatile private[this] var lastNetSample: Option[NetStatsSample] = None
+
   /** Lazily initialize NVML on the executor, if available. */
   private def ensureNvmlInitialized(): Boolean = {
     if (nvmlInitialized) {
@@ -893,6 +901,53 @@ object RapidsMetricService {
   }
 
   /**
+   * Sample aggregate network IO across non-loopback interfaces by reading /proc/net/dev.
+   * Returns per-interval deltas: (rxBytes, txBytes).
+   */
+  private def sampleNetStats(nowMs: Long): (Long, Long) = {
+    try {
+      import scala.collection.JavaConverters._
+      val netDevPath = java.nio.file.Paths.get("/proc/net/dev")
+      if (!java.nio.file.Files.isReadable(netDevPath)) {
+        return (0L, 0L)
+      }
+      val lines = java.nio.file.Files.readAllLines(netDevPath).asScala
+      // Skip header lines (first 2)
+      var rxTotal: Long = 0L
+      var txTotal: Long = 0L
+      lines.drop(2).foreach { line =>
+        val parts = line.trim.split(":")
+        if (parts.length == 2) {
+          val iface = parts(0).trim
+          // Ignore loopback
+          if (!iface.startsWith("lo")) {
+            val fields = parts(1).trim.split("\\s+")
+            // bytes fields: rx=fields(0), tx=fields(8)
+            if (fields.length >= 9) {
+              rxTotal += fields(0).toLong
+              txTotal += fields(8).toLong
+            }
+          }
+        }
+      }
+      val curr = NetStatsSample(rxTotal, txTotal, nowMs)
+      val deltas = lastNetSample match {
+        case Some(prev) if curr.tsMs > prev.tsMs =>
+          val dRx = math.max(0L, curr.rxBytes - prev.rxBytes)
+          val dTx = math.max(0L, curr.txBytes - prev.txBytes)
+          (dRx, dTx)
+        case _ =>
+          (0L, 0L)
+      }
+      lastNetSample = Some(curr)
+      deltas
+    } catch {
+      case _: Throwable =>
+        (0L, 0L)
+    }
+  }
+
+  /**
    * Enqueue a metric update to be picked up by the timer consumer.
    * This can be called from any producer (scheduled runs, event callbacks, etc.).
    */
@@ -943,6 +998,9 @@ object RapidsMetricService {
       // GPU SM utilization (%), averaged across all visible GPUs on this executor
       val gpuSmUtilPct: Long = sampleGpuSmUtilPct()
 
+      // Network IO (bytes per interval across non-loopback interfaces)
+      val (netReadBytes, netWriteBytes) = sampleNetStats(currentTime)
+
       // Compute per-interval deltas for retries, spill times, and spill bytes
       val deltaRetries = math.max(0L, retriesTotal - lastTotalRetries)
       val deltaSplitRetries = math.max(0L, splitRetriesTotal - lastTotalSplitRetries)
@@ -984,6 +1042,8 @@ object RapidsMetricService {
         diskReadBytes,                  // diskReadBytes
         diskWriteBytes,                 // diskWriteBytes
         diskUtilPct,                    // diskUtilPct (0-100)
+        netReadBytes,                   // netReadBytes (per interval)
+        netWriteBytes,                  // netWriteBytes (per interval)
         deltaHostTimeNs,                // gpuSpillToHostTimeNs (per interval)
         deltaDiskTimeNs,                // gpuSpillToDiskTimeNs (per interval)
         deltaReadHostTimeNs,            // gpuReadSpillFromHostTimeNs (per interval)
@@ -1036,6 +1096,8 @@ object RapidsMetricService {
       "diskReadBytes",
       "diskWriteBytes",
       "diskUtilPct",
+      "netReadBytes",
+      "netWriteBytes",
       "gpuSpillToHostTimeNs",
       "gpuSpillToDiskTimeNs",
       "gpuReadSpillFromHostTimeNs",
