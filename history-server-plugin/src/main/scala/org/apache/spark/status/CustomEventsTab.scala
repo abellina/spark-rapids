@@ -1,6 +1,7 @@
 package org.apache.spark.status
 
 import java.nio.{ByteBuffer, ByteOrder}
+import java.util.Base64
 
 import org.apache.spark.ui.{SparkUI, SparkUITab, UIUtils, WebUIPage}
 
@@ -664,20 +665,13 @@ class CustomEventsApiPage(parent: CustomEventsTab, customEvents: List[CustomEven
     s"""{"events": [$eventsJson], "count": ${filteredEvents.size}}"""
   }
 
-  private def hexToBytes(hex: String): Array[Byte] = {
-    val cleanHex = hex.trim
-    val len = cleanHex.length
-    if (len % 2 != 0) {
-      return Array.emptyByteArray
+  private def base64ToBytes(encoded: String): Array[Byte] = {
+    try {
+      Base64.getDecoder.decode(encoded.trim)
+    } catch {
+      case _: IllegalArgumentException =>
+        Array.emptyByteArray
     }
-    val data = new Array[Byte](len / 2)
-    var i = 0
-    while (i < len) {
-      val byteStr = cleanHex.substring(i, i + 2)
-      data(i / 2) = Integer.parseInt(byteStr, 16).toByte
-      i += 2
-    }
-    data
   }
 
   private def generateMetricsJson(): String = {
@@ -700,10 +694,10 @@ class CustomEventsApiPage(parent: CustomEventsTab, customEvents: List[CustomEven
       .foreach { e =>
         for {
           execId <- e.eventData.get("executorId")
-          encoded <- e.eventData.get("encodedMetricsHex")
+          encoded <- e.eventData.get("encodedMetricsB64")
           metricNames <- metricDefs.get(execId)
         } {
-          val bytes = hexToBytes(encoded)
+          val bytes = base64ToBytes(encoded)
           if (bytes.nonEmpty && metricNames.nonEmpty) {
             val bb = ByteBuffer.wrap(bytes).order(ByteOrder.BIG_ENDIAN)
             if (bb.remaining() >= Integer.BYTES) {

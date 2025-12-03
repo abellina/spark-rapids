@@ -17,6 +17,7 @@
 package com.nvidia.spark.rapids
 
 import java.nio.{ByteBuffer, ByteOrder}
+import java.util.Base64
 
 import org.apache.spark.scheduler.SparkListenerEvent
 
@@ -31,28 +32,16 @@ case class MetricDefinition(executorId: String, metricNames: Seq[String])
 }
 
 /**
- * Metric updates encoded as a hex string of (timestamp, value) long pairs.
- * The metric position in the sequence is defined by a prior MetricDefinition.
+ * Metric updates encoded as a Base64 string of the binary payload consisting of
+ * (timestamp, value) long pairs. The metric position in the sequence is defined
+ * by a prior MetricDefinition.
  */
-case class MetricUpdates(executorId: String, encodedMetricsHex: String)
+case class MetricUpdates(executorId: String, encodedMetricsBase64: String)
     extends SparkListenerEvent {
   override def logEvent: Boolean = true
 }
 
 object MetricUpdates {
-  private val hexArray: Array[Char] = "0123456789abcdef".toCharArray
-
-  private def bytesToHex(bytes: Array[Byte]): String = {
-    val hexChars = new Array[Char](bytes.length * 2)
-    var j = 0
-    while (j < bytes.length) {
-      val v = bytes(j) & 0xff
-      hexChars(j * 2) = hexArray(v >>> 4)
-      hexChars(j * 2 + 1) = hexArray(v & 0x0f)
-      j += 1
-    }
-    new String(hexChars)
-  }
 
   /**
    * Helper to build a MetricUpdates message from an array of (timestamp, values) tuples.
@@ -98,7 +87,7 @@ object MetricUpdates {
       i += 1
     }
 
-    MetricUpdates(executorId, bytesToHex(bb.array()))
+    MetricUpdates(executorId, Base64.getEncoder.encodeToString(bb.array()))
   }
 }
 

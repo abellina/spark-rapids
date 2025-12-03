@@ -193,7 +193,7 @@ class CustomEventsListener(customEvents: mutable.ListBuffer[CustomEventData])
       case mu: MetricUpdates =>
         val eventData = Map(
           "executorId" -> mu.executorId,
-          "encodedMetricsHex" -> mu.encodedMetricsHex
+          "encodedMetricsB64" -> mu.encodedMetricsBase64
         )
 
         customEvents += CustomEventData(
