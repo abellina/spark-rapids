@@ -539,6 +539,20 @@ object RapidsMetricService {
   private[this] val totalRetries = new AtomicLong(0L)
   private[this] val totalSplitRetries = new AtomicLong(0L)
 
+  // Cumulative GPU spill times (executor-local, nanoseconds)
+  private[this] val totalGpuSpillToHostTimeNs = new AtomicLong(0L)
+  private[this] val totalGpuSpillToDiskTimeNs = new AtomicLong(0L)
+  private[this] val totalGpuReadSpillFromHostTimeNs = new AtomicLong(0L)
+  private[this] val totalGpuReadSpillFromDiskTimeNs = new AtomicLong(0L)
+
+  // Cumulative GPU spill bytes (executor-local)
+  private[this] val totalGpuSpillHostBytes = new AtomicLong(0L)
+  private[this] val totalGpuSpillDiskBytes = new AtomicLong(0L)
+
+  // Last-sampled GPU spill bytes to compute per-interval deltas
+  @volatile private[this] var lastGpuSpillHostBytes: Long = 0L
+  @volatile private[this] var lastGpuSpillDiskBytes: Long = 0L
+
   // Disk utilization sampling (Linux-only, best-effort)
   private case class DiskStatsSample(
       readSectors: Long,
@@ -562,6 +576,42 @@ object RapidsMetricService {
   def incSplitRetries(n: Long): Unit = {
     if (n > 0) {
       totalSplitRetries.addAndGet(n)
+    }
+  }
+
+  def incGpuSpillToHostTime(ns: Long): Unit = {
+    if (ns > 0) {
+      totalGpuSpillToHostTimeNs.addAndGet(ns)
+    }
+  }
+
+  def incGpuSpillToDiskTime(ns: Long): Unit = {
+    if (ns > 0) {
+      totalGpuSpillToDiskTimeNs.addAndGet(ns)
+    }
+  }
+
+  def incGpuReadSpillFromHostTime(ns: Long): Unit = {
+    if (ns > 0) {
+      totalGpuReadSpillFromHostTimeNs.addAndGet(ns)
+    }
+  }
+
+  def incGpuReadSpillFromDiskTime(ns: Long): Unit = {
+    if (ns > 0) {
+      totalGpuReadSpillFromDiskTimeNs.addAndGet(ns)
+    }
+  }
+
+  def incGpuSpillHostBytes(bytes: Long): Unit = {
+    if (bytes > 0) {
+      totalGpuSpillHostBytes.addAndGet(bytes)
+    }
+  }
+
+  def incGpuSpillDiskBytes(bytes: Long): Unit = {
+    if (bytes > 0) {
+      totalGpuSpillDiskBytes.addAndGet(bytes)
     }
   }
 
@@ -732,6 +782,14 @@ object RapidsMetricService {
       val (diskReadBytes, diskWriteBytes, diskUtilPct) =
         sampleDiskStats(ctx, currentTime)
 
+      // Compute per-interval GPU spill bytes rather than cumulative
+      val hostTotal = totalGpuSpillHostBytes.get()
+      val diskTotal = totalGpuSpillDiskBytes.get()
+      val deltaGpuSpillHostBytes = math.max(0L, hostTotal - lastGpuSpillHostBytes)
+      val deltaGpuSpillDiskBytes = math.max(0L, diskTotal - lastGpuSpillDiskBytes)
+      lastGpuSpillHostBytes = hostTotal
+      lastGpuSpillDiskBytes = diskTotal
+
       val values: Array[Long] = Array(
         runtime.totalMemory(),          // jvmTotal
         runtime.freeMemory(),           // jvmFree
@@ -746,7 +804,13 @@ object RapidsMetricService {
         splitRetries,                   // splitRetryCount
         diskReadBytes,                  // diskReadBytes
         diskWriteBytes,                 // diskWriteBytes
-        diskUtilPct                     // diskUtilPct (0-100)
+        diskUtilPct,                    // diskUtilPct (0-100)
+        totalGpuSpillToHostTimeNs.get(),        // gpuSpillToHostTimeNs
+        totalGpuSpillToDiskTimeNs.get(),        // gpuSpillToDiskTimeNs
+        totalGpuReadSpillFromHostTimeNs.get(),  // gpuReadSpillFromHostTimeNs
+        totalGpuReadSpillFromDiskTimeNs.get(),  // gpuReadSpillFromDiskTimeNs
+        deltaGpuSpillHostBytes,                 // gpuSpillHostBytes (per interval)
+        deltaGpuSpillDiskBytes                 // gpuSpillDiskBytes (per interval)
       )
       // Producer: record the latest executor metrics snapshot.
       recordMetricUpdate(currentTime, values)
@@ -760,6 +824,21 @@ object RapidsMetricService {
   }
 
   def start(executorId: String, ctx: PluginContext): Unit = {
+    val conf = new RapidsConf(ctx.conf().getAll.toMap)
+    val metricsExecutorsConf = RapidsConf.METRICS_EXECUTORS
+    val enabledForThisExecutor: Boolean = {
+      val raw = conf.get(metricsExecutorsConf)
+      if (raw == "-1" || raw.trim.isEmpty) {
+        true
+      } else {
+        // Reuse RangeConfMatcher semantics: interpret config as list/ranges
+        val matcher = new RangeConfMatcher(conf, metricsExecutorsConf)
+        matcher.contains(executorId)
+      }
+    }
+    if (!enabledForThisExecutor) {
+      return
+    }
     // Send metric definition once on executor startup so the driver knows
     // which metric each positional entry in the updates corresponds to.
     val metricNames = Seq(
@@ -776,7 +855,13 @@ object RapidsMetricService {
       "splitRetryCount",
       "diskReadBytes",
       "diskWriteBytes",
-      "diskUtilPct")
+      "diskUtilPct",
+      "gpuSpillToHostTimeNs",
+      "gpuSpillToDiskTimeNs",
+      "gpuReadSpillFromHostTimeNs",
+      "gpuReadSpillFromDiskTimeNs",
+      "gpuSpillHostBytes",
+      "gpuSpillDiskBytes")
     ctx.ask(MetricDefinition(executorId, metricNames))
 
     executorService.scheduleWithFixedDelay(

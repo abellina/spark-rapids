@@ -25,7 +25,7 @@ class CustomEventsPage(parent: CustomEventsTab, customEvents: List[CustomEventDa
     extends WebUIPage("") {
 
   override def render(request: HttpServletRequest): Seq[Node] = {
-    val content = 
+    val content =
       <div class="row-fluid">
         <div class="span12">
           <h4>Custom Events Analysis</h4>
@@ -34,16 +34,85 @@ class CustomEventsPage(parent: CustomEventsTab, customEvents: List[CustomEventDa
           <div id="metric-charts">
             <h5>RAPIDS Metrics</h5>
             <div id="executor-filters" style="margin-bottom: 10px;"></div>
-            <div id="mem-composition-chart" style="width: 100%; height: 300px; margin-top: 20px;"></div>
-            <div id="jvm-chart" style="width: 100%; height: 300px; margin-top: 20px;"></div>
-            <div id="offheap-chart" style="width: 100%; height: 300px; margin-top: 20px;"></div>
-            <div id="sys-mem-chart" style="width: 100%; height: 300px; margin-top: 20px;"></div>
-            <div id="cpu-chart" style="width: 100%; height: 250px; margin-top: 20px;"></div>
-            <div id="gpu-tasks-chart" style="width: 100%; height: 250px; margin-top: 20px;"></div>
-            <div id="retries-chart" style="width: 100%; height: 250px; margin-top: 20px;"></div>
-            <div id="disk-io-chart" style="width: 100%; height: 250px; margin-top: 20px;"></div>
-            <div id="disk-util-chart" style="width: 100%; height: 250px; margin-top: 20px;"></div>
-            <div id="gpu-chart" style="width: 100%; height: 300px; margin-top: 20px;"></div>
+
+            <div class="row-fluid">
+              <div class="span6">
+                <div class="rapids-section">
+                  <h5>
+                    Memory
+                    <a href="#" class="rapids-section-toggle" data-target="section-memory-body"
+                       style="margin-left: 8px; font-size: 11px;">[hide]</a>
+                  </h5>
+                  <div id="section-memory-body">
+                    <div id="mem-composition-chart" style="width: 100%; height: 300px; margin-top: 10px;"></div>
+                    <div id="jvm-chart" style="width: 100%; height: 250px; margin-top: 10px;"></div>
+                    <div id="offheap-chart" style="width: 100%; height: 250px; margin-top: 10px;"></div>
+                    <div id="sys-mem-chart" style="width: 100%; height: 250px; margin-top: 10px;"></div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="span6">
+                <div class="rapids-section">
+                  <h5>
+                    CPU / Tasks / Retries
+                    <a href="#" class="rapids-section-toggle" data-target="section-cpu-body"
+                       style="margin-left: 8px; font-size: 11px;">[hide]</a>
+                  </h5>
+                  <div id="section-cpu-body">
+                    <div id="cpu-chart" style="width: 100%; height: 250px; margin-top: 10px;"></div>
+                    <div id="gpu-tasks-chart" style="width: 100%; height: 250px; margin-top: 10px;"></div>
+                    <div id="retries-chart" style="width: 100%; height: 250px; margin-top: 10px;"></div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="row-fluid" style="margin-top: 20px;">
+              <div class="span6">
+                <div class="rapids-section">
+                  <h5>
+                    Disk
+                    <a href="#" class="rapids-section-toggle" data-target="section-disk-body"
+                       style="margin-left: 8px; font-size: 11px;">[hide]</a>
+                  </h5>
+                  <div id="section-disk-body">
+                    <div id="disk-io-chart" style="width: 100%; height: 250px; margin-top: 10px;"></div>
+                    <div id="disk-util-chart" style="width: 100%; height: 250px; margin-top: 10px;"></div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="span6">
+                <div class="rapids-section">
+                  <h5>
+                    GPU Spill
+                    <a href="#" class="rapids-section-toggle" data-target="section-spill-body"
+                       style="margin-left: 8px; font-size: 11px;">[hide]</a>
+                  </h5>
+                  <div id="section-spill-body">
+                    <div id="spill-time-chart" style="width: 100%; height: 250px; margin-top: 10px;"></div>
+                    <div id="spill-bytes-chart" style="width: 100%; height: 250px; margin-top: 10px;"></div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="row-fluid" style="margin-top: 20px;">
+              <div class="span12">
+                <div class="rapids-section">
+                  <h5>
+                    GPU Memory
+                    <a href="#" class="rapids-section-toggle" data-target="section-gpu-body"
+                       style="margin-left: 8px; font-size: 11px;">[hide]</a>
+                  </h5>
+                  <div id="section-gpu-body">
+                    <div id="gpu-chart" style="width: 100%; height: 300px; margin-top: 10px;"></div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
           </div>
         </div>
       </div>
@@ -55,6 +124,8 @@ class CustomEventsPage(parent: CustomEventsTab, customEvents: List[CustomEventDa
       <script type="text/javascript">
         {scala.xml.Unparsed("""
           $(document).ready(function() {
+            // Initialize collapsible sections
+            initSectionToggles();
             // Fetch and render RAPIDS metric data
             fetchMetricData();
           });
@@ -107,6 +178,24 @@ class CustomEventsPage(parent: CustomEventsTab, customEvents: List[CustomEventDa
                 window._selectedExecutors.delete(execId);
               }
               renderMetricCharts();
+            });
+          }
+
+          function initSectionToggles() {
+            $('.rapids-section-toggle').off('click').on('click', function(e) {
+              e.preventDefault();
+              var targetId = $(this).data('target');
+              var body = $('#' + targetId);
+              if (!body.length) {
+                return;
+              }
+              if (body.is(':visible')) {
+                body.hide();
+                $(this).text('[show]');
+              } else {
+                body.show();
+                $(this).text('[hide]');
+              }
             });
           }
 
@@ -386,6 +475,57 @@ class CustomEventsPage(parent: CustomEventsTab, customEvents: List[CustomEventDa
               diskUtilChart.redraw();
             }
 
+            // Spill time chart: GPU spill times from GpuTaskMetrics (seconds)
+            var spillTimeChart = Highcharts.chart('spill-time-chart', {
+              title: { text: 'GPU Spill Time' },
+              xAxis: { type: 'datetime' },
+              yAxis: {
+                title: { text: 'Time (s, cumulative per executor)' },
+                min: 0
+              },
+              legend: { enabled: true },
+              series: []
+            });
+
+            if (spillTimeChart) {
+              var spillTimeMetrics = [
+                'gpuSpillToHostTimeNs',
+                'gpuSpillToDiskTimeNs',
+                'gpuReadSpillFromHostTimeNs',
+                'gpuReadSpillFromDiskTimeNs'
+              ];
+              spillTimeMetrics.forEach(function(metricName) {
+                var metricSeries = getSeriesForMetric(metricName);
+                metricSeries.forEach(function(s) {
+                  spillTimeChart.addSeries(s, false);
+                });
+              });
+              spillTimeChart.redraw();
+            }
+
+            // Spill bytes chart: GPU spill bytes from GpuTaskMetrics (per interval)
+            var spillBytesChart = Highcharts.chart('spill-bytes-chart', {
+              title: { text: 'GPU Spill Bytes' },
+              xAxis: { type: 'datetime' },
+              yAxis: {
+                title: { text: 'Bytes (per interval per executor)' },
+                min: 0
+              },
+              legend: { enabled: true },
+              series: []
+            });
+
+            if (spillBytesChart) {
+              var spillByteMetrics = ['gpuSpillHostBytes', 'gpuSpillDiskBytes'];
+              spillByteMetrics.forEach(function(metricName) {
+                var metricSeries = getSeriesForMetric(metricName);
+                metricSeries.forEach(function(s) {
+                  spillBytesChart.addSeries(s, false);
+                });
+              });
+              spillBytesChart.redraw();
+            }
+
             // GPU chart
             var gpuChart = Highcharts.chart('gpu-chart', {
               title: { text: 'GPU Memory' },
@@ -589,6 +729,12 @@ class CustomEventsApiPage(parent: CustomEventsTab, customEvents: List[CustomEven
         }
       }
 
+    val timeMetrics = Set(
+      "gpuSpillToHostTimeNs",
+      "gpuSpillToDiskTimeNs",
+      "gpuReadSpillFromHostTimeNs",
+      "gpuReadSpillFromDiskTimeNs")
+
     val knownMetrics = Seq(
       "jvmTotal",
       "jvmUsed",
@@ -604,7 +750,13 @@ class CustomEventsApiPage(parent: CustomEventsTab, customEvents: List[CustomEven
       "splitRetryCount",
       "diskReadBytes",
       "diskWriteBytes",
-      "diskUtilPct")
+      "diskUtilPct",
+      "gpuSpillToHostTimeNs",
+      "gpuSpillToDiskTimeNs",
+      "gpuReadSpillFromHostTimeNs",
+      "gpuReadSpillFromDiskTimeNs",
+      "gpuSpillHostBytes",
+      "gpuSpillDiskBytes")
 
     // Collect unique executor IDs
     val execIds = series.keys.map(_._1).toSet.toSeq.sorted
@@ -671,6 +823,16 @@ class CustomEventsApiPage(parent: CustomEventsTab, customEvents: List[CustomEven
 
             val ptsJson = otherPoints.map { case (ts, v) => s"[$ts,$v]" }.mkString(",")
             s""""systemOtherUsed": [$ptsJson]"""
+
+          case timeMetric if timeMetrics.contains(timeMetric) =>
+            // Convert nanoseconds to fractional seconds for display
+            val points =
+              series.getOrElse((execId, timeMetric), mutable.ArrayBuffer.empty).sortBy(_._1)
+            val ptsJson = points.map { case (ts, v) =>
+              val secs = v.toDouble / 1e9
+              s"[$ts,$secs]"
+            }.mkString(",")
+            s""""$timeMetric": [$ptsJson]"""
 
           case other =>
             val points = series.getOrElse((execId, other), mutable.ArrayBuffer.empty).sortBy(_._1)

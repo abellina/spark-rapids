@@ -786,6 +786,13 @@ val GPU_COREDUMP_PIPE_PATTERN = conf("spark.rapids.gpu.coreDump.pipePattern")
     .stringConf
     .createWithDefault("0")
 
+  val METRICS_EXECUTORS = conf("spark.rapids.metrics.executors")
+    .doc("Comma-separated list of executor IDs and hyphenated ranges of executor IDs to " +
+      "emit RAPIDS runtime metrics. Use -1 (default) to enable metrics on all executors.")
+    .internal()
+    .stringConf
+    .createWithDefault("-1")
+
   val PROFILE_TIME_RANGES_SECONDS = conf("spark.rapids.profile.timeRangesInSeconds")
     .doc("Comma-separated list of start-end ranges of time, in seconds, since executor startup " +
       "to start and stop profiling. For example, a value of 10-30,100-110 will have the profiler " +

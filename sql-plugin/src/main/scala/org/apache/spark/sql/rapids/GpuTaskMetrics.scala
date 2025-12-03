@@ -265,6 +265,8 @@ class GpuTaskMetrics extends Serializable with Logging {
       maxPageableBytesAllocated = maxPageableBytesAllocated.max(
         GpuTaskMetrics.pageableBytesAllocated.get())
     }
+    // Treat host allocations tracked here as part of GPU-related spill footprint
+    RapidsMetricService.incGpuSpillHostBytes(bytes)
   }
 
   def decHostBytesAllocated(bytes: Long, isPinned: Boolean): Unit = {
@@ -274,6 +276,7 @@ class GpuTaskMetrics extends Serializable with Logging {
   def incDiskBytesAllocated(bytes: Long): Unit = {
     GpuTaskMetrics.incDiskBytesAllocated(bytes)
     maxDiskBytesAllocated = maxDiskBytesAllocated.max(GpuTaskMetrics.diskBytesAllocated.get())
+    RapidsMetricService.incGpuSpillDiskBytes(bytes)
   }
 
   def decDiskBytesAllocated(bytes: Long): Unit = {
@@ -359,19 +362,43 @@ class GpuTaskMetrics extends Serializable with Logging {
   def semWaitTime[A](f: => A): A = timeIt(semWaitTimeNs, NvtxRegistry.ACQUIRE_GPU, f)
 
   def spillToHostTime[A](f: => A): A = {
-    timeIt(spillToHostTimeNs, "spillToHostTime", NvtxColor.RED, f)
+    val start = System.nanoTime()
+    try {
+      timeIt(spillToHostTimeNs, "spillToHostTime", NvtxColor.RED, f)
+    } finally {
+      val delta = System.nanoTime() - start
+      RapidsMetricService.incGpuSpillToHostTime(delta)
+    }
   }
 
   def spillToDiskTime[A](f: => A): A = {
-    timeIt(spillToDiskTimeNs, "spillToDiskTime", NvtxColor.RED, f)
+    val start = System.nanoTime()
+    try {
+      timeIt(spillToDiskTimeNs, "spillToDiskTime", NvtxColor.RED, f)
+    } finally {
+      val delta = System.nanoTime() - start
+      RapidsMetricService.incGpuSpillToDiskTime(delta)
+    }
   }
 
   def readSpillFromHostTime[A](f: => A): A = {
-    timeIt(readSpillFromHostTimeNs, "readSpillFromHostTime", NvtxColor.ORANGE, f)
+    val start = System.nanoTime()
+    try {
+      timeIt(readSpillFromHostTimeNs, "readSpillFromHostTime", NvtxColor.ORANGE, f)
+    } finally {
+      val delta = System.nanoTime() - start
+      RapidsMetricService.incGpuReadSpillFromHostTime(delta)
+    }
   }
 
   def readSpillFromDiskTime[A](f: => A): A = {
-    timeIt(readSpillFromDiskTimeNs, "readSpillFromDiskTime", NvtxColor.ORANGE, f)
+    val start = System.nanoTime()
+    try {
+      timeIt(readSpillFromDiskTimeNs, "readSpillFromDiskTime", NvtxColor.ORANGE, f)
+    } finally {
+      val delta = System.nanoTime() - start
+      RapidsMetricService.incGpuReadSpillFromDiskTime(delta)
+    }
   }
 
   def updateRetry(taskAttemptId: Long): Unit = {
