@@ -411,7 +411,7 @@ class CustomEventsPage(parent: CustomEventsTab, customEvents: List[CustomEventDa
               title: { text: 'Retries' },
               xAxis: { type: 'datetime' },
               yAxis: {
-                title: { text: 'Count (cumulative per executor)' },
+                title: { text: 'Count (per interval per executor)' },
                 min: 0
               },
               legend: { enabled: true },
@@ -476,12 +476,12 @@ class CustomEventsPage(parent: CustomEventsTab, customEvents: List[CustomEventDa
               diskUtilChart.redraw();
             }
 
-            // Spill time chart: GPU spill times from GpuTaskMetrics (seconds)
+            // Spill time chart: GPU spill times from GpuTaskMetrics (seconds, per interval)
             var spillTimeChart = Highcharts.chart('spill-time-chart', {
               title: { text: 'GPU Spill Time' },
               xAxis: { type: 'datetime' },
               yAxis: {
-                title: { text: 'Time (s, cumulative per executor)' },
+                title: { text: 'Time (s, per interval per executor)' },
                 min: 0
               },
               legend: { enabled: true },

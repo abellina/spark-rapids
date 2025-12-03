@@ -549,7 +549,13 @@ object RapidsMetricService {
   private[this] val totalGpuSpillHostBytes = new AtomicLong(0L)
   private[this] val totalGpuSpillDiskBytes = new AtomicLong(0L)
 
-  // Last-sampled GPU spill bytes to compute per-interval deltas
+  // Last-sampled values to compute per-interval deltas
+  @volatile private[this] var lastTotalRetries: Long = 0L
+  @volatile private[this] var lastTotalSplitRetries: Long = 0L
+  @volatile private[this] var lastGpuSpillToHostTimeNs: Long = 0L
+  @volatile private[this] var lastGpuSpillToDiskTimeNs: Long = 0L
+  @volatile private[this] var lastGpuReadSpillFromHostTimeNs: Long = 0L
+  @volatile private[this] var lastGpuReadSpillFromDiskTimeNs: Long = 0L
   @volatile private[this] var lastGpuSpillHostBytes: Long = 0L
   @volatile private[this] var lastGpuSpillDiskBytes: Long = 0L
 
@@ -776,13 +782,31 @@ object RapidsMetricService {
           case _: Throwable => 0L
         }
 
-      val retries = totalRetries.get()
-      val splitRetries = totalSplitRetries.get()
+      val retriesTotal = totalRetries.get()
+      val splitRetriesTotal = totalSplitRetries.get()
 
       val (diskReadBytes, diskWriteBytes, diskUtilPct) =
         sampleDiskStats(ctx, currentTime)
 
-      // Compute per-interval GPU spill bytes rather than cumulative
+      // Compute per-interval deltas for retries, spill times, and spill bytes
+      val deltaRetries = math.max(0L, retriesTotal - lastTotalRetries)
+      val deltaSplitRetries = math.max(0L, splitRetriesTotal - lastTotalSplitRetries)
+      lastTotalRetries = retriesTotal
+      lastTotalSplitRetries = splitRetriesTotal
+
+      val hostTimeTotal = totalGpuSpillToHostTimeNs.get()
+      val diskTimeTotal = totalGpuSpillToDiskTimeNs.get()
+      val readHostTimeTotal = totalGpuReadSpillFromHostTimeNs.get()
+      val readDiskTimeTotal = totalGpuReadSpillFromDiskTimeNs.get()
+      val deltaHostTimeNs = math.max(0L, hostTimeTotal - lastGpuSpillToHostTimeNs)
+      val deltaDiskTimeNs = math.max(0L, diskTimeTotal - lastGpuSpillToDiskTimeNs)
+      val deltaReadHostTimeNs = math.max(0L, readHostTimeTotal - lastGpuReadSpillFromHostTimeNs)
+      val deltaReadDiskTimeNs = math.max(0L, readDiskTimeTotal - lastGpuReadSpillFromDiskTimeNs)
+      lastGpuSpillToHostTimeNs = hostTimeTotal
+      lastGpuSpillToDiskTimeNs = diskTimeTotal
+      lastGpuReadSpillFromHostTimeNs = readHostTimeTotal
+      lastGpuReadSpillFromDiskTimeNs = readDiskTimeTotal
+
       val hostTotal = totalGpuSpillHostBytes.get()
       val diskTotal = totalGpuSpillDiskBytes.get()
       val deltaGpuSpillHostBytes = math.max(0L, hostTotal - lastGpuSpillHostBytes)
@@ -800,15 +824,15 @@ object RapidsMetricService {
         sysFree,                        // sysMemFree
         cpuPercent,                     // cpuPercent
         gpuConcurrentTasks,             // gpuConcurrentTasks
-        retries,                        // retryCount
-        splitRetries,                   // splitRetryCount
+        deltaRetries,                   // retryCount (per interval)
+        deltaSplitRetries,              // splitRetryCount (per interval)
         diskReadBytes,                  // diskReadBytes
         diskWriteBytes,                 // diskWriteBytes
         diskUtilPct,                    // diskUtilPct (0-100)
-        totalGpuSpillToHostTimeNs.get(),        // gpuSpillToHostTimeNs
-        totalGpuSpillToDiskTimeNs.get(),        // gpuSpillToDiskTimeNs
-        totalGpuReadSpillFromHostTimeNs.get(),  // gpuReadSpillFromHostTimeNs
-        totalGpuReadSpillFromDiskTimeNs.get(),  // gpuReadSpillFromDiskTimeNs
+        deltaHostTimeNs,                        // gpuSpillToHostTimeNs (per interval)
+        deltaDiskTimeNs,                        // gpuSpillToDiskTimeNs (per interval)
+        deltaReadHostTimeNs,                    // gpuReadSpillFromHostTimeNs (per interval)
+        deltaReadDiskTimeNs,                    // gpuReadSpillFromDiskTimeNs (per interval)
         deltaGpuSpillHostBytes,                 // gpuSpillHostBytes (per interval)
         deltaGpuSpillDiskBytes                 // gpuSpillDiskBytes (per interval)
       )
