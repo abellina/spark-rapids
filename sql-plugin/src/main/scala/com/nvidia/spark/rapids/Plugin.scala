@@ -35,6 +35,7 @@ import com.nvidia.spark.rapids.ScalableTaskCompletion.onTaskCompletion
 import com.nvidia.spark.rapids.filecache.{FileCache, FileCacheLocalityManager, FileCacheLocalityMsg}
 import com.nvidia.spark.rapids.io.async.TrafficController
 import com.nvidia.spark.rapids.jni.{GpuTimeZoneDB, RmmSpark, TaskPriority}
+import com.nvidia.spark.rapids.jni.nvml.{GPUInfo, GPUUtilizationInfo, NVML}
 import com.nvidia.spark.rapids.python.PythonWorkerSemaphore
 import org.apache.commons.lang3.exception.ExceptionUtils
 import org.apache.spark.{ExceptionFailure, SparkConf, SparkContext, SparkEnv, TaskContext, TaskFailedReason}
@@ -82,12 +83,56 @@ object RapidsPluginUtils extends Logging {
   private val SPARK_MASTER = "spark.master"
   private val SPARK_RAPIDS_REPO_URL = "https://github.com/NVIDIA/spark-rapids"
 
-  lazy val buildInfoEvent = SparkRapidsBuildInfoEvent(
-    sparkRapidsBuildInfo = loadProps(PLUGIN_PROPS_FILENAME),
-    sparkRapidsJniBuildInfo = loadProps(JNI_PROPS_FILENAME),
-    cudfBuildInfo = loadProps(CUDF_PROPS_FILENAME),
-    sparkRapidsPrivateBuildInfo = loadProps(PRIVATE_PROPS_FILENAME)
-  )
+  /** Best-effort detection of a GPU model name using NVML on this host. */
+  private def detectGpuModelFromNvml(): Option[String] = {
+    try {
+      if (!NVML.initialize()) {
+        logDebug("Failed to initialize NVML, skipping GPU model detection")
+        None
+      } else {
+        val all: Array[com.nvidia.spark.rapids.jni.nvml.NVMLResult[GPUInfo]] =
+          NVML.getAllGPUInfo()
+        if (all == null || all.isEmpty) {
+          None
+        } else {
+          var name: String = null
+          var i = 0
+          while (i < all.length && (name eq null)) {
+            val res = all(i)
+            if (res != null && res.isSuccess) {
+              val info = res.getData
+              if (info != null && info.deviceInfo != null &&
+                  info.deviceInfo.name != null && info.deviceInfo.name.nonEmpty) {
+                name = info.deviceInfo.name
+              }
+            }
+            i += 1
+          }
+          Option(name)
+        }
+      }
+    } catch {
+      case e: Throwable =>
+        logDebug("Failed to detect GPU model via NVML", e)
+        None
+    }
+  }
+
+  lazy val buildInfoEvent: SparkRapidsBuildInfoEvent = {
+    val pluginInfo = loadProps(PLUGIN_PROPS_FILENAME)
+    val jniInfoBase = loadProps(JNI_PROPS_FILENAME)
+    val gpuModelOpt = detectGpuModelFromNvml()
+    val jniInfo = gpuModelOpt match {
+      case Some(model) => jniInfoBase + ("gpuModel" -> model)
+      case None => jniInfoBase
+    }
+    SparkRapidsBuildInfoEvent(
+      sparkRapidsBuildInfo = pluginInfo,
+      sparkRapidsJniBuildInfo = jniInfo,
+      cudfBuildInfo = loadProps(CUDF_PROPS_FILENAME),
+      sparkRapidsPrivateBuildInfo = loadProps(PRIVATE_PROPS_FILENAME)
+    )
+  }
 
   {
     logInfo(s"RAPIDS Accelerator build: ${buildInfoEvent.sparkRapidsBuildInfo}")
@@ -598,6 +643,9 @@ object RapidsMetricService {
   private[this] val totalGpuSpillHostBytes = new AtomicLong(0L)
   private[this] val totalGpuSpillDiskBytes = new AtomicLong(0L)
 
+  // NVML initialization state (executor-local)
+  @volatile private[this] var nvmlInitialized: Boolean = false
+
   // Last-sampled values to compute per-interval deltas
   @volatile private[this] var lastTotalRetries: Long = 0L
   @volatile private[this] var lastTotalSplitRetries: Long = 0L
@@ -621,6 +669,61 @@ object RapidsMetricService {
   @volatile private[this] var lastDiskSample: Option[DiskStatsSample] = None
 
   private val SECTOR_SIZE_BYTES: Long = 512L
+
+  /** Lazily initialize NVML on the executor, if available. */
+  private def ensureNvmlInitialized(): Boolean = {
+    if (nvmlInitialized) {
+      true
+    } else {
+      if (!NVML.isAvailable) {
+        false
+      } else {
+        this.synchronized {
+          if (!nvmlInitialized) {
+            nvmlInitialized = NVML.initialize()
+          }
+        }
+        nvmlInitialized
+      }
+    }
+  }
+
+  /**
+   * Sample SM utilization using NVML. Returns the average GPU utilization
+   * percentage across all visible GPUs on this executor, or 0 if unavailable.
+   */
+  private def sampleGpuSmUtilPct(): Long = {
+    try {
+      if (!ensureNvmlInitialized()) {
+        return 0L
+      }
+      val all: Array[com.nvidia.spark.rapids.jni.nvml.NVMLResult[GPUInfo]] =
+        NVML.getAllGPUInfo()
+      if (all == null || all.isEmpty) {
+        return 0L
+      }
+      var sum: Long = 0L
+      var count: Long = 0L
+      var i = 0
+      while (i < all.length) {
+        val res = all(i)
+        if (res != null) {
+          val info = res.getData
+          if (info != null && info.utilizationInfo != null) {
+            val util: GPUUtilizationInfo = info.utilizationInfo
+            // gpuUtilization is 0-100 (% of SM utilization)
+            sum += util.gpuUtilization.toLong
+            count += 1
+          }
+        }
+        i += 1
+      }
+      if (count == 0L) 0L else sum / count
+    } catch {
+      case _: Throwable =>
+        0L
+    }
+  }
 
   def incRetries(n: Long): Unit = {
     if (n > 0) {
@@ -837,6 +940,9 @@ object RapidsMetricService {
       val (diskReadBytes, diskWriteBytes, diskUtilPct) =
         sampleDiskStats(ctx, currentTime)
 
+      // GPU SM utilization (%), averaged across all visible GPUs on this executor
+      val gpuSmUtilPct: Long = sampleGpuSmUtilPct()
+
       // Compute per-interval deltas for retries, spill times, and spill bytes
       val deltaRetries = math.max(0L, retriesTotal - lastTotalRetries)
       val deltaSplitRetries = math.max(0L, splitRetriesTotal - lastTotalSplitRetries)
@@ -878,12 +984,13 @@ object RapidsMetricService {
         diskReadBytes,                  // diskReadBytes
         diskWriteBytes,                 // diskWriteBytes
         diskUtilPct,                    // diskUtilPct (0-100)
-        deltaHostTimeNs,                        // gpuSpillToHostTimeNs (per interval)
-        deltaDiskTimeNs,                        // gpuSpillToDiskTimeNs (per interval)
-        deltaReadHostTimeNs,                    // gpuReadSpillFromHostTimeNs (per interval)
-        deltaReadDiskTimeNs,                    // gpuReadSpillFromDiskTimeNs (per interval)
-        deltaGpuSpillHostBytes,                 // gpuSpillHostBytes (per interval)
-        deltaGpuSpillDiskBytes                 // gpuSpillDiskBytes (per interval)
+        deltaHostTimeNs,                // gpuSpillToHostTimeNs (per interval)
+        deltaDiskTimeNs,                // gpuSpillToDiskTimeNs (per interval)
+        deltaReadHostTimeNs,            // gpuReadSpillFromHostTimeNs (per interval)
+        deltaReadDiskTimeNs,            // gpuReadSpillFromDiskTimeNs (per interval)
+        deltaGpuSpillHostBytes,         // gpuSpillHostBytes (per interval)
+        deltaGpuSpillDiskBytes,         // gpuSpillDiskBytes (per interval)
+        gpuSmUtilPct                    // gpuSmUtilPct (0-100)
       )
       // Producer: record the latest executor metrics snapshot.
       recordMetricUpdate(currentTime, values)
@@ -934,7 +1041,8 @@ object RapidsMetricService {
       "gpuReadSpillFromHostTimeNs",
       "gpuReadSpillFromDiskTimeNs",
       "gpuSpillHostBytes",
-      "gpuSpillDiskBytes")
+      "gpuSpillDiskBytes",
+      "gpuSmUtilPct")
     ctx.ask(MetricDefinition(executorId, metricNames))
 
     executorService.scheduleWithFixedDelay(

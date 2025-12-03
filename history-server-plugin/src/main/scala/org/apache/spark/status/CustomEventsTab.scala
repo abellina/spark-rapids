@@ -36,6 +36,7 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
     val pluginRevision = getBuildValue("sparkRapidsBuildInfo", "revision")
     val jniVersion = getBuildValue("sparkRapidsJniBuildInfo", "version")
     val jniRevision = getBuildValue("sparkRapidsJniBuildInfo", "revision")
+    val gpuModel = getBuildValue("sparkRapidsJniBuildInfo", "gpuModel")
     // GPU arch is not standardized across all builds, so fall back to any matching key.
     val jniArch = latestBuildInfo.flatMap { info =>
       info.eventData.collectFirst {
@@ -63,6 +64,7 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                     pluginRevision.map(v => <tr><th>RAPIDS Plugin Revision</th><td>{v}</td></tr>),
                     jniVersion.map(v => <tr><th>spark-rapids-jni Version</th><td>{v}</td></tr>),
                     jniRevision.map(v => <tr><th>spark-rapids-jni Revision</th><td>{v}</td></tr>),
+                    gpuModel.map(v => <tr><th>GPU Model (NVML)</th><td>{v}</td></tr>),
                     jniArch.map(v => <tr><th>JNI GPU Arch (from build info)</th><td>{v}</td></tr>),
                     monitoredDiskDevice.map(v =>
                       <tr><th>Monitored Disk Device (spark.local.dir)</th><td>{v}</td></tr>)
@@ -143,12 +145,13 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
               <div class="span12">
                 <div class="rapids-section">
                   <h5>
-                    GPU Memory
+                    GPU
                     <a href="#" class="rapids-section-toggle" data-target="section-gpu-body"
                        style="margin-left: 8px; font-size: 11px;">[hide]</a>
                   </h5>
                   <div id="section-gpu-body">
-                    <div id="gpu-chart" style="width: 100%; height: 300px; margin-top: 10px;"></div>
+                    <div id="gpu-chart" style="width: 100%; height: 260px; margin-top: 10px;"></div>
+                    <div id="gpu-util-chart" style="width: 100%; height: 240px; margin-top: 10px;"></div>
                   </div>
                 </div>
               </div>
@@ -567,7 +570,7 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
               spillBytesChart.redraw();
             }
 
-            // GPU chart
+            // GPU memory chart
             var gpuChart = Highcharts.chart('gpu-chart', {
               title: { text: 'GPU Memory' },
               xAxis: { type: 'datetime' },
@@ -585,6 +588,30 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                 });
               });
               gpuChart.redraw();
+            }
+
+            // GPU SM utilization chart
+            var gpuUtilChart = Highcharts.chart('gpu-util-chart', {
+              title: { text: 'GPU SM Utilization' },
+              xAxis: { type: 'datetime' },
+              yAxis: {
+                title: { text: 'SM Utilization (%)' },
+                min: 0,
+                max: 100
+              },
+              legend: { enabled: true },
+              series: []
+            });
+
+            if (gpuUtilChart) {
+              var gpuUtilMetrics = ['gpuSmUtilPct'];
+              gpuUtilMetrics.forEach(function(metricName) {
+                var metricSeries = getSeriesForMetric(metricName);
+                metricSeries.forEach(function(s) {
+                  gpuUtilChart.addSeries(s, false);
+                });
+              });
+              gpuUtilChart.redraw();
             }
           }
         """)}
@@ -790,7 +817,8 @@ class CustomEventsApiPage(parent: CustomEventsTab, customEvents: List[CustomEven
       "gpuReadSpillFromHostTimeNs",
       "gpuReadSpillFromDiskTimeNs",
       "gpuSpillHostBytes",
-      "gpuSpillDiskBytes")
+      "gpuSpillDiskBytes",
+      "gpuSmUtilPct")
 
     // Collect unique executor IDs
     val execIds = series.keys.map(_._1).toSet.toSeq.sorted
