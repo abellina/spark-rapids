@@ -26,11 +26,85 @@ class CustomEventsPage(parent: CustomEventsTab, customEvents: List[CustomEventDa
     extends WebUIPage("") {
 
   override def render(request: HttpServletRequest): Seq[Node] = {
+    // Extract latest SparkRapidsBuildInfo event if present
+    val latestBuildInfo = customEvents.reverse.find(_.eventType == "SparkRapidsBuildInfo")
+
+    def getBuildValue(prefix: String, key: String): Option[String] =
+      latestBuildInfo.flatMap(_.eventData.get(s"$prefix.$key")).filter(_.nonEmpty)
+
+    val pluginVersion = getBuildValue("sparkRapidsBuildInfo", "version")
+    val pluginRevision = getBuildValue("sparkRapidsBuildInfo", "revision")
+    val jniVersion = getBuildValue("sparkRapidsJniBuildInfo", "version")
+    val jniRevision = getBuildValue("sparkRapidsJniBuildInfo", "revision")
+    // GPU arch is not standardized across all builds, so fall back to any matching key.
+    val jniArch = latestBuildInfo.flatMap { info =>
+      info.eventData.collectFirst {
+        case (k, v) if k.startsWith("sparkRapidsJniBuildInfo.") &&
+          (k.toLowerCase.contains("arch") || k.toLowerCase.contains("compute")) => v
+      }
+    }
+
+    // Best-effort disk device detection on the history server host based on spark.local.dir
+    val diskDevice: Option[String] = try {
+      val sparkConf = parent.parent.conf
+      val localDirStr = sparkConf.get("spark.local.dir",
+        System.getProperty("java.io.tmpdir", "/tmp"))
+      val firstLocalDir = localDirStr.split(",").headOption
+        .map(_.trim).filter(_.nonEmpty).getOrElse("/tmp")
+      val localPath = java.nio.file.Paths.get(firstLocalDir).toAbsolutePath.normalize()
+
+      import scala.collection.JavaConverters._
+      val mountInfoPath = java.nio.file.Paths.get("/proc/self/mountinfo")
+      if (java.nio.file.Files.isReadable(mountInfoPath)) {
+        val lines = java.nio.file.Files.readAllLines(mountInfoPath).asScala
+        var best: Option[(String, String)] = None
+        lines.foreach { line =>
+          val parts = line.split(" ")
+          if (parts.length >= 5) {
+            val majMin = parts(2)
+            val mountPoint = parts(4)
+            val mountPath = java.nio.file.Paths.get(mountPoint)
+            if (localPath.startsWith(mountPath)) {
+              val len = mountPoint.length
+              best match {
+                case Some((bestMount, _)) =>
+                  if (len > bestMount.length) best = Some((mountPoint, majMin))
+                case None =>
+                  best = Some((mountPoint, majMin))
+              }
+            }
+          }
+        }
+        best.map { case (mp, majMin) => s"$mp (device $majMin)" }
+      } else {
+        None
+      }
+    } catch {
+      case _: Throwable => None
+    }
+
     val content =
       <div class="row-fluid">
         <div class="span12">
           <h4>Custom Events Analysis</h4>
           <p>This tab shows RAPIDS runtime metrics captured during application execution.</p>
+
+          <div id="rapids-build-info" style="margin-bottom: 15px;">
+            <table class="table table-condensed" style="width:auto;">
+              <tbody>
+                {
+                  Seq(
+                    pluginVersion.map(v => <tr><th>RAPIDS Plugin Version</th><td>{v}</td></tr>),
+                    pluginRevision.map(v => <tr><th>RAPIDS Plugin Revision</th><td>{v}</td></tr>),
+                    jniVersion.map(v => <tr><th>spark-rapids-jni Version</th><td>{v}</td></tr>),
+                    jniRevision.map(v => <tr><th>spark-rapids-jni Revision</th><td>{v}</td></tr>),
+                    jniArch.map(v => <tr><th>JNI GPU Arch (from build info)</th><td>{v}</td></tr>),
+                    diskDevice.map(v => <tr><th>Monitored Disk Device (spark.local.dir)</th><td>{v}</td></tr>)
+                  ).flatten
+                }
+              </tbody>
+            </table>
+          </div>
 
           <div id="metric-charts">
             <h5>RAPIDS Metrics</h5>

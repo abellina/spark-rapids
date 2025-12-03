@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2024, NVIDIA CORPORATION.
+ * Copyright (c) 2023-2025 NVIDIA CORPORATION.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,9 +18,19 @@ package com.nvidia.spark.rapids
 
 import org.apache.spark.scheduler.SparkListenerEvent
 
+/**
+ * Event carrying build and version information for the RAPIDS Accelerator and
+ * its dependencies. This is logged once per application so that tools like
+ * the history server plugin can surface the exact versions and revisions used.
+ */
 case class SparkRapidsBuildInfoEvent(
-  sparkRapidsBuildInfo: Map[String, String],
-  sparkRapidsJniBuildInfo: Map[String, String],
-  cudfBuildInfo: Map[String, String],
-  sparkRapidsPrivateBuildInfo: Map[String, String]
-) extends SparkListenerEvent
+    sparkRapidsBuildInfo: Map[String, String],
+    sparkRapidsJniBuildInfo: Map[String, String],
+    cudfBuildInfo: Map[String, String],
+    sparkRapidsPrivateBuildInfo: Map[String, String])
+    extends SparkListenerEvent {
+
+  override def logEvent: Boolean = true
+}
+
+

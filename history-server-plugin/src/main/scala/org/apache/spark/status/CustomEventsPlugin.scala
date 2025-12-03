@@ -1,12 +1,11 @@
 package org.apache.spark.status
 
-import com.nvidia.spark.rapids.{MetricDefinition, MetricUpdates}
+import com.nvidia.spark.rapids.{MetricDefinition, MetricUpdates, SparkRapidsBuildInfoEvent}
 import org.apache.spark.SparkConf
 import org.apache.spark.scheduler._
 import org.apache.spark.ui.SparkUI
 
 import scala.collection.mutable
-
 object CustomEventsPlugin {
   val customEvents = mutable.ListBuffer[CustomEventData]()
 }
@@ -176,6 +175,25 @@ class CustomEventsListener(customEvents: mutable.ListBuffer[CustomEventData])
   override def onOtherEvent(event: SparkListenerEvent): Unit = {
     // Capture any custom events that might be logged
     event match {
+      case bi: SparkRapidsBuildInfoEvent =>
+        // Flatten build info maps into simple key/value strings
+        def flatten(prefix: String, m: Map[String, String]): Map[String, String] =
+          m.map { case (k, v) => s"$prefix.$k" -> v }
+
+        val eventData =
+          flatten("sparkRapidsBuildInfo", bi.sparkRapidsBuildInfo) ++
+            flatten("sparkRapidsJniBuildInfo", bi.sparkRapidsJniBuildInfo) ++
+            flatten("cudfBuildInfo", bi.cudfBuildInfo) ++
+            flatten("sparkRapidsPrivateBuildInfo", bi.sparkRapidsPrivateBuildInfo)
+
+        customEvents += CustomEventData(
+          timestamp = System.currentTimeMillis(),
+          eventType = "SparkRapidsBuildInfo",
+          eventData = eventData,
+          applicationId = "current",
+          applicationAttemptId = None
+        )
+
       case md: MetricDefinition =>
         val eventData = Map(
           "executorId" -> md.executorId,
