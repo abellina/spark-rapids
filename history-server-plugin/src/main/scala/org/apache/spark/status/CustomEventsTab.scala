@@ -252,6 +252,7 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
             }
 
             var selected = window._selectedExecutors || new Set();
+            var stages = data.stages || [];
 
             function getSeriesForMetric(metricName) {
               var allSeries = [];
@@ -266,6 +267,39 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                 }
               });
               return allSeries;
+            }
+
+            function addStageBands(chart) {
+              if (!chart || !chart.xAxis || chart.xAxis.length === 0) {
+                return;
+              }
+              var xAxis = chart.xAxis[0];
+              // Remove existing stage bands (ids starting with 'stage-')
+              if (xAxis.plotLinesAndBands) {
+                var existing = xAxis.plotLinesAndBands.slice();
+                existing.forEach(function (band) {
+                  if (band.id && band.id.indexOf('stage-') === 0) {
+                    xAxis.removePlotBand(band.id);
+                  }
+                });
+              }
+              stages.forEach(function (stage) {
+                if (stage.startTime != null && stage.endTime != null &&
+                    stage.endTime >= stage.startTime) {
+                  var bandId = 'stage-' + stage.id + '-' + stage.startTime;
+                  xAxis.addPlotBand({
+                    id: bandId,
+                    from: stage.startTime,
+                    to: stage.endTime,
+                    color: 'rgba(200, 200, 255, 0.08)',
+                    label: {
+                      text: 'S' + stage.id,
+                      align: 'left',
+                      style: { fontSize: '9px', color: '#666' }
+                    }
+                  });
+                }
+              });
             }
 
             // Memory composition chart: jvmUsed, offHeapPinned, offHeapPageable, systemOtherUsed
@@ -328,6 +362,7 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                 }
               }
 
+              addStageBands(memCompChart);
               memCompChart.redraw();
             }
 
@@ -361,6 +396,7 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                   jvmChart.addSeries(s, false);
                 });
               });
+              addStageBands(jvmChart);
               jvmChart.redraw();
             }
 
@@ -381,6 +417,7 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                   offheapChart.addSeries(s, false);
                 });
               });
+              addStageBands(offheapChart);
               offheapChart.redraw();
             }
 
@@ -401,6 +438,7 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                   sysMemChart.addSeries(s, false);
                 });
               });
+              addStageBands(sysMemChart);
               sysMemChart.redraw();
             }
 
@@ -425,6 +463,7 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                   cpuChart.addSeries(s, false);
                 });
               });
+              addStageBands(cpuChart);
               cpuChart.redraw();
             }
 
@@ -448,6 +487,7 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                   gpuTasksChart.addSeries(s, false);
                 });
               });
+              addStageBands(gpuTasksChart);
               gpuTasksChart.redraw();
             }
 
@@ -471,6 +511,7 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                   retriesChart.addSeries(s, false);
                 });
               });
+              addStageBands(retriesChart);
               retriesChart.redraw();
             }
 
@@ -494,6 +535,7 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                   diskIoChart.addSeries(s, false);
                 });
               });
+              addStageBands(diskIoChart);
               diskIoChart.redraw();
             }
 
@@ -518,6 +560,7 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                   diskUtilChart.addSeries(s, false);
                 });
               });
+              addStageBands(diskUtilChart);
               diskUtilChart.redraw();
             }
 
@@ -546,6 +589,7 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                   spillTimeChart.addSeries(s, false);
                 });
               });
+              addStageBands(spillTimeChart);
               spillTimeChart.redraw();
             }
 
@@ -569,6 +613,7 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                   spillBytesChart.addSeries(s, false);
                 });
               });
+              addStageBands(spillBytesChart);
               spillBytesChart.redraw();
             }
 
@@ -589,6 +634,7 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                   gpuChart.addSeries(s, false);
                 });
               });
+              addStageBands(gpuChart);
               gpuChart.redraw();
             }
 
@@ -613,6 +659,7 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                   gpuUtilChart.addSeries(s, false);
                 });
               });
+              addStageBands(gpuUtilChart);
               gpuUtilChart.redraw();
             }
           }
@@ -825,6 +872,31 @@ class CustomEventsApiPage(parent: CustomEventsTab, customEvents: List[CustomEven
     // Collect unique executor IDs
     val execIds = series.keys.map(_._1).toSet.toSeq.sorted
 
+    // Derive stage ranges from StageCompleted events captured by the listener.
+    import scala.util.Try
+    val stageEvents = customEvents.filter(_.eventType == "StageCompleted")
+    val stages = stageEvents.flatMap { e =>
+      val data = e.eventData
+      for {
+        idStr <- data.get("stageId")
+        id <- Try(idStr.toInt).toOption
+      } yield {
+        val name = data.getOrElse("stageName", s"Stage $id")
+        val start = data
+          .get("stageStartTime")
+          .flatMap(s => Try(s.toLong).toOption)
+          .getOrElse(e.timestamp)
+        val end = data
+          .get("stageEndTime")
+          .flatMap(s => Try(s.toLong).toOption)
+          .getOrElse(e.timestamp)
+        (id, name, start, end)
+      }
+    }
+
+    def escapeJsonString(s: String): String =
+      s.replace("\\", "\\\\").replace("\"", "\\\"")
+
     // Build per-executor, per-metric series JSON
     val seriesByExecutorEntries = execIds.map { execId =>
       val metricEntries = knownMetrics.map { name =>
@@ -909,7 +981,12 @@ class CustomEventsApiPage(parent: CustomEventsTab, customEvents: List[CustomEven
 
     val execIdsJson = execIds.map(id => s""""$id"""").mkString(",")
 
-    s"""{"executors": [$execIdsJson], "seriesByExecutor": {$seriesByExecutorEntries}}"""
+    val stagesJson = stages.map {
+      case (id, name, start, end) =>
+        s"""{"id":$id,"name":"${escapeJsonString(name)}","startTime":$start,"endTime":$end}"""
+    }.mkString(",")
+
+    s"""{"executors": [$execIdsJson], "seriesByExecutor": {$seriesByExecutorEntries}, "stages": [$stagesJson]}"""
   }
 
   private def generateApiIndexJson(): String = {

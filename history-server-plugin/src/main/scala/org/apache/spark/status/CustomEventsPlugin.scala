@@ -119,22 +119,29 @@ class CustomEventsListener(customEvents: mutable.ListBuffer[CustomEventData])
   override def onStageCompleted(stageCompleted: SparkListenerStageCompleted): Unit = {
     // Capture stage completion with custom metrics
     val stageInfo = stageCompleted.stageInfo
-    val taskMetrics = stageInfo.taskMetrics
-    
+    val taskMetrics = Option(stageInfo.taskMetrics)
+    val startTime = stageInfo.submissionTime.getOrElse(
+      stageInfo.completionTime.getOrElse(System.currentTimeMillis()))
+    val endTime = stageInfo.completionTime.getOrElse(System.currentTimeMillis())
+
     val eventData = Map(
       "stageId" -> stageInfo.stageId.toString,
       "stageName" -> stageInfo.name,
       "numTasks" -> stageInfo.numTasks.toString,
-      "executorRunTime" -> taskMetrics.executorRunTime.toString,
-      "executorCpuTime" -> taskMetrics.executorCpuTime.toString,
-      "inputBytes" -> taskMetrics.inputMetrics.bytesRead.toString,
-      "outputBytes" -> taskMetrics.outputMetrics.bytesWritten.toString,
-      "shuffleReadBytes" -> taskMetrics.shuffleReadMetrics.totalBytesRead.toString,
-      "shuffleWriteBytes" -> taskMetrics.shuffleWriteMetrics.bytesWritten.toString
+      "stageStartTime" -> startTime.toString,
+      "stageEndTime" -> endTime.toString,
+      "executorRunTime" -> taskMetrics.map(_.executorRunTime.toString).getOrElse("0"),
+      "executorCpuTime" -> taskMetrics.map(_.executorCpuTime.toString).getOrElse("0"),
+      "inputBytes" -> taskMetrics.map(_.inputMetrics.bytesRead.toString).getOrElse("0"),
+      "outputBytes" -> taskMetrics.map(_.outputMetrics.bytesWritten.toString).getOrElse("0"),
+      "shuffleReadBytes" -> taskMetrics.map(_.shuffleReadMetrics.totalBytesRead.toString)
+        .getOrElse("0"),
+      "shuffleWriteBytes" -> taskMetrics.map(_.shuffleWriteMetrics.bytesWritten.toString)
+        .getOrElse("0")
     )
-    
+
     customEvents += CustomEventData(
-      timestamp = stageInfo.completionTime.getOrElse(System.currentTimeMillis()),
+      timestamp = endTime,
       eventType = "StageCompleted",
       eventData = eventData,
       applicationId = "current",
