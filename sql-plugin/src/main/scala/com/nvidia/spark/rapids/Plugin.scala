@@ -95,20 +95,20 @@ object RapidsPluginUtils extends Logging {
         if (all == null || all.isEmpty) {
           None
         } else {
-          var name: String = null
+          var name = new ArrayBuffer[String]()
           var i = 0
-          while (i < all.length && (name eq null)) {
+          while (i < all.length) {
             val res = all(i)
-            if (res != null && res.isSuccess) {
+            if (res != null) {
               val info = res.getData
               if (info != null && info.deviceInfo != null &&
                   info.deviceInfo.name != null && info.deviceInfo.name.nonEmpty) {
-                name = info.deviceInfo.name
+                name.append(info.deviceInfo.name)
               }
             }
             i += 1
           }
-          Option(name)
+          Option(name.mkString(", "))
         }
       }
     } catch {

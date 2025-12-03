@@ -15,6 +15,8 @@ import scala.xml.Node
 class CustomEventsTab(parent: SparkUI, customEvents: List[CustomEventData]) 
     extends SparkUITab(parent, "customevents") {
 
+  override val name: String = "🚀 RAPIDS"
+
   attachPage(new CustomEventsPage(this, customEvents))
   attachPage(new CustomEventsApiPage(this, customEvents))
 }
