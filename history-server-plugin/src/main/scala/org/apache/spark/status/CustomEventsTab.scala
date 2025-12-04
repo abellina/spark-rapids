@@ -374,6 +374,8 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
               if (!container.length) {
                 return;
               }
+              // Center the stage detail "card" within the available width.
+              container.css('text-align', 'center');
               var active = getActiveStagesAt(ts);
               if (!active || active.length === 0) {
                 container.html(
@@ -1085,21 +1087,31 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                     align: 'right',
                     zIndex: 5
                   }).css({
-                    fontSize: '10px',
+                    fontSize: '11px',
                     textAlign: 'right',
-                    pointerEvents: 'none'
+                    pointerEvents: 'none',
+                    backgroundColor: 'rgba(255,255,255,0.90)',
+                    padding: '4px 6px',
+                    borderRadius: '4px',
+                    boxShadow: '0 0 2px rgba(0,0,0,0.25)'
                   }).add();
                   chart._rapidsSummaryLabel = label;
                 } else {
                   label.attr({ text: text });
                 }
-                // Reposition to top-right inside the plot area
+                // Reposition to top-right inside the plot area, roughly aligned with the title
+                var yOffset = 10;
+                try {
+                  if (chart.title && chart.title.element && chart.title.getBBox) {
+                    yOffset = chart.title.getBBox().y || yOffset;
+                  }
+                } catch (ignore) {}
                 label.align({
                   align: 'right',
                   verticalAlign: 'top',
                   x: -10,
-                  y: 10
-                }, null, 'plotBox');
+                  y: yOffset
+                }, null, 'spacingBox');
               } catch (e) {
                 // best-effort; don't break charts on error
                 if (window.console && console.log) {
