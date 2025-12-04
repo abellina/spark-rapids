@@ -107,35 +107,15 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                   </h5>
                   <div id="section-memory-body">
                     <div id="mem-composition-chart" style="width: 100%; height: 300px; margin-top: 10px;"></div>
-                    <div id="mem-composition-stage-detail" class="rapids-stage-detail" style="margin-top: 4px;"></div>
                     <div id="jvm-chart" style="width: 100%; height: 250px; margin-top: 10px;"></div>
-                    <div id="jvm-stage-detail" class="rapids-stage-detail" style="margin-top: 4px;"></div>
                     <div id="offheap-chart" style="width: 100%; height: 250px; margin-top: 10px;"></div>
-                    <div id="offheap-stage-detail" class="rapids-stage-detail" style="margin-top: 4px;"></div>
                     <div id="sys-mem-chart" style="width: 100%; height: 250px; margin-top: 10px;"></div>
-                    <div id="sys-mem-stage-detail" class="rapids-stage-detail" style="margin-top: 4px;"></div>
+                    <div id="cpu-chart" style="width: 100%; height: 250px; margin-top: 10px;"></div>
+                    <div id="system-stage-detail-group" class="rapids-stage-detail" style="margin-top: 4px;"></div>
                   </div>
                 </div>
-          </div>
-
-              <div class="span6">
-                <div class="rapids-section">
-                  <h5>
-                    CPU / Tasks / Retries
-                    <a href="#" class="rapids-section-toggle" data-target="section-cpu-body"
-                       style="margin-left: 8px; font-size: 11px;">[hide]</a>
-                  </h5>
-                  <div id="section-cpu-body">
-                    <div id="cpu-chart" style="width: 100%; height: 250px; margin-top: 10px;"></div>
-                    <div id="cpu-stage-detail" class="rapids-stage-detail" style="margin-top: 4px;"></div>
-                    <div id="gpu-tasks-chart" style="width: 100%; height: 250px; margin-top: 10px;"></div>
-                    <div id="gpu-tasks-stage-detail" class="rapids-stage-detail" style="margin-top: 4px;"></div>
-                    <div id="retries-chart" style="width: 100%; height: 250px; margin-top: 10px;"></div>
-                    <div id="retries-stage-detail" class="rapids-stage-detail" style="margin-top: 4px;"></div>
-                  </div>
-          </div>
-        </div>
-      </div>
+              </div>
+            </div>
 
             <div class="row-fluid" style="margin-top: 20px;">
               <div class="span6">
@@ -147,11 +127,9 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                   </h5>
                   <div id="section-disk-body">
                     <div id="disk-io-chart" style="width: 100%; height: 250px; margin-top: 10px;"></div>
-                    <div id="disk-io-stage-detail" class="rapids-stage-detail" style="margin-top: 4px;"></div>
                     <div id="disk-util-chart" style="width: 100%; height: 250px; margin-top: 10px;"></div>
-                    <div id="disk-util-stage-detail" class="rapids-stage-detail" style="margin-top: 4px;"></div>
                     <div id="net-io-chart" style="width: 100%; height: 250px; margin-top: 10px;"></div>
-                    <div id="net-io-stage-detail" class="rapids-stage-detail" style="margin-top: 4px;"></div>
+                    <div id="io-stage-detail-group" class="rapids-stage-detail" style="margin-top: 4px;"></div>
                   </div>
                 </div>
               </div>
@@ -165,9 +143,8 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                   </h5>
                   <div id="section-spill-body">
                     <div id="spill-time-chart" style="width: 100%; height: 250px; margin-top: 10px;"></div>
-                    <div id="spill-time-stage-detail" class="rapids-stage-detail" style="margin-top: 4px;"></div>
                     <div id="spill-bytes-chart" style="width: 100%; height: 250px; margin-top: 10px;"></div>
-                    <div id="spill-bytes-stage-detail" class="rapids-stage-detail" style="margin-top: 4px;"></div>
+                    <div id="spill-stage-detail-group" class="rapids-stage-detail" style="margin-top: 4px;"></div>
                   </div>
                 </div>
               </div>
@@ -183,9 +160,10 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                   </h5>
                   <div id="section-gpu-body">
                     <div id="gpu-chart" style="width: 100%; height: 260px; margin-top: 10px;"></div>
-                    <div id="gpu-stage-detail" class="rapids-stage-detail" style="margin-top: 4px;"></div>
+                    <div id="gpu-tasks-chart" style="width: 100%; height: 220px; margin-top: 10px;"></div>
+                    <div id="retries-chart" style="width: 100%; height: 230px; margin-top: 10px;"></div>
                     <div id="gpu-util-chart" style="width: 100%; height: 240px; margin-top: 10px;"></div>
-                    <div id="gpu-util-stage-detail" class="rapids-stage-detail" style="margin-top: 4px;"></div>
+                    <div id="gpu-stage-detail-group" class="rapids-stage-detail" style="margin-top: 4px;"></div>
                   </div>
                 </div>
               </div>
@@ -337,6 +315,10 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
             }
 
             var stages = data.stages || [];
+            // Global grouping of related charts that should share tooltip content
+            // and, where wired, x-axis range. Each entry maps a group name to an
+            // array of Highcharts chart instances.
+            window._rapidsChartGroups = window._rapidsChartGroups || {};
             var selectedExecId = window._selectedExecutorId;
             if (!selectedExecId) {
               var keys = Object.keys(data.seriesByExecutor || {});
@@ -387,59 +369,6 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                 .replace(/'/g, '&#39;');
             }
 
-            function makeTooltipFormatter() {
-              return function() {
-                // Determine owning chart
-                var chart = null;
-                if (this.points && this.points.length) {
-                  chart = this.points[0].series.chart;
-                } else if (this.point && this.point.series) {
-                  chart = this.point.series.chart;
-                }
-
-                // If chart has a pinned set of points, use those; otherwise use current hover
-                var pts;
-                var x;
-                if (chart && chart.pinnedPoints && chart.pinnedPoints.length) {
-                  pts = chart.pinnedPoints;
-                  x = chart.pinnedX;
-                } else {
-                  x = this.x;
-                  if (this.points && this.points.length) {
-                    pts = this.points;
-                  } else if (this.point) {
-                    pts = [this.point];
-                  } else {
-                    pts = [];
-                  }
-                }
-
-                var active = getActiveStagesAt(x);
-                var header = Highcharts.dateFormat('%Y-%m-%d %H:%M:%S', x);
-                var s = '<span style="font-size:10px;">' + header + '</span>';
-
-                if (pts && pts.length) {
-                  pts.forEach(function(p) {
-                    s += '<br/><span style="color:' + p.color +
-                      '">\u25CF</span> ' + escapeHtml(p.series.name) +
-                      ': <b>' + p.y + '</b>';
-                  });
-                }
-
-                if (active.length > 0) {
-                  var stageLinks = active.map(function(st) {
-                    var id = st.id;
-                    var attemptId = (st.attemptId != null) ? st.attemptId : 0;
-                    var href = '/history/' + getAppId() + '/stages/stage/?id=' +
-                      encodeURIComponent(id) + '&attempt=' + encodeURIComponent(attemptId);
-                    return '<a href="' + href + '">' + escapeHtml(id) + '</a>';
-                  }).join(', ');
-                  s += '<br/><span style="font-size:10px;">Stages: ' + stageLinks + '</span>';
-                }
-                return s;
-              };
-            }
-
             function updateStageDetailTable(containerId, ts) {
               var container = $('#' + containerId);
               if (!container.length) {
@@ -448,17 +377,30 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
               var active = getActiveStagesAt(ts);
               if (!active || active.length === 0) {
                 container.html(
-                  '<span style="font-size:11px;color:#777;">' +
+                  '<div style="display:inline-block;max-width:700px;margin:0 auto;' +
+                  'border:1px solid #ccc;border-radius:6px;padding:6px 10px;' +
+                  'background-color:#fafafa;font-size:11px;color:#777;">' +
+                  '<span style="float:right;cursor:pointer;color:#999;" ' +
+                  'onclick="$(\'#' + escapeHtml(containerId) +
+                  '\').empty();">&times;</span>' +
                   'No stages active at the selected time.' +
-                  '</span>');
+                  '</div>');
                 return;
               }
 
               var headerTime = Highcharts.dateFormat('%Y-%m-%d %H:%M:%S', ts);
               var html = '';
-              html += '<div style="font-size:11px;margin-bottom:4px;">' +
-                'Active stages at ' + escapeHtml(headerTime) + '</div>';
-              html += '<table class="table table-condensed" style="font-size:11px;margin-bottom:0;">';
+              html += '<div style="display:inline-block;max-width:900px;margin:0 auto;' +
+                'border:1px solid #ccc;border-radius:6px;padding:6px 10px;' +
+                'background-color:#fafafa;">';
+              html += '<div style="font-size:11px;margin-bottom:4px;overflow:hidden;">' +
+                '<span>Active stages at ' + escapeHtml(headerTime) + '</span>' +
+                '<span style="float:right;cursor:pointer;color:#999;" ' +
+                'onclick="$(\'#' + escapeHtml(containerId) +
+                '\').empty();">&times;</span>' +
+                '</div>';
+              html += '<table class="table table-condensed" ' +
+                'style="font-size:11px;margin-bottom:0;background-color:white;border-radius:4px;">';
               html += '<thead><tr>' +
                 '<th>Stage ID</th>' +
                 '<th>Attempt</th>' +
@@ -493,13 +435,40 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
               container.html(html);
             }
 
-            var commonTooltipFormatter = makeTooltipFormatter();
+            function makeLinkedXAxis(groupName, options) {
+              var cfg = options || {};
+              if (!cfg.type) {
+                cfg.type = 'datetime';
+              }
+              var existingEvents = cfg.events || {};
+              cfg.events = existingEvents;
+              var prevSetExtremes = existingEvents.setExtremes;
+              cfg.events.setExtremes = function (e) {
+                if (prevSetExtremes) {
+                  prevSetExtremes.call(this, e);
+                }
+                if (!e || e.trigger === 'syncExtremes') {
+                  return;
+                }
+                var groups = window._rapidsChartGroups || {};
+                var charts = (groups[groupName] || []);
+                var me = this.chart;
+                charts.forEach(function (c) {
+                  if (c && c !== me) {
+                    c.xAxis[0].setExtremes(
+                      e.min, e.max, false, false, { trigger: 'syncExtremes' });
+                    c.redraw();
+                  }
+                });
+              };
+              return cfg;
+            }
 
             // Memory composition chart: jvmUsed, offHeapPinned, offHeapPageable, systemOtherUsed
             var memCompChart = Highcharts.chart('mem-composition-chart', {
               chart: { type: 'area' },
-              title: { text: 'Memory Composition (Used)' },
-              xAxis: { type: 'datetime' },
+              title: { text: 'Memory Composition (Used)', align: 'left' },
+              xAxis: makeLinkedXAxis('system', { type: 'datetime' }),
               yAxis: {
                 title: { text: 'Bytes' }
               },
@@ -509,7 +478,7 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                   point: {
                     events: {
                       click: function () {
-                        updateStageDetailTable('mem-composition-stage-detail', this.x);
+                        updateStageDetailTable('system-stage-detail-group', this.x);
                       }
                     }
                   }
@@ -519,15 +488,7 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                   marker: { enabled: false }
                 }
               },
-              tooltip: {
-                shared: true,
-                useHTML: true,
-                hideDelay: 1500,
-                formatter: commonTooltipFormatter,
-                style: {
-                  pointerEvents: 'auto'
-                }
-              },
+              tooltip: {},
               series: []
             });
 
@@ -572,8 +533,8 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
 
             // JVM chart: jvmTotal, jvmUsed
             var jvmChart = Highcharts.chart('jvm-chart', {
-              title: { text: 'JVM Memory' },
-              xAxis: { type: 'datetime' },
+              title: { text: 'JVM Memory', align: 'left' },
+              xAxis: makeLinkedXAxis('system', { type: 'datetime' }),
               yAxis: { title: { text: 'Bytes' } },
               legend: { enabled: true },
               plotOptions: {
@@ -581,17 +542,13 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                   point: {
                     events: {
                       click: function () {
-                        updateStageDetailTable('jvm-stage-detail', this.x);
+                        updateStageDetailTable('system-stage-detail-group', this.x);
                       }
                     }
                   }
                 }
               },
-              tooltip: {
-                shared: true,
-                useHTML: true,
-                formatter: commonTooltipFormatter
-              },
+              tooltip: {},
               series: []
             });
 
@@ -621,8 +578,8 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
 
             // Off-heap chart: pinned and pageable
             var offheapChart = Highcharts.chart('offheap-chart', {
-              title: { text: 'Off-heap Memory' },
-              xAxis: { type: 'datetime' },
+              title: { text: 'Off-heap Memory', align: 'left' },
+              xAxis: makeLinkedXAxis('system', { type: 'datetime' }),
               yAxis: { title: { text: 'Bytes' } },
               legend: { enabled: true },
               plotOptions: {
@@ -630,17 +587,13 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                   point: {
                     events: {
                       click: function () {
-                        updateStageDetailTable('offheap-stage-detail', this.x);
+                        updateStageDetailTable('system-stage-detail-group', this.x);
                       }
                     }
                   }
                 }
               },
-              tooltip: {
-                shared: true,
-                useHTML: true,
-                formatter: commonTooltipFormatter
-              },
+              tooltip: {},
               series: []
             });
 
@@ -657,8 +610,8 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
 
             // System memory chart: system used and free
             var sysMemChart = Highcharts.chart('sys-mem-chart', {
-              title: { text: 'System Memory' },
-              xAxis: { type: 'datetime' },
+              title: { text: 'System Memory', align: 'left' },
+              xAxis: makeLinkedXAxis('system', { type: 'datetime' }),
               yAxis: { title: { text: 'Bytes' } },
               legend: { enabled: true },
               plotOptions: {
@@ -666,17 +619,13 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                   point: {
                     events: {
                       click: function () {
-                        updateStageDetailTable('sys-mem-stage-detail', this.x);
+                        updateStageDetailTable('system-stage-detail-group', this.x);
                       }
                     }
                   }
                 }
               },
-              tooltip: {
-                shared: true,
-                useHTML: true,
-                formatter: commonTooltipFormatter
-              },
+              tooltip: {},
               series: []
             });
 
@@ -693,8 +642,8 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
 
             // CPU usage chart: cpuPercent
             var cpuChart = Highcharts.chart('cpu-chart', {
-              title: { text: 'System CPU Usage' },
-              xAxis: { type: 'datetime' },
+              title: { text: 'System CPU Usage', align: 'left' },
+              xAxis: makeLinkedXAxis('system', { type: 'datetime' }),
               yAxis: {
                 title: { text: 'CPU %' },
                 max: 100,
@@ -706,17 +655,13 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                   point: {
                     events: {
                       click: function () {
-                        updateStageDetailTable('cpu-stage-detail', this.x);
+                        updateStageDetailTable('system-stage-detail-group', this.x);
                       }
                     }
                   }
                 }
               },
-              tooltip: {
-                shared: true,
-                useHTML: true,
-                formatter: commonTooltipFormatter
-              },
+              tooltip: {},
               series: []
             });
 
@@ -733,8 +678,8 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
 
             // GPU concurrent tasks chart
             var gpuTasksChart = Highcharts.chart('gpu-tasks-chart', {
-              title: { text: 'GPU Concurrent Tasks' },
-              xAxis: { type: 'datetime' },
+              title: { text: 'GPU Concurrent Tasks', align: 'left' },
+              xAxis: makeLinkedXAxis('gpu', { type: 'datetime' }),
               yAxis: {
                 title: { text: 'Tasks' },
                 min: 0
@@ -745,17 +690,13 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                   point: {
                     events: {
                       click: function () {
-                        updateStageDetailTable('gpu-tasks-stage-detail', this.x);
+                        updateStageDetailTable('gpu-stage-detail-group', this.x);
                       }
                     }
                   }
                 }
               },
-              tooltip: {
-                shared: true,
-                useHTML: true,
-                formatter: commonTooltipFormatter
-              },
+              tooltip: {},
               series: []
             });
 
@@ -772,8 +713,8 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
 
             // Retries chart: retryCount, splitRetryCount
             var retriesChart = Highcharts.chart('retries-chart', {
-              title: { text: 'Retries' },
-              xAxis: { type: 'datetime' },
+              title: { text: 'Retries', align: 'left' },
+              xAxis: makeLinkedXAxis('gpu', { type: 'datetime' }),
               yAxis: {
                 title: { text: 'Count (per interval per executor)' },
                 min: 0
@@ -784,17 +725,13 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                   point: {
                     events: {
                       click: function () {
-                        updateStageDetailTable('retries-stage-detail', this.x);
+                        updateStageDetailTable('gpu-stage-detail-group', this.x);
                       }
                     }
                   }
                 }
               },
-              tooltip: {
-                shared: true,
-                useHTML: true,
-                formatter: commonTooltipFormatter
-              },
+              tooltip: {},
               series: []
             });
 
@@ -809,10 +746,19 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
               retriesChart.redraw();
             }
 
+            // Group: System (CPU + Memory charts) with linked stage table
+            window._rapidsChartGroups.system = [
+              memCompChart,
+              jvmChart,
+              offheapChart,
+              sysMemChart,
+              cpuChart
+            ];
+
             // Disk IO chart: diskReadBytes, diskWriteBytes (per sample interval)
             var diskIoChart = Highcharts.chart('disk-io-chart', {
-              title: { text: 'Disk IO (sample interval bytes)' },
-              xAxis: { type: 'datetime' },
+              title: { text: 'Disk IO (sample interval bytes)', align: 'left' },
+              xAxis: makeLinkedXAxis('io', { type: 'datetime' }),
               yAxis: {
                 title: { text: 'Bytes per interval' },
                 min: 0
@@ -823,17 +769,13 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                   point: {
                     events: {
                       click: function () {
-                        updateStageDetailTable('disk-io-stage-detail', this.x);
+                        updateStageDetailTable('io-stage-detail-group', this.x);
                       }
                     }
                   }
                 }
               },
-              tooltip: {
-                shared: true,
-                useHTML: true,
-                formatter: commonTooltipFormatter
-              },
+              tooltip: {},
               series: []
             });
 
@@ -850,8 +792,8 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
 
             // Disk utilization chart: diskUtilPct
             var diskUtilChart = Highcharts.chart('disk-util-chart', {
-              title: { text: 'Disk Utilization (spark.local.dir device)' },
-              xAxis: { type: 'datetime' },
+              title: { text: 'Disk Utilization (spark.local.dir device)', align: 'left' },
+              xAxis: makeLinkedXAxis('io', { type: 'datetime' }),
               yAxis: {
                 title: { text: '% busy' },
                 max: 100,
@@ -863,17 +805,13 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                   point: {
                     events: {
                       click: function () {
-                        updateStageDetailTable('disk-util-stage-detail', this.x);
+                        updateStageDetailTable('io-stage-detail-group', this.x);
                       }
                     }
                   }
                 }
               },
-              tooltip: {
-                shared: true,
-                useHTML: true,
-                formatter: commonTooltipFormatter
-              },
+              tooltip: {},
               series: []
             });
 
@@ -890,8 +828,8 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
 
             // Network IO chart: netReadBytes, netWriteBytes (per sample interval)
             var netIoChart = Highcharts.chart('net-io-chart', {
-              title: { text: 'Network IO (sample interval bytes)' },
-              xAxis: { type: 'datetime' },
+              title: { text: 'Network IO (sample interval bytes)', align: 'left' },
+              xAxis: makeLinkedXAxis('io', { type: 'datetime' }),
               yAxis: {
                 title: { text: 'Bytes per interval' },
                 min: 0
@@ -902,17 +840,13 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                   point: {
                     events: {
                       click: function () {
-                        updateStageDetailTable('net-io-stage-detail', this.x);
+                        updateStageDetailTable('io-stage-detail-group', this.x);
                       }
                     }
                   }
                 }
               },
-              tooltip: {
-                shared: true,
-                useHTML: true,
-                formatter: commonTooltipFormatter
-              },
+              tooltip: {},
               series: []
             });
 
@@ -927,10 +861,17 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
               netIoChart.redraw();
             }
 
+            // Group: IO (disk IO, disk util, net IO)
+            window._rapidsChartGroups.io = [
+              diskIoChart,
+              diskUtilChart,
+              netIoChart
+            ];
+
             // Spill time chart: GPU spill times from GpuTaskMetrics (seconds, per interval)
             var spillTimeChart = Highcharts.chart('spill-time-chart', {
-              title: { text: 'GPU Spill Time' },
-              xAxis: { type: 'datetime' },
+              title: { text: 'GPU Spill Time', align: 'left' },
+              xAxis: makeLinkedXAxis('spill', { type: 'datetime' }),
               yAxis: {
                 title: { text: 'Time (s, per interval per executor)' },
                 min: 0
@@ -941,17 +882,13 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                   point: {
                     events: {
                       click: function () {
-                        updateStageDetailTable('spill-time-stage-detail', this.x);
+                        updateStageDetailTable('spill-stage-detail-group', this.x);
                       }
                     }
                   }
                 }
               },
-              tooltip: {
-                shared: true,
-                useHTML: true,
-                formatter: commonTooltipFormatter
-              },
+              tooltip: {},
               series: []
             });
 
@@ -973,8 +910,8 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
 
             // Spill bytes chart: GPU spill bytes from GpuTaskMetrics (per interval)
             var spillBytesChart = Highcharts.chart('spill-bytes-chart', {
-              title: { text: 'GPU Spill Bytes' },
-              xAxis: { type: 'datetime' },
+              title: { text: 'GPU Spill Bytes', align: 'left' },
+              xAxis: makeLinkedXAxis('spill', { type: 'datetime' }),
               yAxis: {
                 title: { text: 'Bytes (per interval per executor)' },
                 min: 0
@@ -985,17 +922,13 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                   point: {
                     events: {
                       click: function () {
-                        updateStageDetailTable('spill-bytes-stage-detail', this.x);
+                        updateStageDetailTable('spill-stage-detail-group', this.x);
                       }
                     }
                   }
                 }
               },
-              tooltip: {
-                shared: true,
-                useHTML: true,
-                formatter: commonTooltipFormatter
-              },
+              tooltip: {},
               series: []
             });
 
@@ -1010,10 +943,23 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
               spillBytesChart.redraw();
             }
 
-            // GPU memory chart
+            // Group: Spill (time + bytes)
+            window._rapidsChartGroups.spill = [
+              spillTimeChart,
+              spillBytesChart
+            ];
+
+            // GPU memory chart (top) - shares x-axis range with GPU SM util chart.
+            // We hide the x-axis labels here so that only the bottom chart shows
+            // the time axis, but both charts stay synchronized.
             var gpuChart = Highcharts.chart('gpu-chart', {
-              title: { text: 'GPU Memory' },
-              xAxis: { type: 'datetime' },
+              title: { text: 'GPU Memory', align: 'left' },
+              xAxis: makeLinkedXAxis('gpu', {
+                type: 'datetime',
+                labels: { enabled: false },
+                tickLength: 0,
+                lineWidth: 0
+              }),
               yAxis: { title: { text: 'Bytes' } },
               legend: { enabled: true },
               plotOptions: {
@@ -1021,17 +967,13 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                   point: {
                     events: {
                       click: function () {
-                        updateStageDetailTable('gpu-stage-detail', this.x);
+                        updateStageDetailTable('gpu-stage-detail-group', this.x);
                       }
                     }
                   }
                 }
               },
-              tooltip: {
-                shared: true,
-                useHTML: true,
-                formatter: commonTooltipFormatter
-              },
+              tooltip: {},
               series: []
             });
 
@@ -1040,7 +982,7 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
               gpuMetrics.forEach(function(metricName) {
                 var metricSeries = getSeriesForMetric(metricName);
                 metricSeries.forEach(function(s) {
-              gpuChart.addSeries(s, false);
+                  gpuChart.addSeries(s, false);
                 });
               });
               gpuChart.redraw();
@@ -1048,8 +990,8 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
 
             // GPU SM utilization chart
             var gpuUtilChart = Highcharts.chart('gpu-util-chart', {
-              title: { text: 'GPU SM Utilization' },
-              xAxis: { type: 'datetime' },
+              title: { text: 'GPU SM Utilization', align: 'left' },
+              xAxis: makeLinkedXAxis('gpu', { type: 'datetime' }),
               yAxis: {
                 title: { text: 'SM Utilization (%)' },
                 min: 0,
@@ -1061,17 +1003,13 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                   point: {
                     events: {
                       click: function () {
-                        updateStageDetailTable('gpu-util-stage-detail', this.x);
+                        updateStageDetailTable('gpu-stage-detail-group', this.x);
                       }
                     }
                   }
                 }
               },
-              tooltip: {
-                shared: true,
-                useHTML: true,
-                formatter: commonTooltipFormatter
-              },
+              tooltip: {},
               series: []
             });
 
@@ -1085,6 +1023,146 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
               });
               gpuUtilChart.redraw();
             }
+
+            // Register GPU charts as a group for synchronized behavior (x-axis, tooltip).
+            window._rapidsChartGroups.gpu = [
+              gpuChart,
+              gpuUtilChart,
+              gpuTasksChart,
+              retriesChart
+            ];
+
+            // Highcharts synchronized-charts style behavior for grouped charts.
+            // Adapted from the Highcharts demo: https://www.highcharts.com/demo/highcharts/synchronized-charts
+            if (!Highcharts.Point.prototype.highlight) {
+              Highcharts.Point.prototype.highlight = function (event) {
+                var chart = this.series && this.series.chart;
+                this.onMouseOver(); // Show hover marker
+                if (chart && chart.xAxis && chart.xAxis.length > 0) {
+                  chart.xAxis[0].drawCrosshair(event, this);
+                }
+              };
+            }
+
+            if (!Highcharts.Pointer.prototype._rapidsResetPatched) {
+              // Do not hide tooltips/crosshairs on mouse out; we control them via sync.
+              Highcharts.Pointer.prototype.reset = function () {
+                return undefined;
+              };
+              Highcharts.Pointer.prototype._rapidsResetPatched = true;
+            }
+
+            if (!window._rapidsPointerSyncBound) {
+              window._rapidsPointerSyncBound = {};
+            }
+
+            function updateChartSummaryLabel(chart, metricValues) {
+              try {
+                var parts = [];
+                Object.keys(metricValues).sort().forEach(function (name) {
+                  var v = metricValues[name];
+                  parts.push(escapeHtml(name) + '=' + escapeHtml(v));
+                });
+                var text = parts.join('<br/>');
+                if (!text) {
+                  if (chart._rapidsSummaryLabel) {
+                    chart._rapidsSummaryLabel.destroy();
+                    chart._rapidsSummaryLabel = null;
+                  }
+                  return;
+                }
+                var label = chart._rapidsSummaryLabel;
+                if (!label) {
+                  label = chart.renderer.label(
+                    text,
+                    chart.plotWidth - 10,
+                    10,
+                    null,
+                    null,
+                    null,
+                    true
+                  ).attr({
+                    align: 'right',
+                    zIndex: 5
+                  }).css({
+                    fontSize: '10px',
+                    textAlign: 'right',
+                    pointerEvents: 'none'
+                  }).add();
+                  chart._rapidsSummaryLabel = label;
+                } else {
+                  label.attr({ text: text });
+                }
+                // Reposition to top-right inside the plot area
+                label.align({
+                  align: 'right',
+                  verticalAlign: 'top',
+                  x: -10,
+                  y: 10
+                }, null, 'plotBox');
+              } catch (e) {
+                // best-effort; don't break charts on error
+                if (window.console && console.log) {
+                  console.log('[RAPIDS metrics] failed to update summary label', e);
+                }
+              }
+            }
+
+            function bindPointerSyncForGroup(groupName, containerId) {
+              if (!containerId || window._rapidsPointerSyncBound[groupName]) {
+                return;
+              }
+              window._rapidsPointerSyncBound[groupName] = true;
+              ['mousemove', 'touchmove', 'touchstart'].forEach(function (eventType) {
+                var container = document.getElementById(containerId);
+                if (!container) {
+                  return;
+                }
+                container.addEventListener(eventType, function (e) {
+                  var charts = (window._rapidsChartGroups &&
+                    window._rapidsChartGroups[groupName]) || [];
+                  if (!charts || !charts.length) {
+                    return;
+                  }
+                  charts.forEach(function (chart) {
+                    if (!chart || !chart.pointer) {
+                      return;
+                    }
+                    var event = chart.pointer.normalize(e);
+                    var bestPoint = null;
+                    var metricValues = {};
+                    chart.series.forEach(function (s) {
+                      if (!s.visible) {
+                        return;
+                      }
+                      var p = s.searchPoint(event, true);
+                      if (!p) {
+                        return;
+                      }
+                      if (!bestPoint || Math.abs(p.x - event.chartX) <
+                          Math.abs(bestPoint.x - event.chartX)) {
+                        bestPoint = p;
+                      }
+                      // series.name is like "<execId> <metricName>"
+                      var name = s.name || '';
+                      var idx = name.indexOf(' ');
+                      var metricName = (idx >= 0) ? name.substring(idx + 1) : name;
+                      metricValues[metricName] = p.y;
+                    });
+                    if (bestPoint) {
+                      bestPoint.highlight(event);
+                    }
+                    updateChartSummaryLabel(chart, metricValues);
+                  });
+                });
+              });
+            }
+
+            // Bind synchronized pointer behavior for all chart groups.
+            bindPointerSyncForGroup('system', 'section-memory-body');
+            bindPointerSyncForGroup('io', 'section-disk-body');
+            bindPointerSyncForGroup('spill', 'section-spill-body');
+            bindPointerSyncForGroup('gpu', 'section-gpu-body');
           }
         """)}
       </script>
