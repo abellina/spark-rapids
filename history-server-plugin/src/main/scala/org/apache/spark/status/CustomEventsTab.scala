@@ -359,23 +359,6 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
               };
             }
 
-            // Allow clicking on a chart to "pin" the tooltip so it stops following the mouse.
-            function enableTooltipPinning(chart) {
-              if (!chart || !chart.pointer || !chart.container) {
-                return;
-              }
-              var pinned = false;
-              var origMouseMove = chart.pointer.onContainerMouseMove;
-              Highcharts.addEvent(chart.container, 'click', function () {
-                pinned = !pinned;
-                if (pinned) {
-                  chart.pointer.onContainerMouseMove = function () {};
-                } else {
-                  chart.pointer.onContainerMouseMove = origMouseMove;
-                }
-              });
-            }
-
             var commonTooltipFormatter = makeTooltipFormatter();
 
             // Memory composition chart: jvmUsed, offHeapPinned, offHeapPageable, systemOtherUsed
@@ -388,6 +371,22 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
               },
               legend: { enabled: true },
               plotOptions: {
+                series: {
+                  point: {
+                    events: {
+                      click: function () {
+                        var chart = this.series.chart;
+                        if (chart.pinnedX === this.x) {
+                          chart.pinnedX = null;
+                          chart.tooltip.hide();
+                        } else {
+                          chart.pinnedX = this.x;
+                          chart.tooltip.refresh(this);
+                        }
+                      }
+                    }
+                  }
+                },
                 area: {
                   stacking: 'normal',
                   marker: { enabled: false }
@@ -437,7 +436,6 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                 }
               }
 
-              enableTooltipPinning(memCompChart);
               memCompChart.redraw();
             }
 
@@ -447,6 +445,24 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
               xAxis: { type: 'datetime' },
               yAxis: { title: { text: 'Bytes' } },
               legend: { enabled: true },
+              plotOptions: {
+                series: {
+                  point: {
+                    events: {
+                      click: function () {
+                        var chart = this.series.chart;
+                        if (chart.pinnedX === this.x) {
+                          chart.pinnedX = null;
+                          chart.tooltip.hide();
+                        } else {
+                          chart.pinnedX = this.x;
+                          chart.tooltip.refresh(this);
+                        }
+                      }
+                    }
+                  }
+                }
+              },
               tooltip: {
                 shared: true,
                 useHTML: true,
@@ -486,6 +502,24 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
               xAxis: { type: 'datetime' },
               yAxis: { title: { text: 'Bytes' } },
               legend: { enabled: true },
+              plotOptions: {
+                series: {
+                  point: {
+                    events: {
+                      click: function () {
+                        var chart = this.series.chart;
+                        if (chart.pinnedX === this.x) {
+                          chart.pinnedX = null;
+                          chart.tooltip.hide();
+                        } else {
+                          chart.pinnedX = this.x;
+                          chart.tooltip.refresh(this);
+                        }
+                      }
+                    }
+                  }
+                }
+              },
               tooltip: {
                 shared: true,
                 useHTML: true,
@@ -512,6 +546,24 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
               xAxis: { type: 'datetime' },
               yAxis: { title: { text: 'Bytes' } },
               legend: { enabled: true },
+              plotOptions: {
+                series: {
+                  point: {
+                    events: {
+                      click: function () {
+                        var chart = this.series.chart;
+                        if (chart.pinnedX === this.x) {
+                          chart.pinnedX = null;
+                          chart.tooltip.hide();
+                        } else {
+                          chart.pinnedX = this.x;
+                          chart.tooltip.refresh(this);
+                        }
+                      }
+                    }
+                  }
+                }
+              },
               tooltip: {
                 shared: true,
                 useHTML: true,
@@ -542,6 +594,24 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                 min: 0
               },
               legend: { enabled: true },
+              plotOptions: {
+                series: {
+                  point: {
+                    events: {
+                      click: function () {
+                        var chart = this.series.chart;
+                        if (chart.pinnedX === this.x) {
+                          chart.pinnedX = null;
+                          chart.tooltip.hide();
+                        } else {
+                          chart.pinnedX = this.x;
+                          chart.tooltip.refresh(this);
+                        }
+                      }
+                    }
+                  }
+                }
+              },
               tooltip: {
                 shared: true,
                 useHTML: true,
@@ -571,6 +641,24 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                 min: 0
               },
               legend: { enabled: true },
+              plotOptions: {
+                series: {
+                  point: {
+                    events: {
+                      click: function () {
+                        var chart = this.series.chart;
+                        if (chart.pinnedX === this.x) {
+                          chart.pinnedX = null;
+                          chart.tooltip.hide();
+                        } else {
+                          chart.pinnedX = this.x;
+                          chart.tooltip.refresh(this);
+                        }
+                      }
+                    }
+                  }
+                }
+              },
               tooltip: {
                 shared: true,
                 useHTML: true,
@@ -600,6 +688,24 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                 min: 0
               },
               legend: { enabled: true },
+              plotOptions: {
+                series: {
+                  point: {
+                    events: {
+                      click: function () {
+                        var chart = this.series.chart;
+                        if (chart.pinnedX === this.x) {
+                          chart.pinnedX = null;
+                          chart.tooltip.hide();
+                        } else {
+                          chart.pinnedX = this.x;
+                          chart.tooltip.refresh(this);
+                        }
+                      }
+                    }
+                  }
+                }
+              },
               tooltip: {
                 shared: true,
                 useHTML: true,
@@ -629,6 +735,24 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                 min: 0
               },
               legend: { enabled: true },
+              plotOptions: {
+                series: {
+                  point: {
+                    events: {
+                      click: function () {
+                        var chart = this.series.chart;
+                        if (chart.pinnedX === this.x) {
+                          chart.pinnedX = null;
+                          chart.tooltip.hide();
+                        } else {
+                          chart.pinnedX = this.x;
+                          chart.tooltip.refresh(this);
+                        }
+                      }
+                    }
+                  }
+                }
+              },
               tooltip: {
                 shared: true,
                 useHTML: true,
@@ -659,6 +783,24 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                 min: 0
               },
               legend: { enabled: true },
+              plotOptions: {
+                series: {
+                  point: {
+                    events: {
+                      click: function () {
+                        var chart = this.series.chart;
+                        if (chart.pinnedX === this.x) {
+                          chart.pinnedX = null;
+                          chart.tooltip.hide();
+                        } else {
+                          chart.pinnedX = this.x;
+                          chart.tooltip.refresh(this);
+                        }
+                      }
+                    }
+                  }
+                }
+              },
               tooltip: {
                 shared: true,
                 useHTML: true,
@@ -688,6 +830,24 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                 min: 0
               },
               legend: { enabled: true },
+              plotOptions: {
+                series: {
+                  point: {
+                    events: {
+                      click: function () {
+                        var chart = this.series.chart;
+                        if (chart.pinnedX === this.x) {
+                          chart.pinnedX = null;
+                          chart.tooltip.hide();
+                        } else {
+                          chart.pinnedX = this.x;
+                          chart.tooltip.refresh(this);
+                        }
+                      }
+                    }
+                  }
+                }
+              },
               tooltip: {
                 shared: true,
                 useHTML: true,
@@ -717,6 +877,24 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                 min: 0
               },
               legend: { enabled: true },
+              plotOptions: {
+                series: {
+                  point: {
+                    events: {
+                      click: function () {
+                        var chart = this.series.chart;
+                        if (chart.pinnedX === this.x) {
+                          chart.pinnedX = null;
+                          chart.tooltip.hide();
+                        } else {
+                          chart.pinnedX = this.x;
+                          chart.tooltip.refresh(this);
+                        }
+                      }
+                    }
+                  }
+                }
+              },
               tooltip: {
                 shared: true,
                 useHTML: true,
@@ -751,6 +929,24 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                 min: 0
               },
               legend: { enabled: true },
+              plotOptions: {
+                series: {
+                  point: {
+                    events: {
+                      click: function () {
+                        var chart = this.series.chart;
+                        if (chart.pinnedX === this.x) {
+                          chart.pinnedX = null;
+                          chart.tooltip.hide();
+                        } else {
+                          chart.pinnedX = this.x;
+                          chart.tooltip.refresh(this);
+                        }
+                      }
+                    }
+                  }
+                }
+              },
               tooltip: {
                 shared: true,
                 useHTML: true,
@@ -777,6 +973,24 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
               xAxis: { type: 'datetime' },
               yAxis: { title: { text: 'Bytes' } },
               legend: { enabled: true },
+              plotOptions: {
+                series: {
+                  point: {
+                    events: {
+                      click: function () {
+                        var chart = this.series.chart;
+                        if (chart.pinnedX === this.x) {
+                          chart.pinnedX = null;
+                          chart.tooltip.hide();
+                        } else {
+                          chart.pinnedX = this.x;
+                          chart.tooltip.refresh(this);
+                        }
+                      }
+                    }
+                  }
+                }
+              },
               tooltip: {
                 shared: true,
                 useHTML: true,
@@ -807,6 +1021,24 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                 max: 100
               },
               legend: { enabled: true },
+              plotOptions: {
+                series: {
+                  point: {
+                    events: {
+                      click: function () {
+                        var chart = this.series.chart;
+                        if (chart.pinnedX === this.x) {
+                          chart.pinnedX = null;
+                          chart.tooltip.hide();
+                        } else {
+                          chart.pinnedX = this.x;
+                          chart.tooltip.refresh(this);
+                        }
+                      }
+                    }
+                  }
+                }
+              },
               tooltip: {
                 shared: true,
                 useHTML: true,
