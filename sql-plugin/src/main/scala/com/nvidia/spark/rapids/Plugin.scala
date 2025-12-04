@@ -1073,6 +1073,7 @@ object RapidsMetricService {
   def recordMetricUpdate(timestamp: Long, values: Array[Long]): Unit = {
     // defensively copy in case the caller mutates the array after enqueueing
     pendingUpdates.add(timestamp -> values.clone())
+    println(s"Enqueued metric update in ${System.currentTimeMillis() - timestamp}ms")
   }
 
   /** Drain all currently pending updates into an array for batching. */
@@ -1089,95 +1090,96 @@ object RapidsMetricService {
   class Foo(executorId: String, ctx: PluginContext) extends Runnable {
     override def run(): Unit = {
       val runtime = Runtime.getRuntime
-      val (pinned, pageable) = HostAlloc.getAllocated
       val currentTime = System.currentTimeMillis()
-      val (sysUsed, sysFree, cpuPercent) = osBeanOpt.map { os =>
-        val total = os.getTotalPhysicalMemorySize
-        val free = os.getFreePhysicalMemorySize
-        val used = math.max(0L, total - free)
-        val rawCpu = os.getSystemCpuLoad
-        val cpuPct =
-          if (rawCpu >= 0.0) math.round(rawCpu * 100.0).toLong else 0L
-        (used, free, cpuPct)
-      }.getOrElse((0L, 0L, 0L))
+      // Reuse the original sampling logic from before, but only enqueue samples.
+      try {
+        val (pinned, pageable) = HostAlloc.getAllocated
+        val (sysUsed, sysFree, cpuPercent) = osBeanOpt.map { os =>
+          val total = os.getTotalPhysicalMemorySize
+          val free = os.getFreePhysicalMemorySize
+          val used = math.max(0L, total - free)
+          val rawCpu = os.getSystemCpuLoad
+          val cpuPct =
+            if (rawCpu >= 0.0) math.round(rawCpu * 100.0).toLong else 0L
+          (used, free, cpuPct)
+        }.getOrElse((0L, 0L, 0L))
 
-      val gpuConcurrentTasks: Long =
-        try {
-          GpuSemaphore.getCurrentConcurrentGpuTasks()
-        } catch {
-          case _: Throwable => 0L
-        }
+        val gpuConcurrentTasks: Long =
+          try {
+            GpuSemaphore.getCurrentConcurrentGpuTasks()
+          } catch {
+            case _: Throwable => 0L
+          }
 
-      val retriesTotal = totalRetries.get()
-      val splitRetriesTotal = totalSplitRetries.get()
+        val retriesTotal = totalRetries.get()
+        val splitRetriesTotal = totalSplitRetries.get()
 
-      val (diskReadBytes, diskWriteBytes, diskUtilPct) =
-        sampleDiskStats(ctx, currentTime)
+        val (diskReadBytes, diskWriteBytes, diskUtilPct) =
+          sampleDiskStats(ctx, currentTime)
 
-      // GPU SM utilization (%), averaged across all visible GPUs on this executor
-      val gpuSmUtilPct: Long = sampleGpuSmUtilPct()
+        // GPU SM utilization (%), averaged across all visible GPUs on this executor
+        val gpuSmUtilPct: Long = sampleGpuSmUtilPct()
 
-      // Network IO (bytes per interval across non-loopback interfaces)
-      val (netReadBytes, netWriteBytes) = sampleNetStats(currentTime)
+        // Network IO (bytes per interval across non-loopback interfaces)
+        val (netReadBytes, netWriteBytes) = sampleNetStats(currentTime)
 
-      // Compute per-interval deltas for retries, spill times, and spill bytes
-      val deltaRetries = math.max(0L, retriesTotal - lastTotalRetries)
-      val deltaSplitRetries = math.max(0L, splitRetriesTotal - lastTotalSplitRetries)
-      lastTotalRetries = retriesTotal
-      lastTotalSplitRetries = splitRetriesTotal
+        // Compute per-interval deltas for retries, spill times, and spill bytes
+        val deltaRetries = math.max(0L, retriesTotal - lastTotalRetries)
+        val deltaSplitRetries = math.max(0L, splitRetriesTotal - lastTotalSplitRetries)
+        lastTotalRetries = retriesTotal
+        lastTotalSplitRetries = splitRetriesTotal
 
-      val hostTimeTotal = totalGpuSpillToHostTimeNs.get()
-      val diskTimeTotal = totalGpuSpillToDiskTimeNs.get()
-      val readHostTimeTotal = totalGpuReadSpillFromHostTimeNs.get()
-      val readDiskTimeTotal = totalGpuReadSpillFromDiskTimeNs.get()
-      val deltaHostTimeNs = math.max(0L, hostTimeTotal - lastGpuSpillToHostTimeNs)
-      val deltaDiskTimeNs = math.max(0L, diskTimeTotal - lastGpuSpillToDiskTimeNs)
-      val deltaReadHostTimeNs = math.max(0L, readHostTimeTotal - lastGpuReadSpillFromHostTimeNs)
-      val deltaReadDiskTimeNs = math.max(0L, readDiskTimeTotal - lastGpuReadSpillFromDiskTimeNs)
-      lastGpuSpillToHostTimeNs = hostTimeTotal
-      lastGpuSpillToDiskTimeNs = diskTimeTotal
-      lastGpuReadSpillFromHostTimeNs = readHostTimeTotal
-      lastGpuReadSpillFromDiskTimeNs = readDiskTimeTotal
+        val hostTimeTotal = totalGpuSpillToHostTimeNs.get()
+        val diskTimeTotal = totalGpuSpillToDiskTimeNs.get()
+        val readHostTimeTotal = totalGpuReadSpillFromHostTimeNs.get()
+        val readDiskTimeTotal = totalGpuReadSpillFromDiskTimeNs.get()
+        val deltaHostTimeNs = math.max(0L, hostTimeTotal - lastGpuSpillToHostTimeNs)
+        val deltaDiskTimeNs = math.max(0L, diskTimeTotal - lastGpuSpillToDiskTimeNs)
+        val deltaReadHostTimeNs =
+          math.max(0L, readHostTimeTotal - lastGpuReadSpillFromHostTimeNs)
+        val deltaReadDiskTimeNs =
+          math.max(0L, readDiskTimeTotal - lastGpuReadSpillFromDiskTimeNs)
+        lastGpuSpillToHostTimeNs = hostTimeTotal
+        lastGpuSpillToDiskTimeNs = diskTimeTotal
+        lastGpuReadSpillFromHostTimeNs = readHostTimeTotal
+        lastGpuReadSpillFromDiskTimeNs = readDiskTimeTotal
 
-      val hostTotal = totalGpuSpillHostBytes.get()
-      val diskTotal = totalGpuSpillDiskBytes.get()
-      val deltaGpuSpillHostBytes = math.max(0L, hostTotal - lastGpuSpillHostBytes)
-      val deltaGpuSpillDiskBytes = math.max(0L, diskTotal - lastGpuSpillDiskBytes)
-      lastGpuSpillHostBytes = hostTotal
-      lastGpuSpillDiskBytes = diskTotal
+        val hostTotal = totalGpuSpillHostBytes.get()
+        val diskTotal = totalGpuSpillDiskBytes.get()
+        val deltaGpuSpillHostBytes = math.max(0L, hostTotal - lastGpuSpillHostBytes)
+        val deltaGpuSpillDiskBytes = math.max(0L, diskTotal - lastGpuSpillDiskBytes)
+        lastGpuSpillHostBytes = hostTotal
+        lastGpuSpillDiskBytes = diskTotal
 
-      val values: Array[Long] = Array(
-        runtime.totalMemory(),          // jvmTotal
-        runtime.freeMemory(),           // jvmFree
-        pinned,                         // offHeapPinned
-        pageable,                       // offHeapPageable
-        Rmm.getTotalBytesAllocated,     // gpuMemUsed
-        sysUsed,                        // sysMemUsed
-        sysFree,                        // sysMemFree
-        cpuPercent,                     // cpuPercent
-        gpuConcurrentTasks,             // gpuConcurrentTasks
-        deltaRetries,                   // retryCount (per interval)
-        deltaSplitRetries,              // splitRetryCount (per interval)
-        diskReadBytes,                  // diskReadBytes
-        diskWriteBytes,                 // diskWriteBytes
-        diskUtilPct,                    // diskUtilPct (0-100)
-        netReadBytes,                   // netReadBytes (per interval)
-        netWriteBytes,                  // netWriteBytes (per interval)
-        deltaHostTimeNs,                // gpuSpillToHostTimeNs (per interval)
-        deltaDiskTimeNs,                // gpuSpillToDiskTimeNs (per interval)
-        deltaReadHostTimeNs,            // gpuReadSpillFromHostTimeNs (per interval)
-        deltaReadDiskTimeNs,            // gpuReadSpillFromDiskTimeNs (per interval)
-        deltaGpuSpillHostBytes,         // gpuSpillHostBytes (per interval)
-        deltaGpuSpillDiskBytes,         // gpuSpillDiskBytes (per interval)
-        gpuSmUtilPct                    // gpuSmUtilPct (0-100)
-      )
-      // Producer: record the latest executor metrics snapshot.
-      recordMetricUpdate(currentTime, values)
-
-      // Consumer: drain all pending updates and send them in a single message.
-      val batch = drainPendingUpdates()
-      if (batch.nonEmpty) {
-        ctx.ask(MetricUpdates.fromArrays(executorId, batch))
+        val values: Array[Long] = Array(
+          runtime.totalMemory(),          // jvmTotal
+          runtime.freeMemory(),           // jvmFree
+          pinned,                         // offHeapPinned
+          pageable,                       // offHeapPageable
+          Rmm.getTotalBytesAllocated,     // gpuMemUsed
+          sysUsed,                        // sysMemUsed
+          sysFree,                        // sysMemFree
+          cpuPercent,                     // cpuPercent
+          gpuConcurrentTasks,             // gpuConcurrentTasks
+          deltaRetries,                   // retryCount (per interval)
+          deltaSplitRetries,              // splitRetryCount (per interval)
+          diskReadBytes,                  // diskReadBytes
+          diskWriteBytes,                 // diskWriteBytes
+          diskUtilPct,                    // diskUtilPct (0-100)
+          netReadBytes,                   // netReadBytes (per interval)
+          netWriteBytes,                  // netWriteBytes (per interval)
+          deltaHostTimeNs,                // gpuSpillToHostTimeNs (per interval)
+          deltaDiskTimeNs,                // gpuSpillToDiskTimeNs (per interval)
+          deltaReadHostTimeNs,            // gpuReadSpillFromHostTimeNs (per interval)
+          deltaReadDiskTimeNs,            // gpuReadSpillFromDiskTimeNs (per interval)
+          deltaGpuSpillHostBytes,         // gpuSpillHostBytes (per interval)
+          deltaGpuSpillDiskBytes,         // gpuSpillDiskBytes (per interval)
+          gpuSmUtilPct                    // gpuSmUtilPct (0-100)
+        )
+        // Producer: record the latest executor metrics snapshot.
+        recordMetricUpdate(currentTime, values)
+      } catch {
+        case _: Throwable =>
       }
     }
   }
@@ -1198,6 +1200,11 @@ object RapidsMetricService {
     if (!enabledForThisExecutor) {
       return
     }
+
+    // Resolve sampling and publish periods.
+    val samplePeriodMs = math.max(1, conf.get(RapidsConf.METRICS_SAMPLE_PERIOD_MS))
+    val publishPeriodMs = math.max(samplePeriodMs, conf.get(RapidsConf.METRICS_PUBLISH_PERIOD_MS))
+
     // Send metric definition once on executor startup so the driver knows
     // which metric each positional entry in the updates corresponds to.
     val metricNames = Seq(
@@ -1226,10 +1233,31 @@ object RapidsMetricService {
       "gpuSmUtilPct")
     ctx.ask(MetricDefinition(executorId, metricNames))
 
+    // Sampling task: collect metrics at the configured sampling period and
+    // enqueue them into the pendingUpdates queue.
     executorService.scheduleWithFixedDelay(
       new Foo(executorId, ctx),
-      0,
-      1000,
+      0L,
+      samplePeriodMs.toLong,
+      TimeUnit.MILLISECONDS)
+
+    // Publish task: drain queued samples and send a single batched MetricUpdates
+    // event at the configured publish period.
+    executorService.scheduleWithFixedDelay(
+      new Runnable {
+        override def run(): Unit = {
+          try {
+            val batch = drainPendingUpdates()
+            if (batch.nonEmpty) {
+              ctx.ask(MetricUpdates.fromArrays(executorId, batch))
+            }
+          } catch {
+            case _: Throwable =>
+          }
+        }
+      },
+      publishPeriodMs.toLong,
+      publishPeriodMs.toLong,
       TimeUnit.MILLISECONDS)
   }
 }

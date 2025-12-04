@@ -793,6 +793,26 @@ val GPU_COREDUMP_PIPE_PATTERN = conf("spark.rapids.gpu.coreDump.pipePattern")
     .stringConf
     .createWithDefault("-1")
 
+  val METRICS_SAMPLE_PERIOD_MS = conf("spark.rapids.metrics.samplePeriodMs")
+    .doc("Frequency in milliseconds at which RAPIDS executor metrics are sampled " +
+      "on each executor. This controls how often the executor reads system/GPU " +
+      "state and enqueues a snapshot. Use smaller values (e.g. 10) for finer " +
+      "grained sampling. Metrics are still batched into periodic updates for " +
+      "delivery to the driver.")
+    .internal()
+    .integerConf
+    .createWithDefault(1000)
+
+  val METRICS_PUBLISH_PERIOD_MS = conf("spark.rapids.metrics.publishPeriodMs")
+    .doc("Frequency in milliseconds at which RAPIDS executor metrics batches are " +
+      "sent to the driver via MetricUpdates. This is independent from the " +
+      "sampling period. For example, with samplePeriodMs=10 and " +
+      "publishPeriodMs=1000, each executor will collect up to 100 snapshots " +
+      "per second and send them as a single MetricUpdates event per second.")
+    .internal()
+    .integerConf
+    .createWithDefault(1000)
+
   val PROFILE_TIME_RANGES_SECONDS = conf("spark.rapids.profile.timeRangesInSeconds")
     .doc("Comma-separated list of start-end ranges of time, in seconds, since executor startup " +
       "to start and stop profiling. For example, a value of 10-30,100-110 will have the profiler " +

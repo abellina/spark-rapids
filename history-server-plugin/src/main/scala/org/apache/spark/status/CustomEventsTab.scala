@@ -1142,6 +1142,7 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                     }
                     var event = chart.pointer.normalize(e);
                     var bestPoint = null;
+                    var bestDist2 = Number.POSITIVE_INFINITY;
                     var metricValues = {};
                     chart.series.forEach(function (s) {
                       if (!s.visible) {
@@ -1151,9 +1152,15 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                       if (!p) {
                         return;
                       }
-                      if (!bestPoint || Math.abs(p.x - event.chartX) <
-                          Math.abs(bestPoint.x - event.chartX)) {
+                      // Choose the point whose screen position is closest to the mouse,
+                      // considering both X and Y distance. This makes it intuitive to
+                      // switch between series in multi-series charts.
+                      var dx = p.plotX - event.chartX;
+                      var dy = p.plotY - event.chartY;
+                      var dist2 = dx * dx + dy * dy;
+                      if (!bestPoint || dist2 < bestDist2) {
                         bestPoint = p;
+                        bestDist2 = dist2;
                       }
                       // series.name is like "<execId> <metricName>"
                       var name = s.name || '';
