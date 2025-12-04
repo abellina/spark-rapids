@@ -47,9 +47,13 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
       }
     }
 
-    // Monitored disk device as reported by SparkRapidsBuildInfoEvent on the driver
+    // Monitored disk device and measured disk bandwidth (driver-side test)
     val monitoredDiskDevice =
       getBuildValue("sparkRapidsBuildInfo", "monitoredDiskDevice")
+    val diskWriteBw =
+      getBuildValue("sparkRapidsBuildInfo", "diskWriteBwBytesPerSec")
+    val diskReadBw =
+      getBuildValue("sparkRapidsBuildInfo", "diskReadBwBytesPerSec")
 
     val content = 
       <div class="row-fluid">
@@ -69,7 +73,11 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                     gpuModel.map(v => <tr><th>GPU Model (NVML)</th><td>{v}</td></tr>),
                     jniArch.map(v => <tr><th>JNI GPU Arch (from build info)</th><td>{v}</td></tr>),
                     monitoredDiskDevice.map(v =>
-                      <tr><th>Monitored Disk Device (spark.local.dir)</th><td>{v}</td></tr>)
+                      <tr><th>Monitored Disk Device (spark.local.dir)</th><td>{v}</td></tr>),
+                    diskWriteBw.map(v =>
+                      <tr><th>Disk Write Bandwidth (bytes/s)</th><td>{v}</td></tr>),
+                    diskReadBw.map(v =>
+                      <tr><th>Disk Read Bandwidth (bytes/s)</th><td>{v}</td></tr>)
                   ).flatten
                 }
               </tbody>

@@ -118,6 +118,117 @@ object RapidsPluginUtils extends Logging {
     }
   }
 
+  /**
+   * Best-effort sequential disk bandwidth test on the driver host for the first spark.local.dir.
+   * Returns a map of keys to string values that will be merged into sparkRapidsBuildInfo, e.g.:
+   *   diskWriteBwBytesPerSec, diskReadBwBytesPerSec.
+   *
+   * The test size is bounded to avoid being intrusive and skips entirely on failure.
+   */
+  def detectDiskBandwidth(conf: SparkConf): Map[String, String] = {
+    try {
+      val localDirStr = conf.get("spark.local.dir",
+        System.getProperty("java.io.tmpdir", "/tmp"))
+      val firstLocalDir = localDirStr.split(",").headOption
+        .map(_.trim).filter(_.nonEmpty).getOrElse("/tmp")
+      val dirPath = java.nio.file.Paths.get(firstLocalDir).toAbsolutePath.normalize()
+      val fs = java.nio.file.Files.getFileStore(dirPath)
+      val usable = fs.getUsableSpace
+      if (usable <= 0L) {
+        return Map.empty
+      }
+      val maxTestBytes = 256L * 1024 * 1024 // 256 MiB upper bound
+      val testBytes = math.max(16L * 1024 * 1024, // at least 16 MiB
+        math.min(maxTestBytes, usable / 10)) // at most 10% of free space
+      if (testBytes <= 0L) {
+        return Map.empty
+      }
+
+      val tmpFile = java.nio.file.Files.createTempFile(dirPath, "rapids-disk-bw-", ".bin")
+      def measureWriteBw(): Option[Double] = {
+        try {
+          val channel = java.nio.channels.FileChannel.open(
+            tmpFile,
+            java.nio.file.StandardOpenOption.WRITE,
+            java.nio.file.StandardOpenOption.TRUNCATE_EXISTING)
+          val bufSize = 1L * 1024 * 1024 * 1024
+          val buf = java.nio.ByteBuffer.allocateDirect(bufSize.toInt)
+          var written: Long = 0L
+          val start = System.nanoTime()
+          while (written < testBytes) {
+            buf.clear()
+            while (buf.hasRemaining) {
+              buf.put(0.toByte)
+            }
+            buf.flip()
+            while (buf.hasRemaining) {
+              written += channel.write(buf)
+            }
+          }
+          // Best-effort flush to disk
+          try {
+            channel.force(true)
+          } catch {
+            case _: Throwable =>
+          }
+          channel.close()
+          val elapsedSec = (System.nanoTime() - start) / 1e9
+          if (elapsedSec > 0.0) Some(testBytes.toDouble / elapsedSec) else None
+        } catch {
+          case _: Throwable => None
+        }
+      }
+
+      def measureReadBw(): Option[Double] = {
+        try {
+          val channel = java.nio.channels.FileChannel.open(
+            tmpFile,
+            java.nio.file.StandardOpenOption.READ)
+          val bufSize = 1L * 1024 * 1024 * 1024
+          val buf = java.nio.ByteBuffer.allocateDirect(bufSize.toInt)
+          var read: Long = 0L
+          val start = System.nanoTime()
+          var done = false
+          while (!done && read < testBytes) {
+            buf.clear()
+            val n = channel.read(buf)
+            if (n <= 0) {
+              done = true
+            } else {
+              read += n
+              // Touch one byte to avoid dead-code elimination
+              buf.flip()
+              if (buf.hasRemaining) {
+                buf.get()
+              }
+            }
+          }
+          channel.close()
+          val elapsedSec = (System.nanoTime() - start) / 1e9
+          if (elapsedSec > 0.0) Some(read.toDouble / elapsedSec) else None
+        } catch {
+          case _: Throwable => None
+        } finally { 
+          try {
+            java.nio.file.Files.deleteIfExists(tmpFile)
+          } catch {
+            case _: Throwable =>
+          }
+        }
+      }
+
+      val writeBw = measureWriteBw()
+      val readBw = measureReadBw()
+      val m = scala.collection.mutable.Map[String, String]()
+      writeBw.foreach(bw => m += "diskWriteBwBytesPerSec" -> bw.toLong.toString)
+      readBw.foreach(bw => m += "diskReadBwBytesPerSec" -> bw.toLong.toString)
+      m.toMap
+    } catch {
+      case _: Throwable =>
+        Map.empty
+    }
+  }
+
   lazy val buildInfoEvent: SparkRapidsBuildInfoEvent = {
     val pluginInfo = loadProps(PLUGIN_PROPS_FILENAME)
     val jniInfoBase = loadProps(JNI_PROPS_FILENAME)
@@ -590,9 +701,12 @@ class RapidsDriverPlugin extends DriverPlugin with Logging {
     logDebug("Loading extra driver plugins: " +
       s"${extraDriverPlugins.map(_.getClass.getName).mkString(",")}")
     extraDriverPlugins.foreach(_.init(sc, pluginContext))
-    // Enrich the build info event with the monitored disk device (if detectable)
+    // Enrich the build info event with the monitored disk device and disk bandwidth (if detectable)
     val monitoredDiskDevice = RapidsPluginUtils.detectMonitoredDiskDevice(sparkConf)
-    val eventForLog = buildInfoEvent.copy(monitoredDiskDevice = monitoredDiskDevice)
+    val diskBwInfo = RapidsPluginUtils.detectDiskBandwidth(sparkConf)
+    val eventForLog = buildInfoEvent.copy(
+      sparkRapidsBuildInfo = buildInfoEvent.sparkRapidsBuildInfo ++ diskBwInfo,
+      monitoredDiskDevice = monitoredDiskDevice)
     TrampolineUtil.postEvent(sc, eventForLog)
     conf.rapidsConfMap
   }
