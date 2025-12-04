@@ -108,7 +108,7 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                     <div id="sys-mem-chart" style="width: 100%; height: 250px; margin-top: 10px;"></div>
                   </div>
                 </div>
-              </div>
+          </div>
 
               <div class="span6">
                 <div class="rapids-section">
@@ -121,10 +121,10 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                     <div id="cpu-chart" style="width: 100%; height: 250px; margin-top: 10px;"></div>
                     <div id="gpu-tasks-chart" style="width: 100%; height: 250px; margin-top: 10px;"></div>
                     <div id="retries-chart" style="width: 100%; height: 250px; margin-top: 10px;"></div>
-                  </div>
-                </div>
-              </div>
             </div>
+          </div>
+        </div>
+      </div>
 
             <div class="row-fluid" style="margin-top: 20px;">
               <div class="span6">
@@ -305,7 +305,7 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
               if (body.is(':visible')) {
                 body.hide();
                 $(this).text('[show]');
-              } else {
+            } else {
                 body.show();
                 $(this).text('[hide]');
               }
@@ -371,21 +371,43 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
 
             function makeTooltipFormatter() {
               return function() {
-                var x = this.x;
+                // Determine owning chart
+                var chart = null;
+                if (this.points && this.points.length) {
+                  chart = this.points[0].series.chart;
+                } else if (this.point && this.point.series) {
+                  chart = this.point.series.chart;
+                }
+
+                // If chart has a pinned set of points, use those; otherwise use current hover
+                var pts;
+                var x;
+                if (chart && chart.pinnedPoints && chart.pinnedPoints.length) {
+                  pts = chart.pinnedPoints;
+                  x = chart.pinnedX;
+                } else {
+                  x = this.x;
+                  if (this.points && this.points.length) {
+                    pts = this.points;
+                  } else if (this.point) {
+                    pts = [this.point];
+                  } else {
+                    pts = [];
+                  }
+                }
+
                 var active = getActiveStagesAt(x);
                 var header = Highcharts.dateFormat('%Y-%m-%d %H:%M:%S', x);
                 var s = '<span style="font-size:10px;">' + header + '</span>';
-                if (this.points && this.points.length) {
-                  this.points.forEach(function(p) {
+
+                if (pts && pts.length) {
+                  pts.forEach(function(p) {
                     s += '<br/><span style="color:' + p.color +
                       '">\u25CF</span> ' + escapeHtml(p.series.name) +
                       ': <b>' + p.y + '</b>';
                   });
-                } else if (this.point) {
-                  s += '<br/><span style="color:' + this.point.color +
-                    '">\u25CF</span> ' + escapeHtml(this.point.series.name) +
-                    ': <b>' + this.point.y + '</b>';
                 }
+
                 if (active.length > 0) {
                   var stageLinks = active.map(function(st) {
                     var id = st.id;
@@ -396,6 +418,48 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                 }
                 return s;
               };
+            }
+
+            function handlePointClick(chartName, point) {
+              try {
+                var chart = point.series && point.series.chart;
+                if (!chart) {
+                  console.log('[RAPIDS metrics] point click with no chart for', chartName, point);
+                  return;
+                }
+                console.log('[RAPIDS metrics] point click on chart',
+                  chartName, 'x=', point.x, 'currentPinnedX=', chart.pinnedX);
+                if (chart.pinnedX === point.x) {
+                  console.log('[RAPIDS metrics] unpin tooltip for chart', chartName,
+                    'x=', point.x);
+                  chart.pinnedX = null;
+                  chart.pinnedPoints = null;
+                  chart.tooltip.hide();
+                } else {
+                  console.log('[RAPIDS metrics] pin tooltip for chart', chartName,
+                    'x=', point.x);
+                  chart.pinnedX = point.x;
+                  var pinned = [];
+                  chart.series.forEach(function (s) {
+                    if (!s.visible) return;
+                    if (!s.points || !s.points.length) return;
+                    for (var i = 0; i < s.points.length; i++) {
+                      if (s.points[i].x === chart.pinnedX) {
+                        pinned.push(s.points[i]);
+                        break;
+                      }
+                    }
+                  });
+                  chart.pinnedPoints = pinned;
+                  console.log('[RAPIDS metrics] pinnedPoints length for chart',
+                    chartName, ':', pinned.length);
+                  if (pinned.length > 0) {
+                    chart.tooltip.refresh(pinned);
+                  }
+                }
+              } catch (e) {
+                console.log('[RAPIDS metrics] error handling point click for', chartName, e);
+              }
             }
 
             var commonTooltipFormatter = makeTooltipFormatter();
@@ -414,14 +478,7 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                   point: {
                     events: {
                       click: function () {
-                        var chart = this.series.chart;
-                        if (chart.pinnedX === this.x) {
-                          chart.pinnedX = null;
-                          chart.tooltip.hide();
-                        } else {
-                          chart.pinnedX = this.x;
-                          chart.tooltip.refresh(this);
-                        }
+                        handlePointClick('mem-composition-chart', this);
                       }
                     }
                   }
@@ -489,14 +546,7 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                   point: {
                     events: {
                       click: function () {
-                        var chart = this.series.chart;
-                        if (chart.pinnedX === this.x) {
-                          chart.pinnedX = null;
-                          chart.tooltip.hide();
-                        } else {
-                          chart.pinnedX = this.x;
-                          chart.tooltip.refresh(this);
-                        }
+                        handlePointClick('jvm-chart', this);
                       }
                     }
                   }
@@ -545,14 +595,7 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                   point: {
                     events: {
                       click: function () {
-                        var chart = this.series.chart;
-                        if (chart.pinnedX === this.x) {
-                          chart.pinnedX = null;
-                          chart.tooltip.hide();
-                        } else {
-                          chart.pinnedX = this.x;
-                          chart.tooltip.refresh(this);
-                        }
+                        handlePointClick('offheap-chart', this);
                       }
                     }
                   }
@@ -588,14 +631,7 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                   point: {
                     events: {
                       click: function () {
-                        var chart = this.series.chart;
-                        if (chart.pinnedX === this.x) {
-                          chart.pinnedX = null;
-                          chart.tooltip.hide();
-                        } else {
-                          chart.pinnedX = this.x;
-                          chart.tooltip.refresh(this);
-                        }
+                        handlePointClick('sys-mem-chart', this);
                       }
                     }
                   }
@@ -635,14 +671,7 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                   point: {
                     events: {
                       click: function () {
-                        var chart = this.series.chart;
-                        if (chart.pinnedX === this.x) {
-                          chart.pinnedX = null;
-                          chart.tooltip.hide();
-                        } else {
-                          chart.pinnedX = this.x;
-                          chart.tooltip.refresh(this);
-                        }
+                        handlePointClick('cpu-chart', this);
                       }
                     }
                   }
@@ -681,14 +710,7 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                   point: {
                     events: {
                       click: function () {
-                        var chart = this.series.chart;
-                        if (chart.pinnedX === this.x) {
-                          chart.pinnedX = null;
-                          chart.tooltip.hide();
-                        } else {
-                          chart.pinnedX = this.x;
-                          chart.tooltip.refresh(this);
-                        }
+                        handlePointClick('gpu-tasks-chart', this);
                       }
                     }
                   }
@@ -727,14 +749,7 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                   point: {
                     events: {
                       click: function () {
-                        var chart = this.series.chart;
-                        if (chart.pinnedX === this.x) {
-                          chart.pinnedX = null;
-                          chart.tooltip.hide();
-                        } else {
-                          chart.pinnedX = this.x;
-                          chart.tooltip.refresh(this);
-                        }
+                        handlePointClick('retries-chart', this);
                       }
                     }
                   }
@@ -773,14 +788,7 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                   point: {
                     events: {
                       click: function () {
-                        var chart = this.series.chart;
-                        if (chart.pinnedX === this.x) {
-                          chart.pinnedX = null;
-                          chart.tooltip.hide();
-                        } else {
-                          chart.pinnedX = this.x;
-                          chart.tooltip.refresh(this);
-                        }
+                        handlePointClick('disk-io-chart', this);
                       }
                     }
                   }
@@ -820,14 +828,7 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                   point: {
                     events: {
                       click: function () {
-                        var chart = this.series.chart;
-                        if (chart.pinnedX === this.x) {
-                          chart.pinnedX = null;
-                          chart.tooltip.hide();
-                        } else {
-                          chart.pinnedX = this.x;
-                          chart.tooltip.refresh(this);
-                        }
+                        handlePointClick('disk-util-chart', this);
                       }
                     }
                   }
@@ -866,14 +867,7 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                   point: {
                     events: {
                       click: function () {
-                        var chart = this.series.chart;
-                        if (chart.pinnedX === this.x) {
-                          chart.pinnedX = null;
-                          chart.tooltip.hide();
-                        } else {
-                          chart.pinnedX = this.x;
-                          chart.tooltip.refresh(this);
-                        }
+                        handlePointClick('net-io-chart', this);
                       }
                     }
                   }
@@ -912,14 +906,7 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                   point: {
                     events: {
                       click: function () {
-                        var chart = this.series.chart;
-                        if (chart.pinnedX === this.x) {
-                          chart.pinnedX = null;
-                          chart.tooltip.hide();
-                        } else {
-                          chart.pinnedX = this.x;
-                          chart.tooltip.refresh(this);
-                        }
+                        handlePointClick('spill-time-chart', this);
                       }
                     }
                   }
@@ -963,14 +950,7 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                   point: {
                     events: {
                       click: function () {
-                        var chart = this.series.chart;
-                        if (chart.pinnedX === this.x) {
-                          chart.pinnedX = null;
-                          chart.tooltip.hide();
-                        } else {
-                          chart.pinnedX = this.x;
-                          chart.tooltip.refresh(this);
-                        }
+                        handlePointClick('spill-bytes-chart', this);
                       }
                     }
                   }
@@ -1006,14 +986,7 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                   point: {
                     events: {
                       click: function () {
-                        var chart = this.series.chart;
-                        if (chart.pinnedX === this.x) {
-                          chart.pinnedX = null;
-                          chart.tooltip.hide();
-                        } else {
-                          chart.pinnedX = this.x;
-                          chart.tooltip.refresh(this);
-                        }
+                        handlePointClick('gpu-chart', this);
                       }
                     }
                   }
@@ -1053,14 +1026,7 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                   point: {
                     events: {
                       click: function () {
-                        var chart = this.series.chart;
-                        if (chart.pinnedX === this.x) {
-                          chart.pinnedX = null;
-                          chart.tooltip.hide();
-                        } else {
-                          chart.pinnedX = this.x;
-                          chart.tooltip.refresh(this);
-                        }
+                        handlePointClick('gpu-util-chart', this);
                       }
                     }
                   }
