@@ -348,14 +348,32 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                     ': <b>' + this.point.y + '</b>';
                 }
                 if (active.length > 0) {
-                  var stageStr = active.map(function(st) {
-                    var name = st.name || ('Stage ' + st.id);
-                    return st.id + ' (' + escapeHtml(name) + ')';
+                  var stageLinks = active.map(function(st) {
+                    var id = st.id;
+                    var href = '/history/' + getAppId() + '/stages/stage/?id=' + id;
+                    return '<a href="' + href + '">' + escapeHtml(id) + '</a>';
                   }).join(', ');
-                  s += '<br/><span style="font-size:10px;">Stages: ' + stageStr + '</span>';
+                  s += '<br/><span style="font-size:10px;">Stages: ' + stageLinks + '</span>';
                 }
                 return s;
               };
+            }
+
+            // Allow clicking on a chart to "pin" the tooltip so it stops following the mouse.
+            function enableTooltipPinning(chart) {
+              if (!chart || !chart.pointer || !chart.container) {
+                return;
+              }
+              var pinned = false;
+              var origMouseMove = chart.pointer.onContainerMouseMove;
+              Highcharts.addEvent(chart.container, 'click', function () {
+                pinned = !pinned;
+                if (pinned) {
+                  chart.pointer.onContainerMouseMove = function () {};
+                } else {
+                  chart.pointer.onContainerMouseMove = origMouseMove;
+                }
+              });
             }
 
             var commonTooltipFormatter = makeTooltipFormatter();
@@ -419,6 +437,7 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                 }
               }
 
+              enableTooltipPinning(memCompChart);
               memCompChart.redraw();
             }
 
@@ -454,10 +473,10 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                     s.zIndex = 1;
                     s.lineWidth = 2;
                   }
-                  jvmChart.addSeries(s, false);
+              jvmChart.addSeries(s, false);
                 });
               });
-              addStageBands(jvmChart);
+              enableTooltipPinning(jvmChart);
               jvmChart.redraw();
             }
 
@@ -480,10 +499,10 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
               offheapMetrics.forEach(function(metricName) {
                 var metricSeries = getSeriesForMetric(metricName);
                 metricSeries.forEach(function(s) {
-                  offheapChart.addSeries(s, false);
+              offheapChart.addSeries(s, false);
                 });
               });
-              addStageBands(offheapChart);
+              enableTooltipPinning(offheapChart);
               offheapChart.redraw();
             }
 
@@ -506,10 +525,10 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
               sysMemMetrics.forEach(function(metricName) {
                 var metricSeries = getSeriesForMetric(metricName);
                 metricSeries.forEach(function(s) {
-                  sysMemChart.addSeries(s, false);
+              sysMemChart.addSeries(s, false);
                 });
               });
-              addStageBands(sysMemChart);
+              enableTooltipPinning(sysMemChart);
               sysMemChart.redraw();
             }
 
@@ -536,10 +555,10 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
               cpuMetrics.forEach(function(metricName) {
                 var metricSeries = getSeriesForMetric(metricName);
                 metricSeries.forEach(function(s) {
-                  cpuChart.addSeries(s, false);
+              cpuChart.addSeries(s, false);
                 });
               });
-              addStageBands(cpuChart);
+              enableTooltipPinning(cpuChart);
               cpuChart.redraw();
             }
 
@@ -565,10 +584,10 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
               gpuTasksMetrics.forEach(function(metricName) {
                 var metricSeries = getSeriesForMetric(metricName);
                 metricSeries.forEach(function(s) {
-                  gpuTasksChart.addSeries(s, false);
+              gpuTasksChart.addSeries(s, false);
                 });
               });
-              addStageBands(gpuTasksChart);
+              enableTooltipPinning(gpuTasksChart);
               gpuTasksChart.redraw();
             }
 
@@ -594,10 +613,10 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
               retryMetrics.forEach(function(metricName) {
                 var metricSeries = getSeriesForMetric(metricName);
                 metricSeries.forEach(function(s) {
-                  retriesChart.addSeries(s, false);
+              retriesChart.addSeries(s, false);
                 });
               });
-              addStageBands(retriesChart);
+              enableTooltipPinning(retriesChart);
               retriesChart.redraw();
             }
 
@@ -623,10 +642,10 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
               ioMetrics.forEach(function(metricName) {
                 var metricSeries = getSeriesForMetric(metricName);
                 metricSeries.forEach(function(s) {
-                  diskIoChart.addSeries(s, false);
+              diskIoChart.addSeries(s, false);
                 });
               });
-              addStageBands(diskIoChart);
+              enableTooltipPinning(diskIoChart);
               diskIoChart.redraw();
             }
 
@@ -653,10 +672,10 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
               utilMetrics.forEach(function(metricName) {
                 var metricSeries = getSeriesForMetric(metricName);
                 metricSeries.forEach(function(s) {
-                  diskUtilChart.addSeries(s, false);
+              diskUtilChart.addSeries(s, false);
                 });
               });
-              addStageBands(diskUtilChart);
+              enableTooltipPinning(diskUtilChart);
               diskUtilChart.redraw();
             }
 
@@ -682,10 +701,10 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
               netMetrics.forEach(function(metricName) {
                 var metricSeries = getSeriesForMetric(metricName);
                 metricSeries.forEach(function(s) {
-                  netIoChart.addSeries(s, false);
+              netIoChart.addSeries(s, false);
                 });
               });
-              addStageBands(netIoChart);
+              enableTooltipPinning(netIoChart);
               netIoChart.redraw();
             }
 
@@ -716,10 +735,10 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
               spillTimeMetrics.forEach(function(metricName) {
                 var metricSeries = getSeriesForMetric(metricName);
                 metricSeries.forEach(function(s) {
-                  spillTimeChart.addSeries(s, false);
+              spillTimeChart.addSeries(s, false);
                 });
               });
-              addStageBands(spillTimeChart);
+              enableTooltipPinning(spillTimeChart);
               spillTimeChart.redraw();
             }
 
@@ -745,10 +764,10 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
               spillByteMetrics.forEach(function(metricName) {
                 var metricSeries = getSeriesForMetric(metricName);
                 metricSeries.forEach(function(s) {
-                  spillBytesChart.addSeries(s, false);
+              spillBytesChart.addSeries(s, false);
                 });
               });
-              addStageBands(spillBytesChart);
+              enableTooltipPinning(spillBytesChart);
               spillBytesChart.redraw();
             }
 
@@ -771,10 +790,10 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
               gpuMetrics.forEach(function(metricName) {
                 var metricSeries = getSeriesForMetric(metricName);
                 metricSeries.forEach(function(s) {
-                  gpuChart.addSeries(s, false);
+              gpuChart.addSeries(s, false);
                 });
               });
-              addStageBands(gpuChart);
+              enableTooltipPinning(gpuChart);
               gpuChart.redraw();
             }
 
@@ -801,10 +820,10 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
               gpuUtilMetrics.forEach(function(metricName) {
                 var metricSeries = getSeriesForMetric(metricName);
                 metricSeries.forEach(function(s) {
-                  gpuUtilChart.addSeries(s, false);
+              gpuUtilChart.addSeries(s, false);
                 });
               });
-              addStageBands(gpuUtilChart);
+              enableTooltipPinning(gpuUtilChart);
               gpuUtilChart.redraw();
             }
           }
