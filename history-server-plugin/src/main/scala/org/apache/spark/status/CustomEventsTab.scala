@@ -181,14 +181,36 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
           $(document).ready(function() {
             // Initialize collapsible sections
             initSectionToggles();
-            // Fetch and render RAPIDS metric data
-            fetchMetricData();
+            // Fetch executor list first, then metrics for the initial executor
+            fetchExecutors();
           });
 
-          function fetchMetricData() {
-            $.getJSON('/history/' + getAppId() + '/customevents/api/json/metrics', function(data) {
+          function fetchExecutors() {
+            $.getJSON('/history/' + getAppId() + '/customevents/api/json/metrics/executors', function(data) {
+              if (!data || !data.executors || data.executors.length === 0) {
+                $('#executor-filters').text('No executor metric data available');
+                return;
+              }
+              if (!window._selectedExecutorId) {
+                window._selectedExecutorId = data.executors[0];
+              }
+              initExecutorFilters(data.executors);
+              fetchMetricData(window._selectedExecutorId);
+            });
+          }
+
+          function fetchMetricData(executorId) {
+            var url = '/history/' + getAppId() + '/customevents/api/json/metrics';
+            if (executorId) {
+              url += '?executorId=' + encodeURIComponent(executorId);
+            }
+            $.getJSON(url, function(data) {
               window._rapidsMetricData = data;
-              initExecutorFilters(data);
+              if (executorId) {
+                window._selectedExecutorId = executorId;
+              } else if (data.selectedExecutor && !window._selectedExecutorId) {
+                window._selectedExecutorId = data.selectedExecutor;
+              }
               renderMetricCharts();
             });
           }
@@ -200,39 +222,36 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
             return match ? match[1] : '';
           }
 
-          function initExecutorFilters(data) {
+          function initExecutorFilters(executors) {
             var container = $('#executor-filters');
             container.empty();
-            if (!data || !data.executors || data.executors.length === 0) {
+            if (!executors || executors.length === 0) {
               container.append('<span>No executor metric data available</span>');
               return;
             }
 
-            container.append('<span style="margin-right: 8px;">Executors:</span>');
-
-            // Initialize selected executors on first load
-            if (!window._selectedExecutors) {
-              window._selectedExecutors = new Set(data.executors);
+            if (!window._selectedExecutorId) {
+              window._selectedExecutorId = executors[0];
             }
 
-            data.executors.forEach(function(execId) {
-              var checkboxId = 'exec-filter-' + execId;
-              var checked = window._selectedExecutors.has(execId) ? 'checked' : '';
-              container.append(
-                '<label style="margin-right: 10px;">' +
-                  '<input type="checkbox" id="' + checkboxId + '" data-exec="' + execId + '" ' +
-                  checked + ' /> ' + execId +
-                '</label>');
-            });
+            container.append('<span style="margin-right: 8px;">Executor:</span>');
 
-            container.find('input[type=checkbox]').change(function() {
-              var execId = $(this).data('exec');
-              if (this.checked) {
-                window._selectedExecutors.add(execId);
-              } else {
-                window._selectedExecutors.delete(execId);
+            executors.forEach(function(execId) {
+              var isActive = (execId === window._selectedExecutorId);
+              var btn = $('<button type="button" class="btn btn-mini"></button>');
+              btn.text(execId);
+              if (isActive) {
+                btn.addClass('btn-primary');
               }
-              renderMetricCharts();
+              btn.css('margin-right', '6px');
+              btn.on('click', function() {
+                if (window._selectedExecutorId === execId) {
+                  return;
+                }
+                window._selectedExecutorId = execId;
+                fetchMetricData(execId);
+              });
+              container.append(btn);
             });
           }
 
@@ -260,56 +279,86 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
               return;
             }
 
-            var selected = window._selectedExecutors || new Set();
             var stages = data.stages || [];
+            var selectedExecId = window._selectedExecutorId;
+            if (!selectedExecId) {
+              var keys = Object.keys(data.seriesByExecutor || {});
+              if (keys.length > 0) {
+                selectedExecId = keys[0];
+                window._selectedExecutorId = selectedExecId;
+              }
+            }
+            if (!selectedExecId) {
+              return;
+            }
 
             function getSeriesForMetric(metricName) {
               var allSeries = [];
-              selected.forEach(function(execId) {
-                var execSeries = (data.seriesByExecutor[execId] &&
-                  data.seriesByExecutor[execId][metricName]) || [];
-                if (execSeries.length > 0) {
-                  allSeries.push({
-                    name: execId + ' ' + metricName,
-                    data: execSeries
-                  });
-                }
-              });
+              var execSeries = (data.seriesByExecutor[selectedExecId] &&
+                data.seriesByExecutor[selectedExecId][metricName]) || [];
+              if (execSeries.length > 0) {
+                allSeries.push({
+                  name: selectedExecId + ' ' + metricName,
+                  data: execSeries
+                });
+              }
               return allSeries;
             }
 
-            function addStageBands(chart) {
-              if (!chart || !chart.xAxis || chart.xAxis.length === 0) {
-                return;
+          function getActiveStagesAt(ts) {
+              if (!stages || stages.length === 0) {
+                return [];
               }
-              var xAxis = chart.xAxis[0];
-              // Remove existing stage bands (ids starting with 'stage-')
-              if (xAxis.plotLinesAndBands) {
-                var existing = xAxis.plotLinesAndBands.slice();
-                existing.forEach(function (band) {
-                  if (band.id && band.id.indexOf('stage-') === 0) {
-                    xAxis.removePlotBand(band.id);
-                  }
-                });
-              }
-              stages.forEach(function (stage) {
-                if (stage.startTime != null && stage.endTime != null &&
-                    stage.endTime >= stage.startTime) {
-                  var bandId = 'stage-' + stage.id + '-' + stage.startTime;
-                  xAxis.addPlotBand({
-                    id: bandId,
-                    from: stage.startTime,
-                    to: stage.endTime,
-                    color: 'rgba(200, 200, 255, 0.08)',
-                    label: {
-                      text: 'S' + stage.id,
-                      align: 'left',
-                      style: { fontSize: '9px', color: '#666' }
-                    }
-                  });
+              var active = [];
+              for (var i = 0; i < stages.length; i++) {
+                var s = stages[i];
+                if (s.startTime != null && s.endTime != null &&
+                    s.startTime <= ts && ts <= s.endTime) {
+                  active.push(s);
                 }
-              });
+              }
+              return active;
             }
+
+            function escapeHtml(str) {
+              if (str == null) return '';
+              return String(str)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#39;');
+            }
+
+            function makeTooltipFormatter() {
+              return function() {
+                var x = this.x;
+                var active = getActiveStagesAt(x);
+                var header = Highcharts.dateFormat('%Y-%m-%d %H:%M:%S', x);
+                var s = '<span style="font-size:10px;">' + header + '</span>';
+                if (this.points && this.points.length) {
+                  this.points.forEach(function(p) {
+                    s += '<br/><span style="color:' + p.color +
+                      '">\u25CF</span> ' + escapeHtml(p.series.name) +
+                      ': <b>' + p.y + '</b>';
+                  });
+                } else if (this.point) {
+                  s += '<br/><span style="color:' + this.point.color +
+                    '">\u25CF</span> ' + escapeHtml(this.point.series.name) +
+                    ': <b>' + this.point.y + '</b>';
+                }
+                if (active.length > 0) {
+                  var stageStr = active.map(function(st) {
+                    var name = st.name || ('Stage ' + st.id);
+                    return st.id + ' (' + escapeHtml(name) + ')';
+                  }).join(', ');
+                  s += '<br/><span style="font-size:10px;">Stages: ' + stageStr + '</span>';
+                }
+                return s;
+              };
+            }
+
+            var commonTooltipFormatter = makeTooltipFormatter();
 
             // Memory composition chart: jvmUsed, offHeapPinned, offHeapPageable, systemOtherUsed
             var memCompChart = Highcharts.chart('mem-composition-chart', {
@@ -326,6 +375,11 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                   marker: { enabled: false }
                 }
               },
+              tooltip: {
+                shared: true,
+                useHTML: true,
+                formatter: commonTooltipFormatter
+              },
               series: []
             });
 
@@ -339,15 +393,9 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                 });
               });
 
-              // Draw system total memory as a non-stacked background line.
-              // Use the first selected executor (if any) to compute
-              // sysMemTotal = sysMemUsed + sysMemFree.
-              var anyExecId = null;
-              selected.forEach(function(execId) {
-                if (!anyExecId && data.seriesByExecutor[execId]) {
-                  anyExecId = execId;
-                }
-              });
+              // Draw system total memory as a non-stacked background line for the
+              // currently selected executor: sysMemTotal = sysMemUsed + sysMemFree.
+              var anyExecId = selectedExecId;
               if (anyExecId && data.seriesByExecutor[anyExecId]) {
                 var used = data.seriesByExecutor[anyExecId]['sysMemUsed'] || [];
                 var free = data.seriesByExecutor[anyExecId]['sysMemFree'] || [];
@@ -371,7 +419,6 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                 }
               }
 
-              addStageBands(memCompChart);
               memCompChart.redraw();
             }
 
@@ -381,6 +428,11 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
               xAxis: { type: 'datetime' },
               yAxis: { title: { text: 'Bytes' } },
               legend: { enabled: true },
+              tooltip: {
+                shared: true,
+                useHTML: true,
+                formatter: commonTooltipFormatter
+              },
               series: []
             });
 
@@ -415,6 +467,11 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
               xAxis: { type: 'datetime' },
               yAxis: { title: { text: 'Bytes' } },
               legend: { enabled: true },
+              tooltip: {
+                shared: true,
+                useHTML: true,
+                formatter: commonTooltipFormatter
+              },
               series: []
             });
 
@@ -436,6 +493,11 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
               xAxis: { type: 'datetime' },
               yAxis: { title: { text: 'Bytes' } },
               legend: { enabled: true },
+              tooltip: {
+                shared: true,
+                useHTML: true,
+                formatter: commonTooltipFormatter
+              },
               series: []
             });
 
@@ -461,6 +523,11 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                 min: 0
               },
               legend: { enabled: true },
+              tooltip: {
+                shared: true,
+                useHTML: true,
+                formatter: commonTooltipFormatter
+              },
               series: []
             });
 
@@ -485,6 +552,11 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                 min: 0
               },
               legend: { enabled: true },
+              tooltip: {
+                shared: true,
+                useHTML: true,
+                formatter: commonTooltipFormatter
+              },
               series: []
             });
 
@@ -509,6 +581,11 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                 min: 0
               },
               legend: { enabled: true },
+              tooltip: {
+                shared: true,
+                useHTML: true,
+                formatter: commonTooltipFormatter
+              },
               series: []
             });
 
@@ -533,6 +610,11 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                 min: 0
               },
               legend: { enabled: true },
+              tooltip: {
+                shared: true,
+                useHTML: true,
+                formatter: commonTooltipFormatter
+              },
               series: []
             });
 
@@ -558,6 +640,11 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                 min: 0
               },
               legend: { enabled: true },
+              tooltip: {
+                shared: true,
+                useHTML: true,
+                formatter: commonTooltipFormatter
+              },
               series: []
             });
 
@@ -582,6 +669,11 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                 min: 0
               },
               legend: { enabled: true },
+              tooltip: {
+                shared: true,
+                useHTML: true,
+                formatter: commonTooltipFormatter
+              },
               series: []
             });
 
@@ -606,6 +698,11 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                 min: 0
               },
               legend: { enabled: true },
+              tooltip: {
+                shared: true,
+                useHTML: true,
+                formatter: commonTooltipFormatter
+              },
               series: []
             });
 
@@ -635,6 +732,11 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                 min: 0
               },
               legend: { enabled: true },
+              tooltip: {
+                shared: true,
+                useHTML: true,
+                formatter: commonTooltipFormatter
+              },
               series: []
             });
 
@@ -656,6 +758,11 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
               xAxis: { type: 'datetime' },
               yAxis: { title: { text: 'Bytes' } },
               legend: { enabled: true },
+              tooltip: {
+                shared: true,
+                useHTML: true,
+                formatter: commonTooltipFormatter
+              },
               series: []
             });
 
@@ -681,6 +788,11 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                 max: 100
               },
               legend: { enabled: true },
+              tooltip: {
+                shared: true,
+                useHTML: true,
+                formatter: commonTooltipFormatter
+              },
               series: []
             });
 
@@ -720,7 +832,8 @@ class CustomEventsApiPage(parent: CustomEventsTab, customEvents: List[CustomEven
       case "/timeline" => generateTimelineJson()
       case "/summary" => generateSummaryJson()
       case "/events" => generateEventsJson(request)
-      case "/metrics" => generateMetricsJson()
+      case "/metrics" => generateMetricsJson(request)
+      case "/metrics/executors" => generateMetricsExecutorsJson()
       case _ => generateApiIndexJson()
     }
 
@@ -737,7 +850,8 @@ class CustomEventsApiPage(parent: CustomEventsTab, customEvents: List[CustomEven
       case "/timeline" => generateTimelineJson()
       case "/summary" => generateSummaryJson()
       case "/events" => generateEventsJson(request)
-      case "/metrics" => generateMetricsJson()
+      case "/metrics" => generateMetricsJson(request)
+      case "/metrics/executors" => generateMetricsExecutorsJson()
       case _ => generateApiIndexJson()
     }
     
@@ -823,7 +937,7 @@ class CustomEventsApiPage(parent: CustomEventsTab, customEvents: List[CustomEven
     }
   }
 
-  private def generateMetricsJson(): String = {
+  private def generateMetricsJson(request: HttpServletRequest): String = {
     // Build a mapping from executorId -> metric names (in positional order)
     val metricDefs: Map[String, Seq[String]] = customEvents
       .filter(_.eventType == "MetricDefinition")
@@ -834,7 +948,12 @@ class CustomEventsApiPage(parent: CustomEventsTab, customEvents: List[CustomEven
         } yield execId -> namesStr.split(",").map(_.trim).filter(_.nonEmpty).toSeq
       }.groupBy(_._1).mapValues(_.last._2).toMap
 
-    // series((executorId, metricName)) -> points
+    // Determine which executor we should materialize metrics for.
+    val allExecIds = metricDefs.keys.toSeq.sorted
+    val requestedExecId = Option(request.getParameter("executorId")).filter(_.nonEmpty)
+    val targetExecIdOpt = requestedExecId.orElse(allExecIds.headOption)
+
+    // series((executorId, metricName)) -> points, but we only populate for targetExecIdOpt.
     val series = mutable.Map[(String, String), mutable.ArrayBuffer[(Long, Long)]]()
 
     // Process each MetricUpdates event: decode hex payload and expand into per-metric series
@@ -845,6 +964,7 @@ class CustomEventsApiPage(parent: CustomEventsTab, customEvents: List[CustomEven
           execId <- e.eventData.get("executorId")
           encoded <- e.eventData.get("encodedMetricsB64")
           metricNames <- metricDefs.get(execId)
+          if targetExecIdOpt.forall(_ == execId)
         } {
           val bytes = base64ToBytes(encoded)
           if (bytes.nonEmpty && metricNames.nonEmpty) {
@@ -904,8 +1024,13 @@ class CustomEventsApiPage(parent: CustomEventsTab, customEvents: List[CustomEven
       "gpuSpillDiskBytes",
       "gpuSmUtilPct")
 
-    // Collect unique executor IDs
-    val execIds = series.keys.map(_._1).toSet.toSeq.sorted
+    // Collect executor IDs to return in this response
+    val execIds =
+      if (requestedExecId.isDefined) {
+        targetExecIdOpt.toSeq
+      } else {
+        allExecIds
+      }
 
     // Derive stage ranges from StageCompleted events captured by the listener.
     import scala.util.Try
@@ -932,8 +1057,9 @@ class CustomEventsApiPage(parent: CustomEventsTab, customEvents: List[CustomEven
     def escapeJsonString(s: String): String =
       s.replace("\\", "\\\\").replace("\"", "\\\"")
 
-    // Build per-executor, per-metric series JSON
-    val seriesByExecutorEntries = execIds.map { execId =>
+    // Build per-executor, per-metric series JSON for the selected executor only
+    val visibleExecIds = targetExecIdOpt.toSeq
+    val seriesByExecutorEntries = visibleExecIds.map { execId =>
       val metricEntries = knownMetrics.map { name =>
         name match {
           case "jvmUsed" =>
@@ -1020,8 +1146,25 @@ class CustomEventsApiPage(parent: CustomEventsTab, customEvents: List[CustomEven
       case (id, name, start, end) =>
         s"""{"id":$id,"name":"${escapeJsonString(name)}","startTime":$start,"endTime":$end}"""
     }.mkString(",")
+    val selectedExecutorJson = targetExecIdOpt.map(id => s""""selectedExecutor":"$id",""")
+      .getOrElse("")
 
-    s"""{"executors": [$execIdsJson], "seriesByExecutor": {$seriesByExecutorEntries}, "stages": [$stagesJson]}"""
+    s"""{"executors": [$execIdsJson], $selectedExecutorJson "seriesByExecutor": {$seriesByExecutorEntries}, "stages": [$stagesJson]}"""
+  }
+
+  /**
+   * Lightweight endpoint to list executor IDs that have metric definitions.
+   * This avoids returning any time-series data.
+   */
+  private def generateMetricsExecutorsJson(): String = {
+    val execIds =
+      customEvents
+        .filter(_.eventType == "MetricDefinition")
+        .flatMap(_.eventData.get("executorId"))
+        .distinct
+        .sorted
+    val execIdsJson = execIds.map(id => s""""$id"""").mkString(",")
+    s"""{"executors": [$execIdsJson]}"""
   }
 
   private def generateApiIndexJson(): String = {
