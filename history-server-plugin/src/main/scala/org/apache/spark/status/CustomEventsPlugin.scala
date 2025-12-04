@@ -126,6 +126,7 @@ class CustomEventsListener(customEvents: mutable.ListBuffer[CustomEventData])
 
     val eventData = Map(
       "stageId" -> stageInfo.stageId.toString,
+      "stageAttemptId" -> stageInfo.attemptNumber.toString,
       "stageName" -> stageInfo.name,
       "numTasks" -> stageInfo.numTasks.toString,
       "stageStartTime" -> startTime.toString,

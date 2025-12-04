@@ -202,10 +202,9 @@ object GpuSemaphore {
    * Initializes the GPU task semaphore.
    */
   def initialize(maxConcurrentGpuTasksLimit: Int): Unit = synchronized {
-    if (instance != null) {
-      throw new IllegalStateException("already initialized")
+    if (instance == null) {
+      instance = new GpuSemaphore(maxConcurrentGpuTasksLimit)
     }
-    instance = new GpuSemaphore(maxConcurrentGpuTasksLimit)
   }
 
   /**

@@ -704,11 +704,13 @@ class RapidsDriverPlugin extends DriverPlugin with Logging {
     logDebug("Loading extra driver plugins: " +
       s"${extraDriverPlugins.map(_.getClass.getName).mkString(",")}")
     extraDriverPlugins.foreach(_.init(sc, pluginContext))
-    // Enrich the build info event with the monitored disk device and disk bandwidth (if detectable)
+    // Enrich the build info event with the monitored disk device.
+    // NOTE: Disk bandwidth is intentionally *not* measured or attached on the driver.
+    // The values surfaced in the history server are computed on each executor so
+    // that they reflect the local `spark.local.dir` path for that executor.
     val monitoredDiskDevice = RapidsPluginUtils.detectMonitoredDiskDevice(sparkConf)
-    val diskBwInfo = RapidsPluginUtils.detectDiskBandwidth(sparkConf)
     val eventForLog = buildInfoEvent.copy(
-      sparkRapidsBuildInfo = buildInfoEvent.sparkRapidsBuildInfo ++ diskBwInfo,
+      sparkRapidsBuildInfo = buildInfoEvent.sparkRapidsBuildInfo,
       monitoredDiskDevice = monitoredDiskDevice)
     TrampolineUtil.postEvent(sc, eventForLog)
     conf.rapidsConfMap

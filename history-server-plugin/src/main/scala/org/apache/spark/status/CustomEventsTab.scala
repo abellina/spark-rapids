@@ -50,13 +50,17 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
       }
     }
 
-    // Monitored disk device and measured disk bandwidth (driver-side test)
+    // Monitored disk device and measured disk bandwidth.
+    // NOTE: Disk bandwidth values are executor-local and are populated via
+    // the /metrics JSON endpoint. We intentionally leave the initial values
+    // for bandwidth empty here so the UI always reflects the currently
+    // selected executor.
     val monitoredDiskDevice =
       getBuildValue("sparkRapidsBuildInfo", "monitoredDiskDevice")
     val diskWriteBw =
-      getBuildValue("sparkRapidsBuildInfo", "diskWriteBwBytesPerSec")
+      Option.empty[String]
     val diskReadBw =
-      getBuildValue("sparkRapidsBuildInfo", "diskReadBwBytesPerSec")
+      Option.empty[String]
 
     val content = 
       <div class="row-fluid">
@@ -103,9 +107,13 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                   </h5>
                   <div id="section-memory-body">
                     <div id="mem-composition-chart" style="width: 100%; height: 300px; margin-top: 10px;"></div>
+                    <div id="mem-composition-stage-detail" class="rapids-stage-detail" style="margin-top: 4px;"></div>
                     <div id="jvm-chart" style="width: 100%; height: 250px; margin-top: 10px;"></div>
+                    <div id="jvm-stage-detail" class="rapids-stage-detail" style="margin-top: 4px;"></div>
                     <div id="offheap-chart" style="width: 100%; height: 250px; margin-top: 10px;"></div>
+                    <div id="offheap-stage-detail" class="rapids-stage-detail" style="margin-top: 4px;"></div>
                     <div id="sys-mem-chart" style="width: 100%; height: 250px; margin-top: 10px;"></div>
+                    <div id="sys-mem-stage-detail" class="rapids-stage-detail" style="margin-top: 4px;"></div>
                   </div>
                 </div>
           </div>
@@ -119,9 +127,12 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                   </h5>
                   <div id="section-cpu-body">
                     <div id="cpu-chart" style="width: 100%; height: 250px; margin-top: 10px;"></div>
+                    <div id="cpu-stage-detail" class="rapids-stage-detail" style="margin-top: 4px;"></div>
                     <div id="gpu-tasks-chart" style="width: 100%; height: 250px; margin-top: 10px;"></div>
+                    <div id="gpu-tasks-stage-detail" class="rapids-stage-detail" style="margin-top: 4px;"></div>
                     <div id="retries-chart" style="width: 100%; height: 250px; margin-top: 10px;"></div>
-            </div>
+                    <div id="retries-stage-detail" class="rapids-stage-detail" style="margin-top: 4px;"></div>
+                  </div>
           </div>
         </div>
       </div>
@@ -136,8 +147,11 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                   </h5>
                   <div id="section-disk-body">
                     <div id="disk-io-chart" style="width: 100%; height: 250px; margin-top: 10px;"></div>
+                    <div id="disk-io-stage-detail" class="rapids-stage-detail" style="margin-top: 4px;"></div>
                     <div id="disk-util-chart" style="width: 100%; height: 250px; margin-top: 10px;"></div>
+                    <div id="disk-util-stage-detail" class="rapids-stage-detail" style="margin-top: 4px;"></div>
                     <div id="net-io-chart" style="width: 100%; height: 250px; margin-top: 10px;"></div>
+                    <div id="net-io-stage-detail" class="rapids-stage-detail" style="margin-top: 4px;"></div>
                   </div>
                 </div>
               </div>
@@ -151,7 +165,9 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                   </h5>
                   <div id="section-spill-body">
                     <div id="spill-time-chart" style="width: 100%; height: 250px; margin-top: 10px;"></div>
+                    <div id="spill-time-stage-detail" class="rapids-stage-detail" style="margin-top: 4px;"></div>
                     <div id="spill-bytes-chart" style="width: 100%; height: 250px; margin-top: 10px;"></div>
+                    <div id="spill-bytes-stage-detail" class="rapids-stage-detail" style="margin-top: 4px;"></div>
                   </div>
                 </div>
               </div>
@@ -167,7 +183,9 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                   </h5>
                   <div id="section-gpu-body">
                     <div id="gpu-chart" style="width: 100%; height: 260px; margin-top: 10px;"></div>
+                    <div id="gpu-stage-detail" class="rapids-stage-detail" style="margin-top: 4px;"></div>
                     <div id="gpu-util-chart" style="width: 100%; height: 240px; margin-top: 10px;"></div>
+                    <div id="gpu-util-stage-detail" class="rapids-stage-detail" style="margin-top: 4px;"></div>
                   </div>
                 </div>
               </div>
@@ -411,7 +429,9 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                 if (active.length > 0) {
                   var stageLinks = active.map(function(st) {
                     var id = st.id;
-                    var href = '/history/' + getAppId() + '/stages/stage/?id=' + id;
+                    var attemptId = (st.attemptId != null) ? st.attemptId : 0;
+                    var href = '/history/' + getAppId() + '/stages/stage/?id=' +
+                      encodeURIComponent(id) + '&attempt=' + encodeURIComponent(attemptId);
                     return '<a href="' + href + '">' + escapeHtml(id) + '</a>';
                   }).join(', ');
                   s += '<br/><span style="font-size:10px;">Stages: ' + stageLinks + '</span>';
@@ -420,46 +440,57 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
               };
             }
 
-            function handlePointClick(chartName, point) {
-              try {
-                var chart = point.series && point.series.chart;
-                if (!chart) {
-                  console.log('[RAPIDS metrics] point click with no chart for', chartName, point);
-                  return;
-                }
-                console.log('[RAPIDS metrics] point click on chart',
-                  chartName, 'x=', point.x, 'currentPinnedX=', chart.pinnedX);
-                if (chart.pinnedX === point.x) {
-                  console.log('[RAPIDS metrics] unpin tooltip for chart', chartName,
-                    'x=', point.x);
-                  chart.pinnedX = null;
-                  chart.pinnedPoints = null;
-                  chart.tooltip.hide();
-                } else {
-                  console.log('[RAPIDS metrics] pin tooltip for chart', chartName,
-                    'x=', point.x);
-                  chart.pinnedX = point.x;
-                  var pinned = [];
-                  chart.series.forEach(function (s) {
-                    if (!s.visible) return;
-                    if (!s.points || !s.points.length) return;
-                    for (var i = 0; i < s.points.length; i++) {
-                      if (s.points[i].x === chart.pinnedX) {
-                        pinned.push(s.points[i]);
-                        break;
-                      }
-                    }
-                  });
-                  chart.pinnedPoints = pinned;
-                  console.log('[RAPIDS metrics] pinnedPoints length for chart',
-                    chartName, ':', pinned.length);
-                  if (pinned.length > 0) {
-                    chart.tooltip.refresh(pinned);
-                  }
-                }
-              } catch (e) {
-                console.log('[RAPIDS metrics] error handling point click for', chartName, e);
+            function updateStageDetailTable(containerId, ts) {
+              var container = $('#' + containerId);
+              if (!container.length) {
+                return;
               }
+              var active = getActiveStagesAt(ts);
+              if (!active || active.length === 0) {
+                container.html(
+                  '<span style="font-size:11px;color:#777;">' +
+                  'No stages active at the selected time.' +
+                  '</span>');
+                return;
+              }
+
+              var headerTime = Highcharts.dateFormat('%Y-%m-%d %H:%M:%S', ts);
+              var html = '';
+              html += '<div style="font-size:11px;margin-bottom:4px;">' +
+                'Active stages at ' + escapeHtml(headerTime) + '</div>';
+              html += '<table class="table table-condensed" style="font-size:11px;margin-bottom:0;">';
+              html += '<thead><tr>' +
+                '<th>Stage ID</th>' +
+                '<th>Attempt</th>' +
+                '<th>Name</th>' +
+                '<th>Start Time</th>' +
+                '<th>End Time</th>' +
+                '<th>Link</th>' +
+                '</tr></thead><tbody>';
+
+              active.forEach(function(st) {
+                var id = st.id;
+                var attemptId = (st.attemptId != null) ? st.attemptId : 0;
+                var start = st.startTime != null
+                  ? Highcharts.dateFormat('%Y-%m-%d %H:%M:%S', st.startTime)
+                  : '';
+                var end = st.endTime != null
+                  ? Highcharts.dateFormat('%Y-%m-%d %H:%M:%S', st.endTime)
+                  : '';
+                var href = '/history/' + getAppId() + '/stages/stage/?id=' +
+                  encodeURIComponent(id) + '&attempt=' + encodeURIComponent(attemptId);
+                html += '<tr>' +
+                  '<td>' + escapeHtml(id) + '</td>' +
+                  '<td>' + escapeHtml(attemptId) + '</td>' +
+                  '<td>' + escapeHtml(st.name) + '</td>' +
+                  '<td>' + escapeHtml(start) + '</td>' +
+                  '<td>' + escapeHtml(end) + '</td>' +
+                  '<td><a href="' + href + '">View</a></td>' +
+                  '</tr>';
+              });
+
+              html += '</tbody></table>';
+              container.html(html);
             }
 
             var commonTooltipFormatter = makeTooltipFormatter();
@@ -478,7 +509,7 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                   point: {
                     events: {
                       click: function () {
-                        handlePointClick('mem-composition-chart', this);
+                        updateStageDetailTable('mem-composition-stage-detail', this.x);
                       }
                     }
                   }
@@ -491,7 +522,11 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
               tooltip: {
                 shared: true,
                 useHTML: true,
-                formatter: commonTooltipFormatter
+                hideDelay: 1500,
+                formatter: commonTooltipFormatter,
+                style: {
+                  pointerEvents: 'auto'
+                }
               },
               series: []
             });
@@ -546,7 +581,7 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                   point: {
                     events: {
                       click: function () {
-                        handlePointClick('jvm-chart', this);
+                        updateStageDetailTable('jvm-stage-detail', this.x);
                       }
                     }
                   }
@@ -595,7 +630,7 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                   point: {
                     events: {
                       click: function () {
-                        handlePointClick('offheap-chart', this);
+                        updateStageDetailTable('offheap-stage-detail', this.x);
                       }
                     }
                   }
@@ -631,7 +666,7 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                   point: {
                     events: {
                       click: function () {
-                        handlePointClick('sys-mem-chart', this);
+                        updateStageDetailTable('sys-mem-stage-detail', this.x);
                       }
                     }
                   }
@@ -671,7 +706,7 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                   point: {
                     events: {
                       click: function () {
-                        handlePointClick('cpu-chart', this);
+                        updateStageDetailTable('cpu-stage-detail', this.x);
                       }
                     }
                   }
@@ -710,7 +745,7 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                   point: {
                     events: {
                       click: function () {
-                        handlePointClick('gpu-tasks-chart', this);
+                        updateStageDetailTable('gpu-tasks-stage-detail', this.x);
                       }
                     }
                   }
@@ -749,7 +784,7 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                   point: {
                     events: {
                       click: function () {
-                        handlePointClick('retries-chart', this);
+                        updateStageDetailTable('retries-stage-detail', this.x);
                       }
                     }
                   }
@@ -788,7 +823,7 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                   point: {
                     events: {
                       click: function () {
-                        handlePointClick('disk-io-chart', this);
+                        updateStageDetailTable('disk-io-stage-detail', this.x);
                       }
                     }
                   }
@@ -828,7 +863,7 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                   point: {
                     events: {
                       click: function () {
-                        handlePointClick('disk-util-chart', this);
+                        updateStageDetailTable('disk-util-stage-detail', this.x);
                       }
                     }
                   }
@@ -867,7 +902,7 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                   point: {
                     events: {
                       click: function () {
-                        handlePointClick('net-io-chart', this);
+                        updateStageDetailTable('net-io-stage-detail', this.x);
                       }
                     }
                   }
@@ -906,7 +941,7 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                   point: {
                     events: {
                       click: function () {
-                        handlePointClick('spill-time-chart', this);
+                        updateStageDetailTable('spill-time-stage-detail', this.x);
                       }
                     }
                   }
@@ -950,7 +985,7 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                   point: {
                     events: {
                       click: function () {
-                        handlePointClick('spill-bytes-chart', this);
+                        updateStageDetailTable('spill-bytes-stage-detail', this.x);
                       }
                     }
                   }
@@ -986,7 +1021,7 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                   point: {
                     events: {
                       click: function () {
-                        handlePointClick('gpu-chart', this);
+                        updateStageDetailTable('gpu-stage-detail', this.x);
                       }
                     }
                   }
@@ -1026,7 +1061,7 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                   point: {
                     events: {
                       click: function () {
-                        handlePointClick('gpu-util-chart', this);
+                        updateStageDetailTable('gpu-util-stage-detail', this.x);
                       }
                     }
                   }
@@ -1285,6 +1320,10 @@ class CustomEventsApiPage(parent: CustomEventsTab, customEvents: List[CustomEven
         id <- Try(idStr.toInt).toOption
       } yield {
         val name = data.getOrElse("stageName", s"Stage $id")
+        val attemptId = data
+          .get("stageAttemptId")
+          .flatMap(s => Try(s.toInt).toOption)
+          .getOrElse(0)
         val start = data
           .get("stageStartTime")
           .flatMap(s => Try(s.toLong).toOption)
@@ -1293,7 +1332,7 @@ class CustomEventsApiPage(parent: CustomEventsTab, customEvents: List[CustomEven
           .get("stageEndTime")
           .flatMap(s => Try(s.toLong).toOption)
           .getOrElse(e.timestamp)
-        (id, name, start, end)
+        (id, attemptId, name, start, end)
       }
     }
 
@@ -1301,16 +1340,14 @@ class CustomEventsApiPage(parent: CustomEventsTab, customEvents: List[CustomEven
       s.replace("\\", "\\\\").replace("\"", "\\\"")
 
     // Extract per-executor build info for the selected executor, if available.
+    // IMPORTANT: We *only* use per-executor SparkRapidsBuildInfo events here.
+    // We intentionally do NOT fall back to the driver-level build info because
+    // that would make executor-specific fields (like disk bandwidth) appear
+    // to vary per executor when they are actually global.
     val executorBuildInfoFields: String = targetExecIdOpt.flatMap { execId =>
       val maybeEvent = customEvents.reverse.find { e =>
         e.eventType == "SparkRapidsBuildInfo" &&
           e.eventData.get("sparkRapidsBuildInfo.executorId").contains(execId)
-      }.orElse {
-        // Fallback to driver-level build info (no executorId) if no per-executor event exists.
-        customEvents.reverse.find { e =>
-          e.eventType == "SparkRapidsBuildInfo" &&
-            !e.eventData.get("sparkRapidsBuildInfo.executorId").exists(_.nonEmpty)
-        }
       }
       maybeEvent.map { e =>
         val data = e.eventData
@@ -1428,8 +1465,8 @@ class CustomEventsApiPage(parent: CustomEventsTab, customEvents: List[CustomEven
     val execIdsJson = execIds.map(id => s""""$id"""").mkString(",")
 
     val stagesJson = stages.map {
-      case (id, name, start, end) =>
-        s"""{"id":$id,"name":"${escapeJsonString(name)}","startTime":$start,"endTime":$end}"""
+      case (id, attemptId, name, start, end) =>
+        s"""{"id":$id,"attemptId":$attemptId,"name":"${escapeJsonString(name)}","startTime":$start,"endTime":$end}"""
     }.mkString(",")
     val selectedExecutorJson = targetExecIdOpt.map(id => s""""selectedExecutor":"$id",""")
       .getOrElse("")
