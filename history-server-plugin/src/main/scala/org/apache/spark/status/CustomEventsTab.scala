@@ -28,8 +28,11 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
     extends WebUIPage("") {
 
   override def render(request: HttpServletRequest): Seq[Node] = {
-    // Extract latest SparkRapidsBuildInfo event if present
-    val latestBuildInfo = customEvents.reverse.find(_.eventType == "SparkRapidsBuildInfo")
+    // Extract latest driver-level SparkRapidsBuildInfo event (no executorId) if present.
+    val latestBuildInfo = customEvents.reverse.find { e =>
+      e.eventType == "SparkRapidsBuildInfo" &&
+        !e.eventData.get("sparkRapidsBuildInfo.executorId").exists(_.nonEmpty)
+    }
 
     def getBuildValue(prefix: String, key: String): Option[String] =
       latestBuildInfo.flatMap(_.eventData.get(s"$prefix.$key")).filter(_.nonEmpty)
@@ -64,22 +67,24 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
           <div id="rapids-build-info" style="margin-bottom: 15px;">
             <table class="table table-condensed" style="width:auto;">
               <tbody>
-                {
-                  Seq(
-                    pluginVersion.map(v => <tr><th>RAPIDS Plugin Version</th><td>{v}</td></tr>),
-                    pluginRevision.map(v => <tr><th>RAPIDS Plugin Revision</th><td>{v}</td></tr>),
-                    jniVersion.map(v => <tr><th>spark-rapids-jni Version</th><td>{v}</td></tr>),
-                    jniRevision.map(v => <tr><th>spark-rapids-jni Revision</th><td>{v}</td></tr>),
-                    gpuModel.map(v => <tr><th>GPU Model (NVML)</th><td>{v}</td></tr>),
-                    jniArch.map(v => <tr><th>JNI GPU Arch (from build info)</th><td>{v}</td></tr>),
-                    monitoredDiskDevice.map(v =>
-                      <tr><th>Monitored Disk Device (spark.local.dir)</th><td>{v}</td></tr>),
-                    diskWriteBw.map(v =>
-                      <tr><th>Disk Write Bandwidth (bytes/s)</th><td>{v}</td></tr>),
-                    diskReadBw.map(v =>
-                      <tr><th>Disk Read Bandwidth (bytes/s)</th><td>{v}</td></tr>)
-                  ).flatten
-                }
+                <tr><th>RAPIDS Plugin Version</th>
+                  <td id="rapids-plugin-version">{pluginVersion.getOrElse("")}</td></tr>
+                <tr><th>RAPIDS Plugin Revision</th>
+                  <td id="rapids-plugin-revision">{pluginRevision.getOrElse("")}</td></tr>
+                <tr><th>spark-rapids-jni Version</th>
+                  <td id="rapids-jni-version">{jniVersion.getOrElse("")}</td></tr>
+                <tr><th>spark-rapids-jni Revision</th>
+                  <td id="rapids-jni-revision">{jniRevision.getOrElse("")}</td></tr>
+                <tr><th>GPU Model (NVML)</th>
+                  <td id="rapids-gpu-model">{gpuModel.getOrElse("")}</td></tr>
+                <tr><th>JNI GPU Arch (from build info)</th>
+                  <td id="rapids-jni-arch">{jniArch.getOrElse("")}</td></tr>
+                <tr><th>Monitored Disk Device (spark.local.dir)</th>
+                  <td id="rapids-disk-device">{monitoredDiskDevice.getOrElse("")}</td></tr>
+                <tr><th>Disk Write Bandwidth (bytes/s)</th>
+                  <td id="rapids-disk-write-bw">{diskWriteBw.getOrElse("")}</td></tr>
+                <tr><th>Disk Read Bandwidth (bytes/s)</th>
+                  <td id="rapids-disk-read-bw">{diskReadBw.getOrElse("")}</td></tr>
               </tbody>
             </table>
           </div>
@@ -211,6 +216,9 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
               } else if (data.selectedExecutor && !window._selectedExecutorId) {
                 window._selectedExecutorId = data.selectedExecutor;
               }
+              if (data.executorBuildInfo) {
+                updateExecutorBuildInfo(data.executorBuildInfo);
+              }
               renderMetricCharts();
             });
           }
@@ -253,6 +261,37 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
               });
               container.append(btn);
             });
+          }
+
+          function updateExecutorBuildInfo(info) {
+            if (!info) return;
+            if (info.pluginVersion !== undefined) {
+              $('#rapids-plugin-version').text(info.pluginVersion);
+            }
+            if (info.pluginRevision !== undefined) {
+              $('#rapids-plugin-revision').text(info.pluginRevision);
+            }
+            if (info.jniVersion !== undefined) {
+              $('#rapids-jni-version').text(info.jniVersion);
+            }
+            if (info.jniRevision !== undefined) {
+              $('#rapids-jni-revision').text(info.jniRevision);
+            }
+            if (info.gpuModel !== undefined) {
+              $('#rapids-gpu-model').text(info.gpuModel);
+            }
+            if (info.jniArch !== undefined) {
+              $('#rapids-jni-arch').text(info.jniArch);
+            }
+            if (info.diskDevice !== undefined) {
+              $('#rapids-disk-device').text(info.diskDevice);
+            }
+            if (info.diskWriteBwBytesPerSec !== undefined) {
+              $('#rapids-disk-write-bw').text(info.diskWriteBwBytesPerSec);
+            }
+            if (info.diskReadBwBytesPerSec !== undefined) {
+              $('#rapids-disk-read-bw').text(info.diskReadBwBytesPerSec);
+            }
           }
 
           function initSectionToggles() {
@@ -492,7 +531,6 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
               jvmChart.addSeries(s, false);
                 });
               });
-              enableTooltipPinning(jvmChart);
               jvmChart.redraw();
             }
 
@@ -536,7 +574,6 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
               offheapChart.addSeries(s, false);
                 });
               });
-              enableTooltipPinning(offheapChart);
               offheapChart.redraw();
             }
 
@@ -580,7 +617,6 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
               sysMemChart.addSeries(s, false);
                 });
               });
-              enableTooltipPinning(sysMemChart);
               sysMemChart.redraw();
             }
 
@@ -628,7 +664,6 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
               cpuChart.addSeries(s, false);
                 });
               });
-              enableTooltipPinning(cpuChart);
               cpuChart.redraw();
             }
 
@@ -675,7 +710,6 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
               gpuTasksChart.addSeries(s, false);
                 });
               });
-              enableTooltipPinning(gpuTasksChart);
               gpuTasksChart.redraw();
             }
 
@@ -722,7 +756,6 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
               retriesChart.addSeries(s, false);
                 });
               });
-              enableTooltipPinning(retriesChart);
               retriesChart.redraw();
             }
 
@@ -769,7 +802,6 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
               diskIoChart.addSeries(s, false);
                 });
               });
-              enableTooltipPinning(diskIoChart);
               diskIoChart.redraw();
             }
 
@@ -817,7 +849,6 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
               diskUtilChart.addSeries(s, false);
                 });
               });
-              enableTooltipPinning(diskUtilChart);
               diskUtilChart.redraw();
             }
 
@@ -864,7 +895,6 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
               netIoChart.addSeries(s, false);
                 });
               });
-              enableTooltipPinning(netIoChart);
               netIoChart.redraw();
             }
 
@@ -916,7 +946,6 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
               spillTimeChart.addSeries(s, false);
                 });
               });
-              enableTooltipPinning(spillTimeChart);
               spillTimeChart.redraw();
             }
 
@@ -963,7 +992,6 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
               spillBytesChart.addSeries(s, false);
                 });
               });
-              enableTooltipPinning(spillBytesChart);
               spillBytesChart.redraw();
             }
 
@@ -1007,7 +1035,6 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
               gpuChart.addSeries(s, false);
                 });
               });
-              enableTooltipPinning(gpuChart);
               gpuChart.redraw();
             }
 
@@ -1055,7 +1082,6 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
               gpuUtilChart.addSeries(s, false);
                 });
               });
-              enableTooltipPinning(gpuUtilChart);
               gpuUtilChart.redraw();
             }
           }
@@ -1308,6 +1334,48 @@ class CustomEventsApiPage(parent: CustomEventsTab, customEvents: List[CustomEven
     def escapeJsonString(s: String): String =
       s.replace("\\", "\\\\").replace("\"", "\\\"")
 
+    // Extract per-executor build info for the selected executor, if available.
+    val executorBuildInfoFields: String = targetExecIdOpt.flatMap { execId =>
+      val maybeEvent = customEvents.reverse.find { e =>
+        e.eventType == "SparkRapidsBuildInfo" &&
+          e.eventData.get("sparkRapidsBuildInfo.executorId").contains(execId)
+      }.orElse {
+        // Fallback to driver-level build info (no executorId) if no per-executor event exists.
+        customEvents.reverse.find { e =>
+          e.eventType == "SparkRapidsBuildInfo" &&
+            !e.eventData.get("sparkRapidsBuildInfo.executorId").exists(_.nonEmpty)
+        }
+      }
+      maybeEvent.map { e =>
+        val data = e.eventData
+        val pluginVersion = data.get("sparkRapidsBuildInfo.version")
+        val pluginRevision = data.get("sparkRapidsBuildInfo.revision")
+        val jniVersion = data.get("sparkRapidsJniBuildInfo.version")
+        val jniRevision = data.get("sparkRapidsJniBuildInfo.revision")
+        val gpuModel = data.get("sparkRapidsJniBuildInfo.gpuModel")
+        val jniArch = data.collectFirst {
+          case (k, v) if k.startsWith("sparkRapidsJniBuildInfo.") &&
+            (k.toLowerCase.contains("arch") || k.toLowerCase.contains("compute")) => v
+        }
+        val diskDevice = data.get("sparkRapidsBuildInfo.monitoredDiskDevice")
+        val diskWriteBw = data.get("sparkRapidsBuildInfo.diskWriteBwBytesPerSec")
+        val diskReadBw = data.get("sparkRapidsBuildInfo.diskReadBwBytesPerSec")
+
+        val fields = Seq(
+          pluginVersion.map(v => s""""pluginVersion":"${escapeJsonString(v)}""""),
+          pluginRevision.map(v => s""""pluginRevision":"${escapeJsonString(v)}""""),
+          jniVersion.map(v => s""""jniVersion":"${escapeJsonString(v)}""""),
+          jniRevision.map(v => s""""jniRevision":"${escapeJsonString(v)}""""),
+          gpuModel.map(v => s""""gpuModel":"${escapeJsonString(v)}""""),
+          jniArch.map(v => s""""jniArch":"${escapeJsonString(v)}""""),
+          diskDevice.map(v => s""""diskDevice":"${escapeJsonString(v)}""""),
+          diskWriteBw.map(v => s""""diskWriteBwBytesPerSec":"${escapeJsonString(v)}""""),
+          diskReadBw.map(v => s""""diskReadBwBytesPerSec":"${escapeJsonString(v)}"""")
+        ).flatten.mkString(",")
+        fields
+      }
+    }.getOrElse("")
+
     // Build per-executor, per-metric series JSON for the selected executor only
     val visibleExecIds = targetExecIdOpt.toSeq
     val seriesByExecutorEntries = visibleExecIds.map { execId =>
@@ -1399,8 +1467,10 @@ class CustomEventsApiPage(parent: CustomEventsTab, customEvents: List[CustomEven
     }.mkString(",")
     val selectedExecutorJson = targetExecIdOpt.map(id => s""""selectedExecutor":"$id",""")
       .getOrElse("")
+    val executorBuildInfoJson =
+      if (executorBuildInfoFields.nonEmpty) s""""executorBuildInfo":{$executorBuildInfoFields},""" else ""
 
-    s"""{"executors": [$execIdsJson], $selectedExecutorJson "seriesByExecutor": {$seriesByExecutorEntries}, "stages": [$stagesJson]}"""
+    s"""{"executors": [$execIdsJson], $selectedExecutorJson $executorBuildInfoJson "seriesByExecutor": {$seriesByExecutorEntries}, "stages": [$stagesJson]}"""
   }
 
   /**

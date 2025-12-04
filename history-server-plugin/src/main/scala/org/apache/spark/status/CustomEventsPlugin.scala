@@ -193,11 +193,18 @@ class CustomEventsListener(customEvents: mutable.ListBuffer[CustomEventData])
             flatten("cudfBuildInfo", bi.cudfBuildInfo) ++
             flatten("sparkRapidsPrivateBuildInfo", bi.sparkRapidsPrivateBuildInfo)
 
-        val eventData = bi.monitoredDiskDevice match {
+        val withDisk = bi.monitoredDiskDevice match {
           case Some(dev) =>
             baseEventData + ("sparkRapidsBuildInfo.monitoredDiskDevice" -> dev)
           case None =>
             baseEventData
+        }
+
+        val eventData = bi.executorId match {
+          case Some(execId) =>
+            withDisk + ("sparkRapidsBuildInfo.executorId" -> execId)
+          case None =>
+            withDisk
         }
 
         customEvents += CustomEventData(

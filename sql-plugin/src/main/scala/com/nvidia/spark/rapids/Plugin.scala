@@ -31,6 +31,7 @@ import ai.rapids.cudf.{Cuda, CudaException, CudaFatalException, CudfException, M
 import com.nvidia.spark.DFUDFPlugin
 import com.nvidia.spark.rapids.RapidsConf.AllowMultipleJars
 import com.nvidia.spark.rapids.RapidsPluginUtils.buildInfoEvent
+import com.nvidia.spark.rapids.SparkRapidsBuildInfoEvent
 import com.nvidia.spark.rapids.ScalableTaskCompletion.onTaskCompletion
 import com.nvidia.spark.rapids.filecache.{FileCache, FileCacheLocalityManager, FileCacheLocalityMsg}
 import com.nvidia.spark.rapids.io.async.TrafficController
@@ -240,9 +241,9 @@ object RapidsPluginUtils extends Logging {
     SparkRapidsBuildInfoEvent(
       sparkRapidsBuildInfo = pluginInfo,
       sparkRapidsJniBuildInfo = jniInfo,
-    cudfBuildInfo = loadProps(CUDF_PROPS_FILENAME),
+      cudfBuildInfo = loadProps(CUDF_PROPS_FILENAME),
       sparkRapidsPrivateBuildInfo = loadProps(PRIVATE_PROPS_FILENAME)
-  )
+    )
   }
 
   {
@@ -654,6 +655,9 @@ class RapidsDriverPlugin extends DriverPlugin with Logging {
         null
       case metric: MetricUpdates =>
         TrampolineUtil.postEvent(SparkContext.getOrCreate(), metric)
+        null
+      case bi: SparkRapidsBuildInfoEvent =>
+        TrampolineUtil.postEvent(SparkContext.getOrCreate(), bi)
         null
       case m: FileCacheLocalityMsg =>
         // handleMsg should not block current thread
@@ -1339,6 +1343,23 @@ class RapidsExecutorPlugin extends ExecutorPlugin with Logging {
       }
 
       RapidsMetricService.start(SparkEnv.get.executorId, pluginContext)
+
+      // Post a per-executor build info event (including disk bandwidth and monitored disk
+      // device as seen from this executor) so the history server can attribute build info
+      // to individual executors.
+      try {
+        val execId = SparkEnv.get.executorId
+        val diskBwInfo = RapidsPluginUtils.detectDiskBandwidth(sparkConf)
+        val monitoredDiskDevice = RapidsPluginUtils.detectMonitoredDiskDevice(sparkConf)
+        val execEvent = buildInfoEvent.copy(
+          sparkRapidsBuildInfo = buildInfoEvent.sparkRapidsBuildInfo ++ diskBwInfo,
+          monitoredDiskDevice = monitoredDiskDevice,
+          executorId = Some(execId))
+        pluginContext.ask(execEvent)
+      } catch {
+        case t: Throwable =>
+          logDebug("Failed to post executor build info event", t)
+      }
 
       // Checks if the current GPU architecture is supported by the
       // spark-rapids-jni and cuDF libraries.
