@@ -488,7 +488,7 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                   marker: { enabled: false }
                 }
               },
-              tooltip: {},
+              tooltip: { enabled: false },
               series: []
             });
 
@@ -548,7 +548,7 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                   }
                 }
               },
-              tooltip: {},
+              tooltip: { enabled: false },
               series: []
             });
 
@@ -593,7 +593,7 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                   }
                 }
               },
-              tooltip: {},
+              tooltip: { enabled: false },
               series: []
             });
 
@@ -625,7 +625,7 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                   }
                 }
               },
-              tooltip: {},
+              tooltip: { enabled: false },
               series: []
             });
 
@@ -661,7 +661,7 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                   }
                 }
               },
-              tooltip: {},
+              tooltip: { enabled: false },
               series: []
             });
 
@@ -696,7 +696,7 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                   }
                 }
               },
-              tooltip: {},
+              tooltip: { enabled: false },
               series: []
             });
 
@@ -731,7 +731,7 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                   }
                 }
               },
-              tooltip: {},
+              tooltip: { enabled: false },
               series: []
             });
 
@@ -775,7 +775,7 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                   }
                 }
               },
-              tooltip: {},
+              tooltip: { enabled: false },
               series: []
             });
 
@@ -811,7 +811,7 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                   }
                 }
               },
-              tooltip: {},
+              tooltip: { enabled: false },
               series: []
             });
 
@@ -846,7 +846,7 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                   }
                 }
               },
-              tooltip: {},
+              tooltip: { enabled: false },
               series: []
             });
 
@@ -888,7 +888,7 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                   }
                 }
               },
-              tooltip: {},
+              tooltip: { enabled: false },
               series: []
             });
 
@@ -928,7 +928,7 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                   }
                 }
               },
-              tooltip: {},
+              tooltip: { enabled: false },
               series: []
             });
 
@@ -973,7 +973,7 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                   }
                 }
               },
-              tooltip: {},
+              tooltip: { enabled: false },
               series: []
             });
 
@@ -1009,7 +1009,7 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                   }
                 }
               },
-              tooltip: {},
+              tooltip: { enabled: false },
               series: []
             });
 
