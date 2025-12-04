@@ -265,8 +265,6 @@ class GpuTaskMetrics extends Serializable with Logging {
       maxPageableBytesAllocated = maxPageableBytesAllocated.max(
         GpuTaskMetrics.pageableBytesAllocated.get())
     }
-    // Treat host allocations tracked here as part of GPU-related spill footprint
-    RapidsMetricService.incGpuSpillHostBytes(bytes)
   }
 
   def decHostBytesAllocated(bytes: Long, isPinned: Boolean): Unit = {
@@ -276,7 +274,6 @@ class GpuTaskMetrics extends Serializable with Logging {
   def incDiskBytesAllocated(bytes: Long): Unit = {
     GpuTaskMetrics.incDiskBytesAllocated(bytes)
     maxDiskBytesAllocated = maxDiskBytesAllocated.max(GpuTaskMetrics.diskBytesAllocated.get())
-    RapidsMetricService.incGpuSpillDiskBytes(bytes)
   }
 
   def decDiskBytesAllocated(bytes: Long): Unit = {

@@ -27,7 +27,7 @@ import java.util.concurrent.ArrayBlockingQueue
 import scala.collection.mutable
 
 import ai.rapids.cudf._
-import com.nvidia.spark.rapids.{GpuColumnVector, GpuColumnVectorFromBuffer, GpuCompressedColumnVector, GpuDeviceManager, HashedPriorityQueue, HostAlloc, HostMemoryOutputStream, MemoryBufferToHostByteBufferIterator, NvtxId, NvtxRegistry, RapidsConf, RapidsHostColumnVector}
+import com.nvidia.spark.rapids.{GpuColumnVector, GpuColumnVectorFromBuffer, GpuCompressedColumnVector, GpuDeviceManager, HashedPriorityQueue, HostAlloc, HostMemoryOutputStream, MemoryBufferToHostByteBufferIterator, NvtxId, NvtxRegistry, RapidsConf, RapidsHostColumnVector, RapidsMetricService}
 import com.nvidia.spark.rapids.Arm.{closeOnExcept, withResource}
 import com.nvidia.spark.rapids.RapidsPluginImplicits.AutoCloseableSeq
 import com.nvidia.spark.rapids.format.TableMeta
@@ -1594,6 +1594,8 @@ class SpillableHostStore(val maxSize: Option[Long] = None)
           len,
           stream)
         copied += len
+        // Only count bytes that were actually spilled from device to host
+        RapidsMetricService.incGpuSpillHostBytes(len)
         TrampolineUtil.incTaskMetricsMemoryBytesSpilled(len)
       }
     }
@@ -1642,7 +1644,10 @@ class SpillableHostStore(val maxSize: Option[Long] = None)
                 while (byteBuff.hasRemaining) {
                   outputChannel.write(byteBuff)
                 }
-                copied += byteBuff.capacity()
+                val written = byteBuff.capacity().toLong
+                copied += written
+                // Only count bytes that were actually spilled from device/host to disk
+                RapidsMetricService.incGpuSpillDiskBytes(written)
               } finally {
                 RapidsStorageUtils.dispose(byteBuff)
               }
