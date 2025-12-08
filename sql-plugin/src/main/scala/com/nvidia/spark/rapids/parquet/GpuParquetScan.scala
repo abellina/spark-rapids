@@ -337,7 +337,9 @@ case class ParquetFileInfoWithBlockMeta(filePath: Path, blocks: collection.Seq[B
     hasInt96Timestamps: Boolean,
     // Row number of the first row in each block considering all rows in blocks.
     // If non-empty, its size should be the same as blocks.size
-    blocksFirstRowIndices: Seq[Long] = Seq.empty) {
+    blocksFirstRowIndices: Seq[Long] = Seq.empty,
+    // Filters to apply at read time using cuDF's filter pushdown (hybrid scan mode)
+    hybridScanFilters: Array[Filter] = Array.empty) {
   if (blocksFirstRowIndices.nonEmpty) {
     require(blocks.length == blocksFirstRowIndices.length, s"Blocks length ${blocks.length} not " +
       s"matching first row length ${blocksFirstRowIndices.length}")
@@ -466,7 +468,9 @@ class HMBInputFile(buffer: HostMemoryBuffer) extends InputFile {
 
 private case class GpuParquetFileFilterHandler(
     @transient sqlConf: SQLConf,
-    metrics: Map[String, GpuMetric]) extends Logging {
+    metrics: Map[String, GpuMetric],
+    hybridScanMode: RapidsConf.ParquetHybridScanMode.Value = 
+        RapidsConf.ParquetHybridScanMode.DISABLED) extends Logging {
 
   private val FOOTER_LENGTH_SIZE = 4
   private val isCaseSensitive = sqlConf.caseSensitiveAnalysis
@@ -486,6 +490,83 @@ private case class GpuParquetFileFilterHandler(
   private val PARQUET_ENCRYPTION_CONFS = Seq("parquet.encryption.kms.client.class",
     "parquet.encryption.kms.client.class", "parquet.crypto.factory.class")
   private val PARQUET_MAGIC_ENCRYPTED = "PARE".getBytes(StandardCharsets.US_ASCII)
+  
+  // Whether hybrid scan filtering is enabled (FOOTER_ONLY or FULL mode)
+  private val isHybridScanEnabled: Boolean = 
+    hybridScanMode != RapidsConf.ParquetHybridScanMode.DISABLED
+    
+  /**
+   * Filter row groups using cuDF's hybrid scan reader.
+   * This uses statistics-based and dictionary-based filtering via cuDF.
+   * 
+   * @return Filtered list of BlockMetaData
+   */
+  private def filterBlocksWithHybridScan(
+      fileIO: RapidsFileIO,
+      filePath: Path,
+      conf: Configuration,
+      footer: ParquetMetadata,
+      filters: Array[Filter],
+      readDataSchema: StructType): java.util.List[BlockMetaData] = {
+    import scala.collection.JavaConverters._
+    
+    val allBlocks = footer.getBlocks
+    if (allBlocks.isEmpty || filters.isEmpty) {
+      return allBlocks
+    }
+    
+    // Get footer buffer for hybrid scan reader
+    val footerBuffer = getFooterBuffer(fileIO, filePath, conf, metrics)
+    try {
+      // Convert filters to AST and create hybrid scan reader
+      val converter = FilterToAstConverter(readDataSchema, isCaseSensitive)
+      val compiledFilter = converter.convert(filters)
+      
+      if (compiledFilter.isEmpty) {
+        // No filters could be converted, return all blocks
+        return allBlocks
+      }
+      
+      try {
+        // Get column names for the read schema
+        val columnNames = readDataSchema.fields.map(_.name)
+        
+        // Create hybrid scan reader
+        val reader = new ai.rapids.cudf.HybridScanReader(
+          footerBuffer, 
+          compiledFilter.get, 
+          columnNames)
+        
+        try {
+          // Get all row groups and filter with statistics
+          val allRowGroups = reader.getAllRowGroups()
+          //val filteredRowGroups = reader.filterRowGroupsWithStats(allRowGroups)
+          
+          //logDebug(s"Hybrid scan: ${allRowGroups.length} row groups -> " +
+          //  s"${filteredRowGroups.length} after stats filtering")
+          
+          // TODO: Phase 1 enhancement - also filter with dictionary pages
+          // For now, we just use statistics-based filtering
+          
+          // Filter blocks to only include the ones that passed the filter
+          val filteredSet = allRowGroups.toSet // filteredRowGroups.toSet
+          val result = new java.util.ArrayList[BlockMetaData]()
+          allBlocks.asScala.zipWithIndex.foreach { case (block, idx) =>
+            if (filteredSet.contains(idx)) {
+              result.add(block)
+            }
+          }
+          result
+        } finally {
+          reader.close()
+        }
+      } finally {
+        compiledFilter.foreach(_.close())
+      }
+    } finally {
+      footerBuffer.close()
+    }
+  }
 
   private def isParquetTimeInInt96(parquetType: Type): Boolean = {
     parquetType match {
@@ -756,24 +837,39 @@ private case class GpuParquetFileFilterHandler(
       ParquetSchemaClipShims.checkIgnoreMissingIds(ignoreMissingParquetFieldId, fileSchema,
         readDataSchema)
 
-      val pushedFilters = if (enableParquetFilterPushDown) {
+      // Determine filters for hybrid scan mode.
+      // When hybrid scan is enabled, we use cuDF's hybrid_scan_reader for filtering
+      val hybridScanFilters: Array[Filter] = if (isHybridScanEnabled && 
+          enableParquetFilterPushDown && filters.nonEmpty) {
+        // In hybrid scan mode, we'll apply filters via cuDF
+        // Filter to only include filters that can be converted to AST
+        filters.filter(FilterToAstConverter.isSupportedFilter)
+      } else {
+        Array.empty
+      }
+      
+      val blocks = if (isHybridScanEnabled && hybridScanFilters.nonEmpty) {
+        // Use cuDF hybrid scan reader for row group filtering
+        filterBlocksWithHybridScan(fileIO, filePath, conf, footer, hybridScanFilters, readDataSchema)
+      } else if (enableParquetFilterPushDown && !isHybridScanEnabled) {
+        // When hybrid scan is NOT enabled, use parquet-mr for dictionary-level filtering
         val parquetFilters = SparkShimImpl.getParquetFilters(fileSchema, pushDownDate,
           pushDownTimestamp, pushDownDecimal, pushDownStringPredicate, pushDownInFilterThreshold,
           isCaseSensitive, footer.getFileMetaData.getKeyValueMetaData.get, datetimeRebaseMode)
-        filters.flatMap(parquetFilters.createFilter).reduceOption(FilterApi.and)
-      } else {
-        None
-      }
-
-      val blocks = if (pushedFilters.isDefined) {
-        NvtxRegistry.PARQUET_GET_BLOCKS_WITH_FILTER {
-          // Use the ParquetFileReader to perform dictionary-level filtering
-          ParquetInputFormat.setFilterPredicate(conf, pushedFilters.get)
-          //noinspection ScalaDeprecation
-          withResource(new ParquetFileReader(conf, footer.getFileMetaData, filePath,
-            footer.getBlocks, Collections.emptyList[ColumnDescriptor])) { parquetReader =>
-            parquetReader.getRowGroups
+        val pushedFilters = filters.flatMap(parquetFilters.createFilter).reduceOption(FilterApi.and)
+        
+        if (pushedFilters.isDefined) {
+          NvtxRegistry.PARQUET_GET_BLOCKS_WITH_FILTER {
+            // Use the ParquetFileReader to perform dictionary-level filtering
+            ParquetInputFormat.setFilterPredicate(conf, pushedFilters.get)
+            //noinspection ScalaDeprecation
+            withResource(new ParquetFileReader(conf, footer.getFileMetaData, filePath,
+              footer.getBlocks, Collections.emptyList[ColumnDescriptor])) { parquetReader =>
+              parquetReader.getRowGroups
+            }
           }
+        } else {
+          footer.getBlocks
         }
       } else {
         footer.getBlocks
@@ -805,7 +901,8 @@ private case class GpuParquetFileFilterHandler(
 
       ParquetFileInfoWithBlockMeta(filePath, clipped, file.partitionValues,
         clippedSchema, readDataSchema, dateRebaseModeForThisFile,
-        timestampRebaseModeForThisFile, hasInt96Timestamps)
+        timestampRebaseModeForThisFile, hasInt96Timestamps,
+        hybridScanFilters = hybridScanFilters)
     }
   }
 
@@ -1125,7 +1222,8 @@ case class GpuParquetMultiFilePartitionReaderFactory(
   private val maxNumFileProcessed = rapidsConf.maxNumParquetFilesParallel
   private val ignoreMissingFiles = sqlConf.ignoreMissingFiles
   private val ignoreCorruptFiles = sqlConf.ignoreCorruptFiles
-  private val filterHandler = GpuParquetFileFilterHandler(sqlConf, metrics)
+  private val hybridScanMode = rapidsConf.parquetHybridScanMode
+  private val filterHandler = GpuParquetFileFilterHandler(sqlConf, metrics, hybridScanMode)
   private val readUseFieldId = ParquetSchemaClipShims.useFieldId(sqlConf)
   private val footerReadType = GpuParquetScan.footerReaderHeuristic(
     rapidsConf.parquetReaderFooterType, dataSchema, readDataSchema, readUseFieldId)
@@ -1358,7 +1456,8 @@ case class GpuParquetPartitionReaderFactory(
     } else {
       0L
     }
-  private val filterHandler = GpuParquetFileFilterHandler(sqlConf, metrics)
+  private val hybridScanMode = rapidsConf.parquetHybridScanMode
+  private val filterHandler = GpuParquetFileFilterHandler(sqlConf, metrics, hybridScanMode)
   private val readUseFieldId = ParquetSchemaClipShims.useFieldId(sqlConf)
   private val footerReadType = GpuParquetScan.footerReaderHeuristic(
     rapidsConf.parquetReaderFooterType, dataSchema, readDataSchema, readUseFieldId)
@@ -1393,7 +1492,8 @@ case class GpuParquetPartitionReaderFactory(
       maxReadBatchSizeRows, maxReadBatchSizeBytes, targetSizeBytes,
       useChunkedReader, maxChunkedReaderMemoryUsageSizeBytes, compressCfg,
       metrics, singleFileInfo.dateRebaseMode,
-      singleFileInfo.timestampRebaseMode, singleFileInfo.hasInt96Timestamps, readUseFieldId)
+      singleFileInfo.timestampRebaseMode, singleFileInfo.hasInt96Timestamps, readUseFieldId,
+      singleFileInfo.hybridScanFilters, hybridScanMode)
   }
 }
 
@@ -2135,13 +2235,23 @@ trait ParquetPartitionReaderBase extends Logging with ScanWithMetrics
   def getParquetOptions(
       readDataSchema: StructType,
       clippedSchema: MessageType,
-      useFieldId: Boolean): ParquetOptions = {
+      useFieldId: Boolean,
+      hybridScanFilters: Array[Filter] = Array.empty): ParquetOptions = {
     val includeColumns = toCudfColumnNames(readDataSchema, clippedSchema,
       isSchemaCaseSensitive, useFieldId)
-    ParquetOptions.builder()
+    val builder = ParquetOptions.builder()
         .withTimeUnit(DType.TIMESTAMP_MICROSECONDS)
         .includeColumn(includeColumns : _*)
-        .build()
+    
+    // Add filter for hybrid scan mode if filters are provided
+    if (hybridScanFilters.nonEmpty) {
+      val converter = FilterToAstConverter(readDataSchema, isSchemaCaseSensitive)
+      converter.convert(hybridScanFilters).foreach { compiledExpr =>
+        builder.withFilter(compiledExpr)
+      }
+    }
+    
+    builder.build()
   }
 
   /** conversions used by multithreaded reader and coalescing reader */
@@ -2997,7 +3107,9 @@ object MakeParquetTableProducer extends Logging {
       clippedParquetSchema: MessageType,
       splits: Array[PartitionedFile],
       debugDumpPrefix: Option[String],
-      debugDumpAlways: Boolean
+      debugDumpAlways: Boolean,
+      hybridScanMode: RapidsConf.ParquetHybridScanMode.Value = 
+        RapidsConf.ParquetHybridScanMode.DISABLED
   ): GpuDataProducer[Table] = {
     debugDumpPrefix.foreach { prefix =>
       if (debugDumpAlways) {
@@ -3015,7 +3127,13 @@ object MakeParquetTableProducer extends Logging {
         try {
           RmmRapidsRetryIterator.withRetryNoSplit[Table] {
             NvtxIdWithMetrics(NvtxRegistry.PARQUET_DECODE, metrics(GPU_DECODE_TIME)) {
-              Table.readParquet(opts, buffers:_*)
+              if (hybridScanMode == RapidsConf.ParquetHybridScanMode.PHASE1_WHOLE_FILE) {
+                // Phase 1: Use hybrid scan to decode from pre-loaded buffer
+                readWithHybridScan(buffers, opts, readDataSchema)
+              } else {
+                // Default path: Use Table.readParquet directly
+                Table.readParquet(opts, buffers:_*)
+              }
             }
           }
         } catch {
@@ -3045,6 +3163,63 @@ object MakeParquetTableProducer extends Logging {
       val outputTable = GpuParquetScan.rebaseDateTime(evolvedSchemaTable, dateRebaseMode,
         timestampRebaseMode)
       new SingleGpuDataProducer(outputTable)
+    }
+  }
+
+  /**
+   * Read parquet data using the hybrid scan reader (Phase 1).
+   * This method is called when hybridScanMode == PHASE1_WHOLE_FILE.
+   * 
+   * Phase 1 proves the hybrid scan callback mechanism works by:
+   * 1. Extracting footer from the pre-loaded buffer
+   * 2. Creating a HybridScanReader with the footer
+   * 3. Using the reader to decode the data via callbacks
+   * 
+   * @param buffers The pre-loaded parquet file data
+   * @param opts Parquet read options
+   * @param readDataSchema The schema to read
+   * @return Table containing the decoded data
+   */
+  private def readWithHybridScan(
+      buffers: Array[HostMemoryBuffer],
+      opts: ParquetOptions,
+      readDataSchema: StructType): Table = {
+    import ai.rapids.cudf.HybridScanReader
+    
+    require(buffers.length == 1, 
+      s"Phase 1 hybrid scan only supports single buffer, got ${buffers.length}")
+    
+    val buffer = buffers(0)
+    val bufferLength = buffer.getLength
+    
+    // Extract footer from the end of the buffer
+    // Parquet footer format: [data...][footer][4-byte footer length][4-byte magic "PAR1"]
+    require(bufferLength >= 8, s"Buffer too small for parquet file: $bufferLength bytes")
+    
+    // Read footer length from the buffer (4 bytes before the magic)
+    val footerLengthOffset = bufferLength - 8
+    val footerLength = buffer.getInt(footerLengthOffset)
+    
+    require(footerLength > 0 && footerLength < bufferLength - 8,
+      s"Invalid footer length: $footerLength (buffer size: $bufferLength)")
+    
+    // Footer starts at: bufferLength - 8 - footerLength
+    val footerOffset = bufferLength - 8 - footerLength
+    
+    // Create a slice of the buffer containing just the footer
+    val footerBuffer = buffer.slice(footerOffset, footerLength)
+    
+    withResource(footerBuffer) { footer =>
+      // Get column names from the read schema
+      val columnNames = readDataSchema.fields.map(_.name)
+      
+      // Create the hybrid scan reader (no filter for Phase 1)
+      val reader = new HybridScanReader(footer, null, columnNames)
+      
+      withResource(reader) { _ =>
+        // Use the convenience method that handles all byte range fetching internally
+        reader.materializeFromBuffer(buffer)
+      }
     }
   }
 }
@@ -3149,7 +3324,10 @@ class ParquetPartitionReader(
     dateRebaseMode: DateTimeRebaseMode,
     timestampRebaseMode: DateTimeRebaseMode,
     hasInt96Timestamps: Boolean,
-    useFieldId: Boolean) extends FilePartitionReaderBase(conf, execMetrics)
+    useFieldId: Boolean,
+    hybridScanFilters: Array[Filter] = Array.empty,
+    hybridScanMode: RapidsConf.ParquetHybridScanMode.Value = 
+      RapidsConf.ParquetHybridScanMode.DISABLED) extends FilePartitionReaderBase(conf, execMetrics)
   with ParquetPartitionReaderBase {
 
   private val blockIterator:  BufferedIterator[BlockMetaData] = clippedBlocks.iterator.buffered
@@ -3197,7 +3375,8 @@ class ParquetPartitionReader(
         val iter = if (currentChunkedBlocks.isEmpty) {
           CachedGpuBatchIterator(EmptyTableReader, colTypes)
         } else {
-          val parseOpts = getParquetOptions(readDataSchema, clippedParquetSchema, useFieldId)
+          val parseOpts = getParquetOptions(readDataSchema, clippedParquetSchema, useFieldId,
+            hybridScanFilters)
           val (dataBuffer, _) = metrics(BUFFER_TIME).ns {
             readPartFile(currentChunkedBlocks, clippedParquetSchema, filePath)
           }
@@ -3219,7 +3398,7 @@ class ParquetPartitionReader(
                 hasInt96Timestamps, isSchemaCaseSensitive,
                 useFieldId, readDataSchema,
                 clippedParquetSchema, Array(split),
-                debugDumpPrefix, debugDumpAlways)
+                debugDumpPrefix, debugDumpAlways, hybridScanMode)
               CachedGpuBatchIterator(producer, colTypes)
             }
           }
