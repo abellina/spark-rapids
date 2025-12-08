@@ -2180,12 +2180,25 @@ case class GpuVarianceSamp(child: Expression, nullOnDivideByZero: Boolean)
 }
 
 abstract class CudfArgMinMaxBase() extends CudfAggregate {
+  override val numSlots: Int = 2
   protected val cudfReductionOp: ReductionAggregation
-  override lazy val reductionAggregate: cudf.ColumnVector => cudf.Scalar = col => {
-    if (col.getNullCount == col.getRowCount) { // all nulls
+  override lazy val reductionAggregate: cudf.ColumnVector => cudf.Scalar = {
+    throw new IllegalStateException("argmin should use the batch reduction method")
+  }
+  override def reductionAggregateBatch(
+      batch: ColumnarBatch, position: Int): Array[GpuColumnVector] = {
+    val data = GpuColumnVector.extractColumns(batch)(position).getBase
+    val ordering = GpuColumnVector.extractColumns(batch)(position+1).getBase
+    val res = if (ordering.getNullCount == ordering.getRowCount) { // all nulls
       GpuScalar.from(null, dataType)
     } else {
-      col.reduce(cudfReductionOp, DType.INT32)
+      ordering.reduce(cudfReductionOp, DType.INT32)
+    }
+    val gathered = cudf.ColumnVector.fromScalar(data.getScalarElement(res.getInt), 1)
+    withResource(res) { _ =>
+      Array(
+        GpuColumnVector.from(gathered, dataType),
+        GpuColumnVector.from(res, 1, IntegerType))
     }
   }
   override val dataType: DataType = IntegerType
@@ -2220,29 +2233,15 @@ abstract class GpuMaxMinByBase(valueExpr: Expression, orderingExpr: Expression)
     Seq(GpuLiteral(null, valueExpr.dataType), GpuLiteral(null, orderingExpr.dataType))
 
   // The ordering column is used as input for reduction/groupby to find the argmin/argmax index.
-  override lazy val inputProjection: Seq[Expression] = Seq(orderingExpr)
+  override lazy val inputProjection: Seq[Expression] = Seq(valueExpr, orderingExpr)
   override lazy val updateAggregates: Seq[CudfAggregate] = Seq(cudfArgMinMaxAggregate)
-
   override lazy val postUpdateAttr: Seq[AttributeReference] =
-    updateAggregates.map(_.attr) :+ (valueExpr match {
-      case attr: AttributeReference => attr
-      case _ => throw new IllegalArgumentException("Not an AttributeReference")
-    }) :+ (orderingExpr match {
-      case attr: AttributeReference => attr
-      case _ => throw new IllegalArgumentException("Not an AttributeReference")
-    })
-  // Extract the extremum value from argmin/argmax index.
-  override lazy val postUpdate: Seq[Expression] =
-    Seq(GpuGather(valueExpr, cudfArgMinMaxAggregate.attr),
-      GpuGather(orderingExpr, cudfArgMinMaxAggregate.attr))
+    updateAggregates.map(_.attr) ++ Seq(bufferOrdering)
 
-  override lazy val preMerge: Seq[Expression] = Seq(bufferOrdering)
+  override lazy val preMerge: Seq[Expression] = Seq(bufferValue, bufferOrdering)
   override lazy val mergeAggregates: Seq[CudfAggregate] = Seq(cudfArgMinMaxAggregate)
   override lazy val postMergeAttr: Seq[AttributeReference] =
-    mergeAggregates.map(_.attr) :+ bufferValue :+ bufferOrdering
-  override lazy val postMerge: Seq[Expression] =
-    Seq(GpuGather(bufferValue, cudfArgMinMaxAggregate.attr),
-      GpuGather(bufferOrdering, cudfArgMinMaxAggregate.attr))
+    mergeAggregates.map(_.attr) ++ Seq(bufferOrdering)
 
   override lazy val evaluateExpression: Expression = bufferValue
 

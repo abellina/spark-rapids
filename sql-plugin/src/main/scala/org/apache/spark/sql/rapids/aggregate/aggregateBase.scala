@@ -19,11 +19,13 @@ package org.apache.spark.sql.rapids.aggregate
 import ai.rapids.cudf
 import ai.rapids.cudf.GroupByAggregation
 import com.nvidia.spark.rapids._
+import com.nvidia.spark.rapids.Arm._
 import com.nvidia.spark.rapids.shims.{ShimExpression, ShimUnaryExpression}
 
 import org.apache.spark.sql.catalyst.expressions.{AttributeReference, AttributeSet, Expression, ExprId}
 import org.apache.spark.sql.catalyst.expressions.aggregate._
 import org.apache.spark.sql.catalyst.expressions.codegen.CodegenFallback
+import org.apache.spark.sql.vectorized.ColumnarBatch
 import org.apache.spark.sql.types._
 
 /**
@@ -280,9 +282,20 @@ case class GpuAggregateExpression(origAggregateFunction: GpuAggregateFunction,
 }
 
 trait CudfAggregate extends Serializable {
-  // we use this to get the ordinal of the bound reference, s.t. we can ask cudf to perform
-  // the aggregate on that column
+  // numSlots, which hopefully can be computed automatically... is an idea
+  // to say that this CudfAggregate is going to process numSlot columns, starting at the
+  // index provided (see `reductionAggregateBatch`). We want to do the same for the
+  // group by case.
+  val numSlots: Int = 1
   val reductionAggregate: cudf.ColumnVector => cudf.Scalar
+  def reductionAggregateBatch(batch: ColumnarBatch, position: Int): Array[GpuColumnVector] = {
+    val cols = GpuColumnVector.extractColumns(batch)
+    val reductionCol = cols(position)
+    val scalar = reductionAggregate(reductionCol.getBase)
+    withResource(scalar) { _ =>
+      Array(GpuColumnVector.from(scalar, 1, dataType))
+    }
+  }
   val groupByAggregate: GroupByAggregation
   def dataType: DataType
   val name: String

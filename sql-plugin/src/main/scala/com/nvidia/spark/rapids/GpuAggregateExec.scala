@@ -541,14 +541,11 @@ class AggHelper(
   def performReduction(preProcessed: ColumnarBatch): ColumnarBatch = {
     withResource(new NvtxRange("reduce", NvtxColor.BLUE)) { _ =>
       val cvs = mutable.ArrayBuffer[GpuColumnVector]()
-      cudfAggregates.zipWithIndex.foreach { case (cudfAgg, ix) =>
-        val aggFn = cudfAgg.reductionAggregate
-        val cols = GpuColumnVector.extractColumns(preProcessed)
-        val reductionCol = cols(aggOrdinals(ix))
-        withResource(aggFn(reductionCol.getBase)) { res =>
-          cvs += GpuColumnVector.from(
-            cudf.ColumnVector.fromScalar(res, 1), cudfAgg.dataType)
-        }
+      var slotIx = 0
+      cudfAggregates.foreach { cudfAgg =>
+        val aggFn = cudfAgg.reductionAggregateBatch _
+        cvs.appendAll(aggFn(preProcessed, aggOrdinals(slotIx)))
+        slotIx += cudfAgg.numSlots
       }
       new ColumnarBatch(cvs.toArray, 1)
     }
