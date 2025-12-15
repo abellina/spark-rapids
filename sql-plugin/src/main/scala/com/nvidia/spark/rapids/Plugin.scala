@@ -145,67 +145,86 @@ object RapidsPluginUtils extends Logging {
       }
 
       val tmpFile = java.nio.file.Files.createTempFile(dirPath, "rapids-disk-bw-", ".bin")
+      // Use 4 MiB buffer - aligned to page size for O_DIRECT compatibility
+      val bufSize = 4 * 1024 * 1024
+      // allocateDirect returns a zero-filled, page-aligned buffer
+      val buf = java.nio.ByteBuffer.allocateDirect(bufSize)
+
+      // Try to get O_DIRECT option for bypassing page cache on reads (Linux only)
+      val directOption: Option[java.nio.file.OpenOption] = try {
+        val clazz = Class.forName("com.sun.nio.file.ExtendedOpenOption")
+        val field = clazz.getField("DIRECT")
+        Some(field.get(null).asInstanceOf[java.nio.file.OpenOption])
+      } catch {
+        case _: Throwable => None
+      }
+
       def measureWriteBw(): Option[Double] = {
         try {
           val channel = java.nio.channels.FileChannel.open(
             tmpFile,
             java.nio.file.StandardOpenOption.WRITE,
             java.nio.file.StandardOpenOption.TRUNCATE_EXISTING)
-          val bufSize = 1L * 1024 * 1024 * 1024
-          val buf = java.nio.ByteBuffer.allocateDirect(bufSize.toInt)
           var written: Long = 0L
           val start = System.nanoTime()
           while (written < testBytes) {
             buf.clear()
-            while (buf.hasRemaining) {
-              buf.put(0.toByte)
+            // Limit buffer to remaining bytes if near the end
+            val remaining = testBytes - written
+            if (remaining < bufSize) {
+              buf.limit(remaining.toInt)
             }
-            buf.flip()
             while (buf.hasRemaining) {
               written += channel.write(buf)
             }
           }
-          // Best-effort flush to disk
-          try {
-            channel.force(true)
-          } catch {
-            case _: Throwable =>
-          }
+          // Flush to disk to measure actual write speed, not just OS buffer speed
+          channel.force(true)
           channel.close()
           val elapsedSec = (System.nanoTime() - start) / 1e9
-          if (elapsedSec > 0.0) Some(testBytes.toDouble / elapsedSec) else None
+          if (elapsedSec > 0.0) Some(written.toDouble / elapsedSec) else None
         } catch {
           case _: Throwable => None
         }
       }
 
       def measureReadBw(): Option[Double] = {
-        try {
-          val channel = java.nio.channels.FileChannel.open(
-            tmpFile,
-            java.nio.file.StandardOpenOption.READ)
-          val bufSize = 1L * 1024 * 1024 * 1024
-          val buf = java.nio.ByteBuffer.allocateDirect(bufSize.toInt)
-          var read: Long = 0L
-          val start = System.nanoTime()
-          var done = false
-          while (!done && read < testBytes) {
-            buf.clear()
-            val n = channel.read(buf)
-            if (n <= 0) {
-              done = true
-            } else {
-              read += n
-              // Touch one byte to avoid dead-code elimination
-              buf.flip()
-              if (buf.hasRemaining) {
-                buf.get()
+        def doRead(options: java.nio.file.OpenOption*): Option[Double] = {
+          val channel = java.nio.channels.FileChannel.open(tmpFile, options: _*)
+          try {
+            var read: Long = 0L
+            val start = System.nanoTime()
+            var done = false
+            while (!done && read < testBytes) {
+              buf.clear()
+              val n = channel.read(buf)
+              if (n <= 0) {
+                done = true
+              } else {
+                read += n
               }
             }
+            val elapsedSec = (System.nanoTime() - start) / 1e9
+            if (elapsedSec > 0.0) Some(read.toDouble / elapsedSec) else None
+          } finally {
+            channel.close()
           }
-          channel.close()
-          val elapsedSec = (System.nanoTime() - start) / 1e9
-          if (elapsedSec > 0.0) Some(read.toDouble / elapsedSec) else None
+        }
+
+        try {
+          // Try O_DIRECT first to bypass page cache and measure true disk speed
+          directOption match {
+            case Some(direct) =>
+              try {
+                doRead(java.nio.file.StandardOpenOption.READ, direct)
+              } catch {
+                // O_DIRECT may fail (unsupported filesystem, etc.) - fall back to regular read
+                case _: Throwable =>
+                  doRead(java.nio.file.StandardOpenOption.READ)
+              }
+            case None =>
+              doRead(java.nio.file.StandardOpenOption.READ)
+          }
         } catch {
           case _: Throwable => None
         } finally { 
