@@ -178,29 +178,54 @@ object RapidsPluginUtils extends Logging {
       }
 
       def measureWriteBw(): Option[Double] = {
-        try {
-          val channel = java.nio.channels.FileChannel.open(
-            tmpFile,
-            java.nio.file.StandardOpenOption.WRITE,
-            java.nio.file.StandardOpenOption.TRUNCATE_EXISTING)
-          var written: Long = 0L
-          val start = System.nanoTime()
-          while (written < testBytes) {
-            buf.clear()
-            // Limit buffer to remaining bytes if near the end
-            val remaining = testBytes - written
-            if (remaining < bufSize) {
-              buf.limit(remaining.toInt)
+        def doWrite(options: java.nio.file.OpenOption*): Option[Double] = {
+          val channel = java.nio.channels.FileChannel.open(tmpFile, options: _*)
+          try {
+            var written: Long = 0L
+            val start = System.nanoTime()
+            while (written < testBytes) {
+              buf.clear()
+              // Limit buffer to remaining bytes if near the end
+              val remaining = testBytes - written
+              if (remaining < bufSize) {
+                buf.limit(remaining.toInt)
+              }
+              while (buf.hasRemaining) {
+                written += channel.write(buf)
+              }
             }
-            while (buf.hasRemaining) {
-              written += channel.write(buf)
-            }
+            // Flush to disk to measure actual write speed, not just OS buffer speed
+            // (O_DIRECT already bypasses cache, but force() ensures metadata is synced)
+            channel.force(true)
+            val elapsedSec = (System.nanoTime() - start) / 1e9
+            if (elapsedSec > 0.0) Some(written.toDouble / elapsedSec) else None
+          } finally {
+            channel.close()
           }
-          // Flush to disk to measure actual write speed, not just OS buffer speed
-          channel.force(true)
-          channel.close()
-          val elapsedSec = (System.nanoTime() - start) / 1e9
-          if (elapsedSec > 0.0) Some(written.toDouble / elapsedSec) else None
+        }
+
+        try {
+          // Try O_DIRECT first to bypass page cache and measure true disk speed
+          directOption match {
+            case Some(direct) =>
+              try {
+                doWrite(
+                  java.nio.file.StandardOpenOption.WRITE,
+                  java.nio.file.StandardOpenOption.TRUNCATE_EXISTING,
+                  java.nio.file.StandardOpenOption.CREATE,
+                  direct)
+              } catch {
+                // O_DIRECT may fail (unsupported filesystem, unaligned buffer, etc.)
+                case _: Throwable =>
+                  doWrite(
+                    java.nio.file.StandardOpenOption.WRITE,
+                    java.nio.file.StandardOpenOption.TRUNCATE_EXISTING)
+              }
+            case None =>
+              doWrite(
+                java.nio.file.StandardOpenOption.WRITE,
+                java.nio.file.StandardOpenOption.TRUNCATE_EXISTING)
+          }
         } catch {
           case _: Throwable => None
         }
