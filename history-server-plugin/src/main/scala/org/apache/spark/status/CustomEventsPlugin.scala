@@ -1,4 +1,22 @@
+/*
+ * Copyright (c) 2020-2025, NVIDIA CORPORATION.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *    http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 package org.apache.spark.status
+
+import java.util.concurrent.ConcurrentHashMap
 
 import com.nvidia.spark.rapids.{MetricDefinition, MetricUpdates, SparkRapidsBuildInfoEvent}
 import org.apache.spark.SparkConf
@@ -6,34 +24,100 @@ import org.apache.spark.scheduler._
 import org.apache.spark.ui.SparkUI
 
 import scala.collection.mutable
+
+/**
+ * Companion object to store listener references keyed by application ID.
+ *
+ * This is necessary because Spark's ServiceLoader may create different plugin
+ * instances for createListeners() and setupUI() calls. We use the application ID
+ * as the key to associate listeners with their corresponding UI.
+ *
+ * The flow is:
+ * 1. createListeners() creates a CustomEventsListener
+ * 2. During event log replay, onApplicationStart() is called with the app ID
+ * 3. The listener registers itself with the app ID
+ * 4. setupUI() retrieves the listener using SparkUI.appId
+ */
 object CustomEventsPlugin {
-  val customEvents = mutable.ListBuffer[CustomEventData]()
+  // Map from appId -> Listener for cross-instance communication
+  private val listenersByAppId = new ConcurrentHashMap[String, CustomEventsListener]()
+
+  private[status] def registerListener(appId: String, listener: CustomEventsListener): Unit = {
+    listenersByAppId.put(appId, listener)
+  }
+
+  private[status] def getListener(appId: String): Option[CustomEventsListener] = {
+    if (appId == null) {
+      None
+    } else {
+      Option(listenersByAppId.get(appId))
+    }
+  }
+
+  /**
+   * Remove a listener when the app is no longer needed.
+   * Called during cleanup to prevent memory leaks for very long-running history servers.
+   */
+  private[status] def removeListener(appId: String): Unit = {
+    if (appId != null) {
+      listenersByAppId.remove(appId)
+    }
+  }
 }
+
 /**
  * Custom tab plugin for Spark History Server.
  * This plugin analyzes custom event log events and displays them in a custom tab.
+ *
+ * Each application gets its own listener instance with isolated event storage.
+ * The listener is associated with the app via the shared KVStore reference.
  */
 class CustomEventsPlugin extends AppHistoryServerPlugin {
-  override def setupUI(ui: SparkUI): Unit = {
-    // Add custom tab to the UI
-    val customTab = new CustomEventsTab(ui, CustomEventsPlugin.customEvents.toList)
-    ui.attachTab(customTab)
-  }
 
   override def createListeners(
       conf: SparkConf,
       store: ElementTrackingStore): Seq[SparkListener] = {
-    
-    // Create and return a custom listener
-    val listener = new CustomEventsListener(CustomEventsPlugin.customEvents)
-    Seq(listener)
+    // Create a new listener for this application.
+    // The listener will register itself with the app ID when it receives
+    // the ApplicationStart event during log replay.
+    Seq(new CustomEventsListener())
+  }
+
+  override def setupUI(ui: SparkUI): Unit = {
+    // Try to get the app ID from multiple sources
+    val appId: Option[String] = {
+      // First try ui.appId
+      Option(ui.appId).filter(_.nonEmpty).orElse {
+        // Fall back to getting it from the store's application info
+        try {
+          Option(ui.store.applicationInfo().id).filter(_.nonEmpty)
+        } catch {
+          case _: Exception => None
+        }
+      }
+    }
+
+    // Retrieve the listener using the app ID (don't remove - may be called multiple times)
+    val eventsOpt = appId.flatMap(CustomEventsPlugin.getListener)
+
+    val events = eventsOpt match {
+      case Some(listener) => listener.getEvents
+      case None =>
+        // This can happen if no ApplicationStart event was in the log
+        List.empty[CustomEventData]
+    }
+
+    // Add custom tab to the UI with this app's events
+    val customTab = new CustomEventsTab(ui, events)
+    ui.attachTab(customTab)
   }
 
   override def displayOrder: Int = 1000 // Display order in the UI
 }
 
 /**
- * Data class to hold custom event information
+ * Data class to hold custom event information.
+ * Immutable case class for thread-safe sharing.
  */
 case class CustomEventData(
   timestamp: Long,
@@ -44,80 +128,91 @@ case class CustomEventData(
 )
 
 /**
- * Custom listener to capture and process events
+ * Custom listener to capture and process events for a single application.
+ *
+ * This listener maintains its own private event store, ensuring isolation
+ * between different applications in the History Server.
+ *
+ * Thread-safety: Uses synchronized access to the events buffer since
+ * event callbacks may come from different threads during event log replay.
  */
-class CustomEventsListener(customEvents: mutable.ListBuffer[CustomEventData]) 
-    extends SparkListener {
+class CustomEventsListener extends SparkListener {
+
+  // Private per-listener event store - not shared with other listeners
+  private val events = mutable.ListBuffer[CustomEventData]()
+
+  // Current application context, set on ApplicationStart
+  @volatile private var currentAppId: String = "unknown"
+  @volatile private var currentAppAttemptId: Option[String] = None
+
+  /**
+   * Returns an immutable snapshot of all collected events.
+   * Called by the plugin after event log replay is complete.
+   */
+  def getEvents: List[CustomEventData] = synchronized {
+    events.toList
+  }
+
+  private def addEvent(
+      timestamp: Long,
+      eventType: String,
+      eventData: Map[String, String]): Unit = synchronized {
+    events += CustomEventData(
+      timestamp = timestamp,
+      eventType = eventType,
+      eventData = eventData,
+      applicationId = currentAppId,
+      applicationAttemptId = currentAppAttemptId
+    )
+  }
 
   override def onApplicationStart(applicationStart: SparkListenerApplicationStart): Unit = {
-    // Capture application start as a custom event
+    // Set the application context for subsequent events
+    currentAppId = applicationStart.appId.getOrElse("unknown")
+    currentAppAttemptId = applicationStart.appAttemptId
+
+    // Register this listener with the app ID so setupUI can find it
+    CustomEventsPlugin.registerListener(currentAppId, this)
+
     val eventData = Map(
       "appName" -> applicationStart.appName,
       "time" -> applicationStart.time.toString,
       "user" -> applicationStart.sparkUser
     )
-    
-    customEvents += CustomEventData(
-      timestamp = applicationStart.time,
-      eventType = "ApplicationStart",
-      eventData = eventData,
-      applicationId = applicationStart.appId.getOrElse("unknown"),
-      applicationAttemptId = applicationStart.appAttemptId
-    )
+
+    addEvent(applicationStart.time, "ApplicationStart", eventData)
   }
 
   override def onApplicationEnd(applicationEnd: SparkListenerApplicationEnd): Unit = {
-    // Capture application end as a custom event
     val eventData = Map(
       "time" -> applicationEnd.time.toString
     )
-    
-    customEvents += CustomEventData(
-      timestamp = applicationEnd.time,
-      eventType = "ApplicationEnd",
-      eventData = eventData,
-      applicationId = "current",
-      applicationAttemptId = None
-    )
+
+    addEvent(applicationEnd.time, "ApplicationEnd", eventData)
   }
 
   override def onJobStart(jobStart: SparkListenerJobStart): Unit = {
-    // Capture job start events
     val eventData = Map(
       "jobId" -> jobStart.jobId.toString,
       "time" -> jobStart.time.toString,
       "stageIds" -> jobStart.stageIds.mkString(","),
       "stageCount" -> jobStart.stageIds.size.toString
     )
-    
-    customEvents += CustomEventData(
-      timestamp = jobStart.time,
-      eventType = "JobStart",
-      eventData = eventData,
-      applicationId = "current",
-      applicationAttemptId = None
-    )
+
+    addEvent(jobStart.time, "JobStart", eventData)
   }
 
   override def onJobEnd(jobEnd: SparkListenerJobEnd): Unit = {
-    // Capture job end events
     val eventData = Map(
       "jobId" -> jobEnd.jobId.toString,
       "time" -> jobEnd.time.toString,
       "result" -> jobEnd.jobResult.toString
     )
-    
-    customEvents += CustomEventData(
-      timestamp = jobEnd.time,
-      eventType = "JobEnd",
-      eventData = eventData,
-      applicationId = "current",
-      applicationAttemptId = None
-    )
+
+    addEvent(jobEnd.time, "JobEnd", eventData)
   }
 
   override def onStageCompleted(stageCompleted: SparkListenerStageCompleted): Unit = {
-    // Capture stage completion with custom metrics
     val stageInfo = stageCompleted.stageInfo
     val taskMetrics = Option(stageInfo.taskMetrics)
     val startTime = stageInfo.submissionTime.getOrElse(
@@ -141,20 +236,13 @@ class CustomEventsListener(customEvents: mutable.ListBuffer[CustomEventData])
         .getOrElse("0")
     )
 
-    customEvents += CustomEventData(
-      timestamp = endTime,
-      eventType = "StageCompleted",
-      eventData = eventData,
-      applicationId = "current",
-      applicationAttemptId = None
-    )
+    addEvent(endTime, "StageCompleted", eventData)
   }
 
   override def onTaskEnd(taskEnd: SparkListenerTaskEnd): Unit = {
-    // Capture task-level events for detailed analysis
     val taskInfo = taskEnd.taskInfo
     val taskMetrics = taskEnd.taskMetrics
-    
+
     if (taskMetrics != null) {
       val eventData = Map(
         "taskId" -> taskInfo.taskId.toString,
@@ -169,19 +257,12 @@ class CustomEventsListener(customEvents: mutable.ListBuffer[CustomEventData])
         "memoryBytesSpilled" -> taskMetrics.memoryBytesSpilled.toString,
         "diskBytesSpilled" -> taskMetrics.diskBytesSpilled.toString
       )
-      
-      customEvents += CustomEventData(
-        timestamp = taskInfo.finishTime,
-        eventType = "TaskEnd",
-        eventData = eventData,
-        applicationId = "current",
-        applicationAttemptId = None
-      )
+
+      addEvent(taskInfo.finishTime, "TaskEnd", eventData)
     }
   }
 
   override def onOtherEvent(event: SparkListenerEvent): Unit = {
-    // Capture any custom events that might be logged
     event match {
       case bi: SparkRapidsBuildInfoEvent =>
         // Flatten build info maps into simple key/value strings
@@ -208,13 +289,7 @@ class CustomEventsListener(customEvents: mutable.ListBuffer[CustomEventData])
             withDisk
         }
 
-        customEvents += CustomEventData(
-          timestamp = System.currentTimeMillis(),
-          eventType = "SparkRapidsBuildInfo",
-          eventData = eventData,
-          applicationId = "current",
-          applicationAttemptId = None
-        )
+        addEvent(System.currentTimeMillis(), "SparkRapidsBuildInfo", eventData)
 
       case md: MetricDefinition =>
         val eventData = Map(
@@ -222,13 +297,7 @@ class CustomEventsListener(customEvents: mutable.ListBuffer[CustomEventData])
           "metricNames" -> md.metricNames.mkString(",")
         )
 
-        customEvents += CustomEventData(
-          timestamp = System.currentTimeMillis(),
-          eventType = "MetricDefinition",
-          eventData = eventData,
-          applicationId = "current",
-          applicationAttemptId = None
-        )
+        addEvent(System.currentTimeMillis(), "MetricDefinition", eventData)
 
       case mu: MetricUpdates =>
         val eventData = Map(
@@ -236,28 +305,12 @@ class CustomEventsListener(customEvents: mutable.ListBuffer[CustomEventData])
           "encodedMetricsB64" -> mu.encodedMetricsBase64
         )
 
-        customEvents += CustomEventData(
-          timestamp = System.currentTimeMillis(),
-          eventType = "MetricUpdates",
-          eventData = eventData,
-          applicationId = "current",
-          applicationAttemptId = None
-        )
+        addEvent(System.currentTimeMillis(), "MetricUpdates", eventData)
 
       case _ =>
-        val eventData = Map(
-          "eventClass" -> event.getClass.getSimpleName,
-          "timestamp" -> System.currentTimeMillis().toString
-        )
-
-        customEvents += CustomEventData(
-          timestamp = System.currentTimeMillis(),
-          eventType = "CustomEvent",
-          eventData = eventData,
-          applicationId = "current",
-          applicationAttemptId = None
-        )
+        // Ignore unknown events - don't pollute the event store with noise
+        // Previously we captured all events as "CustomEvent" but this creates
+        // unnecessary overhead for the common case
     }
   }
 }
-

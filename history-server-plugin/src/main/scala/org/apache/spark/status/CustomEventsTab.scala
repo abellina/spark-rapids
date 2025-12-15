@@ -93,6 +93,57 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
             </table>
           </div>
 
+          <style type="text/css">
+            {scala.xml.Unparsed("""
+            .rapids-chart-wrapper {
+              position: relative;
+              margin-top: 10px;
+              border: 1px solid #e0e0e0;
+              border-radius: 4px;
+              background: #fff;
+            }
+            .rapids-chart-wrapper.collapsed .rapids-chart-content {
+              display: none;
+            }
+            .rapids-chart-wrapper.collapsed {
+              border-color: #ccc;
+              background: #f8f8f8;
+            }
+            .rapids-chart-controls {
+              display: flex;
+              align-items: center;
+              padding: 4px 8px;
+              background: #f5f5f5;
+              border-bottom: 1px solid #e0e0e0;
+              font-size: 11px;
+            }
+            .rapids-chart-wrapper.collapsed .rapids-chart-controls {
+              border-bottom: none;
+            }
+            .rapids-chart-title {
+              flex-grow: 1;
+              font-weight: 500;
+              color: #333;
+            }
+            .rapids-chart-btn {
+              margin-left: 6px;
+              padding: 2px 6px;
+              font-size: 10px;
+              cursor: pointer;
+              border: 1px solid #ccc;
+              border-radius: 3px;
+              background: #fff;
+              color: #555;
+            }
+            .rapids-chart-btn:hover {
+              background: #e8e8e8;
+            }
+            .rapids-chart-content {
+              padding: 8px;
+            }
+            """)}
+          </style>
+
           <div id="metric-charts">
             <h5>RAPIDS Metrics</h5>
             <div id="executor-filters" style="margin-bottom: 10px;"></div>
@@ -106,11 +157,51 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                        style="margin-left: 8px; font-size: 11px;">[hide]</a>
                   </h5>
                   <div id="section-memory-body">
-                    <div id="mem-composition-chart" style="width: 100%; height: 300px; margin-top: 10px;"></div>
-                    <div id="jvm-chart" style="width: 100%; height: 250px; margin-top: 10px;"></div>
-                    <div id="offheap-chart" style="width: 100%; height: 250px; margin-top: 10px;"></div>
-                    <div id="sys-mem-chart" style="width: 100%; height: 250px; margin-top: 10px;"></div>
-                    <div id="cpu-chart" style="width: 100%; height: 250px; margin-top: 10px;"></div>
+                    <div class="rapids-chart-wrapper" data-chart-id="mem-composition-chart">
+                      <div class="rapids-chart-controls">
+                        <span class="rapids-chart-title">Memory Composition</span>
+                        <button class="rapids-chart-btn rapids-chart-collapse-btn" title="Collapse/Expand">−</button>
+                      </div>
+                      <div class="rapids-chart-content">
+                        <div id="mem-composition-chart" style="width: 100%; height: 280px;"></div>
+                      </div>
+                    </div>
+                    <div class="rapids-chart-wrapper" data-chart-id="jvm-chart">
+                      <div class="rapids-chart-controls">
+                        <span class="rapids-chart-title">JVM Memory</span>
+                        <button class="rapids-chart-btn rapids-chart-collapse-btn" title="Collapse/Expand">−</button>
+                      </div>
+                      <div class="rapids-chart-content">
+                        <div id="jvm-chart" style="width: 100%; height: 230px;"></div>
+                      </div>
+                    </div>
+                    <div class="rapids-chart-wrapper" data-chart-id="offheap-chart">
+                      <div class="rapids-chart-controls">
+                        <span class="rapids-chart-title">Off-heap Memory</span>
+                        <button class="rapids-chart-btn rapids-chart-collapse-btn" title="Collapse/Expand">−</button>
+                      </div>
+                      <div class="rapids-chart-content">
+                        <div id="offheap-chart" style="width: 100%; height: 230px;"></div>
+                      </div>
+                    </div>
+                    <div class="rapids-chart-wrapper" data-chart-id="sys-mem-chart">
+                      <div class="rapids-chart-controls">
+                        <span class="rapids-chart-title">System Memory</span>
+                        <button class="rapids-chart-btn rapids-chart-collapse-btn" title="Collapse/Expand">−</button>
+                      </div>
+                      <div class="rapids-chart-content">
+                        <div id="sys-mem-chart" style="width: 100%; height: 230px;"></div>
+                      </div>
+                    </div>
+                    <div class="rapids-chart-wrapper" data-chart-id="cpu-chart">
+                      <div class="rapids-chart-controls">
+                        <span class="rapids-chart-title">CPU Usage</span>
+                        <button class="rapids-chart-btn rapids-chart-collapse-btn" title="Collapse/Expand">−</button>
+                      </div>
+                      <div class="rapids-chart-content">
+                        <div id="cpu-chart" style="width: 100%; height: 230px;"></div>
+                      </div>
+                    </div>
                     <div id="system-stage-detail-group" class="rapids-stage-detail" style="margin-top: 4px;"></div>
                   </div>
                 </div>
@@ -126,9 +217,33 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                        style="margin-left: 8px; font-size: 11px;">[hide]</a>
                   </h5>
                   <div id="section-disk-body">
-                    <div id="disk-io-chart" style="width: 100%; height: 250px; margin-top: 10px;"></div>
-                    <div id="disk-util-chart" style="width: 100%; height: 250px; margin-top: 10px;"></div>
-                    <div id="net-io-chart" style="width: 100%; height: 250px; margin-top: 10px;"></div>
+                    <div class="rapids-chart-wrapper" data-chart-id="disk-io-chart">
+                      <div class="rapids-chart-controls">
+                        <span class="rapids-chart-title">Disk IO</span>
+                        <button class="rapids-chart-btn rapids-chart-collapse-btn" title="Collapse/Expand">−</button>
+                      </div>
+                      <div class="rapids-chart-content">
+                        <div id="disk-io-chart" style="width: 100%; height: 230px;"></div>
+                      </div>
+                    </div>
+                    <div class="rapids-chart-wrapper" data-chart-id="disk-util-chart">
+                      <div class="rapids-chart-controls">
+                        <span class="rapids-chart-title">Disk Utilization</span>
+                        <button class="rapids-chart-btn rapids-chart-collapse-btn" title="Collapse/Expand">−</button>
+                      </div>
+                      <div class="rapids-chart-content">
+                        <div id="disk-util-chart" style="width: 100%; height: 230px;"></div>
+                      </div>
+                    </div>
+                    <div class="rapids-chart-wrapper" data-chart-id="net-io-chart">
+                      <div class="rapids-chart-controls">
+                        <span class="rapids-chart-title">Network IO</span>
+                        <button class="rapids-chart-btn rapids-chart-collapse-btn" title="Collapse/Expand">−</button>
+                      </div>
+                      <div class="rapids-chart-content">
+                        <div id="net-io-chart" style="width: 100%; height: 230px;"></div>
+                      </div>
+                    </div>
                     <div id="io-stage-detail-group" class="rapids-stage-detail" style="margin-top: 4px;"></div>
                   </div>
                 </div>
@@ -142,8 +257,24 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                        style="margin-left: 8px; font-size: 11px;">[hide]</a>
                   </h5>
                   <div id="section-spill-body">
-                    <div id="spill-time-chart" style="width: 100%; height: 250px; margin-top: 10px;"></div>
-                    <div id="spill-bytes-chart" style="width: 100%; height: 250px; margin-top: 10px;"></div>
+                    <div class="rapids-chart-wrapper" data-chart-id="spill-time-chart">
+                      <div class="rapids-chart-controls">
+                        <span class="rapids-chart-title">GPU Spill Time</span>
+                        <button class="rapids-chart-btn rapids-chart-collapse-btn" title="Collapse/Expand">−</button>
+                      </div>
+                      <div class="rapids-chart-content">
+                        <div id="spill-time-chart" style="width: 100%; height: 230px;"></div>
+                      </div>
+                    </div>
+                    <div class="rapids-chart-wrapper" data-chart-id="spill-bytes-chart">
+                      <div class="rapids-chart-controls">
+                        <span class="rapids-chart-title">GPU Spill Bytes</span>
+                        <button class="rapids-chart-btn rapids-chart-collapse-btn" title="Collapse/Expand">−</button>
+                      </div>
+                      <div class="rapids-chart-content">
+                        <div id="spill-bytes-chart" style="width: 100%; height: 230px;"></div>
+                      </div>
+                    </div>
                     <div id="spill-stage-detail-group" class="rapids-stage-detail" style="margin-top: 4px;"></div>
                   </div>
                 </div>
@@ -159,10 +290,42 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                        style="margin-left: 8px; font-size: 11px;">[hide]</a>
                   </h5>
                   <div id="section-gpu-body">
-                    <div id="gpu-chart" style="width: 100%; height: 260px; margin-top: 10px;"></div>
-                    <div id="gpu-tasks-chart" style="width: 100%; height: 220px; margin-top: 10px;"></div>
-                    <div id="retries-chart" style="width: 100%; height: 230px; margin-top: 10px;"></div>
-                    <div id="gpu-util-chart" style="width: 100%; height: 240px; margin-top: 10px;"></div>
+                    <div class="rapids-chart-wrapper" data-chart-id="gpu-chart">
+                      <div class="rapids-chart-controls">
+                        <span class="rapids-chart-title">GPU Memory</span>
+                        <button class="rapids-chart-btn rapids-chart-collapse-btn" title="Collapse/Expand">−</button>
+                      </div>
+                      <div class="rapids-chart-content">
+                        <div id="gpu-chart" style="width: 100%; height: 240px;"></div>
+                      </div>
+                    </div>
+                    <div class="rapids-chart-wrapper" data-chart-id="gpu-tasks-chart">
+                      <div class="rapids-chart-controls">
+                        <span class="rapids-chart-title">GPU Concurrent Tasks</span>
+                        <button class="rapids-chart-btn rapids-chart-collapse-btn" title="Collapse/Expand">−</button>
+                      </div>
+                      <div class="rapids-chart-content">
+                        <div id="gpu-tasks-chart" style="width: 100%; height: 200px;"></div>
+                      </div>
+                    </div>
+                    <div class="rapids-chart-wrapper" data-chart-id="retries-chart">
+                      <div class="rapids-chart-controls">
+                        <span class="rapids-chart-title">Retries</span>
+                        <button class="rapids-chart-btn rapids-chart-collapse-btn" title="Collapse/Expand">−</button>
+                      </div>
+                      <div class="rapids-chart-content">
+                        <div id="retries-chart" style="width: 100%; height: 210px;"></div>
+                      </div>
+                    </div>
+                    <div class="rapids-chart-wrapper" data-chart-id="gpu-util-chart">
+                      <div class="rapids-chart-controls">
+                        <span class="rapids-chart-title">GPU SM Utilization</span>
+                        <button class="rapids-chart-btn rapids-chart-collapse-btn" title="Collapse/Expand">−</button>
+                      </div>
+                      <div class="rapids-chart-content">
+                        <div id="gpu-util-chart" style="width: 100%; height: 220px;"></div>
+                      </div>
+                    </div>
                     <div id="gpu-stage-detail-group" class="rapids-stage-detail" style="margin-top: 4px;"></div>
                   </div>
                 </div>
@@ -182,9 +345,34 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
           $(document).ready(function() {
             // Initialize collapsible sections
             initSectionToggles();
+            // Initialize per-chart collapse controls
+            initChartControls();
             // Fetch executor list first, then metrics for the initial executor
             fetchExecutors();
           });
+          function initChartControls() {
+            // Collapse/expand button for each chart
+            $('.rapids-chart-collapse-btn').off('click').on('click', function(e) {
+              e.preventDefault();
+              e.stopPropagation();
+              var wrapper = $(this).closest('.rapids-chart-wrapper');
+              if (wrapper.hasClass('collapsed')) {
+                wrapper.removeClass('collapsed');
+                $(this).text('−');
+                // Reflow chart after expanding
+                var chartId = wrapper.data('chart-id');
+                if (chartId && window.Highcharts) {
+                  var container = document.getElementById(chartId);
+                  if (container && container.highcharts) {
+                    container.highcharts.reflow();
+                  }
+                }
+              } else {
+                wrapper.addClass('collapsed');
+                $(this).text('+');
+              }
+            });
+          }
 
           function fetchExecutors() {
             $.getJSON('/history/' + getAppId() + '/customevents/api/json/metrics/executors', function(data) {
@@ -253,6 +441,9 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                   return;
                 }
                 window._selectedExecutorId = execId;
+                // Update button styling
+                container.find('button').removeClass('btn-primary');
+                $(this).addClass('btn-primary');
                 fetchMetricData(execId);
               });
               container.append(btn);
@@ -1182,6 +1373,29 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
             bindPointerSyncForGroup('io', 'section-disk-body');
             bindPointerSyncForGroup('spill', 'section-spill-body');
             bindPointerSyncForGroup('gpu', 'section-gpu-body');
+
+            // Store chart references on their container elements
+            storeChartReference('mem-composition-chart', memCompChart);
+            storeChartReference('jvm-chart', jvmChart);
+            storeChartReference('offheap-chart', offheapChart);
+            storeChartReference('sys-mem-chart', sysMemChart);
+            storeChartReference('cpu-chart', cpuChart);
+            storeChartReference('disk-io-chart', diskIoChart);
+            storeChartReference('disk-util-chart', diskUtilChart);
+            storeChartReference('net-io-chart', netIoChart);
+            storeChartReference('spill-time-chart', spillTimeChart);
+            storeChartReference('spill-bytes-chart', spillBytesChart);
+            storeChartReference('gpu-chart', gpuChart);
+            storeChartReference('gpu-tasks-chart', gpuTasksChart);
+            storeChartReference('retries-chart', retriesChart);
+            storeChartReference('gpu-util-chart', gpuUtilChart);
+          }
+
+          function storeChartReference(containerId, chart) {
+            var container = document.getElementById(containerId);
+            if (container && chart) {
+              container.highcharts = chart;
+            }
           }
         """)}
       </script>
