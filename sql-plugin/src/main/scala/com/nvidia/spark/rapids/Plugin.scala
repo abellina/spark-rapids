@@ -83,8 +83,12 @@ object RapidsPluginUtils extends Logging {
   private val SPARK_MASTER = "spark.master"
   private val SPARK_RAPIDS_REPO_URL = "https://github.com/NVIDIA/spark-rapids"
 
-  /** Best-effort detection of a GPU model name using NVML on this host. */
-  private def detectGpuModelFromNvml(): Option[String] = {
+  /**
+   * Best-effort detection of a GPU model name using NVML.
+   * @param deviceId If specified, returns the model for just that device.
+   *                 If None, returns all GPU models (comma-separated).
+   */
+  def detectGpuModelFromNvml(deviceId: Option[Int] = None): Option[String] = {
     try {
       if (!NVML.initialize()) {
         logDebug("Failed to initialize NVML, skipping GPU model detection")
@@ -95,20 +99,34 @@ object RapidsPluginUtils extends Logging {
         if (all == null || all.isEmpty) {
           None
         } else {
-          val name = new mutable.ArrayBuffer[String]()
-          var i = 0
-          while (i < all.length) {
-            val res = all(i)
-            if (res != null) {
-              val info = res.getData
-              if (info != null && info.deviceInfo != null &&
-                  info.deviceInfo.name != null && info.deviceInfo.name.nonEmpty) {
-                name.append(info.deviceInfo.name)
+          deviceId match {
+            case Some(id) if id >= 0 && id < all.length =>
+              // Return model for specific device
+              val res = all(id)
+              if (res != null) {
+                val info = res.getData
+                if (info != null && info.deviceInfo != null &&
+                    info.deviceInfo.name != null && info.deviceInfo.name.nonEmpty) {
+                  Some(info.deviceInfo.name)
+                } else None
+              } else None
+            case _ =>
+              // Return all GPU models (for driver or when device ID unknown)
+              val names = new mutable.ArrayBuffer[String]()
+              var i = 0
+              while (i < all.length) {
+                val res = all(i)
+                if (res != null) {
+                  val info = res.getData
+                  if (info != null && info.deviceInfo != null &&
+                      info.deviceInfo.name != null && info.deviceInfo.name.nonEmpty) {
+                    names.append(info.deviceInfo.name)
+                  }
+                }
+                i += 1
               }
-            }
-            i += 1
+              if (names.nonEmpty) Some(names.mkString(", ")) else None
           }
-          Option(name.mkString(", "))
         }
       }
     } catch {
@@ -779,6 +797,9 @@ object RapidsMetricService {
 
   // Cumulative GPU spill bytes (executor-local)
   private[this] val totalGpuSpillHostBytes = new AtomicLong(0L)
+
+  // GPU device ID assigned to this executor (for NVML queries)
+  @volatile private[this] var gpuDeviceId: Option[Int] = None
   private[this] val totalGpuSpillDiskBytes = new AtomicLong(0L)
 
   // NVML initialization state (executor-local)
@@ -835,8 +856,8 @@ object RapidsMetricService {
   }
 
   /**
-   * Sample SM utilization using NVML. Returns the average GPU utilization
-   * percentage across all visible GPUs on this executor, or 0 if unavailable.
+   * Sample SM utilization using NVML. Returns the GPU utilization percentage
+   * for the device assigned to this executor, or 0 if unavailable.
    */
   private def sampleGpuSmUtilPct(): Long = {
     try {
@@ -848,23 +869,21 @@ object RapidsMetricService {
       if (all == null || all.isEmpty) {
         return 0L
       }
-      var sum: Long = 0L
-      var count: Long = 0L
-      var i = 0
-      while (i < all.length) {
-        val res = all(i)
-        if (res != null) {
-          val info = res.getData
-          if (info != null && info.utilizationInfo != null) {
-            val util: GPUUtilizationInfo = info.utilizationInfo
-            // gpuUtilization is 0-100 (% of SM utilization)
-            sum += util.gpuUtilization.toLong
-            count += 1
-          }
-        }
-        i += 1
+      // Use the assigned device ID if known, otherwise fall back to device 0
+      val deviceIdx = gpuDeviceId.getOrElse(0)
+      if (deviceIdx < 0 || deviceIdx >= all.length) {
+        return 0L
       }
-      if (count == 0L) 0L else sum / count
+      val res = all(deviceIdx)
+      if (res != null) {
+        val info = res.getData
+        if (info != null && info.utilizationInfo != null) {
+          val util: GPUUtilizationInfo = info.utilizationInfo
+          // gpuUtilization is 0-100 (% of SM utilization)
+          return util.gpuUtilization.toLong
+        }
+      }
+      0L
     } catch {
       case _: Throwable =>
         0L
@@ -1136,7 +1155,7 @@ object RapidsMetricService {
         val (diskReadBytes, diskWriteBytes, diskUtilPct) =
           sampleDiskStats(ctx, currentTime)
 
-        // GPU SM utilization (%), averaged across all visible GPUs on this executor
+        // GPU SM utilization (%) for the assigned device
         val gpuSmUtilPct: Long = sampleGpuSmUtilPct()
 
         // Network IO (bytes per interval across non-loopback interfaces)
@@ -1219,6 +1238,9 @@ object RapidsMetricService {
     if (!enabledForThisExecutor) {
       return
     }
+
+    // Capture the GPU device ID for this executor (used for SM utilization sampling)
+    gpuDeviceId = GpuDeviceManager.getDeviceId()
 
     // Resolve sampling and publish periods.
     val samplePeriodMs = math.max(1, conf.get(RapidsConf.METRICS_SAMPLE_PERIOD_MS))
@@ -1399,8 +1421,14 @@ class RapidsExecutorPlugin extends ExecutorPlugin with Logging {
         val execId = SparkEnv.get.executorId
         val diskBwInfo = RapidsPluginUtils.detectDiskBandwidth(sparkConf)
         val monitoredDiskDevice = RapidsPluginUtils.detectMonitoredDiskDevice(sparkConf)
+        // Get GPU model for the specific device assigned to this executor
+        val gpuDeviceId = GpuDeviceManager.getDeviceId()
+        val gpuModelInfo = gpuDeviceId.flatMap(id =>
+          RapidsPluginUtils.detectGpuModelFromNvml(Some(id))
+        ).map(model => Map("gpuModel" -> model)).getOrElse(Map.empty)
         val execEvent = buildInfoEvent.copy(
           sparkRapidsBuildInfo = buildInfoEvent.sparkRapidsBuildInfo ++ diskBwInfo,
+          sparkRapidsJniBuildInfo = buildInfoEvent.sparkRapidsJniBuildInfo ++ gpuModelInfo,
           monitoredDiskDevice = monitoredDiskDevice,
           executorId = Some(execId))
         pluginContext.ask(execEvent)
