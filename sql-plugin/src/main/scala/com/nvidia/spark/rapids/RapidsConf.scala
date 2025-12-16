@@ -1278,31 +1278,23 @@ val GPU_COREDUMP_PIPE_PATTERN = conf("spark.rapids.gpu.coreDump.pipePattern")
   /**
    * Controls the hybrid scan mode for Parquet reading.
    * 
-   * Implementation follows 5 phases:
-   * - Phase 1 (PHASE1_WHOLE_FILE): Given footer + pre-loaded data, use hybrid scan 
-   *   callbacks to decode. Tests the callback mechanism with Buffer → Table.
-   * - Phase 2 (PHASE2_CALLBACKS): Footer + IO callbacks for data fetching with 
-   *   column pruning/slicing only (no filter pushdowns).
-   * - Phase 3 (PHASE3_PUSHDOWNS): Add AST filter pushdowns for statistics/dictionary filtering.
-   * - Phase 4 (PHASE4_DELETION_VECTORS): Deletion vector support.
-   * - Phase 5 (PHASE5_CHUNKING): Small files + chunking support.
+   * Implementation follows phases:
+   * - Phase 0 (PHASE0_POC): POC that bypasses parquet-mr entirely. Reads footer only,
+   *   uses hybrid scan for row group filtering, and reads only needed byte ranges.
+   * - Phase 1+: Future phases for production hardening, chunking, deletion vectors, etc.
    * 
    * DISABLED: Use existing parquet-mr based processing.
    */
   object ParquetHybridScanMode extends Enumeration {
-    val DISABLED, PHASE1_WHOLE_FILE, PHASE2_CALLBACKS, PHASE3_PUSHDOWNS, 
-        PHASE4_DELETION_VECTORS, PHASE5_CHUNKING = Value
+    val DISABLED, PHASE0_POC = Value
   }
 
   val PARQUET_HYBRID_SCAN_MODE =
     conf("spark.rapids.sql.format.parquet.hybridScan.mode")
       .doc("Controls hybrid scan integration for Parquet reading. " +
           "DISABLED: Use existing parquet-mr processing. " +
-          "PHASE1_WHOLE_FILE: Use hybrid scan with pre-loaded data buffer (tests callback mechanism). " +
-          "PHASE2_CALLBACKS: Use IO callbacks for data with column pruning only. " +
-          "PHASE3_PUSHDOWNS: Add AST filter pushdowns. " +
-          "PHASE4_DELETION_VECTORS: Add deletion vector support. " +
-          "PHASE5_CHUNKING: Add small files and chunking support.")
+          "PHASE0_POC: POC that bypasses parquet-mr - reads footer only, " +
+          "uses hybrid scan for filtering, reads only needed byte ranges.")
       .stringConf
       .transform(_.toUpperCase(java.util.Locale.ROOT))
       .checkValues(ParquetHybridScanMode.values.map(_.toString))
@@ -3483,11 +3475,7 @@ class RapidsConf(conf: Map[String, String]) extends Logging {
   lazy val parquetHybridScanMode: ParquetHybridScanMode.Value = {
     get(PARQUET_HYBRID_SCAN_MODE) match {
       case "DISABLED" => ParquetHybridScanMode.DISABLED
-      case "PHASE1_WHOLE_FILE" => ParquetHybridScanMode.PHASE1_WHOLE_FILE
-      case "PHASE2_CALLBACKS" => ParquetHybridScanMode.PHASE2_CALLBACKS
-      case "PHASE3_PUSHDOWNS" => ParquetHybridScanMode.PHASE3_PUSHDOWNS
-      case "PHASE4_DELETION_VECTORS" => ParquetHybridScanMode.PHASE4_DELETION_VECTORS
-      case "PHASE5_CHUNKING" => ParquetHybridScanMode.PHASE5_CHUNKING
+      case "PHASE0_POC" => ParquetHybridScanMode.PHASE0_POC
       case other =>
         throw new IllegalArgumentException(s"Internal Error $other is not supported for " +
             s"${PARQUET_HYBRID_SCAN_MODE.key}")
