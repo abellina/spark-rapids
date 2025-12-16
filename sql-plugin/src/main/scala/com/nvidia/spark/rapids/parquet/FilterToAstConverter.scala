@@ -20,7 +20,7 @@ import java.sql.{Date, Timestamp}
 import java.util.Locale
 
 import ai.rapids.cudf.DType
-import ai.rapids.cudf.ast.{AstExpression, BinaryOperation, BinaryOperator, ColumnReference, CompiledExpression, Literal, UnaryOperation, UnaryOperator}
+import ai.rapids.cudf.ast.{AstExpression, BinaryOperation, BinaryOperator, ColumnNameReference, ColumnReference, CompiledExpression, Literal, UnaryOperation, UnaryOperator}
 
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.sources._
@@ -41,7 +41,8 @@ import org.apache.spark.sql.types._
  */
 case class FilterToAstConverter(
     schema: StructType,
-    isCaseSensitive: Boolean) extends Logging {
+    isCaseSensitive: Boolean,
+    useColumnNames: Boolean) extends Logging {
 
   // Build a map from column name to index for efficient lookups
   private val columnNameToIndex: Map[String, Int] = {
@@ -120,14 +121,14 @@ case class FilterToAstConverter(
       // Null checks
       case IsNull(attribute) =>
         getColumnIndex(attribute).map { idx =>
-          new UnaryOperation(UnaryOperator.IS_NULL, new ColumnReference(idx))
+          new UnaryOperation(UnaryOperator.IS_NULL, makeColumnRef(attribute, idx))
         }
 
       case IsNotNull(attribute) =>
         getColumnIndex(attribute).map { idx =>
           new UnaryOperation(
             UnaryOperator.NOT,
-            new UnaryOperation(UnaryOperator.IS_NULL, new ColumnReference(idx)))
+            new UnaryOperation(UnaryOperator.IS_NULL, makeColumnRef(attribute, idx)))
         }
 
       // IN filter - convert to chain of OR(EQUAL, EQUAL, ...)
@@ -183,7 +184,7 @@ case class FilterToAstConverter(
       dataType <- getColumnType(attribute)
       literal <- convertLiteral(value, dataType)
     } yield {
-      new BinaryOperation(operator, new ColumnReference(colIdx), literal)
+      new BinaryOperation(operator, makeColumnRef(attribute, colIdx), literal)
     }
   }
 
@@ -205,7 +206,7 @@ case class FilterToAstConverter(
           convertLiteral(value, dataType).map { literal =>
             new BinaryOperation(
               BinaryOperator.EQUAL,
-              new ColumnReference(colIdx),
+              makeColumnRef(attribute, colIdx),
               literal): AstExpression
           }
         }
@@ -239,6 +240,18 @@ case class FilterToAstConverter(
   private def getColumnType(attribute: String): Option[DataType] = {
     val key = if (isCaseSensitive) attribute else attribute.toLowerCase(Locale.ROOT)
     columnNameToType.get(key)
+  }
+
+  /**
+   * Create a column reference expression. Uses ColumnNameReference if useColumnNames is true,
+   * otherwise uses ColumnReference with the column index.
+   */
+  private def makeColumnRef(attribute: String, colIdx: Int): AstExpression = {
+    if (useColumnNames) {
+      new ColumnNameReference(attribute)
+    } else {
+      new ColumnReference(colIdx)
+    }
   }
 
   /**

@@ -80,6 +80,7 @@ import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.rapids.execution.TrampolineUtil
 import org.apache.spark.sql.rapids.isTimestampNTZ
 import org.apache.spark.sql.sources.Filter
+import org.apache.spark.sql.sources.AlwaysTrue
 import org.apache.spark.sql.types._
 import org.apache.spark.sql.util.CaseInsensitiveStringMap
 import org.apache.spark.sql.vectorized.{ColumnarBatch, ColumnVector => SparkVector}
@@ -519,7 +520,7 @@ private case class GpuParquetFileFilterHandler(
     val footerBuffer = getFooterBuffer(fileIO, filePath, conf, metrics)
     try {
       // Convert filters to AST and create hybrid scan reader
-      val converter = FilterToAstConverter(readDataSchema, isCaseSensitive)
+      val converter = FilterToAstConverter(readDataSchema, isCaseSensitive, true)
       val compiledFilter = converter.convert(filters)
       
       if (compiledFilter.isEmpty) {
@@ -2245,7 +2246,7 @@ trait ParquetPartitionReaderBase extends Logging with ScanWithMetrics
     
     // Add filter for hybrid scan mode if filters are provided
     if (hybridScanFilters.nonEmpty) {
-      val converter = FilterToAstConverter(readDataSchema, isSchemaCaseSensitive)
+      val converter = FilterToAstConverter(readDataSchema, isSchemaCaseSensitive, true)
       converter.convert(hybridScanFilters).foreach { compiledExpr =>
         builder.withFilter(compiledExpr)
       }
@@ -3109,7 +3110,8 @@ object MakeParquetTableProducer extends Logging {
       debugDumpPrefix: Option[String],
       debugDumpAlways: Boolean,
       hybridScanMode: RapidsConf.ParquetHybridScanMode.Value = 
-        RapidsConf.ParquetHybridScanMode.DISABLED
+        RapidsConf.ParquetHybridScanMode.DISABLED,
+      hybridScanFilters: Array[Filter] = Array.empty
   ): GpuDataProducer[Table] = {
     debugDumpPrefix.foreach { prefix =>
       if (debugDumpAlways) {
@@ -3129,7 +3131,8 @@ object MakeParquetTableProducer extends Logging {
             NvtxIdWithMetrics(NvtxRegistry.PARQUET_DECODE, metrics(GPU_DECODE_TIME)) {
               if (hybridScanMode == RapidsConf.ParquetHybridScanMode.PHASE1_WHOLE_FILE) {
                 // Phase 1: Use hybrid scan to decode from pre-loaded buffer
-                readWithHybridScan(buffers, opts, readDataSchema)
+                readWithHybridScan(buffers, opts, readDataSchema, hybridScanFilters,
+                  isSchemaCaseSensitive)
               } else {
                 // Default path: Use Table.readParquet directly
                 Table.readParquet(opts, buffers:_*)
@@ -3172,19 +3175,24 @@ object MakeParquetTableProducer extends Logging {
    * 
    * Phase 1 proves the hybrid scan callback mechanism works by:
    * 1. Extracting footer from the pre-loaded buffer
-   * 2. Creating a HybridScanReader with the footer
+   * 2. Creating a HybridScanReader with the footer and filter
    * 3. Using the reader to decode the data via callbacks
    * 
    * @param buffers The pre-loaded parquet file data
    * @param opts Parquet read options
    * @param readDataSchema The schema to read
+   * @param filters Optional Spark SQL filters to convert to AST
+   * @param isCaseSensitive Whether column name matching is case sensitive
    * @return Table containing the decoded data
    */
   private def readWithHybridScan(
       buffers: Array[HostMemoryBuffer],
       opts: ParquetOptions,
-      readDataSchema: StructType): Table = {
+      readDataSchema: StructType,
+      filters: Array[Filter],
+      isCaseSensitive: Boolean): Table = {
     import ai.rapids.cudf.HybridScanReader
+    import ai.rapids.cudf.ast.CompiledExpression
     
     require(buffers.length == 1, 
       s"Phase 1 hybrid scan only supports single buffer, got ${buffers.length}")
@@ -3213,12 +3221,24 @@ object MakeParquetTableProducer extends Logging {
       // Get column names from the read schema
       val columnNames = readDataSchema.fields.map(_.name)
       
-      // Create the hybrid scan reader (no filter for Phase 1)
-      val reader = new HybridScanReader(footer, null, columnNames)
+      // Convert Spark filters to cuDF AST expression
+      val compiledFilterOpt: Option[CompiledExpression] = if (filters.nonEmpty) {
+        val converter = FilterToAstConverter(readDataSchema, isCaseSensitive, true)
+        converter.convert(filters)
+      } else {
+        val converter = FilterToAstConverter(readDataSchema, isCaseSensitive, false)
+        converter.convert(Array(AlwaysTrue))
+      }
       
-      withResource(reader) { _ =>
-        // Use the convenience method that handles all byte range fetching internally
-        reader.materializeFromBuffer(buffer)
+      // Create the hybrid scan reader with filter (if available)
+      // Use closeOnExcept to ensure filter is closed even if reader creation fails
+      withResource(compiledFilterOpt) { filterOpt =>
+        val reader = new HybridScanReader(footer, filterOpt.orNull, columnNames)
+        
+        withResource(reader) { _ =>
+          // Use the convenience method that handles all byte range fetching internally
+          reader.materializeFromBuffer(buffer)
+        }
       }
     }
   }
@@ -3398,7 +3418,7 @@ class ParquetPartitionReader(
                 hasInt96Timestamps, isSchemaCaseSensitive,
                 useFieldId, readDataSchema,
                 clippedParquetSchema, Array(split),
-                debugDumpPrefix, debugDumpAlways, hybridScanMode)
+                debugDumpPrefix, debugDumpAlways, hybridScanMode, hybridScanFilters)
               CachedGpuBatchIterator(producer, colTypes)
             }
           }

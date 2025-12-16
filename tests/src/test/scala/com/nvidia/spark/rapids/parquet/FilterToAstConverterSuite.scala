@@ -34,8 +34,8 @@ class FilterToAstConverterSuite extends AnyFunSuite {
     StructField("ts_col", TimestampType)
   ))
 
-  private def converter(caseSensitive: Boolean = true) = 
-    FilterToAstConverter(testSchema, caseSensitive)
+  private def converter(caseSensitive: Boolean = true, useColumnNames: Boolean = false) = 
+    FilterToAstConverter(testSchema, caseSensitive, useColumnNames)
 
   // Test supported filter types
   test("isSupportedFilter returns true for comparison filters") {
