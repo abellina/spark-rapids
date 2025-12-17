@@ -378,7 +378,7 @@ class AggHelper(
   private[rapids] val cudfAggregates = new mutable.ArrayBuffer[CudfAggregate]()
 
   // integers for each column the aggregate is operating on
-  // package private for testing
+  // package private for testing2
   private[rapids] val aggOrdinals = new mutable.ArrayBuffer[Int]
 
   // grouping ordinals are the indices of the tables to aggregate that need to be
@@ -415,11 +415,34 @@ class AggHelper(
     groupingExpressions.map(_.dataType)
 
   private var ix = groupingAttributes.length
+  private var input_idx = ix
   for (aggExp <- aggregateExpressions) {
     val aggFn = aggExp.aggregateFunction
     if ((aggExp.mode == Partial || aggExp.mode == Complete) && !forceMerge) {
-      val ordinals = (ix until ix + aggFn.updateAggregates.length)
+      System.err.println("\n\naggFn.updateAggregates: " + 
+        aggFn.updateAggregates.map(_.toString).mkString(", ") + ", size: " + aggFn.updateAggregates.length)
+
+      // val ordinals = (ix until ix + aggFn.updateAggregates.length)
+
+ val numSlots = aggFn.updateAggregates.map(_.numSlots).toArray
+System.err.println("numSlots: " + numSlots.mkString(", "))
+
+       val offsets: Array[Int] = numSlots.scanLeft(0)(_ + _).toArray
+System.err.println("offsets: " + offsets.mkString(", "))
+
+  val ordinals: Array[Int] =
+  aggFn.updateAggregates.indices.map { i =>
+    offsets(i) + input_idx
+  }.toArray
+      System.err.println("ordinals: " + ordinals.mkString(", "))
+
+  input_idx += offsets.last
+
+
       aggOrdinals ++= ordinals
+      
+      System.err.println("aggOrdinals: " + aggOrdinals.mkString(", "))
+      
       ix += ordinals.length
       val updateAggs = aggFn.updateAggregates
       postStepDataTypes ++= updateAggs.map(_.dataType)
@@ -428,7 +451,26 @@ class AggHelper(
       postStep ++= aggFn.postUpdate
       postStepAttr ++= aggFn.postUpdateAttr
     } else {
-      val ordinals = (ix until ix + aggFn.mergeAggregates.length)
+      System.err.println("merge, aggFn.mergeAggregates: " + 
+        aggFn.mergeAggregates.map(_.toString).mkString(", ") + ", size: " + aggFn.mergeAggregates.length)
+      // val ordinals = (ix until ix + aggFn.mergeAggregates.length)
+      //   .map(i => i + aggFn.mergeAggregates(i).numSlots)
+val numSlots = aggFn.updateAggregates.map(_.numSlots).toArray
+System.err.println("merge, numSlots: " + numSlots.mkString(", "))
+
+       val offsets: Array[Int] = numSlots.scanLeft(0)(_ + _).toArray
+System.err.println("merge, offsets: " + offsets.mkString(", "))
+
+
+val ordinals: Array[Int] =
+  aggFn.updateAggregates.indices.map { i =>
+    offsets(i) + input_idx
+  }.toArray
+System.err.println("merge, ordinals: " + ordinals.mkString(", "))
+
+input_idx += offsets.last
+
+
       aggOrdinals ++= ordinals
       ix += ordinals.length
       val mergeAggs = aggFn.mergeAggregates
@@ -539,13 +581,22 @@ class AggHelper(
    * @return
    */
   def performReduction(preProcessed: ColumnarBatch): ColumnarBatch = {
+    System.err.println("performReduction: ")
     withResource(new NvtxRange("reduce", NvtxColor.BLUE)) { _ =>
       val cvs = mutable.ArrayBuffer[GpuColumnVector]()
       var slotIx = 0
+      System.err.println("cudfAggregates: " + cudfAggregates.map(_.toString).mkString(", "))
+      System.err.println("aggOrdinals: " + aggOrdinals.mkString(", "))
+
       cudfAggregates.foreach { cudfAgg =>
+        
+        System.err.println("\n\ncudfAgg: " + cudfAgg.toString)
         val aggFn = cudfAgg.reductionAggregateBatch _
+        
+        System.err.println("slotIx: " + slotIx)
+        System.err.println("aggOrdinals: " + aggOrdinals(slotIx))
         cvs.appendAll(aggFn(preProcessed, aggOrdinals(slotIx)))
-        slotIx += cudfAgg.numSlots
+        slotIx += 1
       }
       new ColumnarBatch(cvs.toArray, 1)
     }

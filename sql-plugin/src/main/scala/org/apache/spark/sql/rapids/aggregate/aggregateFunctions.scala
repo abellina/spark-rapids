@@ -2179,7 +2179,8 @@ case class GpuVarianceSamp(child: Expression, nullOnDivideByZero: Boolean)
   override def prettyName: String = "var_samp"
 }
 
-abstract class CudfArgMinMaxBase() extends CudfAggregate {
+abstract class CudfMinMaxByBase(val valueType: DataType, val orderingType: DataType) extends CudfAggregate {
+  override val dataType: DataType = NullType
   override val numSlots: Int = 2
   protected val cudfReductionOp: ReductionAggregation
   override lazy val reductionAggregate: cudf.ColumnVector => cudf.Scalar = {
@@ -2189,29 +2190,33 @@ abstract class CudfArgMinMaxBase() extends CudfAggregate {
       batch: ColumnarBatch, position: Int): Array[GpuColumnVector] = {
     val data = GpuColumnVector.extractColumns(batch)(position).getBase
     val ordering = GpuColumnVector.extractColumns(batch)(position+1).getBase
-    val res = if (ordering.getNullCount == ordering.getRowCount) { // all nulls
-      GpuScalar.from(null, dataType)
+    val gatherIdx = if (ordering.getNullCount == ordering.getRowCount) { // all nulls
+      GpuScalar.from(null, IntegerType)
     } else {
       ordering.reduce(cudfReductionOp, DType.INT32)
     }
-    val gathered = cudf.ColumnVector.fromScalar(data.getScalarElement(res.getInt), 1)
-    withResource(res) { _ =>
-      Array(
-        GpuColumnVector.from(gathered, dataType),
-        GpuColumnVector.from(res, 1, IntegerType))
+    withResource(gatherIdx) { _ =>
+      val outValueScalar = data.getScalarElement(gatherIdx.getInt)
+      val outOrderingScalar = ordering.getScalarElement(gatherIdx.getInt)
+      withResource(outValueScalar) { _ =>
+        withResource(outOrderingScalar) { _ =>
+          Array(
+            GpuColumnVector.from(outValueScalar, 1, valueType),
+            GpuColumnVector.from(outOrderingScalar, 1, orderingType))
+        }
+      }
     }
   }
-  override val dataType: DataType = IntegerType
 }
 
-class CudfArgMin() extends CudfArgMinMaxBase() {
-  override val name: String = "CudfArgMin"
+class CudfMinBy(valueType: DataType, orderingType: DataType) extends CudfMinMaxByBase(valueType, orderingType) {
+  override val name: String = "CudfMinBy"
   override lazy val groupByAggregate: GroupByAggregation = GroupByAggregation.argMin()
   override lazy val cudfReductionOp: ReductionAggregation = ReductionAggregation.argMin()
 }
 
-class CudfArgMax() extends CudfArgMinMaxBase() {
-  override val name: String = "CudfArgMax"
+class CudfMaxBy(valueType: DataType, orderingType: DataType) extends CudfMinMaxByBase(valueType, orderingType) {
+  override val name: String = "CudfMaxBy"
   override lazy val groupByAggregate: GroupByAggregation = GroupByAggregation.argMax()
   override lazy val cudfReductionOp: ReductionAggregation = ReductionAggregation.argMax()
 }
@@ -2258,7 +2263,8 @@ case class GpuMaxBy(valueExpr: Expression, orderingExpr: Expression)
 
   override def prettyName: String = "max_by"
 
-  override protected lazy val cudfArgMinMaxAggregate: CudfAggregate = new CudfArgMax()
+  override protected lazy val cudfArgMinMaxAggregate: CudfAggregate =
+     new CudfMaxBy(valueExpr.dataType, orderingExpr.dataType)
 }
 
 case class GpuMinBy(valueExpr: Expression, orderingExpr: Expression)
@@ -2266,7 +2272,8 @@ case class GpuMinBy(valueExpr: Expression, orderingExpr: Expression)
 
   override def prettyName: String = "min_by"
 
-  override protected lazy val cudfArgMinMaxAggregate: CudfAggregate = new CudfArgMin()
+  override protected lazy val cudfArgMinMaxAggregate: CudfAggregate =
+    new CudfMinBy(valueExpr.dataType, orderingExpr.dataType)
 }
 
 class CudfBitAndAgg(override val dataType: DataType) extends CudfAggregate {

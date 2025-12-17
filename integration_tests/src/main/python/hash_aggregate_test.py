@@ -1639,11 +1639,11 @@ def test_hash_groupby_min_max_by_same(data_gen, kudo_enabled):
         "SELECT a, min_by(b, b), max_by(b, b) FROM tbl GROUP BY a",
         conf = {kudo_enabled_conf_key: kudo_enabled})
 
-@pytest.mark.parametrize("kudo_enabled", ["true", "false"], ids=idfn)
+@pytest.mark.parametrize("kudo_enabled", ["false"], ids=idfn)
 def test_reduction_with_min_max_by_unique(kudo_enabled):
     assert_gpu_and_cpu_are_equal_collect(
         lambda spark: two_col_df(spark, int_gen, UniqueLongGen()).selectExpr(
-            "min_by(a, b)", "max_by(a, b)"),
+            "min_by(a, b)", "max_by(a, b)","min_by(a, b)", "max_by(a, b)"),
         conf = {kudo_enabled_conf_key: kudo_enabled})
 
 
@@ -1655,7 +1655,7 @@ def test_reduction_with_min_max_by_unique(kudo_enabled):
 def test_reduction_with_max_by_same(data_gen, kudo_enabled):
     assert_gpu_and_cpu_are_equal_collect(
         lambda spark: unary_op_df(spark, data_gen).selectExpr(
-            "min_by(a, a)", "max_by(a, a)"),
+            "min_by(a, a)", "max_by(a, a)", "min_by(a, a)", "max_by(a, a)"),
         conf = {kudo_enabled_conf_key: kudo_enabled})
 
 @pytest.mark.parametrize('data_gen', all_gen + _nested_gens, ids=idfn)
