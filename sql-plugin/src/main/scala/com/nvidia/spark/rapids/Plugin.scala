@@ -84,6 +84,23 @@ object RapidsPluginUtils extends Logging {
   private val SPARK_RAPIDS_REPO_URL = "https://github.com/NVIDIA/spark-rapids"
 
   /**
+   * Resolve the first local directory path for disk operations.
+   * Priority order:
+   *   1. SPARK_LOCAL_DIRS environment variable (set by YARN/Kubernetes)
+   *   2. spark.local.dir Spark configuration
+   *   3. java.io.tmpdir system property
+   *   4. /tmp as fallback
+   */
+  def resolveFirstLocalDir(conf: SparkConf): String = {
+    // SPARK_LOCAL_DIRS is set by YARN and some other cluster managers
+    val envLocalDirs = Option(System.getenv("SPARK_LOCAL_DIRS")).filter(_.nonEmpty)
+    val localDirStr = envLocalDirs.getOrElse(
+      conf.get("spark.local.dir", System.getProperty("java.io.tmpdir", "/tmp")))
+    localDirStr.split(",").headOption
+      .map(_.trim).filter(_.nonEmpty).getOrElse("/tmp")
+  }
+
+  /**
    * Best-effort detection of a GPU model name using NVML.
    * @param deviceId If specified, returns the model for just that device.
    *                 If None, returns all GPU models (comma-separated).
@@ -145,10 +162,7 @@ object RapidsPluginUtils extends Logging {
    */
   def detectDiskBandwidth(conf: SparkConf): Map[String, String] = {
     try {
-      val localDirStr = conf.get("spark.local.dir",
-        System.getProperty("java.io.tmpdir", "/tmp"))
-      val firstLocalDir = localDirStr.split(",").headOption
-        .map(_.trim).filter(_.nonEmpty).getOrElse("/tmp")
+      val firstLocalDir = resolveFirstLocalDir(conf)
       val dirPath = java.nio.file.Paths.get(firstLocalDir).toAbsolutePath.normalize()
       val fs = java.nio.file.Files.getFileStore(dirPath)
       val usable = fs.getUsableSpace
@@ -327,10 +341,7 @@ object RapidsPluginUtils extends Logging {
    */
   def detectMonitoredDiskDevice(conf: SparkConf): Option[String] = {
     try {
-      val localDirStr = conf.get("spark.local.dir",
-        System.getProperty("java.io.tmpdir", "/tmp"))
-      val firstLocalDir = localDirStr.split(",").headOption
-        .map(_.trim).filter(_.nonEmpty).getOrElse("/tmp")
+      val firstLocalDir = resolveFirstLocalDir(conf)
       val localPath = java.nio.file.Paths.get(firstLocalDir).toAbsolutePath.normalize()
 
       import scala.collection.JavaConverters._
@@ -973,11 +984,7 @@ object RapidsMetricService {
         return
       }
       try {
-        val conf = ctx.conf()
-        val localDirStr = conf.get("spark.local.dir",
-          System.getProperty("java.io.tmpdir", "/tmp"))
-        val firstLocalDir = localDirStr.split(",").headOption
-          .map(_.trim).filter(_.nonEmpty).getOrElse("/tmp")
+        val firstLocalDir = RapidsPluginUtils.resolveFirstLocalDir(ctx.conf())
         val localPath = java.nio.file.Paths.get(firstLocalDir).toAbsolutePath.normalize()
 
         import scala.collection.JavaConverters._
