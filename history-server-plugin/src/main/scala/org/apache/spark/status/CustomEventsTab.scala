@@ -87,20 +87,20 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                   <td id="rapids-jni-revision">{jniRevision.getOrElse("")}</td></tr>
                 <tr><th>GPU Model (NVML)</th>
                   <td id="rapids-gpu-model">{gpuModel.getOrElse("")}</td></tr>
-                <tr><th>System Memory Total (bytes)</th>
+                <tr><th>System Memory Total</th>
                   <td id="rapids-sys-mem-total">{sysMemTotal.getOrElse("")}</td></tr>
                 <tr><th>JNI GPU Arch (from build info)</th>
                   <td id="rapids-jni-arch">{jniArch.getOrElse("")}</td></tr>
                 <tr><th>Monitored Disk Device (spark.local.dir)</th>
                   <td id="rapids-disk-device">{monitoredDiskDevice.getOrElse("")}</td></tr>
-                <tr><th>Disk Write Bandwidth (bytes/s)</th>
+                <tr><th>Disk Write Bandwidth</th>
                   <td id="rapids-disk-write-bw">{diskWriteBw.getOrElse("")}</td></tr>
-                <tr><th>Disk Read Bandwidth (bytes/s)</th>
+                <tr><th>Disk Read Bandwidth</th>
                   <td id="rapids-disk-read-bw">{diskReadBw.getOrElse("")}</td></tr>
-                <tr><th>fio Write Bandwidth (bytes/s)</th>
-                  <td id="rapids-fio-write-bw">{fioWriteBw.getOrElse("")}</td></tr>
-                <tr><th>fio Read Bandwidth (bytes/s)</th>
-                  <td id="rapids-fio-read-bw">{fioReadBw.getOrElse("")}</td></tr>
+                <tr><th>fio Write Bandwidth</th>
+                  <td id="rapids-fio-write-bw">{fioWriteBw.getOrElse("no fio detected")}</td></tr>
+                <tr><th>fio Read Bandwidth</th>
+                  <td id="rapids-fio-read-bw">{fioReadBw.getOrElse("no fio detected")}</td></tr>
               </tbody>
             </table>
           </div>
@@ -354,7 +354,7 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                   <div class="col-lg-12">
                     <div class="rapids-chart-wrapper" data-chart-id="io-wait-chart">
                       <div class="rapids-chart-controls">
-                        <span class="rapids-chart-title">Tasks Waiting on I/O</span>
+                        <span class="rapids-chart-title">Max Concurrent I/O Waiters</span>
                         <button class="rapids-chart-btn rapids-chart-collapse-btn" title="Collapse/Expand">−</button>
                       </div>
                       <div class="rapids-chart-content">
@@ -385,6 +385,97 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
             // Fetch executor list first, then metrics for the initial executor
             fetchExecutors();
           });
+
+          // Format bandwidth (base 10: KB, MB, GB) - for disk/network I/O
+          function formatBandwidth(bytes) {
+            if (bytes === undefined || bytes === null || bytes === '') return '';
+            var b = parseFloat(bytes);
+            if (isNaN(b)) return bytes;
+            if (b < 1000) return b.toFixed(0) + ' B/s';
+            if (b < 1000000) return (b / 1000).toFixed(2) + ' KB/s';
+            if (b < 1000000000) return (b / 1000000).toFixed(2) + ' MB/s';
+            return (b / 1000000000).toFixed(2) + ' GB/s';
+          }
+
+          // Format memory (base 2: KiB, MiB, GiB) - for RAM/GPU memory
+          function formatMemory(bytes) {
+            if (bytes === undefined || bytes === null || bytes === '') return '';
+            var b = parseFloat(bytes);
+            if (isNaN(b)) return bytes;
+            if (b < 1024) return b.toFixed(0) + ' B';
+            if (b < 1048576) return (b / 1024).toFixed(2) + ' KiB';
+            if (b < 1073741824) return (b / 1048576).toFixed(2) + ' MiB';
+            return (b / 1073741824).toFixed(2) + ' GiB';
+          }
+
+          // Format percentage
+          function formatPercent(value) {
+            if (value === undefined || value === null || value === '') return '';
+            return parseFloat(value).toFixed(1) + '%';
+          }
+
+          // Format count (integer)
+          function formatCount(value) {
+            if (value === undefined || value === null || value === '') return '';
+            return Math.round(value).toLocaleString();
+          }
+
+          // Format time in seconds
+          function formatSeconds(value) {
+            if (value === undefined || value === null || value === '') return '';
+            var v = parseFloat(value);
+            if (isNaN(v)) return value;
+            if (v < 0.001) return (v * 1000000).toFixed(2) + ' µs';
+            if (v < 1) return (v * 1000).toFixed(2) + ' ms';
+            return v.toFixed(3) + ' s';
+          }
+
+          // Format time in nanoseconds
+          function formatNanoseconds(value) {
+            if (value === undefined || value === null || value === '') return '';
+            var ns = parseFloat(value);
+            if (isNaN(ns)) return value;
+            if (ns < 1000) return ns.toFixed(0) + ' ns';
+            if (ns < 1000000) return (ns / 1000).toFixed(2) + ' µs';
+            if (ns < 1000000000) return (ns / 1000000).toFixed(2) + ' ms';
+            return (ns / 1000000000).toFixed(3) + ' s';
+          }
+
+          // Determine formatter based on metric name
+          function getFormatterForMetric(metricName) {
+            // Memory metrics (base 2)
+            var memoryMetrics = ['jvmTotal', 'jvmUsed', 'jvmFree', 'offHeapPinned', 'offHeapPageable',
+              'gpuMemUsed', 'sysMemUsed', 'sysMemFree', 'systemOtherUsed',
+              'gpuSpillHostBytes', 'gpuSpillDiskBytes'];
+            // Bandwidth metrics (base 10, per second)
+            var bandwidthMetrics = ['diskReadBytes', 'diskWriteBytes', 'netReadBytes', 'netWriteBytes'];
+            // Percentage metrics
+            var percentMetrics = ['cpuPercent', 'diskUtilPct', 'gpuSmUtilPct'];
+            // Time metrics (in nanoseconds from spill metrics)
+            var timeNsMetrics = ['gpuSpillToHostTimeNs', 'gpuSpillToDiskTimeNs',
+              'gpuReadSpillFromHostTimeNs', 'gpuReadSpillFromDiskTimeNs'];
+
+            if (memoryMetrics.indexOf(metricName) >= 0) return formatMemory;
+            if (bandwidthMetrics.indexOf(metricName) >= 0) return formatBandwidth;
+            if (percentMetrics.indexOf(metricName) >= 0) return formatPercent;
+            if (timeNsMetrics.indexOf(metricName) >= 0) return formatNanoseconds;
+            return formatCount; // default for counts like retryCount, gpuConcurrentTasks
+          }
+
+          // Create yAxis label formatter for a chart type
+          function makeYAxisFormatter(chartType) {
+            if (chartType === 'memory') {
+              return function() { return formatMemory(this.value); };
+            } else if (chartType === 'bandwidth') {
+              return function() { return formatBandwidth(this.value); };
+            } else if (chartType === 'percent') {
+              return function() { return this.value + '%'; };
+            } else if (chartType === 'time') {
+              return function() { return formatNanoseconds(this.value); };
+            }
+            return function() { return formatCount(this.value); };
+          }
+
           function initChartControls() {
             // Collapse/expand button for each chart
             $('.rapids-chart-collapse-btn').off('click').on('click', function(e) {
@@ -503,7 +594,7 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
               $('#rapids-gpu-model').text(info.gpuModel);
             }
             if (info.sysMemTotal !== undefined) {
-              $('#rapids-sys-mem-total').text(info.sysMemTotal);
+              $('#rapids-sys-mem-total').text(formatMemory(info.sysMemTotal));
             }
             if (info.jniArch !== undefined) {
               $('#rapids-jni-arch').text(info.jniArch);
@@ -512,16 +603,20 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
               $('#rapids-disk-device').text(info.diskDevice);
             }
             if (info.diskWriteBwBytesPerSec !== undefined) {
-              $('#rapids-disk-write-bw').text(info.diskWriteBwBytesPerSec);
+              $('#rapids-disk-write-bw').text(formatBandwidth(info.diskWriteBwBytesPerSec));
             }
             if (info.diskReadBwBytesPerSec !== undefined) {
-              $('#rapids-disk-read-bw').text(info.diskReadBwBytesPerSec);
+              $('#rapids-disk-read-bw').text(formatBandwidth(info.diskReadBwBytesPerSec));
             }
-            if (info.fioWriteBwBytesPerSec !== undefined) {
-              $('#rapids-fio-write-bw').text(info.fioWriteBwBytesPerSec);
+            if (info.fioWriteBwBytesPerSec !== undefined && info.fioWriteBwBytesPerSec !== '') {
+              $('#rapids-fio-write-bw').text(formatBandwidth(info.fioWriteBwBytesPerSec));
+            } else {
+              $('#rapids-fio-write-bw').text('no fio detected');
             }
-            if (info.fioReadBwBytesPerSec !== undefined) {
-              $('#rapids-fio-read-bw').text(info.fioReadBwBytesPerSec);
+            if (info.fioReadBwBytesPerSec !== undefined && info.fioReadBwBytesPerSec !== '') {
+              $('#rapids-fio-read-bw').text(formatBandwidth(info.fioReadBwBytesPerSec));
+            } else {
+              $('#rapids-fio-read-bw').text('no fio detected');
             }
           }
 
@@ -707,7 +802,8 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
               title: { text: 'Memory Composition (Used)', align: 'left' },
               xAxis: makeLinkedXAxis('system', { type: 'datetime' }),
               yAxis: {
-                title: { text: 'Bytes' }
+                title: { text: 'Memory' },
+                labels: { formatter: makeYAxisFormatter('memory') }
               },
               legend: { enabled: true },
               plotOptions: {
@@ -739,32 +835,6 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                 });
               });
 
-              // Draw system total memory as a non-stacked background line for the
-              // currently selected executor: sysMemTotal = sysMemUsed + sysMemFree.
-              var anyExecId = selectedExecId;
-              if (anyExecId && data.seriesByExecutor[anyExecId]) {
-                var used = data.seriesByExecutor[anyExecId]['sysMemUsed'] || [];
-                var free = data.seriesByExecutor[anyExecId]['sysMemFree'] || [];
-                if (used.length === free.length && used.length > 0) {
-                  var totalData = [];
-                  for (var i = 0; i < used.length; i++) {
-                    var ts = used[i][0];
-                    var total = used[i][1] + free[i][1];
-                    totalData.push([ts, total]);
-                  }
-                  memCompChart.addSeries({
-                    name: anyExecId + ' sysMemTotal',
-                    type: 'line',
-                    data: totalData,
-                    color: '#888888',
-                    lineWidth: 1,
-                    zIndex: 0,
-                    enableMouseTracking: false,
-                    marker: { enabled: false }
-                  }, false);
-                }
-              }
-
               memCompChart.redraw();
             }
 
@@ -772,7 +842,7 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
             var jvmChart = Highcharts.chart('jvm-chart', {
               title: { text: 'JVM Memory', align: 'left' },
               xAxis: makeLinkedXAxis('system', { type: 'datetime' }),
-              yAxis: { title: { text: 'Bytes' } },
+              yAxis: { title: { text: 'Memory' }, labels: { formatter: makeYAxisFormatter('memory') } },
               legend: { enabled: true },
               plotOptions: {
                 series: {
@@ -817,7 +887,7 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
             var offheapChart = Highcharts.chart('offheap-chart', {
               title: { text: 'Off-heap Memory', align: 'left' },
               xAxis: makeLinkedXAxis('system', { type: 'datetime' }),
-              yAxis: { title: { text: 'Bytes' } },
+              yAxis: { title: { text: 'Memory' }, labels: { formatter: makeYAxisFormatter('memory') } },
               legend: { enabled: true },
               plotOptions: {
                 series: {
@@ -849,7 +919,7 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
             var sysMemChart = Highcharts.chart('sys-mem-chart', {
               title: { text: 'System Memory', align: 'left' },
               xAxis: makeLinkedXAxis('system', { type: 'datetime' }),
-              yAxis: { title: { text: 'Bytes' } },
+              yAxis: { title: { text: 'Memory' }, labels: { formatter: makeYAxisFormatter('memory') } },
               legend: { enabled: true },
               plotOptions: {
                 series: {
@@ -884,7 +954,8 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
               yAxis: {
                 title: { text: 'CPU %' },
                 max: 100,
-                min: 0
+                min: 0,
+                labels: { formatter: makeYAxisFormatter('percent') }
               },
               legend: { enabled: true },
               plotOptions: {
@@ -919,7 +990,8 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
               xAxis: makeLinkedXAxis('gpu', { type: 'datetime' }),
               yAxis: {
                 title: { text: 'Tasks' },
-                min: 0
+                min: 0,
+                labels: { formatter: makeYAxisFormatter('count') }
               },
               legend: { enabled: true },
               plotOptions: {
@@ -954,7 +1026,8 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
               xAxis: makeLinkedXAxis('gpu', { type: 'datetime' }),
               yAxis: {
                 title: { text: 'Count (per interval per executor)' },
-                min: 0
+                min: 0,
+                labels: { formatter: makeYAxisFormatter('count') }
               },
               legend: { enabled: true },
               plotOptions: {
@@ -998,7 +1071,8 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
               xAxis: makeLinkedXAxis('io', { type: 'datetime' }),
               yAxis: {
                 title: { text: 'Bytes per interval' },
-                min: 0
+                min: 0,
+                labels: { formatter: makeYAxisFormatter('bandwidth') }
               },
               legend: { enabled: true },
               plotOptions: {
@@ -1034,7 +1108,8 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
               yAxis: {
                 title: { text: '% busy' },
                 max: 100,
-                min: 0
+                min: 0,
+                labels: { formatter: makeYAxisFormatter('percent') }
               },
               legend: { enabled: true },
               plotOptions: {
@@ -1069,7 +1144,8 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
               xAxis: makeLinkedXAxis('io', { type: 'datetime' }),
               yAxis: {
                 title: { text: 'Bytes per interval' },
-                min: 0
+                min: 0,
+                labels: { formatter: makeYAxisFormatter('bandwidth') }
               },
               legend: { enabled: true },
               plotOptions: {
@@ -1110,8 +1186,9 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
               title: { text: 'GPU Spill Time', align: 'left' },
               xAxis: makeLinkedXAxis('spill', { type: 'datetime' }),
               yAxis: {
-                title: { text: 'Time (s, per interval per executor)' },
-                min: 0
+                title: { text: 'Time (per interval per executor)' },
+                min: 0,
+                labels: { formatter: makeYAxisFormatter('time') }
               },
               legend: { enabled: true },
               plotOptions: {
@@ -1151,7 +1228,8 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
               xAxis: makeLinkedXAxis('spill', { type: 'datetime' }),
               yAxis: {
                 title: { text: 'Bytes (per interval per executor)' },
-                min: 0
+                min: 0,
+                labels: { formatter: makeYAxisFormatter('memory') }
               },
               legend: { enabled: true },
               plotOptions: {
@@ -1197,7 +1275,7 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                 tickLength: 0,
                 lineWidth: 0
               }),
-              yAxis: { title: { text: 'Bytes' } },
+              yAxis: { title: { text: 'Memory' }, labels: { formatter: makeYAxisFormatter('memory') } },
               legend: { enabled: true },
               plotOptions: {
                 series: {
@@ -1232,7 +1310,8 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
               yAxis: {
                 title: { text: 'SM Utilization (%)' },
                 min: 0,
-                max: 100
+                max: 100,
+                labels: { formatter: makeYAxisFormatter('percent') }
               },
               legend: { enabled: true },
               plotOptions: {
@@ -1263,11 +1342,12 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
 
             // ===================== I/O WAIT SECTION =====================
             var ioWaitChart = Highcharts.chart('io-wait-chart', {
-              title: { text: 'Tasks Waiting on I/O', align: 'left' },
+              title: { text: 'Max Concurrent I/O Waiters', align: 'left' },
               xAxis: { type: 'datetime' },
               yAxis: {
                 title: { text: 'Task Count' },
-                min: 0
+                min: 0,
+                labels: { formatter: makeYAxisFormatter('count') }
               },
               legend: { enabled: true },
               plotOptions: {
@@ -1281,14 +1361,14 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                   }
                 }
               },
-              tooltip: { shared: true, crosshairs: true },
+              tooltip: { enabled: false },
               series: []
             });
 
             if (ioWaitChart) {
-              var ioWaitMetrics = ['tasksWaitingOnParquetIO', 'tasksWaitingOnShuffleWrite', 'tasksWaitingOnShuffleRead'];
-              var ioWaitColors = { 'tasksWaitingOnParquetIO': '#2f7ed8', 'tasksWaitingOnShuffleWrite': '#8bbc21', 'tasksWaitingOnShuffleRead': '#f28f43' };
-              var ioWaitLabels = { 'tasksWaitingOnParquetIO': 'Parquet I/O', 'tasksWaitingOnShuffleWrite': 'Shuffle Write', 'tasksWaitingOnShuffleRead': 'Shuffle Read' };
+              var ioWaitMetrics = ['maxParquetIOWaiters', 'maxShuffleWriteWaiters', 'maxShuffleReadWaiters'];
+              var ioWaitColors = { 'maxParquetIOWaiters': '#2f7ed8', 'maxShuffleWriteWaiters': '#8bbc21', 'maxShuffleReadWaiters': '#f28f43' };
+              var ioWaitLabels = { 'maxParquetIOWaiters': 'Parquet I/O', 'maxShuffleWriteWaiters': 'Shuffle Write', 'maxShuffleReadWaiters': 'Shuffle Read' };
               ioWaitMetrics.forEach(function(metricName) {
                 var metricSeries = getSeriesForMetric(metricName);
                 metricSeries.forEach(function(s) {
@@ -1340,7 +1420,8 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                 var parts = [];
                 Object.keys(metricValues).sort().forEach(function (name) {
                   var v = metricValues[name];
-                  parts.push(escapeHtml(name) + '=' + escapeHtml(v));
+                  var formatter = getFormatterForMetric(name);
+                  parts.push(escapeHtml(name) + '=' + escapeHtml(formatter(v)));
                 });
                 var text = parts.join('<br/>');
                 if (!text) {
@@ -1459,6 +1540,7 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
             bindPointerSyncForGroup('io', 'section-disk-body');
             bindPointerSyncForGroup('spill', 'section-spill-body');
             bindPointerSyncForGroup('gpu', 'section-gpu-body');
+            bindPointerSyncForGroup('ioWait', 'io-wait-charts-body');
 
             // Store chart references on their container elements
             storeChartReference('mem-composition-chart', memCompChart);
@@ -1475,6 +1557,7 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
             storeChartReference('gpu-tasks-chart', gpuTasksChart);
             storeChartReference('retries-chart', retriesChart);
             storeChartReference('gpu-util-chart', gpuUtilChart);
+            storeChartReference('io-wait-chart', ioWaitChart);
           }
 
           function storeChartReference(containerId, chart) {
@@ -1698,9 +1781,9 @@ class CustomEventsApiPage(parent: CustomEventsTab, customEvents: List[CustomEven
       "gpuSpillHostBytes",
       "gpuSpillDiskBytes",
       "gpuSmUtilPct",
-      "tasksWaitingOnParquetIO",
-      "tasksWaitingOnShuffleWrite",
-      "tasksWaitingOnShuffleRead")
+      "maxParquetIOWaiters",
+      "maxShuffleWriteWaiters",
+      "maxShuffleReadWaiters")
 
     // Collect executor IDs to return in this response
     val execIds =

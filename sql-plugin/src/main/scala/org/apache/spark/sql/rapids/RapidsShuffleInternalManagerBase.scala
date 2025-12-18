@@ -396,7 +396,12 @@ abstract class RapidsShuffleThreadedWriterBase[K, V](
             try {
               while (writeFutures.nonEmpty) {
                 try {
-                  writeFutures.dequeue().get()
+                  RapidsMetricService.incTasksWaitingOnShuffleWrite()
+                  try {
+                    writeFutures.dequeue().get()
+                  } finally {
+                    RapidsMetricService.decTasksWaitingOnShuffleWrite()
+                  }
                 } catch {
                   case ee: ExecutionException =>
                     // this exception is a wrapper for the underlying exception
@@ -515,10 +520,15 @@ abstract class RapidsShuffleThreadedWriterBase[K, V](
   // and had logic to silence exceptions thrown while copying
   // I am ignoring this for now.
   def writePartitionedDataWithStream(file: java.io.File, writer: ShufflePartitionWriter): Unit = {
-    withResource(new FileInputStream(file)) { in =>
-      withResource(writer.openStream()) { os =>
-        Utils.copyStream(in, os, false, false)
+    RapidsMetricService.incTasksWaitingOnShuffleWrite()
+    try {
+      withResource(new FileInputStream(file)) { in =>
+        withResource(writer.openStream()) { os =>
+          Utils.copyStream(in, os, false, false)
+        }
       }
+    } finally {
+      RapidsMetricService.decTasksWaitingOnShuffleWrite()
     }
   }
 
@@ -532,13 +542,18 @@ abstract class RapidsShuffleThreadedWriterBase[K, V](
     // note outputChannel.close() doesn't actually close it.
     // The call is there to record keep the partition lengths
     // after the serialization completes.
-    withResource(outputChannel) { _ =>
-      withResource(new FileInputStream(file)) { in =>
-        withResource(in.getChannel) { inputChannel =>
-          Utils.copyFileStreamNIO(
-            inputChannel, outputChannel.channel, 0L, inputChannel.size)
+    RapidsMetricService.incTasksWaitingOnShuffleWrite()
+    try {
+      withResource(outputChannel) { _ =>
+        withResource(new FileInputStream(file)) { in =>
+          withResource(in.getChannel) { inputChannel =>
+            Utils.copyFileStreamNIO(
+              inputChannel, outputChannel.channel, 0L, inputChannel.size)
+          }
         }
       }
+    } finally {
+      RapidsMetricService.decTasksWaitingOnShuffleWrite()
     }
   }
 

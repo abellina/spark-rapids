@@ -763,11 +763,21 @@ abstract class MultiFileCloudPartitionReaderBase(
     if (results.isEmpty) {
       // none were ready yet so wait as long as need for first one
       val hostBuffersWithMeta = if (keepReadsInOrder) {
-        convertAsyncResult(tasks.poll().get())
+        RapidsMetricService.incTasksWaitingOnParquetIO()
+        try {
+          convertAsyncResult(tasks.poll().get())
+        } finally {
+          RapidsMetricService.decTasksWaitingOnParquetIO()
+        }
       } else {
-        val bufMetaFut = fcs.take()
-        tasks.remove(bufMetaFut)
-        convertAsyncResult(bufMetaFut.get())
+        RapidsMetricService.incTasksWaitingOnParquetIO()
+        try {
+          val bufMetaFut = fcs.take()
+          tasks.remove(bufMetaFut)
+          convertAsyncResult(bufMetaFut.get())
+        } finally {
+          RapidsMetricService.decTasksWaitingOnParquetIO()
+        }
       }
       sizeRead += hostBuffersWithMeta.memBuffersAndSizes.map(_.bytes).sum
       numRowsRead += hostBuffersWithMeta.memBuffersAndSizes.map(_.numRows).sum
@@ -783,11 +793,21 @@ abstract class MultiFileCloudPartitionReaderBase(
 
   private def getNextBuffersAndMetaSingleFile(): HostMemoryBuffersWithMetaDataBase = {
     val taskResult = if (keepReadsInOrder) {
-      tasks.poll().get()
+      RapidsMetricService.incTasksWaitingOnParquetIO()
+      try {
+        tasks.poll().get()
+      } finally {
+        RapidsMetricService.decTasksWaitingOnParquetIO()
+      }
     } else {
-      val bufMetaFut = fcs.take()
-      tasks.remove(bufMetaFut)
-      bufMetaFut.get()
+      RapidsMetricService.incTasksWaitingOnParquetIO()
+      try {
+        val bufMetaFut = fcs.take()
+        tasks.remove(bufMetaFut)
+        bufMetaFut.get()
+      } finally {
+        RapidsMetricService.decTasksWaitingOnParquetIO()
+      }
     }
     filesToRead -= 1
     convertAsyncResult(taskResult)
@@ -1345,9 +1365,14 @@ abstract class MultiFileCoalescingPartitionReaderBase(
           }
 
           for (future <- tasks.asScala) {
-            val (blocks, bytesRead) = future.get().data
-            allOutputBlocks ++= blocks
-            TrampolineUtil.incBytesRead(inputMetrics, bytesRead)
+            RapidsMetricService.incTasksWaitingOnParquetIO()
+            try {
+              val (blocks, bytesRead) = future.get().data
+              allOutputBlocks ++= blocks
+              TrampolineUtil.incBytesRead(inputMetrics, bytesRead)
+            } finally {
+              RapidsMetricService.decTasksWaitingOnParquetIO()
+            }
           }
 
           // Fourth, calculate the final buffer size

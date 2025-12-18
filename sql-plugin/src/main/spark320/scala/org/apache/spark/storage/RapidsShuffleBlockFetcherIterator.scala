@@ -76,6 +76,8 @@ import org.apache.spark.serializer.SerializerManager
 import org.apache.spark.shuffle.{FetchFailedException, ShuffleReadMetricsReporter}
 import org.apache.spark.util.{CompletionIterator, TaskCompletionListener, Utils}
 
+import com.nvidia.spark.rapids.RapidsMetricService
+
 /**
  * Taken mostly verbatim from `ShuffleBlockFetcherIterator` except for
  * a change to the ownership of `currentResult` (which contains the netty buffer).
@@ -787,7 +789,12 @@ final class RapidsShuffleBlockFetcherIterator(
     // For local shuffle block, throw FailureFetchResult for the first IOException.
     while (result == null) {
       val startFetchWait = System.nanoTime()
-      result = results.take()
+      RapidsMetricService.incTasksWaitingOnShuffleRead()
+      try {
+        result = results.take()
+      } finally {
+        RapidsMetricService.decTasksWaitingOnShuffleRead()
+      }
       val fetchWaitTime = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startFetchWait)
       shuffleMetrics.incFetchWaitTime(fetchWaitTime)
 

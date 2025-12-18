@@ -338,10 +338,11 @@ object RapidsPluginUtils extends Logging {
           "--bs=4M",
           "--direct=1",
           "--rw=write",
-          "--ioengine=psync",
+          "--ioengine=libaio",
           "--numjobs=1",
           "--output-format=json"
         )
+        logInfo(s"Running fio write test: ${writeCmd.mkString(" ")}")
         val output = writeCmd.!!
         parseFioBandwidth(output, isWrite = true)
       } catch {
@@ -358,10 +359,11 @@ object RapidsPluginUtils extends Logging {
           "--bs=4M",
           "--direct=1",
           "--rw=read",
-          "--ioengine=psync",
+          "--ioengine=libaio",
           "--numjobs=1",
           "--output-format=json"
         )
+        logInfo(s"Running fio write test: ${readCmd.mkString(" ")}")
         val output = readCmd.!!
         parseFioBandwidth(output, isWrite = false)
       } catch {
@@ -942,11 +944,15 @@ object RapidsMetricService {
   // NVML initialization state (executor-local)
   @volatile private[this] var nvmlInitialized: Boolean = false
 
-  // Task waiting metrics (current counts, not cumulative)
+  // Task waiting metrics - track current count and max concurrent waiters per interval
   // These track how many tasks are currently blocked on various I/O operations
   private[this] val tasksWaitingOnParquetIO = new AtomicLong(0L)
   private[this] val tasksWaitingOnShuffleWrite = new AtomicLong(0L)
   private[this] val tasksWaitingOnShuffleRead = new AtomicLong(0L)
+  // Max concurrent waiters seen during the current sampling interval
+  private[this] val maxTasksWaitingOnParquetIO = new AtomicLong(0L)
+  private[this] val maxTasksWaitingOnShuffleWrite = new AtomicLong(0L)
+  private[this] val maxTasksWaitingOnShuffleRead = new AtomicLong(0L)
 
   // Last-sampled values to compute per-interval deltas
   @volatile private[this] var lastTotalRetries: Long = 0L
@@ -1082,14 +1088,35 @@ object RapidsMetricService {
   }
 
   // Task waiting counters - call these when entering/exiting I/O waits
-  def incTasksWaitingOnParquetIO(): Unit = tasksWaitingOnParquetIO.incrementAndGet()
+  // On increment, update max if the new count exceeds current max
+  def incTasksWaitingOnParquetIO(): Unit = {
+    val newVal = tasksWaitingOnParquetIO.incrementAndGet()
+    updateMax(maxTasksWaitingOnParquetIO, newVal)
+  }
   def decTasksWaitingOnParquetIO(): Unit = tasksWaitingOnParquetIO.decrementAndGet()
 
-  def incTasksWaitingOnShuffleWrite(): Unit = tasksWaitingOnShuffleWrite.incrementAndGet()
+  def incTasksWaitingOnShuffleWrite(): Unit = {
+    val newVal = tasksWaitingOnShuffleWrite.incrementAndGet()
+    updateMax(maxTasksWaitingOnShuffleWrite, newVal)
+  }
   def decTasksWaitingOnShuffleWrite(): Unit = tasksWaitingOnShuffleWrite.decrementAndGet()
 
-  def incTasksWaitingOnShuffleRead(): Unit = tasksWaitingOnShuffleRead.incrementAndGet()
+  def incTasksWaitingOnShuffleRead(): Unit = {
+    val newVal = tasksWaitingOnShuffleRead.incrementAndGet()
+    updateMax(maxTasksWaitingOnShuffleRead, newVal)
+  }
   def decTasksWaitingOnShuffleRead(): Unit = tasksWaitingOnShuffleRead.decrementAndGet()
+
+  // Helper to atomically update max value
+  private def updateMax(maxAtomic: AtomicLong, newVal: Long): Unit = {
+    var currentMax = maxAtomic.get()
+    while (newVal > currentMax) {
+      if (maxAtomic.compareAndSet(currentMax, newVal)) {
+        return
+      }
+      currentMax = maxAtomic.get()
+    }
+  }
 
   /** Resolve the disk device (major,minor) backing spark.local.dir, Linux-only. */
   private def initDiskDeviceIfNeeded(ctx: PluginContext): Unit = {
@@ -1362,9 +1389,9 @@ object RapidsMetricService {
           deltaGpuSpillHostBytes,         // gpuSpillHostBytes (per interval)
           deltaGpuSpillDiskBytes,         // gpuSpillDiskBytes (per interval)
           gpuSmUtilPct,                   // gpuSmUtilPct (0-100)
-          tasksWaitingOnParquetIO.get(),  // tasksWaitingOnParquetIO (current count)
-          tasksWaitingOnShuffleWrite.get(), // tasksWaitingOnShuffleWrite (current count)
-          tasksWaitingOnShuffleRead.get()   // tasksWaitingOnShuffleRead (current count)
+          maxTasksWaitingOnParquetIO.getAndSet(0L),  // max concurrent Parquet I/O waiters (reset)
+          maxTasksWaitingOnShuffleWrite.getAndSet(0L), // max concurrent shuffle write waiters (reset)
+          maxTasksWaitingOnShuffleRead.getAndSet(0L)   // max concurrent shuffle read waiters (reset)
         )
         // Producer: record the latest executor metrics snapshot.
         recordMetricUpdate(currentTime, values)
@@ -1424,9 +1451,9 @@ object RapidsMetricService {
       "gpuSpillHostBytes",
       "gpuSpillDiskBytes",
       "gpuSmUtilPct",
-      "tasksWaitingOnParquetIO",
-      "tasksWaitingOnShuffleWrite",
-      "tasksWaitingOnShuffleRead")
+      "maxParquetIOWaiters",
+      "maxShuffleWriteWaiters",
+      "maxShuffleReadWaiters")
     ctx.ask(MetricDefinition(executorId, metricNames))
 
     // Sampling task: collect metrics at the configured sampling period and
