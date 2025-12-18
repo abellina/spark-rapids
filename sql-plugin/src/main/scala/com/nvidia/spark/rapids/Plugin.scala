@@ -295,13 +295,114 @@ object RapidsPluginUtils extends Logging {
 
       val writeBw = measureWriteBw()
       val readBw = measureReadBw()
+      
+      // Also try fio-based measurement as a reference (if fio is available)
+      val fioBw = measureWithFio(dirPath, testBytes)
+      
       val m = scala.collection.mutable.Map[String, String]()
       writeBw.foreach(bw => m += "diskWriteBwBytesPerSec" -> bw.toLong.toString)
       readBw.foreach(bw => m += "diskReadBwBytesPerSec" -> bw.toLong.toString)
+      fioBw._1.foreach(bw => m += "fioWriteBwBytesPerSec" -> bw.toLong.toString)
+      fioBw._2.foreach(bw => m += "fioReadBwBytesPerSec" -> bw.toLong.toString)
       m.toMap
     } catch {
       case _: Throwable =>
         Map.empty
+    }
+  }
+
+  /**
+   * Measure disk bandwidth using fio (if available) as a reference.
+   * Returns (writeBytesSec, readBytesSec) - both optional.
+   */
+  private def measureWithFio(
+      dirPath: java.nio.file.Path,
+      testBytes: Long): (Option[Double], Option[Double]) = {
+    try {
+      // Check if fio is available
+      val checkFio = Seq("which", "fio").!!
+      if (checkFio.trim.isEmpty) {
+        return (None, None)
+      }
+
+      val testFile = dirPath.resolve("rapids-fio-test.bin").toString
+      val testSizeMB = math.max(16, testBytes / (1024 * 1024))
+
+      // fio write test with O_DIRECT
+      val writeResult = try {
+        val writeCmd = Seq(
+          "fio",
+          "--name=rapids_write",
+          s"--filename=$testFile",
+          s"--size=${testSizeMB}M",
+          "--bs=4M",
+          "--direct=1",
+          "--rw=write",
+          "--ioengine=psync",
+          "--numjobs=1",
+          "--output-format=json"
+        )
+        val output = writeCmd.!!
+        parseFioBandwidth(output, isWrite = true)
+      } catch {
+        case _: Throwable => None
+      }
+
+      // fio read test with O_DIRECT (reuses the file written above)
+      val readResult = try {
+        val readCmd = Seq(
+          "fio",
+          "--name=rapids_read",
+          s"--filename=$testFile",
+          s"--size=${testSizeMB}M",
+          "--bs=4M",
+          "--direct=1",
+          "--rw=read",
+          "--ioengine=psync",
+          "--numjobs=1",
+          "--output-format=json"
+        )
+        val output = readCmd.!!
+        parseFioBandwidth(output, isWrite = false)
+      } catch {
+        case _: Throwable => None
+      }
+
+      // Cleanup
+      try {
+        java.nio.file.Files.deleteIfExists(java.nio.file.Paths.get(testFile))
+      } catch {
+        case _: Throwable =>
+      }
+
+      (writeResult, readResult)
+    } catch {
+      case _: Throwable => (None, None)
+    }
+  }
+
+  /**
+   * Parse fio JSON output to extract bandwidth in bytes/sec.
+   * fio reports bw in KB/s in the JSON output.
+   */
+  private def parseFioBandwidth(jsonOutput: String, isWrite: Boolean): Option[Double] = {
+    try {
+      // Simple regex-based parsing of fio JSON output
+      // Look for "bw" field in the "write" or "read" section
+      // Format: "bw" : 123456, (in KB/s)
+      val section = if (isWrite) "write" else "read"
+      
+      // Find the section and extract bw value
+      // The JSON structure is: "jobs": [{ "write": { "bw": 123456, ... } }]
+      val sectionPattern = s""""$section"\\s*:\\s*\\{[^}]*"bw"\\s*:\\s*(\\d+)""".r
+      sectionPattern.findFirstMatchIn(jsonOutput) match {
+        case Some(m) =>
+          val bwKBps = m.group(1).toDouble
+          Some(bwKBps * 1024) // Convert KB/s to bytes/s
+        case None => None
+      }
+    } catch {
+      case _: Throwable => None
     }
   }
 
@@ -841,6 +942,12 @@ object RapidsMetricService {
   // NVML initialization state (executor-local)
   @volatile private[this] var nvmlInitialized: Boolean = false
 
+  // Task waiting metrics (current counts, not cumulative)
+  // These track how many tasks are currently blocked on various I/O operations
+  private[this] val tasksWaitingOnParquetIO = new AtomicLong(0L)
+  private[this] val tasksWaitingOnShuffleWrite = new AtomicLong(0L)
+  private[this] val tasksWaitingOnShuffleRead = new AtomicLong(0L)
+
   // Last-sampled values to compute per-interval deltas
   @volatile private[this] var lastTotalRetries: Long = 0L
   @volatile private[this] var lastTotalSplitRetries: Long = 0L
@@ -973,6 +1080,16 @@ object RapidsMetricService {
       totalGpuSpillDiskBytes.addAndGet(bytes)
     }
   }
+
+  // Task waiting counters - call these when entering/exiting I/O waits
+  def incTasksWaitingOnParquetIO(): Unit = tasksWaitingOnParquetIO.incrementAndGet()
+  def decTasksWaitingOnParquetIO(): Unit = tasksWaitingOnParquetIO.decrementAndGet()
+
+  def incTasksWaitingOnShuffleWrite(): Unit = tasksWaitingOnShuffleWrite.incrementAndGet()
+  def decTasksWaitingOnShuffleWrite(): Unit = tasksWaitingOnShuffleWrite.decrementAndGet()
+
+  def incTasksWaitingOnShuffleRead(): Unit = tasksWaitingOnShuffleRead.incrementAndGet()
+  def decTasksWaitingOnShuffleRead(): Unit = tasksWaitingOnShuffleRead.decrementAndGet()
 
   /** Resolve the disk device (major,minor) backing spark.local.dir, Linux-only. */
   private def initDiskDeviceIfNeeded(ctx: PluginContext): Unit = {
@@ -1244,7 +1361,10 @@ object RapidsMetricService {
           deltaReadDiskTimeNs,            // gpuReadSpillFromDiskTimeNs (per interval)
           deltaGpuSpillHostBytes,         // gpuSpillHostBytes (per interval)
           deltaGpuSpillDiskBytes,         // gpuSpillDiskBytes (per interval)
-          gpuSmUtilPct                    // gpuSmUtilPct (0-100)
+          gpuSmUtilPct,                   // gpuSmUtilPct (0-100)
+          tasksWaitingOnParquetIO.get(),  // tasksWaitingOnParquetIO (current count)
+          tasksWaitingOnShuffleWrite.get(), // tasksWaitingOnShuffleWrite (current count)
+          tasksWaitingOnShuffleRead.get()   // tasksWaitingOnShuffleRead (current count)
         )
         // Producer: record the latest executor metrics snapshot.
         recordMetricUpdate(currentTime, values)
@@ -1303,7 +1423,10 @@ object RapidsMetricService {
       "gpuReadSpillFromDiskTimeNs",
       "gpuSpillHostBytes",
       "gpuSpillDiskBytes",
-      "gpuSmUtilPct")
+      "gpuSmUtilPct",
+      "tasksWaitingOnParquetIO",
+      "tasksWaitingOnShuffleWrite",
+      "tasksWaitingOnShuffleRead")
     ctx.ask(MetricDefinition(executorId, metricNames))
 
     // Sampling task: collect metrics at the configured sampling period and
@@ -1458,8 +1581,14 @@ class RapidsExecutorPlugin extends ExecutorPlugin with Logging {
         val gpuModelInfo = gpuDeviceId.flatMap(id =>
           RapidsPluginUtils.detectGpuModelFromNvml(Some(id))
         ).map(model => Map("gpuModel" -> model)).getOrElse(Map.empty)
+        // Get system memory total (constant for this host)
+        val sysMemTotalInfo = ManagementFactory.getOperatingSystemMXBean match {
+          case os: com.sun.management.OperatingSystemMXBean =>
+            Map("sysMemTotal" -> os.getTotalPhysicalMemorySize.toString)
+          case _ => Map.empty[String, String]
+        }
         val execEvent = buildInfoEvent.copy(
-          sparkRapidsBuildInfo = buildInfoEvent.sparkRapidsBuildInfo ++ diskBwInfo,
+          sparkRapidsBuildInfo = buildInfoEvent.sparkRapidsBuildInfo ++ diskBwInfo ++ sysMemTotalInfo,
           sparkRapidsJniBuildInfo = buildInfoEvent.sparkRapidsJniBuildInfo ++ gpuModelInfo,
           monitoredDiskDevice = monitoredDiskDevice,
           executorId = Some(execId))

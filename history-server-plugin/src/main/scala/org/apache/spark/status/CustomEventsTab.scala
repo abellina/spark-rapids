@@ -61,6 +61,12 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
       Option.empty[String]
     val diskReadBw =
       Option.empty[String]
+    val fioWriteBw =
+      Option.empty[String]
+    val fioReadBw =
+      Option.empty[String]
+    val sysMemTotal =
+      Option.empty[String]
 
     val content = 
       <div class="row-fluid">
@@ -81,6 +87,8 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                   <td id="rapids-jni-revision">{jniRevision.getOrElse("")}</td></tr>
                 <tr><th>GPU Model (NVML)</th>
                   <td id="rapids-gpu-model">{gpuModel.getOrElse("")}</td></tr>
+                <tr><th>System Memory Total (bytes)</th>
+                  <td id="rapids-sys-mem-total">{sysMemTotal.getOrElse("")}</td></tr>
                 <tr><th>JNI GPU Arch (from build info)</th>
                   <td id="rapids-jni-arch">{jniArch.getOrElse("")}</td></tr>
                 <tr><th>Monitored Disk Device (spark.local.dir)</th>
@@ -89,6 +97,10 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                   <td id="rapids-disk-write-bw">{diskWriteBw.getOrElse("")}</td></tr>
                 <tr><th>Disk Read Bandwidth (bytes/s)</th>
                   <td id="rapids-disk-read-bw">{diskReadBw.getOrElse("")}</td></tr>
+                <tr><th>fio Write Bandwidth (bytes/s)</th>
+                  <td id="rapids-fio-write-bw">{fioWriteBw.getOrElse("")}</td></tr>
+                <tr><th>fio Read Bandwidth (bytes/s)</th>
+                  <td id="rapids-fio-read-bw">{fioReadBw.getOrElse("")}</td></tr>
               </tbody>
             </table>
           </div>
@@ -332,6 +344,29 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
               </div>
             </div>
 
+            <div class="panel panel-default" style="margin-top: 10px;">
+              <div class="panel-heading">
+                <a class="rapids-section-toggle" data-target="io-wait-charts-body" href="#">[hide]</a>
+                <strong style="margin-left: 8px;">I/O Wait Metrics</strong>
+              </div>
+              <div id="io-wait-charts-body" class="panel-body">
+                <div class="row">
+                  <div class="col-lg-12">
+                    <div class="rapids-chart-wrapper" data-chart-id="io-wait-chart">
+                      <div class="rapids-chart-controls">
+                        <span class="rapids-chart-title">Tasks Waiting on I/O</span>
+                        <button class="rapids-chart-btn rapids-chart-collapse-btn" title="Collapse/Expand">−</button>
+                      </div>
+                      <div class="rapids-chart-content">
+                        <div id="io-wait-chart" style="width: 100%; height: 250px;"></div>
+                      </div>
+                    </div>
+                    <div id="io-wait-stage-detail-group" class="rapids-stage-detail" style="margin-top: 4px;"></div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
           </div>
         </div>
       </div>
@@ -467,6 +502,9 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
             if (info.gpuModel !== undefined) {
               $('#rapids-gpu-model').text(info.gpuModel);
             }
+            if (info.sysMemTotal !== undefined) {
+              $('#rapids-sys-mem-total').text(info.sysMemTotal);
+            }
             if (info.jniArch !== undefined) {
               $('#rapids-jni-arch').text(info.jniArch);
             }
@@ -478,6 +516,12 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
             }
             if (info.diskReadBwBytesPerSec !== undefined) {
               $('#rapids-disk-read-bw').text(info.diskReadBwBytesPerSec);
+            }
+            if (info.fioWriteBwBytesPerSec !== undefined) {
+              $('#rapids-fio-write-bw').text(info.fioWriteBwBytesPerSec);
+            }
+            if (info.fioReadBwBytesPerSec !== undefined) {
+              $('#rapids-fio-read-bw').text(info.fioReadBwBytesPerSec);
             }
           }
 
@@ -1217,6 +1261,48 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
               gpuUtilChart.redraw();
             }
 
+            // ===================== I/O WAIT SECTION =====================
+            var ioWaitChart = Highcharts.chart('io-wait-chart', {
+              title: { text: 'Tasks Waiting on I/O', align: 'left' },
+              xAxis: { type: 'datetime' },
+              yAxis: {
+                title: { text: 'Task Count' },
+                min: 0
+              },
+              legend: { enabled: true },
+              plotOptions: {
+                series: {
+                  point: {
+                    events: {
+                      click: function () {
+                        updateStageDetailTable('io-wait-stage-detail-group', this.x);
+                      }
+                    }
+                  }
+                }
+              },
+              tooltip: { shared: true, crosshairs: true },
+              series: []
+            });
+
+            if (ioWaitChart) {
+              var ioWaitMetrics = ['tasksWaitingOnParquetIO', 'tasksWaitingOnShuffleWrite', 'tasksWaitingOnShuffleRead'];
+              var ioWaitColors = { 'tasksWaitingOnParquetIO': '#2f7ed8', 'tasksWaitingOnShuffleWrite': '#8bbc21', 'tasksWaitingOnShuffleRead': '#f28f43' };
+              var ioWaitLabels = { 'tasksWaitingOnParquetIO': 'Parquet I/O', 'tasksWaitingOnShuffleWrite': 'Shuffle Write', 'tasksWaitingOnShuffleRead': 'Shuffle Read' };
+              ioWaitMetrics.forEach(function(metricName) {
+                var metricSeries = getSeriesForMetric(metricName);
+                metricSeries.forEach(function(s) {
+                  s.name = ioWaitLabels[metricName] || metricName;
+                  s.color = ioWaitColors[metricName];
+                  ioWaitChart.addSeries(s, false);
+                });
+              });
+              ioWaitChart.redraw();
+            }
+
+            // Register I/O Wait charts as a group
+            window._rapidsChartGroups.ioWait = [ioWaitChart];
+
             // Register GPU charts as a group for synchronized behavior (x-axis, tooltip).
             window._rapidsChartGroups.gpu = [
               gpuChart,
@@ -1611,7 +1697,10 @@ class CustomEventsApiPage(parent: CustomEventsTab, customEvents: List[CustomEven
       "gpuReadSpillFromDiskTimeNs",
       "gpuSpillHostBytes",
       "gpuSpillDiskBytes",
-      "gpuSmUtilPct")
+      "gpuSmUtilPct",
+      "tasksWaitingOnParquetIO",
+      "tasksWaitingOnShuffleWrite",
+      "tasksWaitingOnShuffleRead")
 
     // Collect executor IDs to return in this response
     val execIds =
@@ -1674,6 +1763,9 @@ class CustomEventsApiPage(parent: CustomEventsTab, customEvents: List[CustomEven
         val diskDevice = data.get("sparkRapidsBuildInfo.monitoredDiskDevice")
         val diskWriteBw = data.get("sparkRapidsBuildInfo.diskWriteBwBytesPerSec")
         val diskReadBw = data.get("sparkRapidsBuildInfo.diskReadBwBytesPerSec")
+        val fioWriteBw = data.get("sparkRapidsBuildInfo.fioWriteBwBytesPerSec")
+        val fioReadBw = data.get("sparkRapidsBuildInfo.fioReadBwBytesPerSec")
+        val sysMemTotal = data.get("sparkRapidsBuildInfo.sysMemTotal")
 
         val fields = Seq(
           pluginVersion.map(v => s""""pluginVersion":"${escapeJsonString(v)}""""),
@@ -1681,10 +1773,13 @@ class CustomEventsApiPage(parent: CustomEventsTab, customEvents: List[CustomEven
           jniVersion.map(v => s""""jniVersion":"${escapeJsonString(v)}""""),
           jniRevision.map(v => s""""jniRevision":"${escapeJsonString(v)}""""),
           gpuModel.map(v => s""""gpuModel":"${escapeJsonString(v)}""""),
+          sysMemTotal.map(v => s""""sysMemTotal":"${escapeJsonString(v)}""""),
           jniArch.map(v => s""""jniArch":"${escapeJsonString(v)}""""),
           diskDevice.map(v => s""""diskDevice":"${escapeJsonString(v)}""""),
           diskWriteBw.map(v => s""""diskWriteBwBytesPerSec":"${escapeJsonString(v)}""""),
-          diskReadBw.map(v => s""""diskReadBwBytesPerSec":"${escapeJsonString(v)}"""")
+          diskReadBw.map(v => s""""diskReadBwBytesPerSec":"${escapeJsonString(v)}""""),
+          fioWriteBw.map(v => s""""fioWriteBwBytesPerSec":"${escapeJsonString(v)}""""),
+          fioReadBw.map(v => s""""fioReadBwBytesPerSec":"${escapeJsonString(v)}"""")
         ).flatten.mkString(",")
         fields
       }
