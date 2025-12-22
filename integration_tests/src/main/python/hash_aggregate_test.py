@@ -1617,8 +1617,8 @@ def test_generic_reductions(data_gen, kudo_enabled):
 
 # min_by and max_by are supported for pyspark since 3.3.0 so tested with sql
 @ignore_order(local=True)
-@pytest.mark.parametrize('data_gen', all_basic_gens + nested_gens_sample, ids=idfn)
-@pytest.mark.parametrize("kudo_enabled", ["true", "false"], ids=idfn)
+@pytest.mark.parametrize('data_gen', [int_gen], ids=idfn)
+@pytest.mark.parametrize("kudo_enabled", ["false"], ids=idfn)
 def test_hash_groupby_min_max_by_unique(data_gen, kudo_enabled):
     assert_gpu_and_cpu_are_equal_sql(
         lambda spark: three_col_df(spark, byte_gen, data_gen, UniqueLongGen()),

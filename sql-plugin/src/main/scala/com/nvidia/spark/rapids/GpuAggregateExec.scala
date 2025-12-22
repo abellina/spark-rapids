@@ -609,6 +609,8 @@ input_idx += offsets.last
    * @return a Table that has been cuDF aggregated
    */
   def performGroupByAggregation(preProcessed: ColumnarBatch): ColumnarBatch = {
+    System.err.println("performGroupByAggregation: ")
+
     withResource(new NvtxRange("groupby", NvtxColor.BLUE)) { _ =>
       withResource(GpuColumnVector.from(preProcessed)) { preProcessedTbl =>
         val groupOptions = cudf.GroupByOptions.builder()
@@ -619,6 +621,10 @@ input_idx += offsets.last
         val cudfAggsOnColumn = cudfAggregates.zip(aggOrdinals).map {
           case (cudfAgg, ord) => cudfAgg.groupByAggregate.onColumn(ord)
         }
+
+System.err.println("cudfAggregates: " + cudfAggregates.map(_.toString).mkString(", "))
+      System.err.println("aggOrdinals: " + aggOrdinals.mkString(", "))
+        System.err.println("cudfAggsOnColumn: " + cudfAggsOnColumn.map(_.toString).mkString(", "))
 
         // perform the aggregate
         val aggTbl = preProcessedTbl
