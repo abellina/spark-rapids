@@ -311,9 +311,14 @@ else
     # we enable the java property in the driver and executor, in case the tests are running in 
     # local mode or in standalone mode.
     ENABLE_TEST_FEATURES="-Dcom.nvidia.spark.rapids.runningTests=true"
-    DRIVER_EXTRA_JAVA_OPTIONS="-ea -Duser.timezone=$TZ -Ddelta.log.cacheSize=$deltaCacheSize"
+    # Enable cuDF resource leak logging (set CUDF_LEAK_LOGGING=0 to disable)
+    CUDF_LEAK_OPTS=""
+    if [[ "${CUDF_LEAK_LOGGING:-0}" == "1" ]]; then
+        CUDF_LEAK_OPTS="-Dai.rapids.refcount.debug=true"
+    fi
+    DRIVER_EXTRA_JAVA_OPTIONS="-ea -Duser.timezone=$TZ -Ddelta.log.cacheSize=$deltaCacheSize $CUDF_LEAK_OPTS"
     export PYSP_TEST_spark_driver_extraJavaOptions="$DRIVER_EXTRA_JAVA_OPTIONS $COVERAGE_SUBMIT_FLAGS $ENABLE_TEST_FEATURES"
-    export PYSP_TEST_spark_executor_extraJavaOptions="-ea -Duser.timezone=$TZ $ENABLE_TEST_FEATURES"
+    export PYSP_TEST_spark_executor_extraJavaOptions="-ea -Duser.timezone=$TZ $CUDF_LEAK_OPTS $ENABLE_TEST_FEATURES"
 
     # TODO: https://github.com/NVIDIA/spark-rapids/issues/10940
     export PYSP_TEST_spark_driver_memory=${PYSP_TEST_spark_driver_memory:-"${MB_PER_EXEC}m"}

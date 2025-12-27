@@ -545,6 +545,25 @@ object NvtxRegistry {
   val PARQUET_READ_BATCH: NvtxId = NvtxId("Parquet readBatch", NvtxColor.GREEN,
     "Reading Parquet batch")
 
+  // Hybrid scan operations for Parquet
+  val HYBRID_SCAN_READ_FOOTER: NvtxId = NvtxId("HybridScan read footer", NvtxColor.CYAN,
+    "Reading Parquet footer for hybrid scan")
+  
+  val HYBRID_SCAN_FILTER_STATS: NvtxId = NvtxId("HybridScan filter stats", NvtxColor.PURPLE,
+    "Filtering row groups with statistics using hybrid scan")
+  
+  val HYBRID_SCAN_FILTER_DICT: NvtxId = NvtxId("HybridScan filter dict", NvtxColor.ORANGE,
+    "Filtering row groups with dictionary pages using hybrid scan")
+  
+  val HYBRID_SCAN_GET_BYTE_RANGES: NvtxId = NvtxId("HybridScan get byte ranges", NvtxColor.YELLOW,
+    "Getting byte ranges for column chunks from hybrid scan")
+  
+  val HYBRID_SCAN_READ_DATA: NvtxId = NvtxId("HybridScan read data", NvtxColor.DARK_GREEN,
+    "Reading column chunk data from file for hybrid scan")
+  
+  val HYBRID_SCAN_MATERIALIZE: NvtxId = NvtxId("HybridScan materialize", NvtxColor.RED,
+    "Materializing table from column chunks using hybrid scan")
+
   val AVRO_READ_BATCH: NvtxId = NvtxId("Avro readBatch", NvtxColor.GREEN,
     "Reading Avro batch")
 

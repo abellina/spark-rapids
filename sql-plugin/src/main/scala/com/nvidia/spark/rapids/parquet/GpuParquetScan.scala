@@ -468,9 +468,7 @@ class HMBInputFile(buffer: HostMemoryBuffer) extends InputFile {
 
 private case class GpuParquetFileFilterHandler(
     @transient sqlConf: SQLConf,
-    metrics: Map[String, GpuMetric],
-    hybridScanMode: RapidsConf.ParquetHybridScanMode.Value = 
-        RapidsConf.ParquetHybridScanMode.DISABLED) extends Logging {
+    metrics: Map[String, GpuMetric]) extends Logging {
 
   private val FOOTER_LENGTH_SIZE = 4
   private val isCaseSensitive = sqlConf.caseSensitiveAnalysis
@@ -490,83 +488,6 @@ private case class GpuParquetFileFilterHandler(
   private val PARQUET_ENCRYPTION_CONFS = Seq("parquet.encryption.kms.client.class",
     "parquet.encryption.kms.client.class", "parquet.crypto.factory.class")
   private val PARQUET_MAGIC_ENCRYPTED = "PARE".getBytes(StandardCharsets.US_ASCII)
-  
-  // Whether hybrid scan filtering is enabled (FOOTER_ONLY or FULL mode)
-  private val isHybridScanEnabled: Boolean = 
-    hybridScanMode != RapidsConf.ParquetHybridScanMode.DISABLED
-    
-  /**
-   * Filter row groups using cuDF's hybrid scan reader.
-   * This uses statistics-based and dictionary-based filtering via cuDF.
-   * 
-   * @return Filtered list of BlockMetaData
-   */
-  private def filterBlocksWithHybridScan(
-      fileIO: RapidsFileIO,
-      filePath: Path,
-      conf: Configuration,
-      footer: ParquetMetadata,
-      filters: Array[Filter],
-      readDataSchema: StructType): java.util.List[BlockMetaData] = {
-    import scala.collection.JavaConverters._
-    
-    val allBlocks = footer.getBlocks
-    if (allBlocks.isEmpty || filters.isEmpty) {
-      return allBlocks
-    }
-    
-    // Get footer buffer for hybrid scan reader
-    val footerBuffer = getFooterBuffer(fileIO, filePath, conf, metrics)
-    try {
-      // Convert filters to AST and create hybrid scan reader
-      val converter = FilterToAstConverter(readDataSchema, isCaseSensitive, true)
-      val compiledFilter = converter.convert(filters)
-      
-      if (compiledFilter.isEmpty) {
-        // No filters could be converted, return all blocks
-        return allBlocks
-      }
-      
-      try {
-        // Get column names for the read schema
-        val columnNames = readDataSchema.fields.map(_.name)
-        
-        // Create hybrid scan reader
-        val reader = new ai.rapids.cudf.HybridScanReader(
-          footerBuffer, 
-          compiledFilter.get, 
-          columnNames)
-        
-        try {
-          // Get all row groups and filter with statistics
-          val allRowGroups = reader.getAllRowGroups()
-          //val filteredRowGroups = reader.filterRowGroupsWithStats(allRowGroups)
-          
-          //logDebug(s"Hybrid scan: ${allRowGroups.length} row groups -> " +
-          //  s"${filteredRowGroups.length} after stats filtering")
-          
-          // TODO: Phase 1 enhancement - also filter with dictionary pages
-          // For now, we just use statistics-based filtering
-          
-          // Filter blocks to only include the ones that passed the filter
-          val filteredSet = allRowGroups.toSet // filteredRowGroups.toSet
-          val result = new java.util.ArrayList[BlockMetaData]()
-          allBlocks.asScala.zipWithIndex.foreach { case (block, idx) =>
-            if (filteredSet.contains(idx)) {
-              result.add(block)
-            }
-          }
-          result
-        } finally {
-          reader.close()
-        }
-      } finally {
-        compiledFilter.foreach(_.close())
-      }
-    } finally {
-      footerBuffer.close()
-    }
-  }
 
   private def isParquetTimeInInt96(parquetType: Type): Boolean = {
     parquetType match {
@@ -837,22 +758,8 @@ private case class GpuParquetFileFilterHandler(
       ParquetSchemaClipShims.checkIgnoreMissingIds(ignoreMissingParquetFieldId, fileSchema,
         readDataSchema)
 
-      // Determine filters for hybrid scan mode.
-      // When hybrid scan is enabled, we use cuDF's hybrid_scan_reader for filtering
-      val hybridScanFilters: Array[Filter] = if (isHybridScanEnabled && 
-          enableParquetFilterPushDown && filters.nonEmpty) {
-        // In hybrid scan mode, we'll apply filters via cuDF
-        // Filter to only include filters that can be converted to AST
-        filters.filter(FilterToAstConverter.isSupportedFilter)
-      } else {
-        Array.empty
-      }
-      
-      val blocks = if (isHybridScanEnabled && hybridScanFilters.nonEmpty) {
-        // Use cuDF hybrid scan reader for row group filtering
-        filterBlocksWithHybridScan(fileIO, filePath, conf, footer, hybridScanFilters, readDataSchema)
-      } else if (enableParquetFilterPushDown && !isHybridScanEnabled) {
-        // When hybrid scan is NOT enabled, use parquet-mr for dictionary-level filtering
+      val blocks = if (enableParquetFilterPushDown) {
+        // Use parquet-mr for dictionary-level filtering
         val parquetFilters = SparkShimImpl.getParquetFilters(fileSchema, pushDownDate,
           pushDownTimestamp, pushDownDecimal, pushDownStringPredicate, pushDownInFilterThreshold,
           isCaseSensitive, footer.getFileMetaData.getKeyValueMetaData.get, datetimeRebaseMode)
@@ -901,8 +808,7 @@ private case class GpuParquetFileFilterHandler(
 
       ParquetFileInfoWithBlockMeta(filePath, clipped, file.partitionValues,
         clippedSchema, readDataSchema, dateRebaseModeForThisFile,
-        timestampRebaseModeForThisFile, hasInt96Timestamps,
-        hybridScanFilters = hybridScanFilters)
+        timestampRebaseModeForThisFile, hasInt96Timestamps)
     }
   }
 
@@ -1311,8 +1217,9 @@ case class GpuParquetMultiFilePartitionReaderFactory(
   private val maxNumFileProcessed = rapidsConf.maxNumParquetFilesParallel
   private val ignoreMissingFiles = sqlConf.ignoreMissingFiles
   private val ignoreCorruptFiles = sqlConf.ignoreCorruptFiles
-  private val hybridScanMode = rapidsConf.parquetHybridScanMode
-  private val filterHandler = GpuParquetFileFilterHandler(sqlConf, metrics, hybridScanMode)
+  // Note: hybridScanMode is not used for multi-file readers (coalescing/multithreaded)
+  // Hybrid scan is only implemented for PERFILE non-chunked reader via HybridScanParquetPartitionReader
+  private val filterHandler = GpuParquetFileFilterHandler(sqlConf, metrics)
   private val readUseFieldId = ParquetSchemaClipShims.useFieldId(sqlConf)
   private val footerReadType = GpuParquetScan.footerReaderHeuristic(
     rapidsConf.parquetReaderFooterType, dataSchema, readDataSchema, readUseFieldId)
@@ -1546,7 +1453,7 @@ case class GpuParquetPartitionReaderFactory(
       0L
     }
   private val hybridScanMode = rapidsConf.parquetHybridScanMode
-  private val filterHandler = GpuParquetFileFilterHandler(sqlConf, metrics, hybridScanMode)
+  private val filterHandler = GpuParquetFileFilterHandler(sqlConf, metrics)
   private val readUseFieldId = ParquetSchemaClipShims.useFieldId(sqlConf)
   private val footerReadType = GpuParquetScan.footerReaderHeuristic(
     rapidsConf.parquetReaderFooterType, dataSchema, readDataSchema, readUseFieldId)
@@ -1570,19 +1477,37 @@ case class GpuParquetPartitionReaderFactory(
     // we need to copy the Hadoop Configuration because filter push down can mutate it,
     // which can affect other tasks.
     val conf = new Configuration(broadcastedConf.value.value)
-    val startTime = System.nanoTime()
-    val singleFileInfo = filterHandler.filterBlocks(fileIO, footerReadType, file, conf, filters,
-      readDataSchema)
-    metrics.get(FILTER_TIME).foreach {
-      _ += (System.nanoTime() - startTime)
+    
+    // For PHASE0_POC, use hybrid scan reader that bypasses filterBlocks entirely
+    if (hybridScanMode == RapidsConf.ParquetHybridScanMode.PHASE0_POC && !useChunkedReader) {
+      val filePath = new Path(new URI(file.filePath.toString()))
+      
+      // Compute filters that can be pushed to hybrid scan (converted to AST)
+      val hybridScanFilters = if (filters.nonEmpty) {
+        filters.filter(FilterToAstConverter.isSupportedFilter)
+      } else {
+        Array.empty[Filter]
+      }
+      
+      new HybridScanParquetPartitionReader(fileIO, conf, file, filePath,
+        isCaseSensitive, readDataSchema, debugDumpPrefix, debugDumpAlways,
+        metrics, readUseFieldId, hybridScanFilters)
+    } else {
+      // Normal path - use filterBlocks
+      val startTime = System.nanoTime()
+      val singleFileInfo = filterHandler.filterBlocks(fileIO, footerReadType, file, conf, filters,
+        readDataSchema)
+      metrics.get(FILTER_TIME).foreach {
+        _ += (System.nanoTime() - startTime)
+      }
+      
+      new ParquetPartitionReader(fileIO, conf, file, singleFileInfo.filePath, singleFileInfo.blocks,
+        singleFileInfo.schema, isCaseSensitive, readDataSchema, debugDumpPrefix, debugDumpAlways,
+        maxReadBatchSizeRows, maxReadBatchSizeBytes, targetSizeBytes,
+        useChunkedReader, maxChunkedReaderMemoryUsageSizeBytes, compressCfg,
+        metrics, singleFileInfo.dateRebaseMode,
+        singleFileInfo.timestampRebaseMode, singleFileInfo.hasInt96Timestamps, readUseFieldId)
     }
-    new ParquetPartitionReader(fileIO, conf, file, singleFileInfo.filePath, singleFileInfo.blocks,
-      singleFileInfo.schema, isCaseSensitive, readDataSchema, debugDumpPrefix, debugDumpAlways,
-      maxReadBatchSizeRows, maxReadBatchSizeBytes, targetSizeBytes,
-      useChunkedReader, maxChunkedReaderMemoryUsageSizeBytes, compressCfg,
-      metrics, singleFileInfo.dateRebaseMode,
-      singleFileInfo.timestampRebaseMode, singleFileInfo.hasInt96Timestamps, readUseFieldId,
-      singleFileInfo.hybridScanFilters, hybridScanMode)
   }
 }
 
@@ -3317,6 +3242,404 @@ case class ParquetTableReader(
 }
 
 /**
+ * A PartitionReader for hybrid scan POC that reads a Parquet file using cuDF's hybrid scan API.
+ * 
+ * This reader bypasses parquet-mr entirely - it reads the footer directly and uses cuDF's
+ * hybrid_scan_reader for all filtering and data reading. This is the PHASE0_POC implementation.
+ *
+ * @param fileIO the file I/O implementation
+ * @param conf the Hadoop configuration
+ * @param split the file split to read
+ * @param filePath the path to the Parquet file
+ * @param isSchemaCaseSensitive whether schema is case sensitive
+ * @param readDataSchema the Spark schema describing what will be read
+ * @param debugDumpPrefix a path prefix to use for dumping the fabricated Parquet data or null
+ * @param debugDumpAlways whether to debug dump always or only on errors
+ * @param execMetrics metrics
+ * @param useFieldId whether to use field ID for column matching
+ * @param hybridScanFilters filters that can be converted to cuDF AST
+ */
+class HybridScanParquetPartitionReader(
+    fileIO: RapidsFileIO,
+    conf: Configuration,
+    split: PartitionedFile,
+    filePath: Path,
+    isSchemaCaseSensitive: Boolean,
+    readDataSchema: StructType,
+    debugDumpPrefix: Option[String],
+    debugDumpAlways: Boolean,
+    execMetrics: Map[String, GpuMetric],
+    useFieldId: Boolean,
+    hybridScanFilters: Array[Filter]) extends PartitionReader[ColumnarBatch] with Logging {
+
+  private var isDone = false
+  private var batchIter: Iterator[ColumnarBatch] = Iterator.empty
+
+  override def next(): Boolean = {
+    if (batchIter.hasNext) {
+      return true
+    }
+    if (!isDone) {
+      isDone = true
+      batchIter = readBatchesWithHybridScan()
+    }
+    batchIter.hasNext
+  }
+
+  override def get(): ColumnarBatch = batchIter.next()
+
+  override def close(): Unit = {
+    // Nothing to close - buffers are closed in readBatchesWithHybridScan
+  }
+
+  /**
+   * Read using hybrid scan API - bypasses parquet-mr entirely.
+   */
+  private def readBatchesWithHybridScan(): Iterator[ColumnarBatch] = {
+    import ai.rapids.cudf.ast.CompiledExpression
+    
+    NvtxRegistry.PARQUET_READ_BATCH {
+      val colTypes = readDataSchema.fields.map(f => f.dataType)
+      
+      // Step 1: Read footer from file
+      val footerBuffer = NvtxRegistry.HYBRID_SCAN_READ_FOOTER {
+        GpuParquetFileFilterHandler.readFooterBuffer(fileIO, filePath, conf)
+      }
+      
+      withResource(footerBuffer) { footer =>
+        // Get column names from the read schema
+        val columnNames = readDataSchema.fields.map(_.name)
+        
+        // Convert Spark filters to cuDF AST expression (use column names for hybrid scan)
+        val compiledFilterOpt: Option[CompiledExpression] = if (hybridScanFilters.nonEmpty) {
+          val converter = FilterToAstConverter(readDataSchema, isSchemaCaseSensitive, 
+            useColumnNames = true)
+          converter.convert(hybridScanFilters)
+        } else {
+          None
+        }
+        
+        withResource(compiledFilterOpt) { filterOpt =>
+          val reader = new HybridScanReader(footer, filterOpt.orNull, columnNames)
+          
+          withResource(reader) { _ =>
+            // Step 2: Get all row groups and filter with statistics
+            val (_, filteredRowGroups) = NvtxRegistry.HYBRID_SCAN_FILTER_STATS {
+              val all = reader.getAllRowGroups()
+              logDebug(s"HybridScan: getAllRowGroups returned ${all.length} row groups")
+              
+              val filtered = if (filterOpt.isDefined) {
+                val f = reader.filterRowGroupsWithStats(all)
+                logDebug(s"HybridScan: filterRowGroupsWithStats: ${all.length} -> " +
+                  s"${f.length} row groups")
+                f
+              } else {
+                all
+              }
+              (all, filtered)
+            }
+            
+            // Step 3: Dictionary filtering (if filter present)
+            val rowGroupsAfterDictFilter = NvtxRegistry.HYBRID_SCAN_FILTER_DICT {
+              if (filterOpt.isDefined) {
+                val dictRanges = reader.getDictionaryPageByteRanges(filteredRowGroups)
+                logDebug(s"HybridScan: getDictionaryPageByteRanges returned " +
+                  s"${dictRanges.length / 2} ranges")
+                
+                if (dictRanges.nonEmpty) {
+                  // Read dictionary pages from file and copy to device
+                  val dictBuffers = readByteRangesToDevice(dictRanges)
+                  try {
+                    val afterDictFilter = reader.filterRowGroupsWithDictionaries(
+                      dictBuffers.toArray, filteredRowGroups)
+                    logDebug(s"HybridScan: filterRowGroupsWithDictionaries: " +
+                      s"${filteredRowGroups.length} -> ${afterDictFilter.length} row groups")
+                    afterDictFilter
+                  } finally {
+                    dictBuffers.foreach(_.close())
+                  }
+                } else {
+                  filteredRowGroups
+                }
+              } else {
+                filteredRowGroups
+              }
+            }
+            
+            if (rowGroupsAfterDictFilter.isEmpty) {
+              logDebug("HybridScan: All row groups filtered out")
+              return EmptyGpuColumnarBatchIterator
+            }
+            
+            // Step 4: Get total rows
+            val totalRows = reader.getTotalRowsInRowGroups(rowGroupsAfterDictFilter)
+            logDebug(s"HybridScan: getTotalRowsInRowGroups = $totalRows rows")
+            
+            if (totalRows == 0) {
+              return EmptyGpuColumnarBatchIterator
+            }
+            
+            // Step 5: Get byte ranges for filter and payload columns
+            val (filterRanges, payloadRanges) = NvtxRegistry.HYBRID_SCAN_GET_BYTE_RANGES {
+              val fRanges = if (filterOpt.isDefined) {
+                reader.getFilterColumnChunkByteRanges(rowGroupsAfterDictFilter)
+              } else {
+                Array.empty[Long]
+              }
+              logDebug(s"HybridScan: getFilterColumnChunkByteRanges returned " +
+                s"${fRanges.length / 2} ranges")
+              
+              val pRanges = reader.getPayloadColumnChunkByteRanges(rowGroupsAfterDictFilter)
+              logDebug(s"HybridScan: getPayloadColumnChunkByteRanges returned " +
+                s"${pRanges.length / 2} ranges")
+              (fRanges, pRanges)
+            }
+            
+            // Step 6: Read both filter and payload data from file to host memory
+            // Uses coalesced reads with FileCache for efficiency
+            val (filterOwner, filterSlices, payloadOwner, payloadSlices) = 
+              NvtxRegistry.HYBRID_SCAN_READ_DATA {
+                val (fOwner, fSlices) = if (filterRanges.nonEmpty) {
+                  readByteRangesToHostCoalesced(filterRanges)
+                } else {
+                  (null, Seq.empty[HostMemoryBuffer])
+                }
+                val (pOwner, pSlices) = readByteRangesToHostCoalesced(payloadRanges)
+                (fOwner, fSlices, pOwner, pSlices)
+              }
+            
+            // Acquire GPU semaphore before materialize (which does device allocations)
+            GpuSemaphore.acquireIfNecessary(TaskContext.get())
+            
+            // Step 7: Materialize using hybrid scan - JNI copies host->device directly
+            // Slices are zero-copy views into the owning buffers
+            val table = NvtxRegistry.HYBRID_SCAN_MATERIALIZE {
+              try {
+                logDebug(s"HybridScan: materializing filter=${filterSlices.map(_.getLength).sum} " +
+                  s"payload=${payloadSlices.map(_.getLength).sum} bytes")
+                reader.materializeFromHostBuffers(
+                  rowGroupsAfterDictFilter,
+                  filterSlices.toArray,
+                  payloadSlices.toArray)
+              } finally {
+                // Close slices first (they hold refs to owners)
+                filterSlices.foreach(_.close())
+                payloadSlices.foreach(_.close())
+                // Close owning buffers
+                if (filterOwner != null) filterOwner.close()
+                if (payloadOwner != null) payloadOwner.close()
+              }
+            }
+            
+            // POC Note: We skip datetime rebase checking and schema evolution for now.
+            // These would require parsing the footer with parquet-mr to get metadata.
+            // For production (Phase 1+), we'll need to either:
+            // 1. Parse minimal footer info for rebase modes
+            // 2. Or have cuDF handle rebase internally
+            
+            execMetrics(NUM_OUTPUT_BATCHES) += 1
+            
+            withResource(table) { t =>
+              val batch = GpuColumnVector.from(t, colTypes)
+              logDebug(s"HybridScan: GPU batch size: " +
+                s"${GpuColumnVector.getTotalDeviceMemoryUsed(batch)} bytes")
+              new SingleGpuColumnarBatchIterator(batch)
+            }
+          }
+        }
+      }
+    }
+  }
+
+  /**
+   * Read byte ranges from the file into a single host buffer, returning slices.
+   * 
+   * This implementation:
+   * 1. Checks FileCache for each range (local hits vs remote misses)
+   * 2. Coalesces adjacent remote ranges for efficient I/O
+   * 3. Allocates a single buffer and returns slices (zero-copy views)
+   * 4. Caches remote reads for future use
+   * 
+   * @param byteRanges Array of (offset, length) pairs
+   * @return Tuple of (owning buffer to close, slices for each range)
+   */
+  private def readByteRangesToHostCoalesced(
+      byteRanges: Array[Long]): (HostMemoryBuffer, Seq[HostMemoryBuffer]) = {
+    import com.nvidia.spark.rapids.filecache.FileCache
+    import com.nvidia.spark.rapids.parquet.ParquetPartitionReader.CopyRange
+    
+    if (byteRanges.isEmpty) {
+      return (null, Seq.empty)
+    }
+    
+    val filePathString = filePath.toString
+    
+    // Parse byte ranges into (fileOffset, length, bufferOffset) tuples
+    case class RangeInfo(fileOffset: Long, length: Int, bufferOffset: Long)
+    val ranges = new ArrayBuffer[RangeInfo]()
+    var totalSize = 0L
+    var i = 0
+    while (i < byteRanges.length) {
+      val fileOffset = byteRanges(i)
+      val length = byteRanges(i + 1).toInt
+      ranges += RangeInfo(fileOffset, length, totalSize)
+      totalSize += length
+      i += 2
+    }
+    
+    // Allocate single buffer for all ranges
+    val buffer = HostMemoryBuffer.allocate(totalSize)
+    
+    try {
+      // Separate into local (cached) and remote ranges
+      val localItems = new ArrayBuffer[(SeekableByteChannel, Int, Long)]()
+      val remoteItems = new ArrayBuffer[CopyRange]()
+      
+      ranges.foreach { r =>
+        val channel = FileCache.get.getDataRangeChannel(filePathString, r.fileOffset, r.length, conf)
+        if (channel.isDefined) {
+          localItems += ((channel.get, r.length, r.bufferOffset))
+        } else {
+          remoteItems += CopyRange(r.fileOffset, r.length, r.bufferOffset)
+        }
+      }
+      
+      // Copy from local cache (hits)
+      localItems.foreach { case (channel, length, bufferOffset) =>
+        try {
+          execMetrics.getOrElse(GpuMetric.FILECACHE_DATA_RANGE_HITS, NoopMetric) += 1
+          execMetrics.getOrElse(GpuMetric.FILECACHE_DATA_RANGE_HITS_SIZE, NoopMetric) += length
+          // Read from channel into buffer at offset
+          val tmpBuf = java.nio.ByteBuffer.allocate(Math.min(length, 64 * 1024))
+          var bytesLeft = length
+          var offset = bufferOffset
+          while (bytesLeft > 0) {
+            tmpBuf.clear()
+            tmpBuf.limit(Math.min(bytesLeft, tmpBuf.capacity()))
+            val bytesRead = channel.read(tmpBuf)
+            if (bytesRead < 0) {
+              throw new IOException(s"Unexpected EOF reading from cache")
+            }
+            buffer.setBytes(offset, tmpBuf.array(), 0, bytesRead)
+            offset += bytesRead
+            bytesLeft -= bytesRead
+          }
+        } finally {
+          channel.close()
+        }
+      }
+      
+      // Coalesce and copy remote ranges (misses)
+      if (remoteItems.nonEmpty) {
+        val coalescedRanges = coalesceRanges(remoteItems.toSeq)
+        
+        withResource(fileIO.newInputFile(filePath).open()) { inputStream =>
+          val copyBuffer = new Array[Byte](64 * 1024)
+          
+          coalescedRanges.foreach { range =>
+            inputStream.seek(range.offset)
+            var bytesLeft = range.length
+            var bufOffset = range.outputOffset
+            while (bytesLeft > 0) {
+              val toRead = Math.min(bytesLeft, copyBuffer.length).toInt
+              val bytesRead = inputStream.read(copyBuffer, 0, toRead)
+              if (bytesRead < 0) {
+                throw new IOException(s"Unexpected EOF reading $filePath at offset ${range.offset}")
+              }
+              buffer.setBytes(bufOffset, copyBuffer, 0, bytesRead)
+              bufOffset += bytesRead
+              bytesLeft -= bytesRead
+            }
+          }
+        }
+        
+        // Cache the remote ranges we just read
+        remoteItems.foreach { range =>
+          execMetrics.getOrElse(GpuMetric.FILECACHE_DATA_RANGE_MISSES, NoopMetric) += 1
+          execMetrics.getOrElse(GpuMetric.FILECACHE_DATA_RANGE_MISSES_SIZE, NoopMetric) += range.length
+          val cacheToken = FileCache.get.startDataRangeCache(
+            filePathString, range.offset, range.length, conf)
+          cacheToken.foreach { token =>
+            token.complete(buffer.slice(range.outputOffset, range.length))
+          }
+        }
+      }
+      
+      // Create slices for each original range (zero-copy views)
+      val slices = ranges.map { r =>
+        buffer.slice(r.bufferOffset, r.length)
+      }
+      
+      (buffer, slices.toSeq)
+    } catch {
+      case e: Exception =>
+        buffer.close()
+        throw e
+    }
+  }
+  
+  /**
+   * Coalesce adjacent CopyRange entries for efficient I/O.
+   */
+  private def coalesceRanges(ranges: Seq[CopyRange]): Seq[CopyRange] = {
+    if (ranges.isEmpty) return Seq.empty
+    
+    val sorted = ranges.sortBy(_.offset)
+    val result = new ArrayBuffer[CopyRange]()
+    var current = sorted.head
+    var currentEnd = current.offset + current.length
+    
+    sorted.tail.foreach { r =>
+      if (r.offset == currentEnd) {
+        // Extend current range (contiguous)
+        currentEnd = r.offset + r.length
+      } else {
+        // Gap - emit current and start new
+        result += current.copy(length = currentEnd - current.offset)
+        current = r
+        currentEnd = r.offset + r.length
+      }
+    }
+    // Emit last range
+    result += current.copy(length = currentEnd - current.offset)
+    result.toSeq
+  }
+  
+
+  /**
+   * Read byte ranges from the file directly to device memory.
+   * Uses coalesced host reads with FileCache, then copies to device.
+   */
+  private def readByteRangesToDevice(byteRanges: Array[Long]): Seq[DeviceMemoryBuffer] = {
+    if (byteRanges.isEmpty) {
+      return Seq.empty
+    }
+    
+    // Read to host first using coalesced/cached reads
+    val (hostOwner, hostSlices) = readByteRangesToHostCoalesced(byteRanges)
+    
+    val deviceBuffers = new scala.collection.mutable.ArrayBuffer[DeviceMemoryBuffer]()
+    try {
+      // Copy each slice to device
+      hostSlices.foreach { slice =>
+        val devBuf = DeviceMemoryBuffer.allocate(slice.getLength)
+        devBuf.copyFromHostBuffer(slice)
+        deviceBuffers += devBuf
+      }
+      deviceBuffers.toSeq
+    } catch {
+      case e: Exception =>
+        deviceBuffers.foreach(_.close())
+        throw e
+    } finally {
+      // Close slices first (they hold refs to owner)
+      hostSlices.foreach(_.close())
+      if (hostOwner != null) hostOwner.close()
+    }
+  }
+}
+
+/**
  * A PartitionReader that reads a Parquet file split on the GPU.
  *
  * Efficiently reading a Parquet split on the GPU requires re-constructing the Parquet file
@@ -3355,19 +3678,10 @@ class ParquetPartitionReader(
     dateRebaseMode: DateTimeRebaseMode,
     timestampRebaseMode: DateTimeRebaseMode,
     hasInt96Timestamps: Boolean,
-    useFieldId: Boolean,
-    hybridScanFilters: Array[Filter] = Array.empty,
-    hybridScanMode: RapidsConf.ParquetHybridScanMode.Value = 
-      RapidsConf.ParquetHybridScanMode.DISABLED) extends FilePartitionReaderBase(conf, execMetrics)
+    useFieldId: Boolean) extends FilePartitionReaderBase(conf, execMetrics)
   with ParquetPartitionReaderBase {
 
-  // For hybrid scan POC, we don't use blockIterator - hybrid scan gets row groups from footer
-  private val useHybridScan = hybridScanMode == RapidsConf.ParquetHybridScanMode.PHASE0_POC && 
-    !useChunkedReader
-  
-  private val blockIterator: BufferedIterator[BlockMetaData] = 
-    if (useHybridScan) Iterator.empty.buffered 
-    else clippedBlocks.iterator.buffered
+  private val blockIterator: BufferedIterator[BlockMetaData] = clippedBlocks.iterator.buffered
 
   override def next(): Boolean = {
     if (batchIter.hasNext) {
@@ -3375,12 +3689,7 @@ class ParquetPartitionReader(
     }
     batchIter = EmptyGpuColumnarBatchIterator
     if (!isDone) {
-      // For hybrid scan, we read once (no blockIterator iteration)
-      // For default path, check blockIterator
-      if (useHybridScan) {
-        isDone = true
-        batchIter = readBatches()
-      } else if (!blockIterator.hasNext) {
+      if (!blockIterator.hasNext) {
         isDone = true
       } else {
         batchIter = readBatches()
@@ -3398,320 +3707,56 @@ class ParquetPartitionReader(
 
   private def readBatches(): Iterator[ColumnarBatch] = {
     NvtxRegistry.PARQUET_READ_BATCH {
-      // Phase 0 POC: Use hybrid scan to read footer and drive IO
-      if (hybridScanMode == RapidsConf.ParquetHybridScanMode.PHASE0_POC && 
-          !useChunkedReader) {
-        readBatchesWithHybridScan()
-      } else {
-        readBatchesDefault()
-      }
-    }
-  }
-  
-  /**
-   * Phase 0 POC: Read using hybrid scan API.
-   * 
-   * This bypasses parquet-mr entirely:
-   * 1. Read footer from file
-   * 2. Let hybrid scan parse footer and filter row groups
-   * 3. Get byte ranges from hybrid scan
-   * 4. Read those byte ranges from file
-   * 5. Materialize via hybrid scan
-   */
-  private def readBatchesWithHybridScan(): Iterator[ColumnarBatch] = {
-    import ai.rapids.cudf.ast.CompiledExpression
-    
-    val colTypes = readDataSchema.fields.map(f => f.dataType)
-    
-    // Step 1: Read footer from file (reuse existing method)
-    val footerBuffer = GpuParquetFileFilterHandler.readFooterBuffer(fileIO, filePath, conf)
-    
-    withResource(footerBuffer) { footer =>
-      // Get column names from the read schema
-      val columnNames = readDataSchema.fields.map(_.name)
-      
-      // Convert Spark filters to cuDF AST expression (use column names for hybrid scan)
-      val compiledFilterOpt: Option[CompiledExpression] = if (hybridScanFilters.nonEmpty) {
-        val converter = FilterToAstConverter(readDataSchema, isSchemaCaseSensitive, 
-          useColumnNames = true)
-        converter.convert(hybridScanFilters)
-      } else {
-        None
-      }
-      
-      withResource(compiledFilterOpt) { filterOpt =>
-        val reader = new HybridScanReader(footer, filterOpt.orNull, columnNames)
-        
-        withResource(reader) { _ =>
-          // Step 2: Get all row groups and filter with statistics
-          val allRowGroups = reader.getAllRowGroups()
-          logDebug(s"HybridScan: getAllRowGroups returned ${allRowGroups.length} row groups")
-          
-          val filteredRowGroups = if (filterOpt.isDefined) {
-            val filtered = reader.filterRowGroupsWithStats(allRowGroups)
-            logDebug(s"HybridScan: filterRowGroupsWithStats: ${allRowGroups.length} -> " +
-              s"${filtered.length} row groups")
-            filtered
-          } else {
-            allRowGroups
-          }
-          
-          // Step 3: Dictionary filtering (if filter present)
-          val rowGroupsAfterDictFilter = if (filterOpt.isDefined) {
-            val dictRanges = reader.getDictionaryPageByteRanges(filteredRowGroups)
-            logDebug(s"HybridScan: getDictionaryPageByteRanges returned " +
-              s"${dictRanges.length / 2} ranges")
-            
-            if (dictRanges.nonEmpty) {
-              // Read dictionary pages from file and copy to device
-              val dictBuffers = readByteRangesToDevice(dictRanges)
-              try {
-                val afterDictFilter = reader.filterRowGroupsWithDictionaries(
-                  dictBuffers.toArray, filteredRowGroups)
-                logDebug(s"HybridScan: filterRowGroupsWithDictionaries: " +
-                  s"${filteredRowGroups.length} -> ${afterDictFilter.length} row groups")
-                afterDictFilter
-              } finally {
-                dictBuffers.foreach(_.close())
-              }
-            } else {
-              filteredRowGroups
-            }
-          } else {
-            filteredRowGroups
-          }
-          
-          if (rowGroupsAfterDictFilter.isEmpty) {
-            // All row groups filtered out
-            logDebug("HybridScan: All row groups filtered out")
-            return EmptyGpuColumnarBatchIterator
-          }
-          
-          // Step 4: Get total rows
-          val totalRows = reader.getTotalRowsInRowGroups(rowGroupsAfterDictFilter)
-          logDebug(s"HybridScan: getTotalRowsInRowGroups = $totalRows rows")
-          
-          if (totalRows == 0) {
-            return EmptyGpuColumnarBatchIterator
-          }
-          
-          // Step 5a: Get filter column byte ranges (if filter present)
-          val filterRanges = if (filterOpt.isDefined) {
-            reader.getFilterColumnChunkByteRanges(rowGroupsAfterDictFilter)
-          } else {
-            Array.empty[Long]
-          }
-          logDebug(s"HybridScan: getFilterColumnChunkByteRanges returned " +
-            s"${filterRanges.length / 2} ranges")
-          
-          // Step 5b: Get payload column byte ranges
-          val payloadRanges = reader.getPayloadColumnChunkByteRanges(rowGroupsAfterDictFilter)
-          logDebug(s"HybridScan: getPayloadColumnChunkByteRanges returned " +
-            s"${payloadRanges.length / 2} ranges")
-          
-          // Step 6: Read both filter and payload data from file to host memory
-          // Using host buffers allows JNI to copy directly to device, avoiding double copy
-          val filterBuffers = if (filterRanges.nonEmpty) {
-            readByteRangesToHost(filterRanges)
-          } else {
-            Seq.empty
-          }
-          val payloadBuffers = readByteRangesToHost(payloadRanges)
-          
-          // Acquire GPU semaphore before materialize (which does device allocations)
+      val currentChunkedBlocks = populateCurrentBlockChunk(blockIterator,
+        maxReadBatchSizeRows, maxReadBatchSizeBytes, readDataSchema)
+      if (clippedParquetSchema.getFieldCount == 0) {
+        // not reading any data, so return a degenerate ColumnarBatch with the row count
+        val numRows = currentChunkedBlocks.map(_.getRowCount).sum.toInt
+        if (numRows == 0) {
+          EmptyGpuColumnarBatchIterator
+        } else {
+          // Someone is going to process this data, even if it is just a row count
           GpuSemaphore.acquireIfNecessary(TaskContext.get())
-          
-          // Materialize using hybrid scan - JNI copies host->device directly
-          val table = try {
-            logDebug(s"HybridScan: materializing filter=${filterBuffers.map(_.getLength).sum} " +
-              s"payload=${payloadBuffers.map(_.getLength).sum} bytes")
-            reader.materializeFromHostBuffers(
-              rowGroupsAfterDictFilter,
-              filterBuffers.toArray,
-              payloadBuffers.toArray)
-          } finally {
-            filterBuffers.foreach(_.close())
-            payloadBuffers.foreach(_.close())
-          }
-          
-          closeOnExcept(table) { _ =>
-            GpuParquetScan.throwIfRebaseNeededInExceptionMode(table, dateRebaseMode,
-              timestampRebaseMode)
-          }
-          
-          execMetrics(NUM_OUTPUT_BATCHES) += 1
-          val evolvedTable = ParquetSchemaUtils.evolveSchemaIfNeededAndClose(table,
-            clippedParquetSchema, readDataSchema, isSchemaCaseSensitive, useFieldId)
-          val rebasedTable = GpuParquetScan.rebaseDateTime(evolvedTable, dateRebaseMode,
-            timestampRebaseMode)
-          
-          withResource(rebasedTable) { t =>
-            val batch = GpuColumnVector.from(t, colTypes)
-            logDebug(s"HybridScan: GPU batch size: " +
-              s"${GpuColumnVector.getTotalDeviceMemoryUsed(batch)} bytes")
-            new SingleGpuColumnarBatchIterator(batch)
-          }
+          val nullColumns = readDataSchema.safeMap(f =>
+            GpuColumnVector.fromNull(numRows, f.dataType).asInstanceOf[SparkVector])
+          new SingleGpuColumnarBatchIterator(new ColumnarBatch(nullColumns.toArray, numRows))
         }
-      }
-    }
-  }
-  
-  /**
-   * Read byte ranges from the file directly to host memory.
-   * This is more efficient than readByteRangesToDevice because the JNI layer
-   * can copy directly from host to device without an intermediate DeviceMemoryBuffer.
-   * 
-   * @param byteRanges Array of (offset, length) pairs
-   * @return Sequence of HostMemoryBuffers (caller must close)
-   */
-  private def readByteRangesToHost(byteRanges: Array[Long]): Seq[HostMemoryBuffer] = {
-    val buffers = new scala.collection.mutable.ArrayBuffer[HostMemoryBuffer]()
-    var i = 0
-    try {
-      val inputFile = fileIO.newInputFile(filePath)
-      withResource(inputFile.open()) { inputStream =>
-        while (i < byteRanges.length) {
-          val offset = byteRanges(i)
-          val length = byteRanges(i + 1).toInt
-          
-          val hostBuf = HostMemoryBuffer.allocate(length)
-          try {
-            inputStream.seek(offset)
-            val tmpBuffer = new Array[Byte](Math.min(length, 64 * 1024))
-            var bytesLeft = length
-            var hostOffset = 0L
-            while (bytesLeft > 0) {
-              val toRead = Math.min(bytesLeft, tmpBuffer.length)
-              val bytesRead = inputStream.read(tmpBuffer, 0, toRead)
-              if (bytesRead < 0) {
-                throw new IOException(s"Unexpected EOF reading $filePath at offset $offset")
-              }
-              hostBuf.setBytes(hostOffset, tmpBuffer, 0, bytesRead)
-              hostOffset += bytesRead
-              bytesLeft -= bytesRead
-            }
-            buffers += hostBuf
-          } catch {
-            case e: Exception =>
-              hostBuf.close()
-              throw e
-          }
-          
-          i += 2
-        }
-      }
-      buffers.toSeq
-    } catch {
-      case e: Exception =>
-        buffers.foreach(_.close())
-        throw e
-    }
-  }
-
-  /**
-   * Read byte ranges from the file directly to device memory.
-   * Note: This involves a double copy (file -> host -> device -> rmm::device_buffer).
-   * Consider using readByteRangesToHost + materializeFromHostBuffers for better performance.
-   * 
-   * @param byteRanges Array of (offset, length) pairs
-   * @return Sequence of DeviceMemoryBuffers (caller must close)
-   */
-  private def readByteRangesToDevice(byteRanges: Array[Long]): Seq[DeviceMemoryBuffer] = {
-    val buffers = new scala.collection.mutable.ArrayBuffer[DeviceMemoryBuffer]()
-    var i = 0
-    try {
-      val inputFile = fileIO.newInputFile(filePath)
-      withResource(inputFile.open()) { inputStream =>
-        while (i < byteRanges.length) {
-          val offset = byteRanges(i)
-          val length = byteRanges(i + 1).toInt
-          
-          // Read from file to host buffer
-          withResource(HostMemoryBuffer.allocate(length)) { hostBuf =>
-            inputStream.seek(offset)
-            val tmpBuffer = new Array[Byte](Math.min(length, 64 * 1024))
-            var bytesLeft = length
-            var hostOffset = 0L
-            while (bytesLeft > 0) {
-              val toRead = Math.min(bytesLeft, tmpBuffer.length)
-              val bytesRead = inputStream.read(tmpBuffer, 0, toRead)
-              if (bytesRead < 0) {
-                throw new IOException(s"Unexpected EOF reading $filePath at offset $offset")
-              }
-              hostBuf.setBytes(hostOffset, tmpBuffer, 0, bytesRead)
-              hostOffset += bytesRead
-              bytesLeft -= bytesRead
-            }
-            
-            // Copy to device
-            val devBuf = DeviceMemoryBuffer.allocate(length)
-            devBuf.copyFromHostBuffer(hostBuf)
-            buffers += devBuf
-          }
-          
-          i += 2
-        }
-      }
-      buffers.toSeq
-    } catch {
-      case e: Exception =>
-        buffers.foreach(_.close())
-        throw e
-    }
-  }
-  
-  /** Default read path using parquet-mr filtered blocks */
-  private def readBatchesDefault(): Iterator[ColumnarBatch] = {
-    val currentChunkedBlocks = populateCurrentBlockChunk(blockIterator,
-      maxReadBatchSizeRows, maxReadBatchSizeBytes, readDataSchema)
-    if (clippedParquetSchema.getFieldCount == 0) {
-      // not reading any data, so return a degenerate ColumnarBatch with the row count
-      val numRows = currentChunkedBlocks.map(_.getRowCount).sum.toInt
-      if (numRows == 0) {
-        EmptyGpuColumnarBatchIterator
       } else {
-        // Someone is going to process this data, even if it is just a row count
-        GpuSemaphore.acquireIfNecessary(TaskContext.get())
-        val nullColumns = readDataSchema.safeMap(f =>
-          GpuColumnVector.fromNull(numRows, f.dataType).asInstanceOf[SparkVector])
-        new SingleGpuColumnarBatchIterator(new ColumnarBatch(nullColumns.toArray, numRows))
-      }
-    } else {
-      val colTypes = readDataSchema.fields.map(f => f.dataType)
-      val iter = if (currentChunkedBlocks.isEmpty) {
-        CachedGpuBatchIterator(EmptyTableReader, colTypes)
-      } else {
-        val parseOpts = getParquetOptions(readDataSchema, clippedParquetSchema, useFieldId,
-          hybridScanFilters)
-        val (dataBuffer, _) = metrics(BUFFER_TIME).ns {
-          readPartFile(currentChunkedBlocks, clippedParquetSchema, filePath)
-        }
-        if (dataBuffer.length == 0) {
-          dataBuffer.close()
+        val colTypes = readDataSchema.fields.map(f => f.dataType)
+        val iter = if (currentChunkedBlocks.isEmpty) {
           CachedGpuBatchIterator(EmptyTableReader, colTypes)
         } else {
-          RmmRapidsRetryIterator.withRetryNoSplit(dataBuffer) { _ =>
-            // MakeParquetTableProducer will try to close the hostBuf
-            val hostBuf = dataBuffer.getDataHostBuffer()
-            // Duplicate request is ok, and start to use the GPU just after the host
-            // buffer is ready to not block CPU things.
-            GpuSemaphore.acquireIfNecessary(TaskContext.get())
-            val producer = MakeParquetTableProducer(useChunkedReader,
-              maxChunkedReaderMemoryUsageSizeBytes, conf,
-              targetBatchSizeBytes, parseOpts,
-              Array(hostBuf), metrics,
-              dateRebaseMode, timestampRebaseMode,
-              hasInt96Timestamps, isSchemaCaseSensitive,
-              useFieldId, readDataSchema,
-              clippedParquetSchema, Array(split),
-              debugDumpPrefix, debugDumpAlways, hybridScanMode, hybridScanFilters)
-            CachedGpuBatchIterator(producer, colTypes)
+          val parseOpts = getParquetOptions(readDataSchema, clippedParquetSchema, useFieldId)
+          val (dataBuffer, _) = metrics(BUFFER_TIME).ns {
+            readPartFile(currentChunkedBlocks, clippedParquetSchema, filePath)
+          }
+          if (dataBuffer.length == 0) {
+            dataBuffer.close()
+            CachedGpuBatchIterator(EmptyTableReader, colTypes)
+          } else {
+            RmmRapidsRetryIterator.withRetryNoSplit(dataBuffer) { _ =>
+              // MakeParquetTableProducer will try to close the hostBuf
+              val hostBuf = dataBuffer.getDataHostBuffer()
+              // Duplicate request is ok, and start to use the GPU just after the host
+              // buffer is ready to not block CPU things.
+              GpuSemaphore.acquireIfNecessary(TaskContext.get())
+              val producer = MakeParquetTableProducer(useChunkedReader,
+                maxChunkedReaderMemoryUsageSizeBytes, conf,
+                targetBatchSizeBytes, parseOpts,
+                Array(hostBuf), metrics,
+                dateRebaseMode, timestampRebaseMode,
+                hasInt96Timestamps, isSchemaCaseSensitive,
+                useFieldId, readDataSchema,
+                clippedParquetSchema, Array(split),
+                debugDumpPrefix, debugDumpAlways)
+              CachedGpuBatchIterator(producer, colTypes)
+            }
           }
         }
-      }
-      iter.map { batch =>
-        logDebug(s"GPU batch size: ${GpuColumnVector.getTotalDeviceMemoryUsed(batch)} bytes")
-        batch
+        iter.map { batch =>
+          logDebug(s"GPU batch size: ${GpuColumnVector.getTotalDeviceMemoryUsed(batch)} bytes")
+          batch
+        }
       }
     }
   }
