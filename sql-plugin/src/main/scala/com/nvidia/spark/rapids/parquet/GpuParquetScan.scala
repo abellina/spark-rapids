@@ -3293,6 +3293,52 @@ class HybridScanParquetPartitionReader(
   }
 
   /**
+   * Filter row groups to only include those whose starting byte offset falls within
+   * this task's split range [split.start, split.start + split.length).
+   *
+   * This is critical for correctness when Spark splits large files into multiple tasks.
+   * Without this filtering, each task would read ALL row groups, causing duplicate data.
+   *
+   * Implementation: For each row group, get its column chunk byte ranges. The minimum
+   * offset across all columns is the row group's "start". Include the row group only if
+   * this start offset falls within our split range.
+   *
+   * @param reader The HybridScanReader with parsed footer
+   * @param rowGroups All row group indices from getAllRowGroups()
+   * @return Filtered row group indices that belong to this split
+   */
+  private def filterRowGroupsBySplit(
+        reader: HybridScanReader,
+        rowGroups: Array[Int]): Array[Int] = {
+    val splitStart = split.start
+    val splitEnd = split.start + split.length
+    
+    // For each row group, find its starting byte offset by getting the minimum
+    // offset across all its column chunks
+    rowGroups.filter { rgIdx =>
+      // Get byte ranges for this single row group (returns offset,length pairs)
+      val ranges = reader.getPayloadColumnChunkByteRanges(Array(rgIdx))
+      if (ranges.isEmpty) {
+        // No columns = empty row group, include it if split starts at 0
+        splitStart == 0
+      } else {
+        // Find minimum offset (row group start is where first column chunk starts)
+        var minOffset = Long.MaxValue
+        var i = 0
+        while (i < ranges.length) {
+          val offset = ranges(i)
+          if (offset < minOffset) {
+            minOffset = offset
+          }
+          i += 2 // Skip length, move to next offset
+        }
+        // Include row group if its start falls within our split range
+        minOffset >= splitStart && minOffset < splitEnd
+      }
+    }
+  }
+
+  /**
    * Read using hybrid scan API - bypasses parquet-mr entirely.
    */
   private def readBatchesWithHybridScan(): Iterator[ColumnarBatch] = {
@@ -3300,6 +3346,25 @@ class HybridScanParquetPartitionReader(
     
     NvtxRegistry.PARQUET_READ_BATCH {
       val colTypes = readDataSchema.fields.map(f => f.dataType)
+      
+      // Handle empty schema case (e.g., SELECT COUNT(*))
+      // When no columns are needed, return empty batch with correct row count
+      if (readDataSchema.isEmpty) {
+        logDebug("HybridScan: Empty read schema, returning empty columnar batch")
+        // For empty schema, we still need to count rows by reading footer
+        val footerBuffer = GpuParquetFileFilterHandler.readFooterBuffer(fileIO, filePath, conf)
+        val rowCount = withResource(footerBuffer) { footer =>
+          val reader = new HybridScanReader(footer, null, Array.empty[String])
+          withResource(reader) { r =>
+            val allRowGroups = r.getAllRowGroups()
+            val rowGroupsInSplit = filterRowGroupsBySplit(r, allRowGroups)
+            r.getTotalRowsInRowGroups(rowGroupsInSplit)
+          }
+        }
+        execMetrics(NUM_OUTPUT_BATCHES) += 1
+        return new SingleGpuColumnarBatchIterator(
+          new ColumnarBatch(Array.empty[SparkVector], rowCount.toInt))
+      }
       
       // Step 1: Read footer from file
       val footerBuffer = NvtxRegistry.HYBRID_SCAN_READ_FOOTER {
@@ -3323,20 +3388,34 @@ class HybridScanParquetPartitionReader(
           val reader = new HybridScanReader(footer, filterOpt.orNull, columnNames)
           
           withResource(reader) { _ =>
-            // Step 2: Get all row groups and filter with statistics
+            // Step 2a: Get all row groups
+            val allRowGroups = reader.getAllRowGroups()
+            logDebug(s"HybridScan: getAllRowGroups returned ${allRowGroups.length} row groups")
+            
+            // Step 2b: Filter by split boundaries (CRITICAL for correctness)
+            // Spark may split large files into multiple tasks. Each task should only
+            // process row groups whose starting byte offset falls within the split range.
+            val rowGroupsInSplit = filterRowGroupsBySplit(reader, allRowGroups)
+            logDebug(s"HybridScan: filterRowGroupsBySplit: ${allRowGroups.length} -> " +
+              s"${rowGroupsInSplit.length} row groups (split.start=${split.start}, " +
+              s"split.length=${split.length})")
+            
+            if (rowGroupsInSplit.isEmpty) {
+              logDebug("HybridScan: No row groups in this split")
+              return EmptyGpuColumnarBatchIterator
+            }
+            
+            // Step 2c: Filter with statistics
             val (_, filteredRowGroups) = NvtxRegistry.HYBRID_SCAN_FILTER_STATS {
-              val all = reader.getAllRowGroups()
-              logDebug(s"HybridScan: getAllRowGroups returned ${all.length} row groups")
-              
               val filtered = if (filterOpt.isDefined) {
-                val f = reader.filterRowGroupsWithStats(all)
-                logDebug(s"HybridScan: filterRowGroupsWithStats: ${all.length} -> " +
+                val f = reader.filterRowGroupsWithStats(rowGroupsInSplit)
+                logDebug(s"HybridScan: filterRowGroupsWithStats: ${rowGroupsInSplit.length} -> " +
                   s"${f.length} row groups")
                 f
               } else {
-                all
+                rowGroupsInSplit
               }
-              (all, filtered)
+              (rowGroupsInSplit, filtered)
             }
             
             // Step 3: Dictionary filtering (if filter present)
@@ -3455,13 +3534,19 @@ class HybridScanParquetPartitionReader(
    * Read byte ranges from the file into a single host buffer, returning slices.
    * 
    * This implementation:
-   * 1. Checks FileCache for each range (local hits vs remote misses)
-   * 2. Coalesces adjacent remote ranges for efficient I/O
-   * 3. Allocates a single buffer and returns slices (zero-copy views)
-   * 4. Caches remote reads for future use
+   * 1. Sorts ranges by file offset and reassigns buffer offsets to match
+   * 2. Checks FileCache for each range (local hits vs remote misses)
+   * 3. Coalesces adjacent remote ranges for efficient I/O (fewer requests)
+   * 4. Allocates a single buffer and returns slices (zero-copy views)
+   * 5. Caches remote reads for future use
+   * 6. Returns slices in original request order
+   * 
+   * By sorting ranges by file offset and reassigning buffer offsets to match,
+   * we ensure that file-contiguous ranges are also buffer-contiguous, enabling
+   * safe coalescing into fewer I/O requests.
    * 
    * @param byteRanges Array of (offset, length) pairs
-   * @return Tuple of (owning buffer to close, slices for each range)
+   * @return Tuple of (owning buffer to close, slices for each range in original order)
    */
   private def readByteRangesToHostCoalesced(
       byteRanges: Array[Long]): (HostMemoryBuffer, Seq[HostMemoryBuffer]) = {
@@ -3474,28 +3559,40 @@ class HybridScanParquetPartitionReader(
     
     val filePathString = filePath.toString
     
-    // Parse byte ranges into (fileOffset, length, bufferOffset) tuples
-    case class RangeInfo(fileOffset: Long, length: Int, bufferOffset: Long)
+    // Parse byte ranges into (originalIndex, fileOffset, length) tuples
+    // originalIndex tracks the order for returning slices
+    case class RangeInfo(originalIndex: Int, fileOffset: Long, length: Int, var bufferOffset: Long)
     val ranges = new ArrayBuffer[RangeInfo]()
     var totalSize = 0L
     var i = 0
+    var idx = 0
     while (i < byteRanges.length) {
       val fileOffset = byteRanges(i)
       val length = byteRanges(i + 1).toInt
-      ranges += RangeInfo(fileOffset, length, totalSize)
+      ranges += RangeInfo(idx, fileOffset, length, 0L)
       totalSize += length
       i += 2
+      idx += 1
+    }
+    
+    // Sort by file offset to enable coalescing, then reassign buffer offsets
+    // This ensures file-contiguous ranges are also buffer-contiguous
+    val sortedRanges = ranges.sortBy(_.fileOffset)
+    var bufferOffset = 0L
+    sortedRanges.foreach { r =>
+      r.bufferOffset = bufferOffset
+      bufferOffset += r.length
     }
     
     // Allocate single buffer for all ranges
     val buffer = HostMemoryBuffer.allocate(totalSize)
     
     try {
-      // Separate into local (cached) and remote ranges
+      // Separate into local (cached) and remote ranges, preserving sorted order
       val localItems = new ArrayBuffer[(SeekableByteChannel, Int, Long)]()
       val remoteItems = new ArrayBuffer[CopyRange]()
       
-      ranges.foreach { r =>
+      sortedRanges.foreach { r =>
         val channel = FileCache.get.getDataRangeChannel(filePathString, r.fileOffset, r.length, conf)
         if (channel.isDefined) {
           localItems += ((channel.get, r.length, r.bufferOffset))
@@ -3505,14 +3602,14 @@ class HybridScanParquetPartitionReader(
       }
       
       // Copy from local cache (hits)
-      localItems.foreach { case (channel, length, bufferOffset) =>
+      localItems.foreach { case (channel, length, bufOffset) =>
         try {
           execMetrics.getOrElse(GpuMetric.FILECACHE_DATA_RANGE_HITS, NoopMetric) += 1
           execMetrics.getOrElse(GpuMetric.FILECACHE_DATA_RANGE_HITS_SIZE, NoopMetric) += length
           // Read from channel into buffer at offset
           val tmpBuf = java.nio.ByteBuffer.allocate(Math.min(length, 64 * 1024))
           var bytesLeft = length
-          var offset = bufferOffset
+          var offset = bufOffset
           while (bytesLeft > 0) {
             tmpBuf.clear()
             tmpBuf.limit(Math.min(bytesLeft, tmpBuf.capacity()))
@@ -3530,6 +3627,8 @@ class HybridScanParquetPartitionReader(
       }
       
       // Coalesce and copy remote ranges (misses)
+      // Since ranges are sorted by file offset and buffer offsets are reassigned
+      // to match, coalesced ranges will have contiguous buffer offsets too.
       if (remoteItems.nonEmpty) {
         val coalescedRanges = coalesceRanges(remoteItems.toSeq)
         
@@ -3553,7 +3652,7 @@ class HybridScanParquetPartitionReader(
           }
         }
         
-        // Cache the remote ranges we just read
+        // Cache the remote ranges we just read (use original non-coalesced ranges)
         remoteItems.foreach { range =>
           execMetrics.getOrElse(GpuMetric.FILECACHE_DATA_RANGE_MISSES, NoopMetric) += 1
           execMetrics.getOrElse(GpuMetric.FILECACHE_DATA_RANGE_MISSES_SIZE, NoopMetric) += range.length
@@ -3565,8 +3664,9 @@ class HybridScanParquetPartitionReader(
         }
       }
       
-      // Create slices for each original range (zero-copy views)
-      val slices = ranges.map { r =>
+      // Create slices for each range in ORIGINAL order (not sorted order)
+      // Sort back by originalIndex to restore original request order
+      val slices = sortedRanges.sortBy(_.originalIndex).map { r =>
         buffer.slice(r.bufferOffset, r.length)
       }
       
@@ -3580,10 +3680,12 @@ class HybridScanParquetPartitionReader(
   
   /**
    * Coalesce adjacent CopyRange entries for efficient I/O.
+   * Assumes ranges are already sorted by file offset and have contiguous buffer offsets.
    */
   private def coalesceRanges(ranges: Seq[CopyRange]): Seq[CopyRange] = {
     if (ranges.isEmpty) return Seq.empty
     
+    // Ranges should already be sorted by offset, but sort to be safe
     val sorted = ranges.sortBy(_.offset)
     val result = new ArrayBuffer[CopyRange]()
     var current = sorted.head
@@ -3591,17 +3693,17 @@ class HybridScanParquetPartitionReader(
     
     sorted.tail.foreach { r =>
       if (r.offset == currentEnd) {
-        // Extend current range (contiguous)
+        // Extend current range (contiguous in file AND buffer due to reassignment)
         currentEnd = r.offset + r.length
       } else {
         // Gap - emit current and start new
-        result += current.copy(length = currentEnd - current.offset)
+        result += current.copy(length = (currentEnd - current.offset).toInt)
         current = r
         currentEnd = r.offset + r.length
       }
     }
     // Emit last range
-    result += current.copy(length = currentEnd - current.offset)
+    result += current.copy(length = (currentEnd - current.offset).toInt)
     result.toSeq
   }
   

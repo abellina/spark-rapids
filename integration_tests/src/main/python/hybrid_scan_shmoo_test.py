@@ -26,6 +26,7 @@ See: designs/hybrid_scan/SHMOO_TEST_PLAN.md for test design details.
 
 import pytest
 import time
+from scipy import stats
 
 from asserts import assert_gpu_and_cpu_are_equal_collect
 from spark_session import with_cpu_session, with_gpu_session
@@ -40,7 +41,7 @@ NUM_ROWS = 1_000_000
 
 # Number of warmup and measured runs for timing
 WARMUP_RUNS = 2
-MEASURED_RUNS = 3
+MEASURED_RUNS = 10  # Increased for statistical significance
 
 # Row group size in bytes - smaller = more row groups
 # 1MB gives us ~50-100 row groups for 1M rows with this schema
@@ -108,7 +109,8 @@ def generate_shmoo_data_sorted(spark, data_path, num_rows=NUM_ROWS, row_group_si
         .parquet(data_path)
 
 
-def run_with_timing(spark, query_fn, warmup_runs=WARMUP_RUNS, measured_runs=MEASURED_RUNS):
+def run_with_timing(spark, query_fn, warmup_runs=WARMUP_RUNS, measured_runs=MEASURED_RUNS, 
+                    output_path=None):
     """Run query multiple times and return timing statistics.
     
     Args:
@@ -116,29 +118,45 @@ def run_with_timing(spark, query_fn, warmup_runs=WARMUP_RUNS, measured_runs=MEAS
         query_fn: Function that takes spark session and returns a DataFrame
         warmup_runs: Number of warmup runs (not measured)
         measured_runs: Number of measured runs
+        output_path: If provided, write to Parquet instead of collecting to driver.
+                     This avoids GC overhead for large result sets.
         
     Returns:
-        dict with 'avg_ms', 'min_ms', 'max_ms', 'all_ms'
+        dict with 'avg_ms', 'min_ms', 'max_ms', 'all_ms', 'row_count'
     """
-    # Warmup runs - let JIT and caches warm up
-    for _ in range(warmup_runs):
-        query_fn(spark).collect()
+    import tempfile
+    import shutil
     
-    # Measured runs
-    times = []
-    for _ in range(measured_runs):
-        start = time.time()
-        result = query_fn(spark).collect()
-        end = time.time()
-        times.append((end - start) * 1000)  # Convert to ms
+    # Use temp dir if no output path provided
+    if output_path is None:
+        output_path = tempfile.mkdtemp(prefix='hybrid_scan_timing_')
     
-    return {
-        'avg_ms': sum(times) / len(times),
-        'min_ms': min(times),
-        'max_ms': max(times),
-        'all_ms': times,
-        'row_count': len(result),
-    }
+    try:
+        # Warmup runs - let JIT and caches warm up
+        for _ in range(warmup_runs):
+            query_fn(spark).write.mode('overwrite').parquet(output_path)
+        
+        # Measured runs
+        times = []
+        for _ in range(measured_runs):
+            start = time.time()
+            query_fn(spark).write.mode('overwrite').parquet(output_path)
+            end = time.time()
+            times.append((end - start) * 1000)  # Convert to ms
+        
+        # Get row count from last run (read back just the count)
+        row_count = spark.read.parquet(output_path).count()
+        
+        return {
+            'avg_ms': sum(times) / len(times),
+            'min_ms': min(times),
+            'max_ms': max(times),
+            'all_ms': times,
+            'row_count': row_count,
+        }
+    finally:
+        # Clean up temp directory
+        shutil.rmtree(output_path, ignore_errors=True)
 
 
 # Base configuration for PERFILE reader (required for hybrid scan)
@@ -311,14 +329,34 @@ def test_hybrid_scan_high_selectivity_filter(spark_tmp_path):
     print(f"{'='*60}\n")
 
 
-def test_hybrid_scan_multi_column_filter(spark_tmp_path):
-    """Test with filter on multiple columns.
+def test_hybrid_scan_multi_column_filter_correctness(spark_tmp_path):
+    """Verify correctness with filter on multiple columns.
     
-    This tests the scenario where the filter uses multiple columns, which 
-    should exercise the filter column vs payload column split in hybrid scan.
+    Uses smaller dataset for fast CPU comparison.
     """
     data_path = spark_tmp_path + '/HYBRID_SHMOO_DATA'
     
+    # Use small dataset for correctness (CPU comparison)
+    with_cpu_session(
+        lambda spark: generate_shmoo_data(spark, data_path, num_rows=100_000))
+    
+    def query_fn(spark):
+        return spark.read.parquet(data_path) \
+            .filter((col('filter_col') < 10) & (col('payload_1') > 0.5))
+    
+    assert_gpu_and_cpu_are_equal_collect(query_fn, conf=hybrid_conf)
+
+
+def test_hybrid_scan_multi_column_filter_performance(spark_tmp_path):
+    """Test performance with filter on multiple columns.
+    
+    This tests the scenario where the filter uses multiple columns, which 
+    should exercise the filter column vs payload column split in hybrid scan.
+    GPU-only comparison (baseline vs hybrid) for speed.
+    """
+    data_path = spark_tmp_path + '/HYBRID_SHMOO_DATA'
+    
+    # Use large dataset for performance testing (GPU only)
     with_cpu_session(
         lambda spark: generate_shmoo_data(spark, data_path, num_rows=NUM_ROWS))
     
@@ -326,10 +364,7 @@ def test_hybrid_scan_multi_column_filter(spark_tmp_path):
         return spark.read.parquet(data_path) \
             .filter((col('filter_col') < 10) & (col('payload_1') > 0.5))
     
-    # First verify correctness
-    assert_gpu_and_cpu_are_equal_collect(query_fn, conf=hybrid_conf)
-    
-    # Then measure performance
+    # GPU only - compare baseline vs hybrid
     baseline_times = with_gpu_session(
         lambda spark: run_with_timing(spark, query_fn),
         conf=baseline_conf
@@ -415,8 +450,22 @@ def test_hybrid_scan_row_group_count(spark_tmp_path, num_row_groups):
 # ROW GROUP FILTERING TESTS (using sorted data)
 # =============================================================================
 
-@pytest.mark.parametrize('selectivity', [0.01, 0.05, 0.10, 0.25, 0.50], ids=lambda x: f'sel_{int(x*100)}pct')
-def test_hybrid_scan_with_row_group_filtering(spark_tmp_path, selectivity):
+# Row counts to test - from small to large
+ROW_COUNTS = [100_000, 1_000_000, 10_000_000, 100_000_000]
+ROW_COUNTS_LARGE = [1_000_000_000]  # 1B rows - only for low selectivity
+
+def row_count_id(num_rows):
+    """Generate readable test ID for row count."""
+    if num_rows >= 1_000_000_000:
+        return f'{num_rows // 1_000_000_000}B'
+    elif num_rows >= 1_000_000:
+        return f'{num_rows // 1_000_000}M'
+    else:
+        return f'{num_rows // 1_000}K'
+
+@pytest.mark.parametrize('num_rows', ROW_COUNTS, ids=row_count_id)
+@pytest.mark.parametrize('selectivity', [0.01, 0.05, 0.10, 0.25, 0.50, 0.75, 1.00], ids=lambda x: f'sel_{int(x*100)}pct')
+def test_hybrid_scan_with_row_group_filtering(spark_tmp_path, selectivity, num_rows):
     """Test hybrid scan with SORTED data that enables row group filtering.
     
     This test creates data sorted by filter_col with many small row groups.
@@ -427,11 +476,10 @@ def test_hybrid_scan_with_row_group_filtering(spark_tmp_path, selectivity):
     - If data is sorted with 100 row groups, only ~5 row groups are read
     - This should show significant speedup for hybrid scan at low selectivity
     
-    NOTE: Using 1M rows to keep file small enough to avoid Spark file splitting.
-    The hybrid scan POC does not yet handle split boundaries correctly.
+    GPU-only comparison (baseline vs hybrid) for speed - no CPU runs.
+    Parameterized by both selectivity (1-50%) and row count (100K-100M).
     """
     data_path = spark_tmp_path + '/HYBRID_SHMOO_SORTED'
-    num_rows = 10_000_000  # 10M rows for measurable I/O difference
     
     # Generate SORTED data with small row groups (1MB each)
     with_cpu_session(
@@ -459,18 +507,123 @@ def test_hybrid_scan_with_row_group_filtering(spark_tmp_path, selectivity):
     # Calculate speedup
     speedup = baseline_times['avg_ms'] / hybrid_times['avg_ms']
     
+    # Perform Welch's t-test (unequal variances t-test)
+    # H0: mean(baseline) == mean(hybrid)
+    # Ha: mean(baseline) != mean(hybrid) (two-tailed)
+    t_stat, p_value = stats.ttest_ind(baseline_times['all_ms'], hybrid_times['all_ms'], 
+                                       equal_var=False)  # Welch's t-test
+    
+    # Calculate standard deviations
+    import numpy as np
+    baseline_std = np.std(baseline_times['all_ms'], ddof=1)
+    hybrid_std = np.std(hybrid_times['all_ms'], ddof=1)
+    
+    # Determine statistical significance
+    alpha = 0.05
+    is_significant = p_value < alpha
+    
     # Print results with row group info
     print(f"\n{'='*70}")
-    print(f"ROW GROUP FILTERING TEST - Sorted Data")
+    print(f"ROW GROUP FILTERING SHMOO - {row_count_id(num_rows)} rows, {selectivity*100:.0f}% selectivity")
     print(f"{'='*70}")
-    print(f"Selectivity: {selectivity*100:.0f}% (filter_col < {threshold})")
-    print(f"Total rows: {num_rows:,} | Rows after filter: {hybrid_times['row_count']:,}")
+    print(f"Filter: filter_col < {threshold}")
+    print(f"Input rows: {num_rows:,} | Output rows: {hybrid_times['row_count']:,}")
     print(f"{'='*70}")
     print(f"Baseline (Table.readParquet): {baseline_times['avg_ms']:.2f}ms "
-          f"(min={baseline_times['min_ms']:.2f}, max={baseline_times['max_ms']:.2f})")
+          f"(std={baseline_std:.2f}, min={baseline_times['min_ms']:.2f}, max={baseline_times['max_ms']:.2f})")
     print(f"Hybrid Scan (PHASE0_POC):     {hybrid_times['avg_ms']:.2f}ms "
-          f"(min={hybrid_times['min_ms']:.2f}, max={hybrid_times['max_ms']:.2f})")
+          f"(std={hybrid_std:.2f}, min={hybrid_times['min_ms']:.2f}, max={hybrid_times['max_ms']:.2f})")
     print(f"Speedup: {speedup:.2f}x {'✓ HYBRID FASTER' if speedup > 1 else '✗ BASELINE FASTER'}")
+    print(f"{'='*70}")
+    print(f"T-TEST: t={t_stat:.3f}, p={p_value:.4f} {'*** SIGNIFICANT ***' if is_significant else '(not significant)'}")
+    print(f"{'='*70}")
+    
+    # Print CSV-friendly line for easy data collection
+    winner = 'Hybrid' if speedup > 1 else 'Baseline'
+    sig_marker = '*' if is_significant else ''
+    print(f"CSV: {selectivity*100:.0f}%,{row_count_id(num_rows)},{num_rows},{int(selectivity*num_rows)},"
+          f"{baseline_times['avg_ms']:.2f},{baseline_std:.2f},"
+          f"{hybrid_times['avg_ms']:.2f},{hybrid_std:.2f},"
+          f"{speedup:.2f},{t_stat:.3f},{p_value:.4f},{winner}{sig_marker}")
+    print(f"{'='*70}\n")
+
+
+@pytest.mark.parametrize('num_rows', ROW_COUNTS_LARGE, ids=row_count_id)
+@pytest.mark.parametrize('selectivity', [0.01, 0.05, 0.10], ids=lambda x: f'sel_{int(x*100)}pct')
+def test_hybrid_scan_1B_low_selectivity(spark_tmp_path, selectivity, num_rows):
+    """Test hybrid scan with 1B rows at LOW selectivity only.
+    
+    1B rows is only tested at 1%, 5%, 10% selectivity to keep output size manageable:
+    - 1% of 1B = 10M rows output
+    - 5% of 1B = 50M rows output
+    - 10% of 1B = 100M rows output
+    
+    Higher selectivity would produce too much output data and cause memory issues.
+    """
+    data_path = spark_tmp_path + '/HYBRID_SHMOO_SORTED_1B'
+    
+    # Generate SORTED data with small row groups (1MB each)
+    with_cpu_session(
+        lambda spark: generate_shmoo_data_sorted(spark, data_path, num_rows=num_rows))
+    
+    # Calculate filter threshold
+    threshold = int(selectivity * 100)
+    
+    def query_fn(spark):
+        return spark.read.parquet(data_path) \
+            .filter(col('filter_col') < threshold)
+    
+    # Run with baseline (Table.readParquet)
+    baseline_times = with_gpu_session(
+        lambda spark: run_with_timing(spark, query_fn),
+        conf=baseline_conf
+    )
+    
+    # Run with hybrid scan (PHASE0_POC)
+    hybrid_times = with_gpu_session(
+        lambda spark: run_with_timing(spark, query_fn),
+        conf=hybrid_conf
+    )
+    
+    # Calculate speedup
+    speedup = baseline_times['avg_ms'] / hybrid_times['avg_ms']
+    
+    # Perform Welch's t-test (unequal variances t-test)
+    t_stat, p_value = stats.ttest_ind(baseline_times['all_ms'], hybrid_times['all_ms'], 
+                                       equal_var=False)
+    
+    # Calculate standard deviations
+    import numpy as np
+    baseline_std = np.std(baseline_times['all_ms'], ddof=1)
+    hybrid_std = np.std(hybrid_times['all_ms'], ddof=1)
+    
+    # Determine statistical significance
+    alpha = 0.05
+    is_significant = p_value < alpha
+    
+    # Print results
+    print(f"\n{'='*70}")
+    print(f"1B ROW TEST - {row_count_id(num_rows)} rows, {selectivity*100:.0f}% selectivity")
+    print(f"{'='*70}")
+    print(f"Filter: filter_col < {threshold}")
+    print(f"Input rows: {num_rows:,} | Output rows: {hybrid_times['row_count']:,}")
+    print(f"{'='*70}")
+    print(f"Baseline (Table.readParquet): {baseline_times['avg_ms']:.2f}ms "
+          f"(std={baseline_std:.2f}, min={baseline_times['min_ms']:.2f}, max={baseline_times['max_ms']:.2f})")
+    print(f"Hybrid Scan (PHASE0_POC):     {hybrid_times['avg_ms']:.2f}ms "
+          f"(std={hybrid_std:.2f}, min={hybrid_times['min_ms']:.2f}, max={hybrid_times['max_ms']:.2f})")
+    print(f"Speedup: {speedup:.2f}x {'✓ HYBRID FASTER' if speedup > 1 else '✗ BASELINE FASTER'}")
+    print(f"{'='*70}")
+    print(f"T-TEST: t={t_stat:.3f}, p={p_value:.4f} {'*** SIGNIFICANT ***' if is_significant else '(not significant)'}")
+    print(f"{'='*70}")
+    
+    # Print CSV-friendly line
+    winner = 'Hybrid' if speedup > 1 else 'Baseline'
+    sig_marker = '*' if is_significant else ''
+    print(f"CSV: {selectivity*100:.0f}%,{row_count_id(num_rows)},{num_rows},{int(selectivity*num_rows)},"
+          f"{baseline_times['avg_ms']:.2f},{baseline_std:.2f},"
+          f"{hybrid_times['avg_ms']:.2f},{hybrid_std:.2f},"
+          f"{speedup:.2f},{t_stat:.3f},{p_value:.4f},{winner}{sig_marker}")
     print(f"{'='*70}\n")
 
 
