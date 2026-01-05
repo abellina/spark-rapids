@@ -310,7 +310,7 @@ else
     # currently the only test feature this enables is OOM injection
     # we enable the java property in the driver and executor, in case the tests are running in 
     # local mode or in standalone mode.
-    ENABLE_TEST_FEATURES="-Dcom.nvidia.spark.rapids.runningTests=true"
+    ENABLE_TEST_FEATURES="-Dcom.nvidia.spark.rapids.runningTests=true -Dai.rapids.cudf.nvtx.enabled=true"
     # Enable cuDF resource leak logging (set CUDF_LEAK_LOGGING=0 to disable)
     CUDF_LEAK_OPTS=""
     if [[ "${CUDF_LEAK_LOGGING:-0}" == "1" ]]; then
