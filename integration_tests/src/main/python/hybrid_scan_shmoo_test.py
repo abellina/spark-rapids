@@ -204,6 +204,139 @@ def generate_shmoo_data_random_all_int(spark, data_path, num_rows=NUM_ROWS, row_
     print(f"  - Written to {data_path}")
 
 
+# Integer lookup value for equality tests (mirrors Haseeb's string pattern)
+# Using same numeric value as Haseeb's string "4500000000" for consistency
+INT_LOOKUP_VALUE = 4500000000  # Requires long (exceeds 32-bit int max of ~2.1B)
+
+
+def generate_lookup_data_int_str(spark, data_path, num_rows=NUM_ROWS, num_rgs=100, 
+                                  num_payload_cols=10, selectivity_pct=0.01):
+    """Generate data with INTEGER lookup_value pattern + STRING payloads.
+    
+    Mirrors Haseeb's pattern but with integer filter_col:
+    - Each row group has N rows matching INT_LOOKUP_VALUE (at the start of each RG)
+    - Row group min/max statistics INCLUDE lookup_value -> can't skip any RGs
+    - Only AST filtering can skip rows
+    - String payload columns make skipping valuable
+    
+    Args:
+        num_rows: Total number of rows
+        num_rgs: Number of row groups
+        num_payload_cols: Number of string payload columns
+        selectivity_pct: Percentage of rows that match filter (0.01 = 0.01%)
+    """
+    from pyspark.sql.functions import when, floor
+    
+    rows_per_rg = num_rows // num_rgs
+    matches_per_rg = max(1, int(rows_per_rg * selectivity_pct / 100.0))
+    total_matches = matches_per_rg * num_rgs
+    actual_selectivity = total_matches / num_rows * 100
+    num_partitions = max(1, num_rows // 2_500_000)
+    
+    print(f"Generating INT LOOKUP data (string payloads):")
+    print(f"  - {num_rows:,} rows in {num_rgs} row groups")
+    print(f"  - {num_payload_cols} STRING payload columns")
+    print(f"  - Lookup value: {INT_LOOKUP_VALUE}")
+    print(f"  - Target selectivity: {selectivity_pct}%")
+    print(f"  - Matches per RG: {matches_per_rg:,}")
+    print(f"  - Expected total matches: {total_matches:,} ({actual_selectivity:.4f}%)")
+    print(f"  - Using {num_partitions} partition(s)")
+    
+    df = spark.range(0, num_rows, 1, num_partitions)
+    
+    # Create filter_col:
+    # - Position within row group: id % rows_per_rg
+    # - If position < matches_per_rg (start of RG), use INT_LOOKUP_VALUE
+    # - Otherwise use position (unique, won't match)
+    # Using long type since INT_LOOKUP_VALUE (4500000000) exceeds 32-bit int max
+    position_in_rg = col('id') % rows_per_rg
+    df = df.withColumn('filter_col', 
+        when(position_in_rg < matches_per_rg, lit(INT_LOOKUP_VALUE))
+        .otherwise(position_in_rg.cast('long'))
+    )
+    
+    # Add STRING payload columns
+    for i in range(num_payload_cols):
+        df = df.withColumn(f'payload_{i}', 
+            concat(lit(f'data_{i}_'), (rand() * 100000).cast('int').cast('string'))
+        )
+    
+    df = df.drop('id')
+    
+    row_group_size = max(1024 * 1024, (num_rows * 100) // num_rgs)
+    
+    df.write \
+        .mode('overwrite') \
+        .option('parquet.block.size', str(row_group_size)) \
+        .parquet(data_path)
+    
+    print(f"  - Written to {data_path}")
+
+
+def generate_lookup_data_int_int(spark, data_path, num_rows=NUM_ROWS, num_rgs=100, 
+                                  num_payload_cols=10, selectivity_pct=0.01):
+    """Generate data with INTEGER lookup_value pattern + INTEGER payloads.
+    
+    Mirrors Haseeb's pattern but with integer filter_col and integer payloads:
+    - Each row group has N rows matching INT_LOOKUP_VALUE (at the start of each RG)
+    - Row group min/max statistics INCLUDE lookup_value -> can't skip any RGs
+    - Only AST filtering can skip rows
+    - Integer payloads are cheap to decompress (control test)
+    
+    Args:
+        num_rows: Total number of rows
+        num_rgs: Number of row groups
+        num_payload_cols: Number of integer payload columns
+        selectivity_pct: Percentage of rows that match filter (0.01 = 0.01%)
+    """
+    from pyspark.sql.functions import when, floor
+    
+    rows_per_rg = num_rows // num_rgs
+    matches_per_rg = max(1, int(rows_per_rg * selectivity_pct / 100.0))
+    total_matches = matches_per_rg * num_rgs
+    actual_selectivity = total_matches / num_rows * 100
+    num_partitions = max(1, num_rows // 2_500_000)
+    
+    print(f"Generating INT LOOKUP data (INT payloads):")
+    print(f"  - {num_rows:,} rows in {num_rgs} row groups")
+    print(f"  - {num_payload_cols} INTEGER payload columns")
+    print(f"  - Lookup value: {INT_LOOKUP_VALUE}")
+    print(f"  - Target selectivity: {selectivity_pct}%")
+    print(f"  - Matches per RG: {matches_per_rg:,}")
+    print(f"  - Expected total matches: {total_matches:,} ({actual_selectivity:.4f}%)")
+    print(f"  - Using {num_partitions} partition(s)")
+    
+    df = spark.range(0, num_rows, 1, num_partitions)
+    
+    # Create filter_col:
+    # - Position within row group: id % rows_per_rg
+    # - If position < matches_per_rg (start of RG), use INT_LOOKUP_VALUE
+    # - Otherwise use position (unique, won't match)
+    # Using long type since INT_LOOKUP_VALUE (4500000000) exceeds 32-bit int max
+    position_in_rg = col('id') % rows_per_rg
+    df = df.withColumn('filter_col', 
+        when(position_in_rg < matches_per_rg, lit(INT_LOOKUP_VALUE))
+        .otherwise(position_in_rg.cast('long'))
+    )
+    
+    # Add INTEGER payload columns (cheap to decompress - control test)
+    for i in range(num_payload_cols):
+        df = df.withColumn(f'payload_{i}', 
+            (rand() * 1000000000).cast('long')
+        )
+    
+    df = df.drop('id')
+    
+    row_group_size = max(1024 * 1024, (num_rows * 100) // num_rgs)
+    
+    df.write \
+        .mode('overwrite') \
+        .option('parquet.block.size', str(row_group_size)) \
+        .parquet(data_path)
+    
+    print(f"  - Written to {data_path}")
+
+
 def run_with_timing(spark, query_fn, warmup_runs=WARMUP_RUNS, measured_runs=MEASURED_RUNS, 
                     output_path=None):
     """Run query multiple times and return timing statistics.
@@ -1201,6 +1334,11 @@ def generate_haseeb_data(spark, data_path, num_rows=100_000_000, num_rgs=100, nu
         .otherwise(position_in_rg.cast('string'))
     )
     
+    # Add integer filter_col (0-99 RANDOM) for range filter tests
+    # This allows consistent range filters across all test patterns
+    # Every row group has min=0, max=99 -> row group stats can't skip anything
+    df = df.withColumn('filter_col', floor(rand() * 100).cast('int'))
+    
     # Add payload string columns (simulates expensive-to-decompress data)
     for i in range(num_payload_cols):
         df = df.withColumn(f'payload_{i}', 
@@ -1599,4 +1737,441 @@ def test_hybrid_scan_haseeb_range_filter(spark_tmp_path):
     print(f"Hybrid:   {hybrid_times['avg_ms']:.2f}ms")
     print(f"Speedup:  {speedup:.2f}x {'✓ HYBRID FASTER' if speedup > 1 else '✗ BASELINE FASTER'}")
     print(f"{'='*70}\n")
+
+
+# ==============================================================================
+# CONSISTENT TEST SETS
+# ==============================================================================
+#
+# Two sets of tests with consistent filter types for fair comparison:
+# 1. RANGE tests: All use filter_col < threshold (integer range filter)
+# 2. EQUALITY tests: All use filter_col == value OR key == value (point lookup)
+#
+# This allows comparing across data patterns (int+str, int+int, str+str payloads)
+# with the same filter semantics.
+# ==============================================================================
+
+
+# ------------------------------------------------------------------------------
+# SET 1: RANGE FILTER TESTS (filter_col < threshold)
+# ------------------------------------------------------------------------------
+# All tests use integer filter_col with range filter (less-than)
+# This tests AST filtering because filter_col is random (0-99) in every row group
+# so row group statistics cannot skip anything.
+# ------------------------------------------------------------------------------
+
+@pytest.mark.parametrize('selectivity', [0.01, 0.05, 0.10], ids=lambda x: f'sel_{int(x*100)}pct')
+@pytest.mark.parametrize('num_payload_cols', [1, 5, 10, 40, 100], ids=lambda x: f'{x}cols')
+@pytest.mark.parametrize('num_rows', [1_000_000], ids=['1M'])
+def test_range_int_str_payload(spark_tmp_path, num_rows, num_payload_cols, selectivity):
+    """RANGE filter test: Integer filter_col + String payload columns.
+    
+    Filter: filter_col < threshold (range filter)
+    Data: Random int filter_col (0-99), string payload columns
+    
+    This tests the benefit of skipping string decompression.
+    """
+    data_path = spark_tmp_path + '/RANGE_INT_STR'
+    
+    print(f"\n{'='*80}")
+    print(f"RANGE TEST [int+str]: {num_rows:,} rows, {num_payload_cols} cols, {selectivity*100:.0f}% selectivity")
+    print(f"{'='*80}")
+    
+    with_cpu_session(
+        lambda spark: generate_shmoo_data_random(spark, data_path, num_rows=num_rows, 
+                                                  num_payload_cols=num_payload_cols))
+    
+    threshold = int(selectivity * 100)
+    
+    def query_fn(spark):
+        return spark.read.parquet(data_path).filter(col('filter_col') < threshold)
+    
+    print(f"Running BASELINE (hybridScan=DISABLED)...")
+    baseline_times = with_gpu_session(
+        lambda spark: run_with_timing(spark, query_fn), conf=baseline_conf)
+    
+    print(f"Running HYBRID SCAN (hybridScan=PHASE0_POC)...")
+    hybrid_times = with_gpu_session(
+        lambda spark: run_with_timing(spark, query_fn), conf=hybrid_conf)
+    
+    speedup = baseline_times['avg_ms'] / hybrid_times['avg_ms']
+    t_stat, p_value = stats.ttest_ind(baseline_times['all_ms'], hybrid_times['all_ms'], equal_var=False)
+    
+    import numpy as np
+    baseline_std = np.std(baseline_times['all_ms'], ddof=1)
+    hybrid_std = np.std(hybrid_times['all_ms'], ddof=1)
+    is_significant = p_value < 0.05
+    actual_selectivity = hybrid_times['row_count'] / num_rows * 100
+    
+    print(f"\n{'='*80}")
+    print(f"RANGE [int+str] - {num_payload_cols} cols, {selectivity*100:.0f}% selectivity")
+    print(f"{'='*80}")
+    print(f"Filter: filter_col < {threshold}")
+    print(f"Input rows: {num_rows:,} | Payload cols: {num_payload_cols}")
+    print(f"Output rows: {hybrid_times['row_count']:,} | Actual selectivity: {actual_selectivity:.2f}%")
+    print(f"{'='*80}")
+    print(f"Baseline: {baseline_times['avg_ms']:.2f}ms (std={baseline_std:.2f})")
+    print(f"Hybrid:   {hybrid_times['avg_ms']:.2f}ms (std={hybrid_std:.2f})")
+    print(f"{'='*80}")
+    print(f"SPEEDUP: {speedup:.2f}x {'✓ HYBRID FASTER' if speedup > 1 else '✗ BASELINE FASTER'}")
+    print(f"T-TEST:  t={t_stat:.3f}, p={p_value:.6f} {'*** SIGNIFICANT ***' if is_significant else ''}")
+    print(f"{'='*80}")
+    
+    winner = 'Hybrid' if speedup > 1 else 'Baseline'
+    sig_marker = '*' if is_significant else ''
+    print(f"CSV: RANGE_INT_STR,{row_count_id(num_rows)},{num_rows},{num_payload_cols},{selectivity*100:.0f},"
+          f"{hybrid_times['row_count']},{actual_selectivity:.2f},"
+          f"{baseline_times['avg_ms']:.2f},{baseline_std:.2f},"
+          f"{hybrid_times['avg_ms']:.2f},{hybrid_std:.2f},"
+          f"{speedup:.2f},{t_stat:.3f},{p_value:.6f},{winner}{sig_marker}")
+    print(f"{'='*80}\n")
+
+
+@pytest.mark.parametrize('selectivity', [0.01, 0.05, 0.10], ids=lambda x: f'sel_{int(x*100)}pct')
+@pytest.mark.parametrize('num_payload_cols', [1, 5, 10, 40, 100], ids=lambda x: f'{x}cols')
+@pytest.mark.parametrize('num_rows', [1_000_000], ids=['1M'])
+def test_range_int_int_payload(spark_tmp_path, num_rows, num_payload_cols, selectivity):
+    """RANGE filter test: Integer filter_col + Integer payload columns.
+    
+    Filter: filter_col < threshold (range filter)
+    Data: Random int filter_col (0-99), integer payload columns
+    
+    CONTROL TEST: Isolates benefit of skipping data (without string decompression overhead).
+    """
+    data_path = spark_tmp_path + '/RANGE_INT_INT'
+    
+    print(f"\n{'='*80}")
+    print(f"RANGE TEST [int+int]: {num_rows:,} rows, {num_payload_cols} cols, {selectivity*100:.0f}% selectivity")
+    print(f"{'='*80}")
+    
+    with_cpu_session(
+        lambda spark: generate_shmoo_data_random_all_int(spark, data_path, num_rows=num_rows, 
+                                                          num_payload_cols=num_payload_cols))
+    
+    threshold = int(selectivity * 100)
+    
+    def query_fn(spark):
+        return spark.read.parquet(data_path).filter(col('filter_col') < threshold)
+    
+    print(f"Running BASELINE (hybridScan=DISABLED)...")
+    baseline_times = with_gpu_session(
+        lambda spark: run_with_timing(spark, query_fn), conf=baseline_conf)
+    
+    print(f"Running HYBRID SCAN (hybridScan=PHASE0_POC)...")
+    hybrid_times = with_gpu_session(
+        lambda spark: run_with_timing(spark, query_fn), conf=hybrid_conf)
+    
+    speedup = baseline_times['avg_ms'] / hybrid_times['avg_ms']
+    t_stat, p_value = stats.ttest_ind(baseline_times['all_ms'], hybrid_times['all_ms'], equal_var=False)
+    
+    import numpy as np
+    baseline_std = np.std(baseline_times['all_ms'], ddof=1)
+    hybrid_std = np.std(hybrid_times['all_ms'], ddof=1)
+    is_significant = p_value < 0.05
+    actual_selectivity = hybrid_times['row_count'] / num_rows * 100
+    
+    print(f"\n{'='*80}")
+    print(f"RANGE [int+int] - {num_payload_cols} cols, {selectivity*100:.0f}% selectivity")
+    print(f"{'='*80}")
+    print(f"Filter: filter_col < {threshold}")
+    print(f"Input rows: {num_rows:,} | Payload cols: {num_payload_cols}")
+    print(f"Output rows: {hybrid_times['row_count']:,} | Actual selectivity: {actual_selectivity:.2f}%")
+    print(f"{'='*80}")
+    print(f"Baseline: {baseline_times['avg_ms']:.2f}ms (std={baseline_std:.2f})")
+    print(f"Hybrid:   {hybrid_times['avg_ms']:.2f}ms (std={hybrid_std:.2f})")
+    print(f"{'='*80}")
+    print(f"SPEEDUP: {speedup:.2f}x {'✓ HYBRID FASTER' if speedup > 1 else '✗ BASELINE FASTER'}")
+    print(f"T-TEST:  t={t_stat:.3f}, p={p_value:.6f} {'*** SIGNIFICANT ***' if is_significant else ''}")
+    print(f"{'='*80}")
+    
+    winner = 'Hybrid' if speedup > 1 else 'Baseline'
+    sig_marker = '*' if is_significant else ''
+    print(f"CSV: RANGE_INT_INT,{row_count_id(num_rows)},{num_rows},{num_payload_cols},{selectivity*100:.0f},"
+          f"{hybrid_times['row_count']},{actual_selectivity:.2f},"
+          f"{baseline_times['avg_ms']:.2f},{baseline_std:.2f},"
+          f"{hybrid_times['avg_ms']:.2f},{hybrid_std:.2f},"
+          f"{speedup:.2f},{t_stat:.3f},{p_value:.6f},{winner}{sig_marker}")
+    print(f"{'='*80}\n")
+
+
+@pytest.mark.parametrize('selectivity', [0.01, 0.05, 0.10], ids=lambda x: f'sel_{int(x*100)}pct')
+@pytest.mark.parametrize('num_payload_cols', [1, 5, 10, 40, 100], ids=lambda x: f'{x}cols')
+@pytest.mark.parametrize('num_rows', [1_000_000], ids=['1M'])
+def test_range_str_str_payload(spark_tmp_path, num_rows, num_payload_cols, selectivity):
+    """RANGE filter test: String key + String payload columns (Haseeb pattern).
+    
+    Filter: filter_col < threshold (range filter on integer column)
+    Data: String key (Haseeb pattern) + filter_col (random int) + string payload columns
+    
+    Uses the integer filter_col added to Haseeb's data for consistent range filtering.
+    """
+    data_path = spark_tmp_path + '/RANGE_STR_STR'
+    
+    print(f"\n{'='*80}")
+    print(f"RANGE TEST [str+str]: {num_rows:,} rows, {num_payload_cols} cols, {selectivity*100:.0f}% selectivity")
+    print(f"{'='*80}")
+    
+    with_cpu_session(
+        lambda spark: generate_haseeb_data(spark, data_path, num_rows=num_rows, 
+                                           num_rgs=100, num_payload_cols=num_payload_cols))
+    
+    threshold = int(selectivity * 100)
+    
+    def query_fn(spark):
+        return spark.read.parquet(data_path).filter(col('filter_col') < threshold)
+    
+    print(f"Running BASELINE (hybridScan=DISABLED)...")
+    baseline_times = with_gpu_session(
+        lambda spark: run_with_timing(spark, query_fn), conf=baseline_conf)
+    
+    print(f"Running HYBRID SCAN (hybridScan=PHASE0_POC)...")
+    hybrid_times = with_gpu_session(
+        lambda spark: run_with_timing(spark, query_fn), conf=hybrid_conf)
+    
+    speedup = baseline_times['avg_ms'] / hybrid_times['avg_ms']
+    t_stat, p_value = stats.ttest_ind(baseline_times['all_ms'], hybrid_times['all_ms'], equal_var=False)
+    
+    import numpy as np
+    baseline_std = np.std(baseline_times['all_ms'], ddof=1)
+    hybrid_std = np.std(hybrid_times['all_ms'], ddof=1)
+    is_significant = p_value < 0.05
+    actual_selectivity = hybrid_times['row_count'] / num_rows * 100
+    
+    print(f"\n{'='*80}")
+    print(f"RANGE [str+str] - {num_payload_cols} cols, {selectivity*100:.0f}% selectivity")
+    print(f"{'='*80}")
+    print(f"Filter: filter_col < {threshold}")
+    print(f"Input rows: {num_rows:,} | Payload cols: {num_payload_cols}")
+    print(f"Output rows: {hybrid_times['row_count']:,} | Actual selectivity: {actual_selectivity:.2f}%")
+    print(f"{'='*80}")
+    print(f"Baseline: {baseline_times['avg_ms']:.2f}ms (std={baseline_std:.2f})")
+    print(f"Hybrid:   {hybrid_times['avg_ms']:.2f}ms (std={hybrid_std:.2f})")
+    print(f"{'='*80}")
+    print(f"SPEEDUP: {speedup:.2f}x {'✓ HYBRID FASTER' if speedup > 1 else '✗ BASELINE FASTER'}")
+    print(f"T-TEST:  t={t_stat:.3f}, p={p_value:.6f} {'*** SIGNIFICANT ***' if is_significant else ''}")
+    print(f"{'='*80}")
+    
+    winner = 'Hybrid' if speedup > 1 else 'Baseline'
+    sig_marker = '*' if is_significant else ''
+    print(f"CSV: RANGE_STR_STR,{row_count_id(num_rows)},{num_rows},{num_payload_cols},{selectivity*100:.0f},"
+          f"{hybrid_times['row_count']},{actual_selectivity:.2f},"
+          f"{baseline_times['avg_ms']:.2f},{baseline_std:.2f},"
+          f"{hybrid_times['avg_ms']:.2f},{hybrid_std:.2f},"
+          f"{speedup:.2f},{t_stat:.3f},{p_value:.6f},{winner}{sig_marker}")
+    print(f"{'='*80}\n")
+
+
+# ------------------------------------------------------------------------------
+# SET 2: EQUALITY FILTER TESTS (filter_col == lookup_value)
+# ------------------------------------------------------------------------------
+# All tests use equality filter (point lookup) with lookup_value pattern:
+# - Lookup value placed at START of each row group
+# - Row group stats INCLUDE lookup_value -> can't skip any RGs
+# - Only AST filtering can skip rows
+# - Selectivity controlled by matches per row group
+# ------------------------------------------------------------------------------
+
+@pytest.mark.parametrize('selectivity_pct', [0.01, 1.0, 5.0, 10.0], ids=lambda x: f'sel_{x}pct')
+@pytest.mark.parametrize('num_payload_cols', [1, 5, 10, 40, 100], ids=lambda x: f'{x}cols')
+@pytest.mark.parametrize('num_rows', [1_000_000], ids=['1M'])
+def test_equality_int_str_payload(spark_tmp_path, num_rows, num_payload_cols, selectivity_pct):
+    """EQUALITY filter test: Integer filter_col + String payload columns.
+    
+    Filter: filter_col == INT_LOOKUP_VALUE (point lookup)
+    Data: Integer lookup_value pattern (Haseeb-style) + string payload columns
+    
+    Uses the same lookup_value pattern as Haseeb's test but with integer filter_col.
+    Selectivity is controlled by how many rows per row group match the lookup_value.
+    """
+    data_path = spark_tmp_path + '/EQ_INT_STR'
+    num_rgs = 100
+    
+    print(f"\n{'='*80}")
+    print(f"EQUALITY TEST [int+str]: {num_rows:,} rows, {num_payload_cols} cols, {selectivity_pct}% selectivity")
+    print(f"{'='*80}")
+    
+    with_cpu_session(
+        lambda spark: generate_lookup_data_int_str(spark, data_path, num_rows=num_rows, 
+                                                    num_rgs=num_rgs, num_payload_cols=num_payload_cols,
+                                                    selectivity_pct=selectivity_pct))
+    
+    def query_fn(spark):
+        return spark.read.parquet(data_path).filter(col('filter_col') == INT_LOOKUP_VALUE)
+    
+    print(f"Running BASELINE (hybridScan=DISABLED)...")
+    baseline_times = with_gpu_session(
+        lambda spark: run_with_timing(spark, query_fn), conf=baseline_conf)
+    
+    print(f"Running HYBRID SCAN (hybridScan=PHASE0_POC)...")
+    hybrid_times = with_gpu_session(
+        lambda spark: run_with_timing(spark, query_fn), conf=hybrid_conf)
+    
+    speedup = baseline_times['avg_ms'] / hybrid_times['avg_ms']
+    t_stat, p_value = stats.ttest_ind(baseline_times['all_ms'], hybrid_times['all_ms'], equal_var=False)
+    
+    import numpy as np
+    baseline_std = np.std(baseline_times['all_ms'], ddof=1)
+    hybrid_std = np.std(hybrid_times['all_ms'], ddof=1)
+    is_significant = p_value < 0.05
+    actual_selectivity = hybrid_times['row_count'] / num_rows * 100
+    
+    print(f"\n{'='*80}")
+    print(f"EQUALITY [int+str] - {num_payload_cols} cols, {selectivity_pct}% target selectivity")
+    print(f"{'='*80}")
+    print(f"Filter: filter_col == {INT_LOOKUP_VALUE}")
+    print(f"Input rows: {num_rows:,} | Payload cols: {num_payload_cols}")
+    print(f"Output rows: {hybrid_times['row_count']:,} | Actual selectivity: {actual_selectivity:.4f}%")
+    print(f"{'='*80}")
+    print(f"Baseline: {baseline_times['avg_ms']:.2f}ms (std={baseline_std:.2f})")
+    print(f"Hybrid:   {hybrid_times['avg_ms']:.2f}ms (std={hybrid_std:.2f})")
+    print(f"{'='*80}")
+    print(f"SPEEDUP: {speedup:.2f}x {'✓ HYBRID FASTER' if speedup > 1 else '✗ BASELINE FASTER'}")
+    print(f"T-TEST:  t={t_stat:.3f}, p={p_value:.6f} {'*** SIGNIFICANT ***' if is_significant else ''}")
+    print(f"{'='*80}")
+    
+    winner = 'Hybrid' if speedup > 1 else 'Baseline'
+    sig_marker = '*' if is_significant else ''
+    print(f"CSV: EQ_INT_STR,{row_count_id(num_rows)},{num_rows},{num_payload_cols},{selectivity_pct},"
+          f"{hybrid_times['row_count']},{actual_selectivity:.4f},"
+          f"{baseline_times['avg_ms']:.2f},{baseline_std:.2f},"
+          f"{hybrid_times['avg_ms']:.2f},{hybrid_std:.2f},"
+          f"{speedup:.2f},{t_stat:.3f},{p_value:.6f},{winner}{sig_marker}")
+    print(f"{'='*80}\n")
+
+
+@pytest.mark.parametrize('selectivity_pct', [0.01, 1.0, 5.0, 10.0], ids=lambda x: f'sel_{x}pct')
+@pytest.mark.parametrize('num_payload_cols', [1, 5, 10, 40, 100], ids=lambda x: f'{x}cols')
+@pytest.mark.parametrize('num_rows', [1_000_000], ids=['1M'])
+def test_equality_int_int_payload(spark_tmp_path, num_rows, num_payload_cols, selectivity_pct):
+    """EQUALITY filter test: Integer filter_col + Integer payload columns.
+    
+    Filter: filter_col == INT_LOOKUP_VALUE (point lookup)
+    Data: Integer lookup_value pattern + integer payload columns
+    
+    CONTROL TEST: Uses integer payloads (cheap to decompress) to isolate
+    the benefit of skipping data without string decompression overhead.
+    """
+    data_path = spark_tmp_path + '/EQ_INT_INT'
+    num_rgs = 100
+    
+    print(f"\n{'='*80}")
+    print(f"EQUALITY TEST [int+int]: {num_rows:,} rows, {num_payload_cols} cols, {selectivity_pct}% selectivity")
+    print(f"{'='*80}")
+    
+    with_cpu_session(
+        lambda spark: generate_lookup_data_int_int(spark, data_path, num_rows=num_rows, 
+                                                    num_rgs=num_rgs, num_payload_cols=num_payload_cols,
+                                                    selectivity_pct=selectivity_pct))
+    
+    def query_fn(spark):
+        return spark.read.parquet(data_path).filter(col('filter_col') == INT_LOOKUP_VALUE)
+    
+    print(f"Running BASELINE (hybridScan=DISABLED)...")
+    baseline_times = with_gpu_session(
+        lambda spark: run_with_timing(spark, query_fn), conf=baseline_conf)
+    
+    print(f"Running HYBRID SCAN (hybridScan=PHASE0_POC)...")
+    hybrid_times = with_gpu_session(
+        lambda spark: run_with_timing(spark, query_fn), conf=hybrid_conf)
+    
+    speedup = baseline_times['avg_ms'] / hybrid_times['avg_ms']
+    t_stat, p_value = stats.ttest_ind(baseline_times['all_ms'], hybrid_times['all_ms'], equal_var=False)
+    
+    import numpy as np
+    baseline_std = np.std(baseline_times['all_ms'], ddof=1)
+    hybrid_std = np.std(hybrid_times['all_ms'], ddof=1)
+    is_significant = p_value < 0.05
+    actual_selectivity = hybrid_times['row_count'] / num_rows * 100
+    
+    print(f"\n{'='*80}")
+    print(f"EQUALITY [int+int] - {num_payload_cols} cols, {selectivity_pct}% target selectivity")
+    print(f"{'='*80}")
+    print(f"Filter: filter_col == {INT_LOOKUP_VALUE}")
+    print(f"Input rows: {num_rows:,} | Payload cols: {num_payload_cols}")
+    print(f"Output rows: {hybrid_times['row_count']:,} | Actual selectivity: {actual_selectivity:.4f}%")
+    print(f"{'='*80}")
+    print(f"Baseline: {baseline_times['avg_ms']:.2f}ms (std={baseline_std:.2f})")
+    print(f"Hybrid:   {hybrid_times['avg_ms']:.2f}ms (std={hybrid_std:.2f})")
+    print(f"{'='*80}")
+    print(f"SPEEDUP: {speedup:.2f}x {'✓ HYBRID FASTER' if speedup > 1 else '✗ BASELINE FASTER'}")
+    print(f"T-TEST:  t={t_stat:.3f}, p={p_value:.6f} {'*** SIGNIFICANT ***' if is_significant else ''}")
+    print(f"{'='*80}")
+    
+    winner = 'Hybrid' if speedup > 1 else 'Baseline'
+    sig_marker = '*' if is_significant else ''
+    print(f"CSV: EQ_INT_INT,{row_count_id(num_rows)},{num_rows},{num_payload_cols},{selectivity_pct},"
+          f"{hybrid_times['row_count']},{actual_selectivity:.4f},"
+          f"{baseline_times['avg_ms']:.2f},{baseline_std:.2f},"
+          f"{hybrid_times['avg_ms']:.2f},{hybrid_std:.2f},"
+          f"{speedup:.2f},{t_stat:.3f},{p_value:.6f},{winner}{sig_marker}")
+    print(f"{'='*80}\n")
+
+
+@pytest.mark.parametrize('selectivity_pct', [0.01, 1.0, 5.0, 10.0], ids=lambda x: f'sel_{x}pct')
+@pytest.mark.parametrize('num_payload_cols', [1, 5, 10, 40, 100], ids=lambda x: f'{x}cols')
+@pytest.mark.parametrize('num_rows', [1_000_000], ids=['1M'])
+def test_equality_str_str_payload(spark_tmp_path, num_rows, num_payload_cols, selectivity_pct):
+    """EQUALITY filter test: String key + String payload columns (Haseeb pattern).
+    
+    Filter: key == lookup_value (string equality)
+    Data: String key (Haseeb pattern) + string payload columns
+    
+    This is Haseeb's original test pattern with string equality filter.
+    Selectivity is controlled by how many rows per row group match the lookup_value.
+    """
+    data_path = spark_tmp_path + '/EQ_STR_STR'
+    num_rgs = 100
+    lookup_value = "4500000000"
+    
+    print(f"\n{'='*80}")
+    print(f"EQUALITY TEST [str+str]: {num_rows:,} rows, {num_payload_cols} cols, {selectivity_pct}% selectivity")
+    print(f"{'='*80}")
+    
+    with_cpu_session(
+        lambda spark: generate_haseeb_data(spark, data_path, num_rows=num_rows, 
+                                           num_rgs=num_rgs, num_payload_cols=num_payload_cols,
+                                           selectivity_pct=selectivity_pct))
+    
+    def query_fn(spark):
+        return spark.read.parquet(data_path).filter(col('key') == lookup_value)
+    
+    print(f"Running BASELINE (hybridScan=DISABLED)...")
+    baseline_times = with_gpu_session(
+        lambda spark: run_with_timing(spark, query_fn), conf=baseline_conf)
+    
+    print(f"Running HYBRID SCAN (hybridScan=PHASE0_POC)...")
+    hybrid_times = with_gpu_session(
+        lambda spark: run_with_timing(spark, query_fn), conf=hybrid_conf)
+    
+    speedup = baseline_times['avg_ms'] / hybrid_times['avg_ms']
+    t_stat, p_value = stats.ttest_ind(baseline_times['all_ms'], hybrid_times['all_ms'], equal_var=False)
+    
+    import numpy as np
+    baseline_std = np.std(baseline_times['all_ms'], ddof=1)
+    hybrid_std = np.std(hybrid_times['all_ms'], ddof=1)
+    is_significant = p_value < 0.05
+    actual_selectivity = hybrid_times['row_count'] / num_rows * 100
+    
+    print(f"\n{'='*80}")
+    print(f"EQUALITY [str+str] - {num_payload_cols} cols, {selectivity_pct}% target selectivity")
+    print(f"{'='*80}")
+    print(f"Filter: key == '{lookup_value}'")
+    print(f"Input rows: {num_rows:,} | Payload cols: {num_payload_cols}")
+    print(f"Output rows: {hybrid_times['row_count']:,} | Actual selectivity: {actual_selectivity:.4f}%")
+    print(f"{'='*80}")
+    print(f"Baseline: {baseline_times['avg_ms']:.2f}ms (std={baseline_std:.2f})")
+    print(f"Hybrid:   {hybrid_times['avg_ms']:.2f}ms (std={hybrid_std:.2f})")
+    print(f"{'='*80}")
+    print(f"SPEEDUP: {speedup:.2f}x {'✓ HYBRID FASTER' if speedup > 1 else '✗ BASELINE FASTER'}")
+    print(f"T-TEST:  t={t_stat:.3f}, p={p_value:.6f} {'*** SIGNIFICANT ***' if is_significant else ''}")
+    print(f"{'='*80}")
+    
+    winner = 'Hybrid' if speedup > 1 else 'Baseline'
+    sig_marker = '*' if is_significant else ''
+    print(f"CSV: EQ_STR_STR,{row_count_id(num_rows)},{num_rows},{num_payload_cols},{selectivity_pct},"
+          f"{hybrid_times['row_count']},{actual_selectivity:.4f},"
+          f"{baseline_times['avg_ms']:.2f},{baseline_std:.2f},"
+          f"{hybrid_times['avg_ms']:.2f},{hybrid_std:.2f},"
+          f"{speedup:.2f},{t_stat:.3f},{p_value:.6f},{winner}{sig_marker}")
+    print(f"{'='*80}\n")
 
