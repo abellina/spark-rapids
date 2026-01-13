@@ -109,7 +109,8 @@ def generate_shmoo_data_sorted(spark, data_path, num_rows=NUM_ROWS, row_group_si
         .parquet(data_path)
 
 
-def generate_shmoo_data_random(spark, data_path, num_rows=NUM_ROWS, row_group_size=ROW_GROUP_SIZE_BYTES):
+def generate_shmoo_data_random(spark, data_path, num_rows=NUM_ROWS, row_group_size=ROW_GROUP_SIZE_BYTES,
+                                num_payload_cols=10):
     """Generate test data with RANDOM filter_col values for AST filtering test.
     
     THIS IS THE KEY TEST FOR HYBRID SCAN!
@@ -124,25 +125,83 @@ def generate_shmoo_data_random(spark, data_path, num_rows=NUM_ROWS, row_group_si
     
     Schema:
     - filter_col: RANDOM value from 0-99 (uniformly distributed in every row group)
-    - payload_1, payload_2, payload_3: random double columns (payload data)
-    - payload_str: string column (tests different data types)
+    - payload_0..N: string payload columns (expensive to decompress)
+    
+    Args:
+        num_payload_cols: Number of string payload columns (default 10)
     """
     from pyspark.sql.functions import floor
     
+    # Calculate partitions for larger datasets
+    num_partitions = max(1, num_rows // 2_500_000)
+    
+    print(f"Generating RANDOM filter_col data:")
+    print(f"  - {num_rows:,} rows, {num_payload_cols} payload columns")
+    print(f"  - Using {num_partitions} partition(s)")
+    
     # Create data with RANDOM filter_col values - NOT sorted!
     # This means every row group has min=0, max=99 -> row group pruning won't work
-    spark.range(num_rows) \
-        .withColumn('filter_col', floor(rand() * 100).cast('int')) \
-        .withColumn('payload_1', rand()) \
-        .withColumn('payload_2', rand()) \
-        .withColumn('payload_3', rand()) \
-        .withColumn('payload_str', concat(lit('row_'), col('id').cast('string'))) \
-        .drop('id') \
-        .coalesce(1) \
-        .write \
+    df = spark.range(0, num_rows, 1, num_partitions) \
+        .withColumn('filter_col', floor(rand() * 100).cast('int'))
+    
+    # Add string payload columns (simulates expensive-to-decompress data)
+    for i in range(num_payload_cols):
+        df = df.withColumn(f'payload_{i}', 
+            concat(lit(f'data_{i}_'), (rand() * 100000).cast('int').cast('string'))
+        )
+    
+    df = df.drop('id')
+    
+    df.write \
         .mode('overwrite') \
         .option('parquet.block.size', str(row_group_size)) \
         .parquet(data_path)
+    
+    print(f"  - Written to {data_path}")
+
+
+def generate_shmoo_data_random_all_int(spark, data_path, num_rows=NUM_ROWS, row_group_size=ROW_GROUP_SIZE_BYTES,
+                                        num_payload_cols=10):
+    """Generate test data with RANDOM filter_col and INTEGER payload columns.
+    
+    This is the control test for measuring string decompression overhead.
+    By using integer payloads instead of strings, we can isolate the effect
+    of string decompression on hybrid scan speedup.
+    
+    Schema:
+    - filter_col: RANDOM value from 0-99 (uniformly distributed in every row group)
+    - payload_0..N: integer payload columns (cheap to decompress)
+    
+    Args:
+        num_payload_cols: Number of integer payload columns (default 10)
+    """
+    from pyspark.sql.functions import floor
+    
+    # Calculate partitions for larger datasets
+    num_partitions = max(1, num_rows // 2_500_000)
+    
+    print(f"Generating RANDOM filter_col data (ALL INT):")
+    print(f"  - {num_rows:,} rows, {num_payload_cols} INT payload columns")
+    print(f"  - Using {num_partitions} partition(s)")
+    
+    # Create data with RANDOM filter_col values - NOT sorted!
+    df = spark.range(0, num_rows, 1, num_partitions) \
+        .withColumn('filter_col', floor(rand() * 100).cast('int'))
+    
+    # Add INTEGER payload columns (cheap to decompress - control test)
+    for i in range(num_payload_cols):
+        df = df.withColumn(f'payload_{i}', 
+            (rand() * 1000000000).cast('long')  # Random long integers
+        )
+    
+    df = df.drop('id')
+    
+    df.write \
+        .mode('overwrite') \
+        .option('parquet.block.size', str(row_group_size)) \
+        .parquet(data_path)
+    
+    print(f"  - Written to {data_path}")
 
 
 def run_with_timing(spark, query_fn, warmup_runs=WARMUP_RUNS, measured_runs=MEASURED_RUNS, 
@@ -583,6 +642,206 @@ def test_hybrid_scan_ast_filtering(spark_tmp_path, selectivity, num_rows):
 
 
 # =============================================================================
+# AST FILTERING WITH VARYING PAYLOAD COLUMNS (integer filter_col)
+# =============================================================================
+# Similar to Haseeb's test but uses integer filter_col instead of string key
+
+@pytest.mark.parametrize('selectivity', [0.01, 0.05, 0.10], ids=lambda x: f'sel_{int(x*100)}pct')
+@pytest.mark.parametrize('num_payload_cols', [1, 5, 10, 40, 100], ids=lambda x: f'{x}cols')
+@pytest.mark.parametrize('num_rows', [1_000_000], ids=['1M'])
+def test_hybrid_scan_random_payload_cols(spark_tmp_path, num_rows, num_payload_cols, selectivity):
+    """Test hybrid scan with RANDOM filter_col and varying payload columns.
+    
+    This test uses an integer filter_col (0-99, random) and varies the number of
+    string payload columns. This is similar to Haseeb's test but uses a simpler
+    integer filter column instead of a string key.
+    
+    Tests:
+    - Selectivity: 1%, 5%, 10%
+    - Payload columns: 10, 40, 100
+    - Row count: 1M (can be extended)
+    """
+    data_path = spark_tmp_path + '/AST_RANDOM_PAYLOAD'
+    
+    # Generate RANDOM data with variable payload columns
+    print(f"\n{'='*80}")
+    print(f"AST RANDOM PAYLOAD TEST: {num_rows:,} rows, {num_payload_cols} cols, {selectivity*100:.0f}% selectivity")
+    print(f"{'='*80}")
+    with_cpu_session(
+        lambda spark: generate_shmoo_data_random(spark, data_path, num_rows=num_rows, 
+                                                  num_payload_cols=num_payload_cols))
+    
+    # Calculate filter threshold (filter_col < threshold)
+    threshold = int(selectivity * 100)
+    
+    def query_fn(spark):
+        return spark.read.parquet(data_path) \
+            .filter(col('filter_col') < threshold)
+    
+    # Run with baseline (Table.readParquet)
+    print(f"Running BASELINE (hybridScan=DISABLED)...")
+    baseline_times = with_gpu_session(
+        lambda spark: run_with_timing(spark, query_fn),
+        conf=baseline_conf
+    )
+    
+    # Run with hybrid scan (PHASE0_POC)
+    print(f"Running HYBRID SCAN (hybridScan=PHASE0_POC)...")
+    hybrid_times = with_gpu_session(
+        lambda spark: run_with_timing(spark, query_fn),
+        conf=hybrid_conf
+    )
+    
+    # Calculate speedup
+    speedup = baseline_times['avg_ms'] / hybrid_times['avg_ms']
+    
+    # Perform Welch's t-test
+    t_stat, p_value = stats.ttest_ind(baseline_times['all_ms'], hybrid_times['all_ms'], 
+                                       equal_var=False)
+    
+    # Calculate standard deviations
+    import numpy as np
+    baseline_std = np.std(baseline_times['all_ms'], ddof=1)
+    hybrid_std = np.std(hybrid_times['all_ms'], ddof=1)
+    
+    # Statistical significance
+    alpha = 0.05
+    is_significant = p_value < alpha
+    
+    # Calculate actual selectivity
+    actual_selectivity = hybrid_times['row_count'] / num_rows * 100
+    
+    # Print results
+    print(f"\n{'='*80}")
+    print(f"AST RANDOM PAYLOAD SHMOO - {num_payload_cols} cols, {selectivity*100:.0f}% selectivity")
+    print(f"{'='*80}")
+    print(f"Filter: filter_col < {threshold}")
+    print(f"Input rows: {num_rows:,} | Payload cols: {num_payload_cols}")
+    print(f"Output rows: {hybrid_times['row_count']:,} | Actual selectivity: {actual_selectivity:.2f}%")
+    print(f"NOTE: Row group stats CAN'T filter (random filter_col) - tests AST filtering!")
+    print(f"{'='*80}")
+    print(f"Baseline (Table.readParquet): {baseline_times['avg_ms']:.2f}ms "
+          f"(std={baseline_std:.2f}, min={baseline_times['min_ms']:.2f}, max={baseline_times['max_ms']:.2f})")
+    print(f"Hybrid Scan (PHASE0_POC):     {hybrid_times['avg_ms']:.2f}ms "
+          f"(std={hybrid_std:.2f}, min={hybrid_times['min_ms']:.2f}, max={hybrid_times['max_ms']:.2f})")
+    print(f"{'='*80}")
+    print(f"SPEEDUP: {speedup:.2f}x {'✓ HYBRID FASTER' if speedup > 1 else '✗ BASELINE FASTER'}")
+    print(f"T-TEST:  t={t_stat:.3f}, p={p_value:.6f} {'*** SIGNIFICANT ***' if is_significant else '(not significant)'}")
+    print(f"{'='*80}")
+    
+    # CSV output for easy analysis
+    winner = 'Hybrid' if speedup > 1 else 'Baseline'
+    sig_marker = '*' if is_significant else ''
+    print(f"CSV: AST_INT_COLS,{row_count_id(num_rows)},{num_rows},{num_payload_cols},{selectivity*100:.0f},"
+          f"{hybrid_times['row_count']},{actual_selectivity:.2f},"
+          f"{baseline_times['avg_ms']:.2f},{baseline_std:.2f},"
+          f"{hybrid_times['avg_ms']:.2f},{hybrid_std:.2f},"
+          f"{speedup:.2f},{t_stat:.3f},{p_value:.6f},{winner}{sig_marker}")
+    print(f"{'='*80}\n")
+
+
+# =============================================================================
+# ALL-INTEGER TEST (control for string decompression overhead)
+# =============================================================================
+# Uses integer filter + integer payloads to isolate string decompression effect
+
+@pytest.mark.parametrize('selectivity', [0.01, 0.05, 0.10], ids=lambda x: f'sel_{int(x*100)}pct')
+@pytest.mark.parametrize('num_payload_cols', [1, 5, 10, 40, 100], ids=lambda x: f'{x}cols')
+@pytest.mark.parametrize('num_rows', [1_000_000], ids=['1M'])
+def test_hybrid_scan_all_int_payload_cols(spark_tmp_path, num_rows, num_payload_cols, selectivity):
+    """Test hybrid scan with ALL INTEGER columns (filter + payloads).
+    
+    This is the CONTROL TEST to measure the effect of string decompression.
+    By using integer payloads instead of strings, we can isolate how much
+    of the speedup comes from skipping string decompression.
+    
+    Expected: Lower speedup than string payloads because integers are cheap to decompress.
+    
+    Tests:
+    - Selectivity: 1%, 5%, 10%
+    - Payload columns: 1, 5, 10, 40, 100
+    - Row count: 1M
+    """
+    data_path = spark_tmp_path + '/AST_ALL_INT_PAYLOAD'
+    
+    # Generate RANDOM data with INTEGER payload columns
+    print(f"\n{'='*80}")
+    print(f"ALL-INT PAYLOAD TEST: {num_rows:,} rows, {num_payload_cols} INT cols, {selectivity*100:.0f}% selectivity")
+    print(f"{'='*80}")
+    with_cpu_session(
+        lambda spark: generate_shmoo_data_random_all_int(spark, data_path, num_rows=num_rows, 
+                                                          num_payload_cols=num_payload_cols))
+    
+    # Calculate filter threshold (filter_col < threshold)
+    threshold = int(selectivity * 100)
+    
+    def query_fn(spark):
+        return spark.read.parquet(data_path) \
+            .filter(col('filter_col') < threshold)
+    
+    # Run with baseline (Table.readParquet)
+    print(f"Running BASELINE (hybridScan=DISABLED)...")
+    baseline_times = with_gpu_session(
+        lambda spark: run_with_timing(spark, query_fn),
+        conf=baseline_conf
+    )
+    
+    # Run with hybrid scan (PHASE0_POC)
+    print(f"Running HYBRID SCAN (hybridScan=PHASE0_POC)...")
+    hybrid_times = with_gpu_session(
+        lambda spark: run_with_timing(spark, query_fn),
+        conf=hybrid_conf
+    )
+    
+    # Calculate speedup
+    speedup = baseline_times['avg_ms'] / hybrid_times['avg_ms']
+    
+    # Perform Welch's t-test
+    t_stat, p_value = stats.ttest_ind(baseline_times['all_ms'], hybrid_times['all_ms'], 
+                                       equal_var=False)
+    
+    # Calculate standard deviations
+    import numpy as np
+    baseline_std = np.std(baseline_times['all_ms'], ddof=1)
+    hybrid_std = np.std(hybrid_times['all_ms'], ddof=1)
+    
+    # Statistical significance
+    alpha = 0.05
+    is_significant = p_value < alpha
+    
+    # Calculate actual selectivity
+    actual_selectivity = hybrid_times['row_count'] / num_rows * 100
+    
+    # Print results
+    print(f"\n{'='*80}")
+    print(f"ALL-INT PAYLOAD SHMOO - {num_payload_cols} INT cols, {selectivity*100:.0f}% selectivity")
+    print(f"{'='*80}")
+    print(f"Filter: filter_col < {threshold}")
+    print(f"Input rows: {num_rows:,} | INT Payload cols: {num_payload_cols}")
+    print(f"Output rows: {hybrid_times['row_count']:,} | Actual selectivity: {actual_selectivity:.2f}%")
+    print(f"NOTE: ALL INTEGER columns - control test for string decompression overhead")
+    print(f"{'='*80}")
+    print(f"Baseline (Table.readParquet): {baseline_times['avg_ms']:.2f}ms "
+          f"(std={baseline_std:.2f}, min={baseline_times['min_ms']:.2f}, max={baseline_times['max_ms']:.2f})")
+    print(f"Hybrid Scan (PHASE0_POC):     {hybrid_times['avg_ms']:.2f}ms "
+          f"(std={hybrid_std:.2f}, min={hybrid_times['min_ms']:.2f}, max={hybrid_times['max_ms']:.2f})")
+    print(f"{'='*80}")
+    print(f"SPEEDUP: {speedup:.2f}x {'✓ HYBRID FASTER' if speedup > 1 else '✗ BASELINE FASTER'}")
+    print(f"T-TEST:  t={t_stat:.3f}, p={p_value:.6f} {'*** SIGNIFICANT ***' if is_significant else '(not significant)'}")
+    print(f"{'='*80}")
+    
+    # CSV output for easy analysis
+    winner = 'Hybrid' if speedup > 1 else 'Baseline'
+    sig_marker = '*' if is_significant else ''
+    print(f"CSV: AST_ALL_INT,{row_count_id(num_rows)},{num_rows},{num_payload_cols},{selectivity*100:.0f},"
+          f"{hybrid_times['row_count']},{actual_selectivity:.2f},"
+          f"{baseline_times['avg_ms']:.2f},{baseline_std:.2f},"
+          f"{hybrid_times['avg_ms']:.2f},{hybrid_std:.2f},"
+          f"{speedup:.2f},{t_stat:.3f},{p_value:.6f},{winner}{sig_marker}")
+    print(f"{'='*80}\n")
+
+
+# =============================================================================
 # ROW GROUP FILTERING TESTS (using sorted data) - CONTROL TEST
 # =============================================================================
 # These tests use SORTED data where row group statistics help BOTH readers equally.
@@ -971,7 +1230,7 @@ HASEEB_SELECTIVITY_LEVELS = [0.01, 1.0, 5.0, 10.0]  # 0.01%, 1%, 5%, 10%
 
 @pytest.mark.parametrize('selectivity_pct', HASEEB_SELECTIVITY_LEVELS, 
                          ids=lambda x: f'sel_{x}pct')
-@pytest.mark.parametrize('num_payload_cols', [10, 40, 100], ids=lambda x: f'{x}cols')
+@pytest.mark.parametrize('num_payload_cols', [1, 5, 10, 40, 100], ids=lambda x: f'{x}cols')
 @pytest.mark.parametrize('num_rows', [1_000_000], ids=['1M'])
 def test_hybrid_scan_haseeb_selectivity(spark_tmp_path, num_rows, num_payload_cols, selectivity_pct):
     """Test hybrid scan varying selectivity with Haseeb pattern.
