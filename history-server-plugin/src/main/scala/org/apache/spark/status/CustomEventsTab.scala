@@ -530,16 +530,17 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                   <div class="col-lg-12">
                     <div class="rapids-chart-wrapper" data-chart-id="boundedness-chart">
                       <div class="rapids-chart-controls">
-                        <span class="rapids-chart-title">Tasks Waiting on I/O
+                        <span class="rapids-chart-title">I/O Wait vs GPU Compute
                           <span class="rapids-info-icon">ⓘ<div class="rapids-info-tooltip">
-                            <div class="metric-row"><span class="metric-name">Tasks Waiting on I/O</span> — Total tasks blocked on any I/O operation (Parquet reads, shuffle reads, or shuffle writes)</div>
-                            <div class="metric-row" style="margin-top:6px;font-style:italic;">High values indicate I/O bottlenecks — tasks waiting instead of computing.</div>
+                            <div class="metric-row"><span class="metric-name">Tasks Waiting on I/O</span> (top, orange) — Total tasks blocked on I/O (Parquet/shuffle reads/writes)</div>
+                            <div class="metric-row"><span class="metric-name">GPU SM Utilization</span> (bottom, green) — GPU streaming multiprocessor activity (%)</div>
+                            <div class="metric-row" style="margin-top:6px;font-style:italic;"><b>Interpretation:</b> When orange is high and green is low → I/O bound. When green is high and orange is low → compute bound.</div>
                           </div></span>
                         </span>
                         <button class="rapids-chart-btn rapids-chart-collapse-btn" title="Collapse/Expand">−</button>
                       </div>
                       <div class="rapids-chart-content">
-                        <div id="boundedness-chart" style="width: 100%; height: 250px;"></div>
+                        <div id="boundedness-chart" style="width: 100%; height: 300px;"></div>
                       </div>
                     </div>
                     <div id="executor-health-stage-detail-group" class="rapids-stage-detail" style="margin-top: 4px;"></div>
@@ -1637,23 +1638,40 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
             window._rapidsChartGroups.ioWait = [ioWaitChart];
 
             // ===================== EXECUTOR HEALTH SECTION =====================
-            // Tasks Waiting on I/O - shows total tasks blocked on I/O operations
+            // Mirrored Area Chart: I/O Wait (top) vs GPU Utilization (bottom, mirrored)
             var boundednessChart = Highcharts.chart('boundedness-chart', {
-              title: { text: 'Tasks Waiting on I/O', align: 'left' },
+              title: { text: 'I/O Wait vs GPU Compute', align: 'left' },
               xAxis: makeLinkedXAxis('health', { type: 'datetime' }),
               yAxis: {
-                title: { text: 'Task Count' },
-                min: 0,
-                labels: { formatter: makeYAxisFormatter('count') }
+                title: { text: '' },
+                labels: {
+                  formatter: function() {
+                    // Show absolute value - negative side is scaled by 0.5, so multiply by 2
+                    if (this.value < 0) {
+                      return Math.abs(this.value * 2) + '%';
+                    }
+                    return this.value;
+                  }
+                },
+                plotLines: [{
+                  value: 0,
+                  color: '#666',
+                  width: 1,
+                  zIndex: 3
+                }]
               },
-              legend: { enabled: false },
+              legend: { enabled: true },
               plotOptions: {
                 area: {
                   lineWidth: 2,
                   marker: { enabled: false },
-                  fillOpacity: 0.3
+                  fillOpacity: 0.5
                 },
                 series: {
+                  states: {
+                    inactive: { opacity: 1 },  // Don't fade other series on hover
+                    hover: { enabled: false }  // No hover effect on series
+                  },
                   point: {
                     events: {
                       click: function () {
@@ -1667,36 +1685,33 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
               series: []
             });
 
-            // Combine all I/O waiter metrics into single series (max of maxes)
+            // Add I/O Wait series (positive, top)
             if (boundednessChart) {
-              var ioWaitMetrics = ['maxParquetIOWaiters', 'maxShuffleReadWaiters', 'maxShuffleWriteWaiters'];
-              var combinedData = {};
-
-              // Take max of all I/O waiters at each timestamp
-              // Note: This is an approximation. For accurate "total tasks waiting on any I/O",
-              // we would need a single atomic counter in the backend.
-              ioWaitMetrics.forEach(function(metricName) {
-                var series = getSeriesForMetric(metricName);
-                if (series && series.length > 0) {
-                  series[0].data.forEach(function(pt) {
-                    var ts = pt[0];
-                    combinedData[ts] = Math.max(combinedData[ts] || 0, pt[1]);
-                  });
-                }
-              });
-
-              // Convert to sorted array
-              var combinedArray = Object.keys(combinedData).map(function(ts) {
-                return [parseInt(ts), combinedData[ts]];
-              }).sort(function(a, b) { return a[0] - b[0]; });
-
-              if (combinedArray.length > 0) {
+              var ioSeries = getSeriesForMetric('maxTotalIOWaiters');
+              if (ioSeries && ioSeries.length > 0) {
                 boundednessChart.addSeries({
                   name: 'Tasks Waiting on I/O',
                   type: 'area',
-                  data: combinedArray,
+                  data: ioSeries[0].data,
                   color: '#FF5722',  // Deep Orange
-                  fillOpacity: 0.4
+                  fillOpacity: 0.5
+                }, false);
+              }
+
+              // Add GPU SM Utilization series (negative/mirrored, bottom, scaled to 1/2 height)
+              var gpuSeries = getSeriesForMetric('gpuSmUtilPct');
+              if (gpuSeries && gpuSeries.length > 0) {
+                // Negate and scale by 0.5 so bottom half takes less space
+                // 100% GPU util -> -50 on chart (displayed as 100% via formatter)
+                var mirroredData = gpuSeries[0].data.map(function(pt) {
+                  return [pt[0], -pt[1] * 0.5];
+                });
+                boundednessChart.addSeries({
+                  name: 'GPU SM Utilization (%)',
+                  type: 'area',
+                  data: mirroredData,
+                  color: '#4CAF50',  // Green
+                  fillOpacity: 0.5
                 }, false);
               }
 
@@ -1743,6 +1758,11 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                 var parts = [];
                 Object.keys(metricValues).sort().forEach(function (name) {
                   var v = metricValues[name];
+                  // For mirrored series (GPU SM Utilization in boundedness chart), 
+                  // show absolute value * 2 (since we scaled by 0.5 for display)
+                  if (name.indexOf('GPU SM Utilization') >= 0) {
+                    v = Math.abs(v) * 2;
+                  }
                   var formatter = getFormatterForMetric(name);
                   parts.push(escapeHtml(name) + '=' + escapeHtml(formatter(v)));
                 });
@@ -2108,7 +2128,8 @@ class CustomEventsApiPage(parent: CustomEventsTab, customEvents: List[CustomEven
       "gpuSmUtilPct",
       "maxParquetIOWaiters",
       "maxShuffleWriteWaiters",
-      "maxShuffleReadWaiters")
+      "maxShuffleReadWaiters",
+      "maxTotalIOWaiters")
 
     // Collect executor IDs to return in this response
     val execIds =

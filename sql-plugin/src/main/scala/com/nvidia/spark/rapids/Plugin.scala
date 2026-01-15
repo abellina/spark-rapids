@@ -862,10 +862,12 @@ object RapidsMetricService {
   private[this] val tasksWaitingOnParquetIO = new AtomicLong(0L)
   private[this] val tasksWaitingOnShuffleWrite = new AtomicLong(0L)
   private[this] val tasksWaitingOnShuffleRead = new AtomicLong(0L)
-  // Max concurrent waiters seen during the current sampling interval
+  // Max concurrent waiters seen during the current sampling interval (per-type)
   private[this] val maxTasksWaitingOnParquetIO = new AtomicLong(0L)
   private[this] val maxTasksWaitingOnShuffleWrite = new AtomicLong(0L)
   private[this] val maxTasksWaitingOnShuffleRead = new AtomicLong(0L)
+  // Max TOTAL concurrent I/O waiters (sum of all types) seen during sampling interval
+  private[this] val maxTotalIOWaiters = new AtomicLong(0L)
 
   // Last-sampled values to compute per-interval deltas
   @volatile private[this] var lastTotalRetries: Long = 0L
@@ -1001,22 +1003,25 @@ object RapidsMetricService {
   }
 
   // Task waiting counters - call these when entering/exiting I/O waits
-  // On increment, update max if the new count exceeds current max
+  // On increment, update both per-type max and total max
   def incTasksWaitingOnParquetIO(): Unit = {
     val newVal = tasksWaitingOnParquetIO.incrementAndGet()
     updateMax(maxTasksWaitingOnParquetIO, newVal)
+    updateTotalIOWaitersMax()
   }
   def decTasksWaitingOnParquetIO(): Unit = tasksWaitingOnParquetIO.decrementAndGet()
 
   def incTasksWaitingOnShuffleWrite(): Unit = {
     val newVal = tasksWaitingOnShuffleWrite.incrementAndGet()
     updateMax(maxTasksWaitingOnShuffleWrite, newVal)
+    updateTotalIOWaitersMax()
   }
   def decTasksWaitingOnShuffleWrite(): Unit = tasksWaitingOnShuffleWrite.decrementAndGet()
 
   def incTasksWaitingOnShuffleRead(): Unit = {
     val newVal = tasksWaitingOnShuffleRead.incrementAndGet()
     updateMax(maxTasksWaitingOnShuffleRead, newVal)
+    updateTotalIOWaitersMax()
   }
   def decTasksWaitingOnShuffleRead(): Unit = tasksWaitingOnShuffleRead.decrementAndGet()
 
@@ -1029,6 +1034,14 @@ object RapidsMetricService {
       }
       currentMax = maxAtomic.get()
     }
+  }
+
+  // Update the max total I/O waiters based on current instantaneous sum
+  private def updateTotalIOWaitersMax(): Unit = {
+    val total = tasksWaitingOnParquetIO.get() +
+                tasksWaitingOnShuffleWrite.get() +
+                tasksWaitingOnShuffleRead.get()
+    updateMax(maxTotalIOWaiters, total)
   }
 
   /** Resolve the disk device (major,minor) backing spark.local.dir, Linux-only. */
@@ -1304,7 +1317,8 @@ object RapidsMetricService {
           gpuSmUtilPct,                   // gpuSmUtilPct (0-100)
           maxTasksWaitingOnParquetIO.getAndSet(0L),  // max concurrent Parquet I/O waiters (reset)
           maxTasksWaitingOnShuffleWrite.getAndSet(0L), // max concurrent shuffle write waiters (reset)
-          maxTasksWaitingOnShuffleRead.getAndSet(0L)   // max concurrent shuffle read waiters (reset)
+          maxTasksWaitingOnShuffleRead.getAndSet(0L),  // max concurrent shuffle read waiters (reset)
+          maxTotalIOWaiters.getAndSet(0L)              // max TOTAL I/O waiters (sum of all types, reset)
         )
         // Producer: record the latest executor metrics snapshot.
         recordMetricUpdate(currentTime, values)
@@ -1366,7 +1380,8 @@ object RapidsMetricService {
       "gpuSmUtilPct",
       "maxParquetIOWaiters",
       "maxShuffleWriteWaiters",
-      "maxShuffleReadWaiters")
+      "maxShuffleReadWaiters",
+      "maxTotalIOWaiters")
     ctx.ask(MetricDefinition(executorId, metricNames))
 
     // Sampling task: collect metrics at the configured sampling period and
