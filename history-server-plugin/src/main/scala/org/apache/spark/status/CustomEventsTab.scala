@@ -1667,18 +1667,20 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
               series: []
             });
 
-            // Combine all I/O waiter metrics into single series
+            // Combine all I/O waiter metrics into single series (max of maxes)
             if (boundednessChart) {
               var ioWaitMetrics = ['maxParquetIOWaiters', 'maxShuffleReadWaiters', 'maxShuffleWriteWaiters'];
               var combinedData = {};
 
-              // Sum all I/O waiters by timestamp
+              // Take max of all I/O waiters at each timestamp
+              // Note: This is an approximation. For accurate "total tasks waiting on any I/O",
+              // we would need a single atomic counter in the backend.
               ioWaitMetrics.forEach(function(metricName) {
                 var series = getSeriesForMetric(metricName);
                 if (series && series.length > 0) {
                   series[0].data.forEach(function(pt) {
                     var ts = pt[0];
-                    combinedData[ts] = (combinedData[ts] || 0) + pt[1];
+                    combinedData[ts] = Math.max(combinedData[ts] || 0, pt[1]);
                   });
                 }
               });
