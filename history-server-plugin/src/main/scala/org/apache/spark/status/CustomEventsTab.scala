@@ -160,6 +160,76 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
             .rapids-chart-content {
               padding: 8px;
             }
+            /* Info tooltip styles */
+            .rapids-info-icon {
+              display: inline-flex;
+              align-items: center;
+              justify-content: center;
+              width: 18px;
+              height: 18px;
+              margin-left: 6px;
+              font-size: 13px;
+              font-weight: bold;
+              color: #666;
+              background: #e8e8e8;
+              border-radius: 50%;
+              cursor: help;
+              position: relative;
+            }
+            .rapids-info-icon:hover {
+              background: #d0d0d0;
+              color: #333;
+            }
+            .rapids-info-tooltip {
+              display: none;
+              position: absolute;
+              left: 26px;
+              top: -8px;
+              z-index: 1000;
+              min-width: 350px;
+              max-width: 500px;
+              padding: 12px 14px;
+              background: #fff;
+              border: 1px solid #ccc;
+              border-radius: 6px;
+              box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+              font-size: 13px;
+              font-weight: normal;
+              color: #333;
+              text-align: left;
+              line-height: 1.6;
+            }
+            .rapids-info-icon:hover .rapids-info-tooltip {
+              display: block;
+            }
+            .rapids-info-tooltip table {
+              width: 100%;
+              border-collapse: collapse;
+              margin: 0;
+            }
+            .rapids-info-tooltip th {
+              text-align: left;
+              font-weight: 600;
+              color: #555;
+              padding: 3px 8px 3px 0;
+              width: 70px;
+              vertical-align: top;
+            }
+            .rapids-info-tooltip td {
+              padding: 3px 0;
+              vertical-align: top;
+            }
+            .rapids-info-tooltip .metric-row {
+              border-bottom: 1px solid #eee;
+              padding: 4px 0;
+            }
+            .rapids-info-tooltip .metric-row:last-child {
+              border-bottom: none;
+            }
+            .rapids-info-tooltip .metric-name {
+              font-weight: 600;
+              color: #2196F3;
+            }
             """)}
           </style>
 
@@ -177,7 +247,15 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                   <div id="section-memory-body">
                     <div class="rapids-chart-wrapper" data-chart-id="mem-composition-chart">
                       <div class="rapids-chart-controls">
-                        <span class="rapids-chart-title">Memory Composition</span>
+                        <span class="rapids-chart-title">Memory Composition
+                          <span class="rapids-info-icon">ⓘ<div class="rapids-info-tooltip">
+                            <div class="metric-row"><span class="metric-name">gpuMemUsed</span> — GPU device memory allocated (NVML) [bytes]</div>
+                            <div class="metric-row"><span class="metric-name">jvmUsed</span> — JVM heap in use (Runtime.totalMemory - freeMemory) [bytes]</div>
+                            <div class="metric-row"><span class="metric-name">offHeapPinned</span> — CUDA pinned (page-locked) host memory [bytes]</div>
+                            <div class="metric-row"><span class="metric-name">offHeapPageable</span> — Non-pinned host memory from RMM [bytes]</div>
+                            <div class="metric-row"><span class="metric-name">systemOtherUsed</span> — System memory used by other processes [bytes]</div>
+                          </div></span>
+                        </span>
                         <button class="rapids-chart-btn rapids-chart-collapse-btn" title="Collapse/Expand">−</button>
                       </div>
                       <div class="rapids-chart-content">
@@ -186,7 +264,13 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                     </div>
                     <div class="rapids-chart-wrapper" data-chart-id="jvm-chart">
                       <div class="rapids-chart-controls">
-                        <span class="rapids-chart-title">JVM Memory</span>
+                        <span class="rapids-chart-title">JVM Memory
+                          <span class="rapids-info-icon">ⓘ<div class="rapids-info-tooltip">
+                            <div class="metric-row"><span class="metric-name">jvmTotal</span> — JVM heap size (Runtime.totalMemory) [bytes]</div>
+                            <div class="metric-row"><span class="metric-name">jvmFree</span> — JVM heap free (Runtime.freeMemory) [bytes]</div>
+                            <div class="metric-row"><span class="metric-name">jvmUsed</span> — JVM heap used (derived: total - free) [bytes]</div>
+                          </div></span>
+                        </span>
                         <button class="rapids-chart-btn rapids-chart-collapse-btn" title="Collapse/Expand">−</button>
                       </div>
                       <div class="rapids-chart-content">
@@ -195,7 +279,12 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                     </div>
                     <div class="rapids-chart-wrapper" data-chart-id="offheap-chart">
                       <div class="rapids-chart-controls">
-                        <span class="rapids-chart-title">Off-heap Memory</span>
+                        <span class="rapids-chart-title">Off-heap Memory
+                          <span class="rapids-info-icon">ⓘ<div class="rapids-info-tooltip">
+                            <div class="metric-row"><span class="metric-name">offHeapPinned</span> — CUDA pinned (page-locked) host memory from RMM [bytes]</div>
+                            <div class="metric-row"><span class="metric-name">offHeapPageable</span> — Non-pinned host memory allocated via RMM [bytes]</div>
+                          </div></span>
+                        </span>
                         <button class="rapids-chart-btn rapids-chart-collapse-btn" title="Collapse/Expand">−</button>
                       </div>
                       <div class="rapids-chart-content">
@@ -204,7 +293,12 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                     </div>
                     <div class="rapids-chart-wrapper" data-chart-id="sys-mem-chart">
                       <div class="rapids-chart-controls">
-                        <span class="rapids-chart-title">System Memory</span>
+                        <span class="rapids-chart-title">System Memory
+                          <span class="rapids-info-icon">ⓘ<div class="rapids-info-tooltip">
+                            <div class="metric-row"><span class="metric-name">sysMemUsed</span> — System memory in use (/proc/meminfo or OperatingSystemMXBean) [bytes]</div>
+                            <div class="metric-row"><span class="metric-name">sysMemFree</span> — System memory available [bytes]</div>
+                          </div></span>
+                        </span>
                         <button class="rapids-chart-btn rapids-chart-collapse-btn" title="Collapse/Expand">−</button>
                       </div>
                       <div class="rapids-chart-content">
@@ -213,7 +307,13 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                     </div>
                     <div class="rapids-chart-wrapper" data-chart-id="cpu-chart">
                       <div class="rapids-chart-controls">
-                        <span class="rapids-chart-title">CPU Usage</span>
+                        <span class="rapids-chart-title">CPU Usage
+                          <span class="rapids-info-icon">ⓘ<div class="rapids-info-tooltip">
+                            <div class="metric-row"><span class="metric-name">cpuUser</span> — CPU time in user mode (/proc/stat) [nanoseconds]</div>
+                            <div class="metric-row"><span class="metric-name">cpuSystem</span> — CPU time in kernel mode (/proc/stat) [nanoseconds]</div>
+                            <div class="metric-row"><span class="metric-name">cpuIdle</span> — CPU idle time (/proc/stat) [nanoseconds]</div>
+                          </div></span>
+                        </span>
                         <button class="rapids-chart-btn rapids-chart-collapse-btn" title="Collapse/Expand">−</button>
                       </div>
                       <div class="rapids-chart-content">
@@ -237,7 +337,12 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                   <div id="section-disk-body">
                     <div class="rapids-chart-wrapper" data-chart-id="disk-io-chart">
                       <div class="rapids-chart-controls">
-                        <span class="rapids-chart-title">Disk IO</span>
+                        <span class="rapids-chart-title">Disk IO
+                          <span class="rapids-info-icon">ⓘ<div class="rapids-info-tooltip">
+                            <div class="metric-row"><span class="metric-name">diskReadBytes</span> — Bytes read from monitored disk (/proc/diskstats) [bytes]</div>
+                            <div class="metric-row"><span class="metric-name">diskWriteBytes</span> — Bytes written to monitored disk (/proc/diskstats) [bytes]</div>
+                          </div></span>
+                        </span>
                         <button class="rapids-chart-btn rapids-chart-collapse-btn" title="Collapse/Expand">−</button>
                       </div>
                       <div class="rapids-chart-content">
@@ -246,7 +351,11 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                     </div>
                     <div class="rapids-chart-wrapper" data-chart-id="disk-util-chart">
                       <div class="rapids-chart-controls">
-                        <span class="rapids-chart-title">Disk Utilization</span>
+                        <span class="rapids-chart-title">Disk Utilization
+                          <span class="rapids-info-icon">ⓘ<div class="rapids-info-tooltip">
+                            <div class="metric-row"><span class="metric-name">diskUtilization</span> — Percent of time disk was busy (/proc/diskstats io_ticks) [%]</div>
+                          </div></span>
+                        </span>
                         <button class="rapids-chart-btn rapids-chart-collapse-btn" title="Collapse/Expand">−</button>
                       </div>
                       <div class="rapids-chart-content">
@@ -255,7 +364,12 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                     </div>
                     <div class="rapids-chart-wrapper" data-chart-id="net-io-chart">
                       <div class="rapids-chart-controls">
-                        <span class="rapids-chart-title">Network IO</span>
+                        <span class="rapids-chart-title">Network IO
+                          <span class="rapids-info-icon">ⓘ<div class="rapids-info-tooltip">
+                            <div class="metric-row"><span class="metric-name">netRxBytes</span> — Network bytes received (/proc/net/dev) [bytes]</div>
+                            <div class="metric-row"><span class="metric-name">netTxBytes</span> — Network bytes transmitted (/proc/net/dev) [bytes]</div>
+                          </div></span>
+                        </span>
                         <button class="rapids-chart-btn rapids-chart-collapse-btn" title="Collapse/Expand">−</button>
                       </div>
                       <div class="rapids-chart-content">
@@ -277,7 +391,11 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                   <div id="section-spill-body">
                     <div class="rapids-chart-wrapper" data-chart-id="spill-time-chart">
                       <div class="rapids-chart-controls">
-                        <span class="rapids-chart-title">GPU Spill Time</span>
+                        <span class="rapids-chart-title">GPU Spill Time
+                          <span class="rapids-info-icon">ⓘ<div class="rapids-info-tooltip">
+                            <div class="metric-row"><span class="metric-name">retryBlockTime</span> — Time blocked waiting for GPU memory during retry framework [nanoseconds]</div>
+                          </div></span>
+                        </span>
                         <button class="rapids-chart-btn rapids-chart-collapse-btn" title="Collapse/Expand">−</button>
                       </div>
                       <div class="rapids-chart-content">
@@ -286,7 +404,11 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                     </div>
                     <div class="rapids-chart-wrapper" data-chart-id="spill-bytes-chart">
                       <div class="rapids-chart-controls">
-                        <span class="rapids-chart-title">GPU Spill Bytes</span>
+                        <span class="rapids-chart-title">GPU Spill Bytes
+                          <span class="rapids-info-icon">ⓘ<div class="rapids-info-tooltip">
+                            <div class="metric-row"><span class="metric-name">spilledBytes</span> — Data spilled from GPU to host/disk by RAPIDS spill framework [bytes]</div>
+                          </div></span>
+                        </span>
                         <button class="rapids-chart-btn rapids-chart-collapse-btn" title="Collapse/Expand">−</button>
                       </div>
                       <div class="rapids-chart-content">
@@ -310,7 +432,13 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                   <div id="section-gpu-body">
                     <div class="rapids-chart-wrapper" data-chart-id="gpu-chart">
                       <div class="rapids-chart-controls">
-                        <span class="rapids-chart-title">GPU Memory</span>
+                        <span class="rapids-chart-title">GPU Memory
+                          <span class="rapids-info-icon">ⓘ<div class="rapids-info-tooltip">
+                            <div class="metric-row"><span class="metric-name">gpuMemUsed</span> — GPU device memory allocated (NVML nvmlDeviceGetMemoryInfo) [bytes]</div>
+                            <div class="metric-row"><span class="metric-name">gpuMemFree</span> — GPU device memory available [bytes]</div>
+                            <div class="metric-row"><span class="metric-name">gpuMemTotal</span> — Total GPU device memory [bytes]</div>
+                          </div></span>
+                        </span>
                         <button class="rapids-chart-btn rapids-chart-collapse-btn" title="Collapse/Expand">−</button>
                       </div>
                       <div class="rapids-chart-content">
@@ -319,7 +447,11 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                     </div>
                     <div class="rapids-chart-wrapper" data-chart-id="gpu-tasks-chart">
                       <div class="rapids-chart-controls">
-                        <span class="rapids-chart-title">GPU Concurrent Tasks</span>
+                        <span class="rapids-chart-title">GPU Concurrent Tasks
+                          <span class="rapids-info-icon">ⓘ<div class="rapids-info-tooltip">
+                            <div class="metric-row"><span class="metric-name">gpuConcurrentTasks</span> — Number of tasks concurrently holding the GPU semaphore [count]</div>
+                          </div></span>
+                        </span>
                         <button class="rapids-chart-btn rapids-chart-collapse-btn" title="Collapse/Expand">−</button>
                       </div>
                       <div class="rapids-chart-content">
@@ -328,7 +460,12 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                     </div>
                     <div class="rapids-chart-wrapper" data-chart-id="retries-chart">
                       <div class="rapids-chart-controls">
-                        <span class="rapids-chart-title">Retries</span>
+                        <span class="rapids-chart-title">Retries
+                          <span class="rapids-info-icon">ⓘ<div class="rapids-info-tooltip">
+                            <div class="metric-row"><span class="metric-name">retryCount</span> — Number of GPU memory retry attempts (OOM handling) [count]</div>
+                            <div class="metric-row"><span class="metric-name">splitRetryCount</span> — Number of split-and-retry operations [count]</div>
+                          </div></span>
+                        </span>
                         <button class="rapids-chart-btn rapids-chart-collapse-btn" title="Collapse/Expand">−</button>
                       </div>
                       <div class="rapids-chart-content">
@@ -337,7 +474,11 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                     </div>
                     <div class="rapids-chart-wrapper" data-chart-id="gpu-util-chart">
                       <div class="rapids-chart-controls">
-                        <span class="rapids-chart-title">GPU SM Utilization</span>
+                        <span class="rapids-chart-title">GPU SM Utilization
+                          <span class="rapids-info-icon">ⓘ<div class="rapids-info-tooltip">
+                            <div class="metric-row"><span class="metric-name">smUtilization</span> — Percent of streaming multiprocessors active on assigned GPU (NVML nvmlDeviceGetUtilizationRates) [%]</div>
+                          </div></span>
+                        </span>
                         <button class="rapids-chart-btn rapids-chart-collapse-btn" title="Collapse/Expand">−</button>
                       </div>
                       <div class="rapids-chart-content">
@@ -360,7 +501,13 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                   <div class="col-lg-12">
                     <div class="rapids-chart-wrapper" data-chart-id="io-wait-chart">
                       <div class="rapids-chart-controls">
-                        <span class="rapids-chart-title">Max Concurrent I/O Waiters</span>
+                        <span class="rapids-chart-title">Max Concurrent I/O Waiters
+                          <span class="rapids-info-icon">ⓘ<div class="rapids-info-tooltip">
+                            <div class="metric-row"><span class="metric-name">maxParquetIOWaiters</span> — Max tasks blocked on Parquet file reads (per sample interval) [count]</div>
+                            <div class="metric-row"><span class="metric-name">maxShuffleWriteWaiters</span> — Max tasks blocked on shuffle writes (per sample interval) [count]</div>
+                            <div class="metric-row"><span class="metric-name">maxShuffleReadWaiters</span> — Max tasks blocked on shuffle reads (per sample interval) [count]</div>
+                          </div></span>
+                        </span>
                         <button class="rapids-chart-btn rapids-chart-collapse-btn" title="Collapse/Expand">−</button>
                       </div>
                       <div class="rapids-chart-content">
@@ -1523,7 +1670,7 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                     align: 'right',
                     zIndex: 5
                   }).css({
-                    fontSize: '11px',
+                    fontSize: '16px',
                     textAlign: 'right',
                     pointerEvents: 'none',
                     backgroundColor: 'rgba(255,255,255,0.90)',
