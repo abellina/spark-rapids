@@ -158,6 +158,7 @@ object RapidsPluginUtils extends Logging {
    * Returns a map of keys to string values that will be merged into sparkRapidsBuildInfo, e.g.:
    *   diskWriteBwBytesPerSec, diskReadBwBytesPerSec.
    *
+   * Uses native C++ implementation with O_DIRECT to bypass page cache and measure true disk speed.
    * The test size is bounded to avoid being intrusive and skips entirely on failure.
    */
   def detectDiskBandwidth(conf: SparkConf): Map[String, String] = {
@@ -176,134 +177,46 @@ object RapidsPluginUtils extends Logging {
         return Map.empty
       }
 
-      val tmpFile = java.nio.file.Files.createTempFile(dirPath, "rapids-disk-bw-", ".bin")
-      // Use 4 MiB buffer - aligned to page size for O_DIRECT compatibility
-      val bufSize = 4 * 1024 * 1024
-      // allocateDirect returns a zero-filled, page-aligned buffer
-      val buf = java.nio.ByteBuffer.allocateDirect(bufSize)
-
-      // Try to get O_DIRECT option for bypassing page cache on reads (Linux only)
-      val directOption: Option[java.nio.file.OpenOption] = try {
-        val clazz = Class.forName("com.sun.nio.file.ExtendedOpenOption")
-        val field = clazz.getField("DIRECT")
-        Some(field.get(null).asInstanceOf[java.nio.file.OpenOption])
+      // Use native JNI implementation with O_DIRECT for accurate disk bandwidth measurement
+      val m = scala.collection.mutable.Map[String, String]()
+      
+      try {
+        import com.nvidia.spark.rapids.jni.DiskBandwidth
+        
+        val oDirectSupported = DiskBandwidth.isODirectSupported(dirPath.toString)
+        logInfo(s"Disk bandwidth test on $dirPath (O_DIRECT supported: $oDirectSupported)")
+        
+        val result = DiskBandwidth.measureBandwidth(dirPath.toString, testBytes)
+        
+        if (result.writeSucceeded()) {
+          val writeBw = result.writeBytesPerSec
+          m += "diskWriteBwBytesPerSec" -> writeBw.toString
+          logInfo(f"Disk write bandwidth (native O_DIRECT): ${result.getWriteMBps}%.2f MB/s")
+        }
+        
+        if (result.readSucceeded()) {
+          val readBw = result.readBytesPerSec
+          m += "diskReadBwBytesPerSec" -> readBw.toString
+          logInfo(f"Disk read bandwidth (native O_DIRECT): ${result.getReadMBps}%.2f MB/s")
+        }
       } catch {
-        case _: Throwable => None
+        case e: Throwable =>
+          logWarning(s"Native disk bandwidth test failed: ${e.getMessage}, skipping")
       }
-
-      def measureWriteBw(): Option[Double] = {
-        def doWrite(options: java.nio.file.OpenOption*): Option[Double] = {
-          val channel = java.nio.channels.FileChannel.open(tmpFile, options: _*)
-          try {
-            var written: Long = 0L
-            val start = System.nanoTime()
-            while (written < testBytes) {
-              buf.clear()
-              // Limit buffer to remaining bytes if near the end
-              val remaining = testBytes - written
-              if (remaining < bufSize) {
-                buf.limit(remaining.toInt)
-              }
-              while (buf.hasRemaining) {
-                written += channel.write(buf)
-              }
-            }
-            // Flush to disk to measure actual write speed, not just OS buffer speed
-            // (O_DIRECT already bypasses cache, but force() ensures metadata is synced)
-            channel.force(true)
-            val elapsedSec = (System.nanoTime() - start) / 1e9
-            if (elapsedSec > 0.0) Some(written.toDouble / elapsedSec) else None
-          } finally {
-            channel.close()
-          }
-        }
-
-        try {
-          // Try O_DIRECT first to bypass page cache and measure true disk speed
-          directOption match {
-            case Some(direct) =>
-              try {
-                doWrite(
-                  java.nio.file.StandardOpenOption.WRITE,
-                  java.nio.file.StandardOpenOption.TRUNCATE_EXISTING,
-                  java.nio.file.StandardOpenOption.CREATE,
-                  direct)
-              } catch {
-                // O_DIRECT may fail (unsupported filesystem, unaligned buffer, etc.)
-                case _: Throwable =>
-                  doWrite(
-                    java.nio.file.StandardOpenOption.WRITE,
-                    java.nio.file.StandardOpenOption.TRUNCATE_EXISTING)
-              }
-            case None =>
-              doWrite(
-                java.nio.file.StandardOpenOption.WRITE,
-                java.nio.file.StandardOpenOption.TRUNCATE_EXISTING)
-          }
-        } catch {
-          case _: Throwable => None
-        }
-      }
-
-      def measureReadBw(): Option[Double] = {
-        def doRead(options: java.nio.file.OpenOption*): Option[Double] = {
-          val channel = java.nio.channels.FileChannel.open(tmpFile, options: _*)
-          try {
-            var read: Long = 0L
-            val start = System.nanoTime()
-            var done = false
-            while (!done && read < testBytes) {
-              buf.clear()
-              val n = channel.read(buf)
-              if (n <= 0) {
-                done = true
-              } else {
-                read += n
-              }
-            }
-            val elapsedSec = (System.nanoTime() - start) / 1e9
-            if (elapsedSec > 0.0) Some(read.toDouble / elapsedSec) else None
-          } finally {
-            channel.close()
-          }
-        }
-
-        try {
-          // Try O_DIRECT first to bypass page cache and measure true disk speed
-          directOption match {
-            case Some(direct) =>
-              try {
-                doRead(java.nio.file.StandardOpenOption.READ, direct)
-              } catch {
-                // O_DIRECT may fail (unsupported filesystem, etc.) - fall back to regular read
-                case _: Throwable =>
-                  doRead(java.nio.file.StandardOpenOption.READ)
-              }
-            case None =>
-              doRead(java.nio.file.StandardOpenOption.READ)
-          }
-        } catch {
-          case _: Throwable => None
-        } finally { 
-          try {
-            java.nio.file.Files.deleteIfExists(tmpFile)
-          } catch {
-            case _: Throwable =>
-          }
-        }
-      }
-
-      val writeBw = measureWriteBw()
-      val readBw = measureReadBw()
       
       // Also try fio-based measurement as a reference (if fio is available)
       val fioBw = measureWithFio(dirPath, testBytes)
       
-      val m = scala.collection.mutable.Map[String, String]()
-      writeBw.foreach(bw => m += "diskWriteBwBytesPerSec" -> bw.toLong.toString)
-      readBw.foreach(bw => m += "diskReadBwBytesPerSec" -> bw.toLong.toString)
-      fioBw._1.foreach(bw => m += "fioWriteBwBytesPerSec" -> bw.toLong.toString)
-      fioBw._2.foreach(bw => m += "fioReadBwBytesPerSec" -> bw.toLong.toString)
+      // Log fio results for comparison
+      fioBw._1.foreach { bw =>
+        m += "fioWriteBwBytesPerSec" -> bw.toLong.toString
+        logInfo(f"Disk write bandwidth (fio): ${bw / 1e6}%.2f MB/s")
+      }
+      fioBw._2.foreach { bw =>
+        m += "fioReadBwBytesPerSec" -> bw.toLong.toString
+        logInfo(f"Disk read bandwidth (fio): ${bw / 1e6}%.2f MB/s")
+      }
+      
       m.toMap
     } catch {
       case _: Throwable =>
@@ -328,7 +241,7 @@ object RapidsPluginUtils extends Logging {
       val testFile = dirPath.resolve("rapids-fio-test.bin").toString
       val testSizeMB = math.max(16, testBytes / (1024 * 1024))
 
-      // fio write test with O_DIRECT
+      // fio write test with O_DIRECT (psync for fair comparison with our sync FileChannel test)
       val writeResult = try {
         val writeCmd = Seq(
           "fio",
@@ -338,7 +251,7 @@ object RapidsPluginUtils extends Logging {
           "--bs=4M",
           "--direct=1",
           "--rw=write",
-          "--ioengine=libaio",
+          "--ioengine=psync",
           "--numjobs=1",
           "--output-format=json"
         )
@@ -349,7 +262,7 @@ object RapidsPluginUtils extends Logging {
         case _: Throwable => None
       }
 
-      // fio read test with O_DIRECT (reuses the file written above)
+      // fio read test with O_DIRECT (psync for fair comparison with our sync FileChannel test)
       val readResult = try {
         val readCmd = Seq(
           "fio",
@@ -359,7 +272,7 @@ object RapidsPluginUtils extends Logging {
           "--bs=4M",
           "--direct=1",
           "--rw=read",
-          "--ioengine=libaio",
+          "--ioengine=psync",
           "--numjobs=1",
           "--output-format=json"
         )

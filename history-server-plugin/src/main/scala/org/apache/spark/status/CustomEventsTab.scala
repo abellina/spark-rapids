@@ -16,6 +16,9 @@ class CustomEventsTab(parent: SparkUI, customEvents: List[CustomEventData])
     extends SparkUITab(parent, "customevents") {
 
   override val name: String = "🚀 RAPIDS"
+  
+  // Expose parent for accessing executor info from AppStatusStore
+  val sparkUI: SparkUI = parent
 
   attachPage(new CustomEventsPage(this, customEvents))
   attachPage(new CustomEventsApiPage(this, customEvents))
@@ -71,12 +74,16 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
     val content = 
       <div class="row-fluid">
         <div class="span12">
-          <h4>Custom Events Analysis</h4>
-          <p>This tab shows RAPIDS runtime metrics captured during application execution.</p>
+          <h4>RAPIDS Events</h4>
+          
+          <!-- Executor selection buttons - at the top for easy access -->
+          <div id="executor-selector-top" style="margin-bottom: 15px;"></div>
 
           <div id="rapids-build-info" style="margin-bottom: 15px;">
             <table class="table table-condensed" style="width:auto;">
               <tbody>
+                <tr><th>Executor Hostname</th>
+                  <td id="rapids-hostname"><em>Select an executor</em></td></tr>
                 <tr><th>RAPIDS Plugin Version</th>
                   <td id="rapids-plugin-version">{pluginVersion.getOrElse("")}</td></tr>
                 <tr><th>RAPIDS Plugin Revision</th>
@@ -158,7 +165,6 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
 
           <div id="metric-charts">
             <h5>RAPIDS Metrics</h5>
-            <div id="executor-filters" style="margin-bottom: 10px;"></div>
 
             <div class="row-fluid">
               <div class="span6">
@@ -503,7 +509,7 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
           function fetchExecutors() {
             $.getJSON('/history/' + getAppId() + '/customevents/api/json/metrics/executors', function(data) {
               if (!data || !data.executors || data.executors.length === 0) {
-                $('#executor-filters').text('No executor metric data available');
+                $('#executor-selector-top').text('No executor metric data available');
                 return;
               }
               if (!window._selectedExecutorId) {
@@ -541,7 +547,8 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
           }
 
           function initExecutorFilters(executors) {
-            var container = $('#executor-filters');
+            // Render in top container for easy access
+            var container = $('#executor-selector-top');
             container.empty();
             if (!executors || executors.length === 0) {
               container.append('<span>No executor metric data available</span>');
@@ -552,7 +559,7 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
               window._selectedExecutorId = executors[0];
             }
 
-            container.append('<span style="margin-right: 8px;">Executor:</span>');
+            container.append('<strong style="margin-right: 8px;">Select Executor:</strong>');
 
             executors.forEach(function(execId) {
               var isActive = (execId === window._selectedExecutorId);
@@ -578,6 +585,9 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
 
           function updateExecutorBuildInfo(info) {
             if (!info) return;
+            if (info.hostname !== undefined) {
+              $('#rapids-hostname').text(info.hostname);
+            }
             if (info.pluginVersion !== undefined) {
               $('#rapids-plugin-version').text(info.pluginVersion);
             }
@@ -643,6 +653,24 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
             if (!window.Highcharts || !data || !data.seriesByExecutor) {
               return;
             }
+
+            // Set global Highcharts options for consistent chart alignment
+            // Fixed left margin ensures Y-axis labels don't cause horizontal misalignment
+            Highcharts.setOptions({
+              chart: {
+                marginLeft: 80,  // Fixed left margin for all charts
+                spacingLeft: 5
+              },
+              yAxis: {
+                labels: {
+                  align: 'right',
+                  x: -5  // Small gap from the axis line
+                },
+                title: {
+                  margin: 10
+                }
+              }
+            });
 
             var stages = data.stages || [];
             // Global grouping of related charts that should share tooltip content
@@ -767,11 +795,61 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
               container.html(html);
             }
 
+            // Compute global time range across ALL series for perfect X-axis alignment
+            function computeGlobalTimeRange(data) {
+              var minTime = Infinity;
+              var maxTime = -Infinity;
+              
+              if (data && data.seriesByExecutor) {
+                Object.keys(data.seriesByExecutor).forEach(function(execId) {
+                  var execData = data.seriesByExecutor[execId];
+                  if (execData) {
+                    Object.keys(execData).forEach(function(metricName) {
+                      var points = execData[metricName];
+                      if (Array.isArray(points)) {
+                        points.forEach(function(pt) {
+                          if (Array.isArray(pt) && pt.length >= 1) {
+                            var ts = pt[0];
+                            if (ts < minTime) minTime = ts;
+                            if (ts > maxTime) maxTime = ts;
+                          }
+                        });
+                      }
+                    });
+                  }
+                });
+              }
+              
+              // Add small padding (1% on each side) for visual clarity
+              if (minTime !== Infinity && maxTime !== -Infinity) {
+                var range = maxTime - minTime;
+                var padding = range * 0.01;
+                return { min: minTime - padding, max: maxTime + padding };
+              }
+              return null;
+            }
+            
+            // Store global time range for all charts
+            window._rapidsGlobalTimeRange = computeGlobalTimeRange(data);
+            
             function makeLinkedXAxis(groupName, options) {
               var cfg = options || {};
               if (!cfg.type) {
                 cfg.type = 'datetime';
               }
+              
+              // Apply global time range for perfect alignment
+              var globalRange = window._rapidsGlobalTimeRange;
+              if (globalRange) {
+                cfg.min = globalRange.min;
+                cfg.max = globalRange.max;
+              }
+              
+              // Ensure consistent tick behavior across all charts
+              cfg.ordinal = false;  // Prevent Highcharts from compressing time gaps
+              cfg.startOnTick = false;
+              cfg.endOnTick = false;
+              
               var existingEvents = cfg.events || {};
               cfg.events = existingEvents;
               var prevSetExtremes = existingEvents.setExtremes;
@@ -1343,7 +1421,7 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
             // ===================== I/O WAIT SECTION =====================
             var ioWaitChart = Highcharts.chart('io-wait-chart', {
               title: { text: 'Max Concurrent I/O Waiters', align: 'left' },
-              xAxis: { type: 'datetime' },
+              xAxis: makeLinkedXAxis('ioWait', { type: 'datetime' }),
               yAxis: {
                 title: { text: 'Task Count' },
                 min: 0,
@@ -1569,7 +1647,7 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
         """)}
       </script>
 
-    UIUtils.headerSparkPage(request, "Custom Events",
+    UIUtils.headerSparkPage(request, "RAPIDS Events",
       content ++ highchartsScript ++ scriptContent, tab)
   }
 
@@ -1827,6 +1905,16 @@ class CustomEventsApiPage(parent: CustomEventsTab, customEvents: List[CustomEven
     // We intentionally do NOT fall back to the driver-level build info because
     // that would make executor-specific fields (like disk bandwidth) appear
     // to vary per executor when they are actually global.
+    // Helper to lookup executor hostname from Spark's AppStatusStore
+    def getExecutorHost(execId: String): Option[String] = {
+      try {
+        val executors = parent.sparkUI.store.executorList(true)
+        executors.find(_.id == execId).map(_.hostPort.split(":")(0))
+      } catch {
+        case _: Exception => None
+      }
+    }
+
     val executorBuildInfoFields: String = targetExecIdOpt.flatMap { execId =>
       val maybeEvent = customEvents.reverse.find { e =>
         e.eventType == "SparkRapidsBuildInfo" &&
@@ -1843,6 +1931,8 @@ class CustomEventsApiPage(parent: CustomEventsTab, customEvents: List[CustomEven
           case (k, v) if k.startsWith("sparkRapidsJniBuildInfo.") &&
             (k.toLowerCase.contains("arch") || k.toLowerCase.contains("compute")) => v
         }
+        // Get hostname from Spark's executor tracking, not from our event data
+        val hostname = getExecutorHost(execId)
         val diskDevice = data.get("sparkRapidsBuildInfo.monitoredDiskDevice")
         val diskWriteBw = data.get("sparkRapidsBuildInfo.diskWriteBwBytesPerSec")
         val diskReadBw = data.get("sparkRapidsBuildInfo.diskReadBwBytesPerSec")
@@ -1851,6 +1941,7 @@ class CustomEventsApiPage(parent: CustomEventsTab, customEvents: List[CustomEven
         val sysMemTotal = data.get("sparkRapidsBuildInfo.sysMemTotal")
 
         val fields = Seq(
+          hostname.map(v => s""""hostname":"${escapeJsonString(v)}""""),
           pluginVersion.map(v => s""""pluginVersion":"${escapeJsonString(v)}""""),
           pluginRevision.map(v => s""""pluginRevision":"${escapeJsonString(v)}""""),
           jniVersion.map(v => s""""jniVersion":"${escapeJsonString(v)}""""),
