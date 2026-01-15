@@ -520,6 +520,34 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
               </div>
             </div>
 
+            <div class="panel panel-default" style="margin-top: 10px;">
+              <div class="panel-heading">
+                <a class="rapids-section-toggle" data-target="executor-health-body" href="#">[hide]</a>
+                <strong style="margin-left: 8px;">Executor Health</strong>
+              </div>
+              <div id="executor-health-body" class="panel-body">
+                <div class="row">
+                  <div class="col-lg-12">
+                    <div class="rapids-chart-wrapper" data-chart-id="boundedness-chart">
+                      <div class="rapids-chart-controls">
+                        <span class="rapids-chart-title">Tasks Waiting on I/O
+                          <span class="rapids-info-icon">ⓘ<div class="rapids-info-tooltip">
+                            <div class="metric-row"><span class="metric-name">Tasks Waiting on I/O</span> — Total tasks blocked on any I/O operation (Parquet reads, shuffle reads, or shuffle writes)</div>
+                            <div class="metric-row" style="margin-top:6px;font-style:italic;">High values indicate I/O bottlenecks — tasks waiting instead of computing.</div>
+                          </div></span>
+                        </span>
+                        <button class="rapids-chart-btn rapids-chart-collapse-btn" title="Collapse/Expand">−</button>
+                      </div>
+                      <div class="rapids-chart-content">
+                        <div id="boundedness-chart" style="width: 100%; height: 250px;"></div>
+                      </div>
+                    </div>
+                    <div id="executor-health-stage-detail-group" class="rapids-stage-detail" style="margin-top: 4px;"></div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
           </div>
         </div>
       </div>
@@ -1608,6 +1636,74 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
             // Register I/O Wait charts as a group
             window._rapidsChartGroups.ioWait = [ioWaitChart];
 
+            // ===================== EXECUTOR HEALTH SECTION =====================
+            // Tasks Waiting on I/O - shows total tasks blocked on I/O operations
+            var boundednessChart = Highcharts.chart('boundedness-chart', {
+              title: { text: 'Tasks Waiting on I/O', align: 'left' },
+              xAxis: makeLinkedXAxis('health', { type: 'datetime' }),
+              yAxis: {
+                title: { text: 'Task Count' },
+                min: 0,
+                labels: { formatter: makeYAxisFormatter('count') }
+              },
+              legend: { enabled: false },
+              plotOptions: {
+                area: {
+                  lineWidth: 2,
+                  marker: { enabled: false },
+                  fillOpacity: 0.3
+                },
+                series: {
+                  point: {
+                    events: {
+                      click: function () {
+                        updateStageDetailTable('executor-health-stage-detail-group', this.x);
+                      }
+                    }
+                  }
+                }
+              },
+              tooltip: { enabled: false },
+              series: []
+            });
+
+            // Combine all I/O waiter metrics into single series
+            if (boundednessChart) {
+              var ioWaitMetrics = ['maxParquetIOWaiters', 'maxShuffleReadWaiters', 'maxShuffleWriteWaiters'];
+              var combinedData = {};
+
+              // Sum all I/O waiters by timestamp
+              ioWaitMetrics.forEach(function(metricName) {
+                var series = getSeriesForMetric(metricName);
+                if (series && series.length > 0) {
+                  series[0].data.forEach(function(pt) {
+                    var ts = pt[0];
+                    combinedData[ts] = (combinedData[ts] || 0) + pt[1];
+                  });
+                }
+              });
+
+              // Convert to sorted array
+              var combinedArray = Object.keys(combinedData).map(function(ts) {
+                return [parseInt(ts), combinedData[ts]];
+              }).sort(function(a, b) { return a[0] - b[0]; });
+
+              if (combinedArray.length > 0) {
+                boundednessChart.addSeries({
+                  name: 'Tasks Waiting on I/O',
+                  type: 'area',
+                  data: combinedArray,
+                  color: '#FF5722',  // Deep Orange
+                  fillOpacity: 0.4
+                }, false);
+              }
+
+              boundednessChart.redraw();
+            }
+
+            // Register Executor Health charts as a group
+            window._rapidsChartGroups.health = [boundednessChart];
+
             // Register GPU charts as a group for synchronized behavior (x-axis, tooltip).
             window._rapidsChartGroups.gpu = [
               gpuChart,
@@ -1766,6 +1862,7 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
             bindPointerSyncForGroup('spill', 'section-spill-body');
             bindPointerSyncForGroup('gpu', 'section-gpu-body');
             bindPointerSyncForGroup('ioWait', 'io-wait-charts-body');
+            bindPointerSyncForGroup('health', 'executor-health-body');
 
             // Store chart references on their container elements
             storeChartReference('mem-composition-chart', memCompChart);
@@ -1783,6 +1880,7 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
             storeChartReference('retries-chart', retriesChart);
             storeChartReference('gpu-util-chart', gpuUtilChart);
             storeChartReference('io-wait-chart', ioWaitChart);
+            storeChartReference('boundedness-chart', boundednessChart);
           }
 
           function storeChartReference(containerId, chart) {
