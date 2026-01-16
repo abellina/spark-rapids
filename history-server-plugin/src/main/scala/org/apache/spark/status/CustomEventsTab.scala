@@ -1644,6 +1644,7 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
               xAxis: makeLinkedXAxis('health', { type: 'datetime' }),
               yAxis: {
                 title: { text: '' },
+                min: -50,  // 100% GPU util scaled by 0.5 = -50
                 labels: {
                   formatter: function() {
                     // Show absolute value - negative side is scaled by 0.5, so multiply by 2
@@ -1760,7 +1761,9 @@ class CustomEventsPage(tab: CustomEventsTab, customEvents: List[CustomEventData]
                   var v = metricValues[name];
                   // For mirrored series (GPU SM Utilization in boundedness chart), 
                   // show absolute value * 2 (since we scaled by 0.5 for display)
-                  if (name.indexOf('GPU SM Utilization') >= 0) {
+                  // Note: series name "GPU SM Utilization (%)" becomes "SM Utilization (%)" 
+                  // after extracting the part after first space
+                  if (name.indexOf('SM Utilization') >= 0) {
                     v = Math.abs(v) * 2;
                   }
                   var formatter = getFormatterForMetric(name);
