@@ -761,7 +761,7 @@ def test_hybrid_scan_ast_filtering(spark_tmp_path, selectivity, num_rows):
           f"(std={hybrid_std:.2f}, min={hybrid_times['min_ms']:.2f}, max={hybrid_times['max_ms']:.2f})")
     print(f"Speedup: {speedup:.2f}x {'✓ HYBRID FASTER' if speedup > 1 else '✗ BASELINE FASTER'}")
     print(f"{'='*70}")
-    print(f"T-TEST: t={t_stat:.3f}, p={p_value:.4f} {'*** SIGNIFICANT ***' if is_significant else '(not significant)'}")
+    print(f"T-TEST: t={t_stat:.3f}, p={p_value:.2e} {'*** SIGNIFICANT ***' if is_significant else '(not significant)'}")
     print(f"{'='*70}")
     
     # Print CSV-friendly line
@@ -770,7 +770,7 @@ def test_hybrid_scan_ast_filtering(spark_tmp_path, selectivity, num_rows):
     print(f"CSV: AST_RANDOM,{selectivity*100:.0f}%,{fmt_rows(num_rows)},{num_rows},{int(selectivity*num_rows)},"
           f"{baseline_times['avg_ms']:.2f},{baseline_std:.2f},"
           f"{hybrid_times['avg_ms']:.2f},{hybrid_std:.2f},"
-          f"{speedup:.2f},{t_stat:.3f},{p_value:.4f},{winner}{sig_marker}")
+          f"{speedup:.2f},{t_stat:.3f},{p_value:.2e},{winner}{sig_marker}")
     print(f"{'='*70}\n")
 
 
@@ -859,7 +859,7 @@ def test_hybrid_scan_random_payload_cols(spark_tmp_path, num_rows, num_payload_c
           f"(std={hybrid_std:.2f}, min={hybrid_times['min_ms']:.2f}, max={hybrid_times['max_ms']:.2f})")
     print(f"{'='*80}")
     print(f"SPEEDUP: {speedup:.2f}x {'✓ HYBRID FASTER' if speedup > 1 else '✗ BASELINE FASTER'}")
-    print(f"T-TEST:  t={t_stat:.3f}, p={p_value:.6f} {'*** SIGNIFICANT ***' if is_significant else '(not significant)'}")
+    print(f"T-TEST:  t={t_stat:.3f}, p={p_value:.2e} {'*** SIGNIFICANT ***' if is_significant else '(not significant)'}")
     print(f"{'='*80}")
     
     # CSV output for easy analysis
@@ -869,7 +869,7 @@ def test_hybrid_scan_random_payload_cols(spark_tmp_path, num_rows, num_payload_c
           f"{hybrid_times['row_count']},{actual_selectivity:.2f},"
           f"{baseline_times['avg_ms']:.2f},{baseline_std:.2f},"
           f"{hybrid_times['avg_ms']:.2f},{hybrid_std:.2f},"
-          f"{speedup:.2f},{t_stat:.3f},{p_value:.6f},{winner}{sig_marker}")
+          f"{speedup:.2f},{t_stat:.3f},{p_value:.2e},{winner}{sig_marker}")
     print(f"{'='*80}\n")
 
 
@@ -960,7 +960,7 @@ def test_hybrid_scan_all_int_payload_cols(spark_tmp_path, num_rows, num_payload_
           f"(std={hybrid_std:.2f}, min={hybrid_times['min_ms']:.2f}, max={hybrid_times['max_ms']:.2f})")
     print(f"{'='*80}")
     print(f"SPEEDUP: {speedup:.2f}x {'✓ HYBRID FASTER' if speedup > 1 else '✗ BASELINE FASTER'}")
-    print(f"T-TEST:  t={t_stat:.3f}, p={p_value:.6f} {'*** SIGNIFICANT ***' if is_significant else '(not significant)'}")
+    print(f"T-TEST:  t={t_stat:.3f}, p={p_value:.2e} {'*** SIGNIFICANT ***' if is_significant else '(not significant)'}")
     print(f"{'='*80}")
     
     # CSV output for easy analysis
@@ -970,7 +970,7 @@ def test_hybrid_scan_all_int_payload_cols(spark_tmp_path, num_rows, num_payload_
           f"{hybrid_times['row_count']},{actual_selectivity:.2f},"
           f"{baseline_times['avg_ms']:.2f},{baseline_std:.2f},"
           f"{hybrid_times['avg_ms']:.2f},{hybrid_std:.2f},"
-          f"{speedup:.2f},{t_stat:.3f},{p_value:.6f},{winner}{sig_marker}")
+          f"{speedup:.2f},{t_stat:.3f},{p_value:.2e},{winner}{sig_marker}")
     print(f"{'='*80}\n")
 
 
@@ -1065,7 +1065,7 @@ def test_hybrid_scan_with_row_group_filtering(spark_tmp_path, selectivity, num_r
           f"(std={hybrid_std:.2f}, min={hybrid_times['min_ms']:.2f}, max={hybrid_times['max_ms']:.2f})")
     print(f"Speedup: {speedup:.2f}x {'✓ HYBRID FASTER' if speedup > 1 else '✗ BASELINE FASTER'}")
     print(f"{'='*70}")
-    print(f"T-TEST: t={t_stat:.3f}, p={p_value:.4f} {'*** SIGNIFICANT ***' if is_significant else '(not significant)'}")
+    print(f"T-TEST: t={t_stat:.3f}, p={p_value:.2e} {'*** SIGNIFICANT ***' if is_significant else '(not significant)'}")
     print(f"{'='*70}")
     
     # Print CSV-friendly line for easy data collection
@@ -1074,7 +1074,7 @@ def test_hybrid_scan_with_row_group_filtering(spark_tmp_path, selectivity, num_r
     print(f"CSV: {selectivity*100:.0f}%,{row_count_id(num_rows)},{num_rows},{int(selectivity*num_rows)},"
           f"{baseline_times['avg_ms']:.2f},{baseline_std:.2f},"
           f"{hybrid_times['avg_ms']:.2f},{hybrid_std:.2f},"
-          f"{speedup:.2f},{t_stat:.3f},{p_value:.4f},{winner}{sig_marker}")
+          f"{speedup:.2f},{t_stat:.3f},{p_value:.2e},{winner}{sig_marker}")
     print(f"{'='*70}\n")
 
 
@@ -1144,7 +1144,7 @@ def test_hybrid_scan_1B_low_selectivity(spark_tmp_path, selectivity, num_rows):
           f"(std={hybrid_std:.2f}, min={hybrid_times['min_ms']:.2f}, max={hybrid_times['max_ms']:.2f})")
     print(f"Speedup: {speedup:.2f}x {'✓ HYBRID FASTER' if speedup > 1 else '✗ BASELINE FASTER'}")
     print(f"{'='*70}")
-    print(f"T-TEST: t={t_stat:.3f}, p={p_value:.4f} {'*** SIGNIFICANT ***' if is_significant else '(not significant)'}")
+    print(f"T-TEST: t={t_stat:.3f}, p={p_value:.2e} {'*** SIGNIFICANT ***' if is_significant else '(not significant)'}")
     print(f"{'='*70}")
     
     # Print CSV-friendly line
@@ -1153,7 +1153,7 @@ def test_hybrid_scan_1B_low_selectivity(spark_tmp_path, selectivity, num_rows):
     print(f"CSV: {selectivity*100:.0f}%,{row_count_id(num_rows)},{num_rows},{int(selectivity*num_rows)},"
           f"{baseline_times['avg_ms']:.2f},{baseline_std:.2f},"
           f"{hybrid_times['avg_ms']:.2f},{hybrid_std:.2f},"
-          f"{speedup:.2f},{t_stat:.3f},{p_value:.4f},{winner}{sig_marker}")
+          f"{speedup:.2f},{t_stat:.3f},{p_value:.2e},{winner}{sig_marker}")
     print(f"{'='*70}\n")
 
 
@@ -1445,7 +1445,7 @@ def test_hybrid_scan_haseeb_selectivity(spark_tmp_path, num_rows, num_payload_co
           f"(std={hybrid_std:.2f}, min={hybrid_times['min_ms']:.2f}, max={hybrid_times['max_ms']:.2f})")
     print(f"{'='*80}")
     print(f"SPEEDUP: {speedup:.2f}x {'✓ HYBRID FASTER' if speedup > 1 else '✗ BASELINE FASTER'}")
-    print(f"T-TEST:  t={t_stat:.3f}, p={p_value:.6f} {'*** SIGNIFICANT ***' if is_significant else '(not significant)'}")
+    print(f"T-TEST:  t={t_stat:.3f}, p={p_value:.2e} {'*** SIGNIFICANT ***' if is_significant else '(not significant)'}")
     print(f"{'='*80}")
     
     # CSV output for easy analysis
@@ -1455,7 +1455,7 @@ def test_hybrid_scan_haseeb_selectivity(spark_tmp_path, num_rows, num_payload_co
           f"{hybrid_times['row_count']},{actual_selectivity:.4f},"
           f"{baseline_times['avg_ms']:.2f},{baseline_std:.2f},"
           f"{hybrid_times['avg_ms']:.2f},{hybrid_std:.2f},"
-          f"{speedup:.2f},{t_stat:.3f},{p_value:.6f},{winner}{sig_marker}")
+          f"{speedup:.2f},{t_stat:.3f},{p_value:.2e},{winner}{sig_marker}")
     print(f"{'='*80}\n")
 
 
@@ -1537,7 +1537,7 @@ def test_hybrid_scan_haseeb_payload_cols(spark_tmp_path, num_rows, num_payload_c
           f"(std={hybrid_std:.2f}, min={hybrid_times['min_ms']:.2f}, max={hybrid_times['max_ms']:.2f})")
     print(f"{'='*80}")
     print(f"SPEEDUP: {speedup:.2f}x {'✓ HYBRID FASTER' if speedup > 1 else '✗ BASELINE FASTER'}")
-    print(f"T-TEST:  t={t_stat:.3f}, p={p_value:.6f} {'*** SIGNIFICANT ***' if is_significant else '(not significant)'}")
+    print(f"T-TEST:  t={t_stat:.3f}, p={p_value:.2e} {'*** SIGNIFICANT ***' if is_significant else '(not significant)'}")
     print(f"{'='*80}")
     
     # CSV output for easy analysis
@@ -1546,7 +1546,7 @@ def test_hybrid_scan_haseeb_payload_cols(spark_tmp_path, num_rows, num_payload_c
     print(f"CSV: HASEEB_COLS,{row_count_id(num_rows)},{num_rows},{num_payload_cols},"
           f"{baseline_times['avg_ms']:.2f},{baseline_std:.2f},"
           f"{hybrid_times['avg_ms']:.2f},{hybrid_std:.2f},"
-          f"{speedup:.2f},{t_stat:.3f},{p_value:.6f},{winner}{sig_marker}")
+          f"{speedup:.2f},{t_stat:.3f},{p_value:.2e},{winner}{sig_marker}")
     print(f"{'='*80}\n")
 
 
@@ -1638,7 +1638,7 @@ def test_hybrid_scan_haseeb_ast_filter(spark_tmp_path, num_rows):
           f"(std={hybrid_std:.2f}, min={hybrid_times['min_ms']:.2f}, max={hybrid_times['max_ms']:.2f})")
     print(f"{'='*80}")
     print(f"SPEEDUP: {speedup:.2f}x {'✓ HYBRID FASTER' if speedup > 1 else '✗ BASELINE FASTER'}")
-    print(f"T-TEST:  t={t_stat:.3f}, p={p_value:.6f} {'*** SIGNIFICANT ***' if is_significant else '(not significant)'}")
+    print(f"T-TEST:  t={t_stat:.3f}, p={p_value:.2e} {'*** SIGNIFICANT ***' if is_significant else '(not significant)'}")
     print(f"{'='*80}")
     
     # CSV output
@@ -1647,7 +1647,7 @@ def test_hybrid_scan_haseeb_ast_filter(spark_tmp_path, num_rows):
     print(f"CSV: HASEEB,{row_count_id(num_rows)},{num_rows},{hybrid_times['row_count']},"
           f"{baseline_times['avg_ms']:.2f},{baseline_std:.2f},"
           f"{hybrid_times['avg_ms']:.2f},{hybrid_std:.2f},"
-          f"{speedup:.2f},{t_stat:.3f},{p_value:.6f},{winner}{sig_marker}")
+          f"{speedup:.2f},{t_stat:.3f},{p_value:.2e},{winner}{sig_marker}")
     print(f"{'='*80}\n")
 
 
@@ -1762,7 +1762,7 @@ def test_hybrid_scan_haseeb_range_filter(spark_tmp_path):
 
 @pytest.mark.parametrize('selectivity', [0.01, 0.05, 0.10], ids=lambda x: f'sel_{int(x*100)}pct')
 @pytest.mark.parametrize('num_payload_cols', [1, 5, 10, 40, 100], ids=lambda x: f'{x}cols')
-@pytest.mark.parametrize('num_rows', [1_000_000], ids=['1M'])
+@pytest.mark.parametrize('num_rows', [1_000_000, 10_000_000], ids=['1M', '10M'])
 def test_range_int_str_payload(spark_tmp_path, num_rows, num_payload_cols, selectivity):
     """RANGE filter test: Integer filter_col + String payload columns.
     
@@ -1814,7 +1814,7 @@ def test_range_int_str_payload(spark_tmp_path, num_rows, num_payload_cols, selec
     print(f"Hybrid:   {hybrid_times['avg_ms']:.2f}ms (std={hybrid_std:.2f})")
     print(f"{'='*80}")
     print(f"SPEEDUP: {speedup:.2f}x {'✓ HYBRID FASTER' if speedup > 1 else '✗ BASELINE FASTER'}")
-    print(f"T-TEST:  t={t_stat:.3f}, p={p_value:.6f} {'*** SIGNIFICANT ***' if is_significant else ''}")
+    print(f"T-TEST:  t={t_stat:.3f}, p={p_value:.2e} {'*** SIGNIFICANT ***' if is_significant else ''}")
     print(f"{'='*80}")
     
     winner = 'Hybrid' if speedup > 1 else 'Baseline'
@@ -1823,13 +1823,13 @@ def test_range_int_str_payload(spark_tmp_path, num_rows, num_payload_cols, selec
           f"{hybrid_times['row_count']},{actual_selectivity:.2f},"
           f"{baseline_times['avg_ms']:.2f},{baseline_std:.2f},"
           f"{hybrid_times['avg_ms']:.2f},{hybrid_std:.2f},"
-          f"{speedup:.2f},{t_stat:.3f},{p_value:.6f},{winner}{sig_marker}")
+          f"{speedup:.2f},{t_stat:.3f},{p_value:.2e},{winner}{sig_marker}")
     print(f"{'='*80}\n")
 
 
 @pytest.mark.parametrize('selectivity', [0.01, 0.05, 0.10], ids=lambda x: f'sel_{int(x*100)}pct')
 @pytest.mark.parametrize('num_payload_cols', [1, 5, 10, 40, 100], ids=lambda x: f'{x}cols')
-@pytest.mark.parametrize('num_rows', [1_000_000], ids=['1M'])
+@pytest.mark.parametrize('num_rows', [1_000_000, 10_000_000], ids=['1M', '10M'])
 def test_range_int_int_payload(spark_tmp_path, num_rows, num_payload_cols, selectivity):
     """RANGE filter test: Integer filter_col + Integer payload columns.
     
@@ -1881,7 +1881,7 @@ def test_range_int_int_payload(spark_tmp_path, num_rows, num_payload_cols, selec
     print(f"Hybrid:   {hybrid_times['avg_ms']:.2f}ms (std={hybrid_std:.2f})")
     print(f"{'='*80}")
     print(f"SPEEDUP: {speedup:.2f}x {'✓ HYBRID FASTER' if speedup > 1 else '✗ BASELINE FASTER'}")
-    print(f"T-TEST:  t={t_stat:.3f}, p={p_value:.6f} {'*** SIGNIFICANT ***' if is_significant else ''}")
+    print(f"T-TEST:  t={t_stat:.3f}, p={p_value:.2e} {'*** SIGNIFICANT ***' if is_significant else ''}")
     print(f"{'='*80}")
     
     winner = 'Hybrid' if speedup > 1 else 'Baseline'
@@ -1890,13 +1890,13 @@ def test_range_int_int_payload(spark_tmp_path, num_rows, num_payload_cols, selec
           f"{hybrid_times['row_count']},{actual_selectivity:.2f},"
           f"{baseline_times['avg_ms']:.2f},{baseline_std:.2f},"
           f"{hybrid_times['avg_ms']:.2f},{hybrid_std:.2f},"
-          f"{speedup:.2f},{t_stat:.3f},{p_value:.6f},{winner}{sig_marker}")
+          f"{speedup:.2f},{t_stat:.3f},{p_value:.2e},{winner}{sig_marker}")
     print(f"{'='*80}\n")
 
 
 @pytest.mark.parametrize('selectivity', [0.01, 0.05, 0.10], ids=lambda x: f'sel_{int(x*100)}pct')
 @pytest.mark.parametrize('num_payload_cols', [1, 5, 10, 40, 100], ids=lambda x: f'{x}cols')
-@pytest.mark.parametrize('num_rows', [1_000_000], ids=['1M'])
+@pytest.mark.parametrize('num_rows', [1_000_000, 10_000_000], ids=['1M', '10M'])
 def test_range_str_str_payload(spark_tmp_path, num_rows, num_payload_cols, selectivity):
     """RANGE filter test: String key + String payload columns (Haseeb pattern).
     
@@ -1948,7 +1948,7 @@ def test_range_str_str_payload(spark_tmp_path, num_rows, num_payload_cols, selec
     print(f"Hybrid:   {hybrid_times['avg_ms']:.2f}ms (std={hybrid_std:.2f})")
     print(f"{'='*80}")
     print(f"SPEEDUP: {speedup:.2f}x {'✓ HYBRID FASTER' if speedup > 1 else '✗ BASELINE FASTER'}")
-    print(f"T-TEST:  t={t_stat:.3f}, p={p_value:.6f} {'*** SIGNIFICANT ***' if is_significant else ''}")
+    print(f"T-TEST:  t={t_stat:.3f}, p={p_value:.2e} {'*** SIGNIFICANT ***' if is_significant else ''}")
     print(f"{'='*80}")
     
     winner = 'Hybrid' if speedup > 1 else 'Baseline'
@@ -1957,7 +1957,7 @@ def test_range_str_str_payload(spark_tmp_path, num_rows, num_payload_cols, selec
           f"{hybrid_times['row_count']},{actual_selectivity:.2f},"
           f"{baseline_times['avg_ms']:.2f},{baseline_std:.2f},"
           f"{hybrid_times['avg_ms']:.2f},{hybrid_std:.2f},"
-          f"{speedup:.2f},{t_stat:.3f},{p_value:.6f},{winner}{sig_marker}")
+          f"{speedup:.2f},{t_stat:.3f},{p_value:.2e},{winner}{sig_marker}")
     print(f"{'='*80}\n")
 
 
@@ -1973,7 +1973,7 @@ def test_range_str_str_payload(spark_tmp_path, num_rows, num_payload_cols, selec
 
 @pytest.mark.parametrize('selectivity_pct', [0.01, 1.0, 5.0, 10.0], ids=lambda x: f'sel_{x}pct')
 @pytest.mark.parametrize('num_payload_cols', [1, 5, 10, 40, 100], ids=lambda x: f'{x}cols')
-@pytest.mark.parametrize('num_rows', [1_000_000], ids=['1M'])
+@pytest.mark.parametrize('num_rows', [1_000_000, 10_000_000], ids=['1M', '10M'])
 def test_equality_int_str_payload(spark_tmp_path, num_rows, num_payload_cols, selectivity_pct):
     """EQUALITY filter test: Integer filter_col + String payload columns.
     
@@ -2026,7 +2026,7 @@ def test_equality_int_str_payload(spark_tmp_path, num_rows, num_payload_cols, se
     print(f"Hybrid:   {hybrid_times['avg_ms']:.2f}ms (std={hybrid_std:.2f})")
     print(f"{'='*80}")
     print(f"SPEEDUP: {speedup:.2f}x {'✓ HYBRID FASTER' if speedup > 1 else '✗ BASELINE FASTER'}")
-    print(f"T-TEST:  t={t_stat:.3f}, p={p_value:.6f} {'*** SIGNIFICANT ***' if is_significant else ''}")
+    print(f"T-TEST:  t={t_stat:.3f}, p={p_value:.2e} {'*** SIGNIFICANT ***' if is_significant else ''}")
     print(f"{'='*80}")
     
     winner = 'Hybrid' if speedup > 1 else 'Baseline'
@@ -2035,13 +2035,13 @@ def test_equality_int_str_payload(spark_tmp_path, num_rows, num_payload_cols, se
           f"{hybrid_times['row_count']},{actual_selectivity:.4f},"
           f"{baseline_times['avg_ms']:.2f},{baseline_std:.2f},"
           f"{hybrid_times['avg_ms']:.2f},{hybrid_std:.2f},"
-          f"{speedup:.2f},{t_stat:.3f},{p_value:.6f},{winner}{sig_marker}")
+          f"{speedup:.2f},{t_stat:.3f},{p_value:.2e},{winner}{sig_marker}")
     print(f"{'='*80}\n")
 
 
 @pytest.mark.parametrize('selectivity_pct', [0.01, 1.0, 5.0, 10.0], ids=lambda x: f'sel_{x}pct')
 @pytest.mark.parametrize('num_payload_cols', [1, 5, 10, 40, 100], ids=lambda x: f'{x}cols')
-@pytest.mark.parametrize('num_rows', [1_000_000], ids=['1M'])
+@pytest.mark.parametrize('num_rows', [1_000_000, 10_000_000], ids=['1M', '10M'])
 def test_equality_int_int_payload(spark_tmp_path, num_rows, num_payload_cols, selectivity_pct):
     """EQUALITY filter test: Integer filter_col + Integer payload columns.
     
@@ -2094,7 +2094,7 @@ def test_equality_int_int_payload(spark_tmp_path, num_rows, num_payload_cols, se
     print(f"Hybrid:   {hybrid_times['avg_ms']:.2f}ms (std={hybrid_std:.2f})")
     print(f"{'='*80}")
     print(f"SPEEDUP: {speedup:.2f}x {'✓ HYBRID FASTER' if speedup > 1 else '✗ BASELINE FASTER'}")
-    print(f"T-TEST:  t={t_stat:.3f}, p={p_value:.6f} {'*** SIGNIFICANT ***' if is_significant else ''}")
+    print(f"T-TEST:  t={t_stat:.3f}, p={p_value:.2e} {'*** SIGNIFICANT ***' if is_significant else ''}")
     print(f"{'='*80}")
     
     winner = 'Hybrid' if speedup > 1 else 'Baseline'
@@ -2103,13 +2103,13 @@ def test_equality_int_int_payload(spark_tmp_path, num_rows, num_payload_cols, se
           f"{hybrid_times['row_count']},{actual_selectivity:.4f},"
           f"{baseline_times['avg_ms']:.2f},{baseline_std:.2f},"
           f"{hybrid_times['avg_ms']:.2f},{hybrid_std:.2f},"
-          f"{speedup:.2f},{t_stat:.3f},{p_value:.6f},{winner}{sig_marker}")
+          f"{speedup:.2f},{t_stat:.3f},{p_value:.2e},{winner}{sig_marker}")
     print(f"{'='*80}\n")
 
 
 @pytest.mark.parametrize('selectivity_pct', [0.01, 1.0, 5.0, 10.0], ids=lambda x: f'sel_{x}pct')
 @pytest.mark.parametrize('num_payload_cols', [1, 5, 10, 40, 100], ids=lambda x: f'{x}cols')
-@pytest.mark.parametrize('num_rows', [1_000_000], ids=['1M'])
+@pytest.mark.parametrize('num_rows', [1_000_000, 10_000_000], ids=['1M', '10M'])
 def test_equality_str_str_payload(spark_tmp_path, num_rows, num_payload_cols, selectivity_pct):
     """EQUALITY filter test: String key + String payload columns (Haseeb pattern).
     
@@ -2163,7 +2163,7 @@ def test_equality_str_str_payload(spark_tmp_path, num_rows, num_payload_cols, se
     print(f"Hybrid:   {hybrid_times['avg_ms']:.2f}ms (std={hybrid_std:.2f})")
     print(f"{'='*80}")
     print(f"SPEEDUP: {speedup:.2f}x {'✓ HYBRID FASTER' if speedup > 1 else '✗ BASELINE FASTER'}")
-    print(f"T-TEST:  t={t_stat:.3f}, p={p_value:.6f} {'*** SIGNIFICANT ***' if is_significant else ''}")
+    print(f"T-TEST:  t={t_stat:.3f}, p={p_value:.2e} {'*** SIGNIFICANT ***' if is_significant else ''}")
     print(f"{'='*80}")
     
     winner = 'Hybrid' if speedup > 1 else 'Baseline'
@@ -2172,6 +2172,235 @@ def test_equality_str_str_payload(spark_tmp_path, num_rows, num_payload_cols, se
           f"{hybrid_times['row_count']},{actual_selectivity:.4f},"
           f"{baseline_times['avg_ms']:.2f},{baseline_std:.2f},"
           f"{hybrid_times['avg_ms']:.2f},{hybrid_std:.2f},"
-          f"{speedup:.2f},{t_stat:.3f},{p_value:.6f},{winner}{sig_marker}")
+          f"{speedup:.2f},{t_stat:.3f},{p_value:.2e},{winner}{sig_marker}")
     print(f"{'='*80}\n")
 
+
+# =============================================================================
+# FERDINAND VALIDATION TESTS - SORTED vs RANDOM DATA
+# =============================================================================
+# These tests replicate Ferdinand's findings to validate when hybrid scan
+# helps vs hurts. Ferdinand found:
+#   - Random (no page index) @ 1%: -48% (faster)
+#   - Random (no page index) @ 10%: +11% (SLOWER!)
+#   - Sorted + Page Index @ 1%: -65% (faster)
+#   - Sorted + Page Index @ 10%: -24% (faster)
+# =============================================================================
+
+def generate_sorted_data_ferdinand(spark, data_path, num_rows, num_payload_cols=5):
+    """Generate SORTED data (like Ferdinand's test) for page index filtering.
+    
+    Data is SORTED by filter_col, so each row group has narrow min/max stats.
+    This enables both row group AND page-level filtering.
+    
+    Ferdinand tested with ~5 payload columns - we replicate that here.
+    """
+    from pyspark.sql.functions import floor
+    
+    num_partitions = max(1, num_rows // 2_500_000)
+    
+    print(f"Generating SORTED data (Ferdinand pattern):")
+    print(f"  - {num_rows:,} rows, {num_payload_cols} payload columns")
+    print(f"  - SORTED by filter_col for effective page index")
+    
+    # Create data with filter_col 0-99, then SORT it
+    df = spark.range(0, num_rows, 1, num_partitions) \
+        .withColumn('filter_col', floor(col('id') % 100).cast('int'))
+    
+    # Add payload columns (mix of strings and doubles like Ferdinand)
+    for i in range(num_payload_cols):
+        if i % 2 == 0:
+            # String payload
+            df = df.withColumn(f'payload_{i}', 
+                concat(lit(f'data_{i}_'), (rand() * 100000).cast('int').cast('string')))
+        else:
+            # Double payload
+            df = df.withColumn(f'payload_{i}', rand())
+    
+    df = df.drop('id')
+    
+    # Sort by filter_col to get good page index stats
+    df = df.orderBy('filter_col')
+    
+    # Write with small row groups for more granular filtering
+    row_group_size = 1 * 1024 * 1024  # 1MB
+    df.coalesce(1) \
+        .write \
+        .mode('overwrite') \
+        .option('parquet.block.size', str(row_group_size)) \
+        .parquet(data_path)
+    
+    print(f"  - Written to {data_path}")
+
+
+def generate_random_data_ferdinand(spark, data_path, num_rows, num_payload_cols=5):
+    """Generate RANDOM data (like Ferdinand's test) - page index won't help.
+    
+    Data has RANDOM filter_col values, so every row group/page has min=0, max=99.
+    Page index exists but is INEFFECTIVE for filtering.
+    
+    Ferdinand tested with ~5 payload columns - we replicate that here.
+    """
+    from pyspark.sql.functions import floor
+    
+    num_partitions = max(1, num_rows // 2_500_000)
+    
+    print(f"Generating RANDOM data (Ferdinand pattern):")
+    print(f"  - {num_rows:,} rows, {num_payload_cols} payload columns")
+    print(f"  - RANDOM filter_col - page index won't help!")
+    
+    # Create data with RANDOM filter_col 0-99
+    df = spark.range(0, num_rows, 1, num_partitions) \
+        .withColumn('filter_col', floor(rand() * 100).cast('int'))
+    
+    # Add payload columns (mix of strings and doubles like Ferdinand)
+    for i in range(num_payload_cols):
+        if i % 2 == 0:
+            # String payload
+            df = df.withColumn(f'payload_{i}', 
+                concat(lit(f'data_{i}_'), (rand() * 100000).cast('int').cast('string')))
+        else:
+            # Double payload
+            df = df.withColumn(f'payload_{i}', rand())
+    
+    df = df.drop('id')
+    
+    # Write with small row groups
+    row_group_size = 1 * 1024 * 1024  # 1MB
+    df.write \
+        .mode('overwrite') \
+        .option('parquet.block.size', str(row_group_size)) \
+        .parquet(data_path)
+    
+    print(f"  - Written to {data_path}")
+
+
+@pytest.mark.parametrize('selectivity', [1, 10], ids=['1pct', '10pct'])
+@pytest.mark.parametrize('num_rows', [5_000_000], ids=['5M'])
+def test_ferdinand_sorted_data(spark_tmp_path, num_rows, selectivity):
+    """Ferdinand validation: SORTED data with page index.
+    
+    Ferdinand's results to replicate:
+      - 1% selectivity: -65% (hybrid faster)
+      - 10% selectivity: -24% (hybrid faster)
+    
+    Sorted data enables effective page index filtering.
+    """
+    data_path = spark_tmp_path + '/FERD_SORTED'
+    num_payload_cols = 5  # Ferdinand used ~5-6 cols
+    
+    print(f"\n{'='*80}")
+    print(f"FERDINAND VALIDATION: SORTED DATA")
+    print(f"  {num_rows:,} rows, {num_payload_cols} payload cols, {selectivity}% selectivity")
+    print(f"{'='*80}")
+    
+    with_cpu_session(
+        lambda spark: generate_sorted_data_ferdinand(spark, data_path, num_rows, num_payload_cols))
+    
+    def query_fn(spark):
+        return spark.read.parquet(data_path).filter(col('filter_col') < selectivity)
+    
+    print(f"Running BASELINE (hybridScan=DISABLED)...")
+    baseline_times = with_gpu_session(
+        lambda spark: run_with_timing(spark, query_fn), conf=baseline_conf)
+    
+    print(f"Running HYBRID SCAN (hybridScan=PHASE0_POC)...")
+    hybrid_times = with_gpu_session(
+        lambda spark: run_with_timing(spark, query_fn), conf=hybrid_conf)
+    
+    speedup = baseline_times['avg_ms'] / hybrid_times['avg_ms']
+    t_stat, p_value = stats.ttest_ind(baseline_times['all_ms'], hybrid_times['all_ms'], equal_var=False)
+    
+    import numpy as np
+    baseline_std = np.std(baseline_times['all_ms'], ddof=1)
+    hybrid_std = np.std(hybrid_times['all_ms'], ddof=1)
+    is_significant = p_value < 0.05
+    
+    improvement_pct = (1 - hybrid_times['avg_ms'] / baseline_times['avg_ms']) * 100
+    
+    print(f"\n{'='*80}")
+    print(f"FERDINAND SORTED DATA - {selectivity}% selectivity")
+    print(f"{'='*80}")
+    print(f"Expected (Ferdinand): {'-65%' if selectivity == 1 else '-24%'}")
+    print(f"Actual:               {improvement_pct:+.1f}%")
+    print(f"{'='*80}")
+    print(f"Baseline: {baseline_times['avg_ms']:.2f}ms (std={baseline_std:.2f})")
+    print(f"Hybrid:   {hybrid_times['avg_ms']:.2f}ms (std={hybrid_std:.2f})")
+    print(f"SPEEDUP:  {speedup:.2f}x")
+    print(f"T-TEST:   t={t_stat:.3f}, p={p_value:.2e} {'*** SIGNIFICANT ***' if is_significant else ''}")
+    print(f"{'='*80}")
+    
+    winner = 'Hybrid' if speedup > 1 else 'Baseline'
+    sig_marker = '*' if is_significant else ''
+    print(f"CSV: FERD_SORTED,5M,{num_rows},{num_payload_cols},{selectivity},"
+          f"{baseline_times['avg_ms']:.2f},{baseline_std:.2f},"
+          f"{hybrid_times['avg_ms']:.2f},{hybrid_std:.2f},"
+          f"{speedup:.2f},{improvement_pct:+.1f}%,{t_stat:.3f},{p_value:.2e},{winner}{sig_marker}")
+
+
+@pytest.mark.parametrize('selectivity', [1, 10], ids=['1pct', '10pct'])
+@pytest.mark.parametrize('num_rows', [5_000_000], ids=['5M'])
+def test_ferdinand_random_data(spark_tmp_path, num_rows, selectivity):
+    """Ferdinand validation: RANDOM data (page index ineffective).
+    
+    Ferdinand's results to replicate:
+      - 1% selectivity: -48% (hybrid faster)
+      - 10% selectivity: +11% (hybrid SLOWER!)
+    
+    Random data means page index can't skip anything.
+    This is where we expect to see hybrid scan potentially LOSE at higher selectivity.
+    """
+    data_path = spark_tmp_path + '/FERD_RANDOM'
+    num_payload_cols = 5  # Ferdinand used ~5-6 cols
+    
+    print(f"\n{'='*80}")
+    print(f"FERDINAND VALIDATION: RANDOM DATA (page index ineffective)")
+    print(f"  {num_rows:,} rows, {num_payload_cols} payload cols, {selectivity}% selectivity")
+    print(f"{'='*80}")
+    
+    with_cpu_session(
+        lambda spark: generate_random_data_ferdinand(spark, data_path, num_rows, num_payload_cols))
+    
+    def query_fn(spark):
+        return spark.read.parquet(data_path).filter(col('filter_col') < selectivity)
+    
+    print(f"Running BASELINE (hybridScan=DISABLED)...")
+    baseline_times = with_gpu_session(
+        lambda spark: run_with_timing(spark, query_fn), conf=baseline_conf)
+    
+    print(f"Running HYBRID SCAN (hybridScan=PHASE0_POC)...")
+    hybrid_times = with_gpu_session(
+        lambda spark: run_with_timing(spark, query_fn), conf=hybrid_conf)
+    
+    speedup = baseline_times['avg_ms'] / hybrid_times['avg_ms']
+    t_stat, p_value = stats.ttest_ind(baseline_times['all_ms'], hybrid_times['all_ms'], equal_var=False)
+    
+    import numpy as np
+    baseline_std = np.std(baseline_times['all_ms'], ddof=1)
+    hybrid_std = np.std(hybrid_times['all_ms'], ddof=1)
+    is_significant = p_value < 0.05
+    
+    improvement_pct = (1 - hybrid_times['avg_ms'] / baseline_times['avg_ms']) * 100
+    
+    print(f"\n{'='*80}")
+    print(f"FERDINAND RANDOM DATA - {selectivity}% selectivity")
+    print(f"{'='*80}")
+    print(f"Expected (Ferdinand): {'-48%' if selectivity == 1 else '+11% SLOWER'}")
+    print(f"Actual:               {improvement_pct:+.1f}%")
+    print(f"{'='*80}")
+    print(f"Baseline: {baseline_times['avg_ms']:.2f}ms (std={baseline_std:.2f})")
+    print(f"Hybrid:   {hybrid_times['avg_ms']:.2f}ms (std={hybrid_std:.2f})")
+    print(f"SPEEDUP:  {speedup:.2f}x")
+    print(f"T-TEST:   t={t_stat:.3f}, p={p_value:.2e} {'*** SIGNIFICANT ***' if is_significant else ''}")
+    print(f"{'='*80}")
+    
+    if selectivity == 10 and speedup < 1:
+        print(f"⚠️  CONFIRMED: Hybrid scan is SLOWER with random data at {selectivity}% selectivity!")
+        print(f"    This matches Ferdinand's findings (+11% slower)")
+    
+    winner = 'Hybrid' if speedup > 1 else 'Baseline'
+    sig_marker = '*' if is_significant else ''
+    print(f"CSV: FERD_RANDOM,5M,{num_rows},{num_payload_cols},{selectivity},"
+          f"{baseline_times['avg_ms']:.2f},{baseline_std:.2f},"
+          f"{hybrid_times['avg_ms']:.2f},{hybrid_std:.2f},"
+          f"{speedup:.2f},{improvement_pct:+.1f}%,{t_stat:.3f},{p_value:.2e},{winner}{sig_marker}")
