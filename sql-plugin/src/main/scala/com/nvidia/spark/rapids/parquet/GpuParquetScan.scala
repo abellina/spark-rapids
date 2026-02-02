@@ -3458,6 +3458,20 @@ class HybridScanParquetPartitionReader(
               return EmptyGpuColumnarBatchIterator
             }
             
+            // Determine which columns are filter-only vs payload columns
+            // Filter columns = columns referenced in the filter expression
+            // Payload columns = output columns that are NOT filter columns
+            val filterColumnNames: Set[String] = if (hybridScanFilters.nonEmpty) {
+              hybridScanFilters.flatMap(FilterToAstConverter.getReferencedColumns).toSet
+            } else {
+              Set.empty
+            }
+            val outputColumnNames = columnNames.toSet
+            val hasPayloadColumns = !(outputColumnNames subsetOf filterColumnNames)
+            
+            logDebug(s"HybridScan: filterColumns=$filterColumnNames, " +
+              s"outputColumns=$outputColumnNames, hasPayloadColumns=$hasPayloadColumns")
+            
             // Step 5: Get byte ranges for filter and payload columns
             val (filterRanges, payloadRanges) = NvtxRegistry.HYBRID_SCAN_GET_BYTE_RANGES {
               val fRanges = if (filterOpt.isDefined) {
@@ -3468,7 +3482,13 @@ class HybridScanParquetPartitionReader(
               logDebug(s"HybridScan: getFilterColumnChunkByteRanges returned " +
                 s"${fRanges.length / 2} ranges")
               
-              val pRanges = reader.getPayloadColumnChunkByteRanges(rowGroupsAfterDictFilter)
+              // Only get payload ranges if there are payload columns
+              // If all output columns are filter columns, there's nothing extra to read
+              val pRanges = if (hasPayloadColumns) {
+                reader.getPayloadColumnChunkByteRanges(rowGroupsAfterDictFilter)
+              } else {
+                Array.empty[Long]
+              }
               logDebug(s"HybridScan: getPayloadColumnChunkByteRanges returned " +
                 s"${pRanges.length / 2} ranges")
               (fRanges, pRanges)
@@ -3483,7 +3503,11 @@ class HybridScanParquetPartitionReader(
                 } else {
                   (null, Seq.empty[HostMemoryBuffer])
                 }
-                val (pOwner, pSlices) = readByteRangesToHostCoalesced(payloadRanges)
+                val (pOwner, pSlices) = if (payloadRanges.nonEmpty) {
+                  readByteRangesToHostCoalesced(payloadRanges)
+                } else {
+                  (null, Seq.empty[HostMemoryBuffer])
+                }
                 (fOwner, fSlices, pOwner, pSlices)
               }
             
