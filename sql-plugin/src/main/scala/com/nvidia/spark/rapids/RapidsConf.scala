@@ -1385,6 +1385,30 @@ val GPU_COREDUMP_PIPE_PATTERN = conf("spark.rapids.gpu.coreDump.pipePattern")
       .checkValues(ParquetHybridScanMode.values.map(_.toString))
       .createWithDefault(ParquetHybridScanMode.DISABLED.toString)
 
+  /**
+   * Controls the materialization mode for hybrid scan.
+   * 
+   * TWO_STAGE: Read filter columns first, apply AST filter, then read payload columns 
+   *            only for surviving rows. Best for highly selective filters with many payload columns.
+   * SINGLE_STAGE: Read all columns at once and apply filter after. Best for high selectivity
+   *               (most rows survive) or few/small payload columns.
+   */
+  object HybridScanMaterializeMode extends Enumeration {
+    val TWO_STAGE, SINGLE_STAGE = Value
+  }
+
+  val PARQUET_HYBRID_SCAN_MATERIALIZE_MODE =
+    conf("spark.rapids.sql.format.parquet.hybridScan.materialize.mode")
+      .doc("Controls how hybrid scan materializes columns. " +
+          "TWO_STAGE: Read filter columns first, apply filter, then read payload columns " +
+          "only for surviving rows. Best for highly selective filters (<10%) with many payload columns. " +
+          "SINGLE_STAGE: Read all columns at once and filter after. Less overhead, " +
+          "best when filter selectivity is high or payload columns are few/small.")
+      .stringConf
+      .transform(_.toUpperCase(java.util.Locale.ROOT))
+      .checkValues(HybridScanMaterializeMode.values.map(_.toString))
+      .createWithDefault(HybridScanMaterializeMode.TWO_STAGE.toString)
+
   // This is an experimental feature now. And eventually, should be enabled or disabled depending
   // on something that we don't know yet but would try to figure out.
   val ENABLE_CPU_BASED_UDF = conf("spark.rapids.sql.rowBasedUDF.enabled")
@@ -3576,6 +3600,16 @@ class RapidsConf(conf: Map[String, String]) extends Logging {
       case other =>
         throw new IllegalArgumentException(s"Internal Error $other is not supported for " +
             s"${PARQUET_HYBRID_SCAN_MODE.key}")
+    }
+  }
+
+  lazy val hybridScanMaterializeMode: HybridScanMaterializeMode.Value = {
+    get(PARQUET_HYBRID_SCAN_MATERIALIZE_MODE) match {
+      case "TWO_STAGE" => HybridScanMaterializeMode.TWO_STAGE
+      case "SINGLE_STAGE" => HybridScanMaterializeMode.SINGLE_STAGE
+      case other =>
+        throw new IllegalArgumentException(s"Internal Error $other is not supported for " +
+            s"${PARQUET_HYBRID_SCAN_MATERIALIZE_MODE.key}")
     }
   }
 

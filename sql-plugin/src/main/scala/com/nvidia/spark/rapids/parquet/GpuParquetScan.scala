@@ -34,7 +34,7 @@ import com.github.luben.zstd.ZstdDecompressCtx
 import com.nvidia.spark.rapids._
 import com.nvidia.spark.rapids.Arm.{closeOnExcept, withResource}
 import com.nvidia.spark.rapids.GpuMetric._
-import com.nvidia.spark.rapids.RapidsConf.ParquetFooterReaderType
+import com.nvidia.spark.rapids.RapidsConf.{HybridScanMaterializeMode, ParquetFooterReaderType}
 import com.nvidia.spark.rapids.RapidsPluginImplicits._
 import com.nvidia.spark.rapids.RmmRapidsRetryIterator.withRetryNoSplit
 import com.nvidia.spark.rapids.filecache.FileCache
@@ -1453,6 +1453,7 @@ case class GpuParquetPartitionReaderFactory(
       0L
     }
   private val hybridScanMode = rapidsConf.parquetHybridScanMode
+  private val hybridScanMaterializeMode = rapidsConf.hybridScanMaterializeMode
   private val filterHandler = GpuParquetFileFilterHandler(sqlConf, metrics)
   private val readUseFieldId = ParquetSchemaClipShims.useFieldId(sqlConf)
   private val footerReadType = GpuParquetScan.footerReaderHeuristic(
@@ -1491,7 +1492,7 @@ case class GpuParquetPartitionReaderFactory(
       
       new HybridScanParquetPartitionReader(fileIO, conf, file, filePath,
         isCaseSensitive, readDataSchema, debugDumpPrefix, debugDumpAlways,
-        metrics, readUseFieldId, hybridScanFilters)
+        metrics, readUseFieldId, hybridScanFilters, hybridScanMaterializeMode)
     } else {
       // Normal path - use filterBlocks
       val startTime = System.nanoTime()
@@ -3258,6 +3259,7 @@ case class ParquetTableReader(
  * @param execMetrics metrics
  * @param useFieldId whether to use field ID for column matching
  * @param hybridScanFilters filters that can be converted to cuDF AST
+ * @param materializeMode TWO_STAGE or SINGLE_STAGE materialization mode
  */
 class HybridScanParquetPartitionReader(
     fileIO: RapidsFileIO,
@@ -3270,7 +3272,8 @@ class HybridScanParquetPartitionReader(
     debugDumpAlways: Boolean,
     execMetrics: Map[String, GpuMetric],
     useFieldId: Boolean,
-    hybridScanFilters: Array[Filter]) extends PartitionReader[ColumnarBatch] with Logging {
+    hybridScanFilters: Array[Filter],
+    materializeMode: HybridScanMaterializeMode.Value) extends PartitionReader[ColumnarBatch] with Logging {
 
   private var isDone = false
   private var batchIter: Iterator[ColumnarBatch] = Iterator.empty
@@ -3458,80 +3461,91 @@ class HybridScanParquetPartitionReader(
               return EmptyGpuColumnarBatchIterator
             }
             
-            // Determine which columns are filter-only vs payload columns
-            // Filter columns = columns referenced in the filter expression
-            // Payload columns = output columns that are NOT filter columns
-            val filterColumnNames: Set[String] = if (hybridScanFilters.nonEmpty) {
-              hybridScanFilters.flatMap(FilterToAstConverter.getReferencedColumns).toSet
-            } else {
-              Set.empty
-            }
-            val outputColumnNames = columnNames.toSet
-            val hasPayloadColumns = !(outputColumnNames subsetOf filterColumnNames)
-            
-            logDebug(s"HybridScan: filterColumns=$filterColumnNames, " +
-              s"outputColumns=$outputColumnNames, hasPayloadColumns=$hasPayloadColumns")
-            
-            // Step 5: Get byte ranges for filter and payload columns
-            val (filterRanges, payloadRanges) = NvtxRegistry.HYBRID_SCAN_GET_BYTE_RANGES {
-              val fRanges = if (filterOpt.isDefined) {
-                reader.getFilterColumnChunkByteRanges(rowGroupsAfterDictFilter)
-              } else {
-                Array.empty[Long]
-              }
-              logDebug(s"HybridScan: getFilterColumnChunkByteRanges returned " +
-                s"${fRanges.length / 2} ranges")
-              
-              // Only get payload ranges if there are payload columns
-              // If all output columns are filter columns, there's nothing extra to read
-              val pRanges = if (hasPayloadColumns) {
-                reader.getPayloadColumnChunkByteRanges(rowGroupsAfterDictFilter)
-              } else {
-                Array.empty[Long]
-              }
-              logDebug(s"HybridScan: getPayloadColumnChunkByteRanges returned " +
-                s"${pRanges.length / 2} ranges")
-              (fRanges, pRanges)
-            }
-            
-            // Step 6: Read both filter and payload data from file to host memory
-            // Uses coalesced reads with FileCache for efficiency
-            val (filterOwner, filterSlices, payloadOwner, payloadSlices) = 
-              NvtxRegistry.HYBRID_SCAN_READ_DATA {
-                val (fOwner, fSlices) = if (filterRanges.nonEmpty) {
-                  readByteRangesToHostCoalesced(filterRanges)
-                } else {
-                  (null, Seq.empty[HostMemoryBuffer])
-                }
-                val (pOwner, pSlices) = if (payloadRanges.nonEmpty) {
-                  readByteRangesToHostCoalesced(payloadRanges)
-                } else {
-                  (null, Seq.empty[HostMemoryBuffer])
-                }
-                (fOwner, fSlices, pOwner, pSlices)
-              }
+            logDebug(s"HybridScan: outputColumns=${columnNames.mkString(",")}, " +
+              s"materializeMode=$materializeMode")
             
             // Acquire GPU semaphore before materialize (which does device allocations)
             GpuSemaphore.acquireIfNecessary(TaskContext.get())
             
-            // Step 7: Materialize using hybrid scan - JNI copies host->device directly
-            // Slices are zero-copy views into the owning buffers
-            val table = NvtxRegistry.HYBRID_SCAN_MATERIALIZE {
-              try {
-                logDebug(s"HybridScan: materializing filter=${filterSlices.map(_.getLength).sum} " +
-                  s"payload=${payloadSlices.map(_.getLength).sum} bytes")
-                reader.materializeFromHostBuffers(
-                  rowGroupsAfterDictFilter,
-                  filterSlices.toArray,
-                  payloadSlices.toArray)
-              } finally {
-                // Close slices first (they hold refs to owners)
-                filterSlices.foreach(_.close())
-                payloadSlices.foreach(_.close())
-                // Close owning buffers
-                if (filterOwner != null) filterOwner.close()
-                if (payloadOwner != null) payloadOwner.close()
-              }
+            // Materialize columns based on configured mode
+            val table = materializeMode match {
+              case HybridScanMaterializeMode.SINGLE_STAGE =>
+                // SINGLE_STAGE: Read all columns at once, apply filter after
+                // Best for high selectivity or few/small payload columns
+                val allRanges = NvtxRegistry.HYBRID_SCAN_GET_BYTE_RANGES {
+                  val ranges = reader.getAllColumnChunkByteRanges(rowGroupsAfterDictFilter)
+                  logDebug(s"HybridScan: SINGLE_STAGE getAllColumnChunkByteRanges returned " +
+                    s"${ranges.length / 2} ranges")
+                  ranges
+                }
+                
+                val (owner, slices) = NvtxRegistry.HYBRID_SCAN_READ_DATA {
+                  readByteRangesToHostCoalesced(allRanges)
+                }
+                
+                NvtxRegistry.HYBRID_SCAN_MATERIALIZE {
+                  try {
+                    logDebug(s"HybridScan: SINGLE_STAGE materializing " +
+                      s"${slices.map(_.getLength).sum} bytes total")
+                    reader.materializeAllColumnsFromHostBuffers(
+                      rowGroupsAfterDictFilter,
+                      slices.toArray)
+                  } finally {
+                    slices.foreach(_.close())
+                    if (owner != null) owner.close()
+                  }
+                }
+                
+              case HybridScanMaterializeMode.TWO_STAGE =>
+                // TWO_STAGE: Read filter columns first, apply filter, then read payload
+                // Best for highly selective filters with many payload columns
+                val (filterRanges, payloadRanges) = NvtxRegistry.HYBRID_SCAN_GET_BYTE_RANGES {
+                  val fRanges = if (filterOpt.isDefined) {
+                    reader.getFilterColumnChunkByteRanges(rowGroupsAfterDictFilter)
+                  } else {
+                    Array.empty[Long]
+                  }
+                  logDebug(s"HybridScan: TWO_STAGE getFilterColumnChunkByteRanges returned " +
+                    s"${fRanges.length / 2} ranges")
+                  
+                  // Try to get payload ranges - cuDF determines what's filter vs payload internally
+                  // If all columns are filter columns, getPayloadColumnChunkByteRanges will throw
+                  // "No input columns selected" - we handle that by returning empty ranges
+                  val pRanges = try {
+                    reader.getPayloadColumnChunkByteRanges(rowGroupsAfterDictFilter)
+                  } catch {
+                    case e: ai.rapids.cudf.CudfException 
+                        if e.getMessage.contains("No input columns selected") =>
+                      logDebug("HybridScan: No payload columns (all columns are filter columns)")
+                      Array.empty[Long]
+                  }
+                  logDebug(s"HybridScan: TWO_STAGE getPayloadColumnChunkByteRanges returned " +
+                    s"${pRanges.length / 2} ranges")
+                  (fRanges, pRanges)
+                }
+                
+                // Read both filter and payload data from file to host memory
+                // Combine filter and payload ranges for coalesced I/O
+                val (combinedOwner, filterSlices, payloadSlices) = 
+                  NvtxRegistry.HYBRID_SCAN_READ_DATA {
+                    readFilterAndPayloadRangesCoalesced(filterRanges, payloadRanges)
+                  }
+                
+                NvtxRegistry.HYBRID_SCAN_MATERIALIZE {
+                  try {
+                    logDebug(s"HybridScan: TWO_STAGE materializing " +
+                      s"filter=${filterSlices.map(_.getLength).sum} " +
+                      s"payload=${payloadSlices.map(_.getLength).sum} bytes")
+                    reader.materializeFromHostBuffers(
+                      rowGroupsAfterDictFilter,
+                      filterSlices.toArray,
+                      payloadSlices.toArray)
+                  } finally {
+                    filterSlices.foreach(_.close())
+                    payloadSlices.foreach(_.close())
+                    if (combinedOwner != null) combinedOwner.close()
+                  }
+                }
             }
             
             // POC Note: We skip datetime rebase checking and schema evolution for now.
@@ -3695,6 +3709,173 @@ class HybridScanParquetPartitionReader(
       }
       
       (buffer, slices.toSeq)
+    } catch {
+      case e: Exception =>
+        buffer.close()
+        throw e
+    }
+  }
+  
+  /**
+   * Read filter and payload byte ranges together in a single coalesced operation.
+   * This enables adjacent ranges (regardless of filter/payload designation) to be
+   * read with a single I/O request, reducing overall read latency.
+   * 
+   * @param filterRanges Array of (offset, length) pairs for filter columns
+   * @param payloadRanges Array of (offset, length) pairs for payload columns
+   * @return Tuple of (owning buffer, filter slices, payload slices)
+   */
+  private def readFilterAndPayloadRangesCoalesced(
+      filterRanges: Array[Long],
+      payloadRanges: Array[Long]): (HostMemoryBuffer, Seq[HostMemoryBuffer], Seq[HostMemoryBuffer]) = {
+    import com.nvidia.spark.rapids.filecache.FileCache
+    import com.nvidia.spark.rapids.parquet.ParquetPartitionReader.CopyRange
+    
+    if (filterRanges.isEmpty && payloadRanges.isEmpty) {
+      return (null, Seq.empty, Seq.empty)
+    }
+    
+    val filePathString = filePath.toString
+    
+    // Parse byte ranges into (originalIndex, fileOffset, length, isFilter) tuples
+    // isFilter tracks whether this range is for filter or payload columns
+    case class RangeInfo(
+        originalIndex: Int,
+        fileOffset: Long,
+        length: Int,
+        isFilter: Boolean,
+        var bufferOffset: Long)
+    
+    val ranges = new ArrayBuffer[RangeInfo]()
+    var totalSize = 0L
+    
+    // Add filter ranges
+    var i = 0
+    var filterIdx = 0
+    while (i < filterRanges.length) {
+      val fileOffset = filterRanges(i)
+      val length = filterRanges(i + 1).toInt
+      ranges += RangeInfo(filterIdx, fileOffset, length, isFilter = true, 0L)
+      totalSize += length
+      i += 2
+      filterIdx += 1
+    }
+    
+    // Add payload ranges
+    i = 0
+    var payloadIdx = 0
+    while (i < payloadRanges.length) {
+      val fileOffset = payloadRanges(i)
+      val length = payloadRanges(i + 1).toInt
+      ranges += RangeInfo(payloadIdx, fileOffset, length, isFilter = false, 0L)
+      totalSize += length
+      i += 2
+      payloadIdx += 1
+    }
+    
+    if (totalSize == 0) {
+      return (null, Seq.empty, Seq.empty)
+    }
+    
+    // Sort by file offset to enable coalescing, then reassign buffer offsets
+    val sortedRanges = ranges.sortBy(_.fileOffset)
+    var bufferOffset = 0L
+    sortedRanges.foreach { r =>
+      r.bufferOffset = bufferOffset
+      bufferOffset += r.length
+    }
+    
+    // Allocate single buffer for all ranges
+    val buffer = HostMemoryBuffer.allocate(totalSize)
+    
+    try {
+      // Separate into local (cached) and remote ranges, preserving sorted order
+      val localItems = new ArrayBuffer[(SeekableByteChannel, Int, Long)]()
+      val remoteItems = new ArrayBuffer[CopyRange]()
+      
+      sortedRanges.foreach { r =>
+        val channel = FileCache.get.getDataRangeChannel(filePathString, r.fileOffset, r.length, conf)
+        if (channel.isDefined) {
+          localItems += ((channel.get, r.length, r.bufferOffset))
+        } else {
+          remoteItems += CopyRange(r.fileOffset, r.length, r.bufferOffset)
+        }
+      }
+      
+      // Copy from local cache (hits)
+      localItems.foreach { case (channel, length, bufOffset) =>
+        try {
+          execMetrics.getOrElse(GpuMetric.FILECACHE_DATA_RANGE_HITS, NoopMetric) += 1
+          execMetrics.getOrElse(GpuMetric.FILECACHE_DATA_RANGE_HITS_SIZE, NoopMetric) += length
+          val tmpBuf = java.nio.ByteBuffer.allocate(Math.min(length, 64 * 1024))
+          var bytesLeft = length
+          var offset = bufOffset
+          while (bytesLeft > 0) {
+            tmpBuf.clear()
+            tmpBuf.limit(Math.min(bytesLeft, tmpBuf.capacity()))
+            val bytesRead = channel.read(tmpBuf)
+            if (bytesRead < 0) {
+              throw new IOException(s"Unexpected EOF reading from cache")
+            }
+            buffer.setBytes(offset, tmpBuf.array(), 0, bytesRead)
+            offset += bytesRead
+            bytesLeft -= bytesRead
+          }
+        } finally {
+          channel.close()
+        }
+      }
+      
+      // Coalesce and copy remote ranges (misses)
+      if (remoteItems.nonEmpty) {
+        val coalescedRanges = coalesceRanges(remoteItems.toSeq)
+        
+        withResource(fileIO.newInputFile(filePath).open()) { inputStream =>
+          val copyBuffer = new Array[Byte](64 * 1024)
+          
+          coalescedRanges.foreach { range =>
+            inputStream.seek(range.offset)
+            var bytesLeft = range.length
+            var bufOffset = range.outputOffset
+            while (bytesLeft > 0) {
+              val toRead = Math.min(bytesLeft, copyBuffer.length).toInt
+              val bytesRead = inputStream.read(copyBuffer, 0, toRead)
+              if (bytesRead < 0) {
+                throw new IOException(s"Unexpected EOF reading $filePath at offset ${range.offset}")
+              }
+              buffer.setBytes(bufOffset, copyBuffer, 0, bytesRead)
+              bufOffset += bytesRead
+              bytesLeft -= bytesRead
+            }
+          }
+        }
+        
+        // Cache the remote ranges
+        remoteItems.foreach { range =>
+          execMetrics.getOrElse(GpuMetric.FILECACHE_DATA_RANGE_MISSES, NoopMetric) += 1
+          execMetrics.getOrElse(GpuMetric.FILECACHE_DATA_RANGE_MISSES_SIZE, NoopMetric) += range.length
+          val cacheToken = FileCache.get.startDataRangeCache(
+            filePathString, range.offset, range.length, conf)
+          cacheToken.foreach { token =>
+            token.complete(buffer.slice(range.outputOffset, range.length))
+          }
+        }
+      }
+      
+      // Create slices for filter and payload ranges separately, in original order
+      val filterSlices = sortedRanges
+        .filter(_.isFilter)
+        .sortBy(_.originalIndex)
+        .map(r => buffer.slice(r.bufferOffset, r.length))
+        .toSeq
+      
+      val payloadSlices = sortedRanges
+        .filter(!_.isFilter)
+        .sortBy(_.originalIndex)
+        .map(r => buffer.slice(r.bufferOffset, r.length))
+        .toSeq
+      
+      (buffer, filterSlices, payloadSlices)
     } catch {
       case e: Exception =>
         buffer.close()
