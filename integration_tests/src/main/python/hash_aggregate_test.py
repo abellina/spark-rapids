@@ -575,7 +575,7 @@ def _assert_no_agg_functions_not_single_pass(expect_forced=False):
     guard directly. Removing the `aggModes.nonEmpty` check flips it to True and the query
     returns duplicate rows.
     """
-    def do_assert(plan):
+    def do_assert(cpu_plan, plan):
         aggs = _aggs_with_no_agg_functions(plan)
         assert aggs, \
             "Expected an aggregate with grouping keys and no aggregate functions in:\n{}".format(plan)
@@ -597,7 +597,7 @@ def _assert_zero_column_agg_batches(expect_multiple):
     tests into a single-batch query, which takes the `size == 1` early return in
     concatenateBatchesWithRetry and therefore exercises nothing.
     """
-    def do_assert(plan):
+    def do_assert(cpu_plan, plan):
         counts = _child_batch_counts(plan)
         assert counts, "Expected a zero-column reduction aggregate in:\n{}".format(plan)
         if expect_multiple:
@@ -674,7 +674,7 @@ def test_hash_reduction_count_action_after_join(override_batch_size_bytes):
         # the pruned plan on the DataFrame we hand back, so the plan assertion can see it.
         return a.join(b, "k", "fullouter").agg(f.sum("v1"), f.sum("v2")).groupBy().count()
 
-    def assert_batches(plan):
+    def assert_batches(cpu_plan, plan):
         counts = _child_batch_counts(plan)
         assert counts, "Expected a zero-column reduction aggregate in:\n{}".format(plan)
         if override_batch_size_bytes is not None:
