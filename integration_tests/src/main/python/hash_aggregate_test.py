@@ -554,33 +554,35 @@ def _child_batch_counts(plan):
         counts.append((child.getClass().getSimpleName(), batches))
     return counts
 
-def _dedup_aggs(plan):
-    """GpuHashAggregate nodes with grouping keys but no aggregate functions.
+def _aggs_with_no_agg_functions(plan):
+    """GpuHashAggregate nodes that have grouping keys but an empty aggregateExpressions.
 
-    aggregateExpressions is empty here, so the aggModes set is empty and `forall` on it is
-    vacuously true -- the shape that canUsePartialSortAgg's `aggModes.nonEmpty` guard exists
-    to reject.
+    A GROUP BY with no aggregate functions is a distinct on the keys. aggModes is derived
+    from aggregateExpressions, so it is empty here, and `forall` on an empty set is
+    vacuously true -- this is the shape canUsePartialSortAgg's `aggModes.nonEmpty` guard
+    exists to reject.
     """
     return [node for node in collect_plan_nodes(plan)
             if node.getClass().getSimpleName() == "GpuHashAggregateExec"
             and not node.groupingExpressions().isEmpty()
             and node.aggregateExpressions().isEmpty()]
 
-def _assert_dedup_not_single_pass(expect_forced=False):
-    """Plan assertion: the query still builds the empty-aggModes dedup shape, and that shape
-    was kept off the single pass partial sort path.
+def _assert_no_agg_functions_not_single_pass(expect_forced=False):
+    """Plan assertion: the query still builds an aggregate with no aggregate functions, and
+    that aggregate was kept off the single pass partial sort path.
 
     allowSinglePassAgg is the plan-level output of canUsePartialSortAgg, so this pins the
     guard directly. Removing the `aggModes.nonEmpty` check flips it to True and the query
     returns duplicate rows.
     """
     def do_assert(plan):
-        aggs = _dedup_aggs(plan)
+        aggs = _aggs_with_no_agg_functions(plan)
         assert aggs, \
             "Expected an aggregate with grouping keys and no aggregate functions in:\n{}".format(plan)
         for agg in aggs:
             assert not agg.allowSinglePassAgg(), \
-                "Expected allowSinglePassAgg=False on the dedup aggregate:\n{}".format(plan)
+                "Expected allowSinglePassAgg=False on the aggregate with no aggregate " \
+                "functions:\n{}".format(plan)
             if expect_forced:
                 # the force conf is set, so this also pins that the guard beats the conf
                 assert agg.forceSinglePassAgg(), \
@@ -692,7 +694,7 @@ def test_distinct_zero_columns(override_batch_size_bytes):
     # groupingExpressions is non-empty while aggregateExpressions is empty. `forall` is
     # vacuously true on the resulting empty aggModes set, so the aggregate is misreported as
     # a Partial one and takes the single pass partial sort path, which emits
-    # non-fully-aggregated output for a terminal dedup that has no final agg to merge it.
+    # non-fully-aggregated output, which here has no final agg downstream to merge it.
     # The GPU then returns 1000 rows where the CPU returns 1.
     #
     # This checks wrong results, not the zero-column crash: verified to still pass with the
@@ -703,7 +705,7 @@ def test_distinct_zero_columns(override_batch_size_bytes):
     assert_cpu_and_gpu_are_equal_collect_with_capture(
         lambda spark: spark.range(0, 1000, 1, 1).select().distinct(),
         conf = conf,
-        gpu_plan_assertion = _assert_dedup_not_single_pass()
+        gpu_plan_assertion = _assert_no_agg_functions_not_single_pass()
     )
 
 @pytest.mark.parametrize('data_gen', [_longs_with_nulls], ids=idfn)
@@ -711,7 +713,7 @@ def test_distinct_zero_columns(override_batch_size_bytes):
 def test_hash_grpby_literal_sum_count_action(data_gen, override_batch_size_bytes):
     # Coverage for a groupBy on a literal/constant key. Catalyst does NOT constant-fold the
     # key away: the plan keeps groupingExpressions=[1] and, once count() prunes sum('b'),
-    # aggregateExpressions=[] -- the same empty-aggModes dedup shape as
+    # aggregateExpressions=[] -- the same no-aggregate-functions shape as
     # test_distinct_zero_columns rather than a keyless reduction.
     #
     # This does not reproduce either aggregate bug on its own: verified to pass with the
@@ -730,18 +732,19 @@ def test_hash_grpby_literal_sum_count_action(data_gen, override_batch_size_bytes
         lambda spark: gen_df(spark, data_gen, length=100).groupby(f.lit(1)).agg(
             f.sum('b')).groupBy().count(),
         conf = conf,
-        gpu_plan_assertion = _assert_dedup_not_single_pass()
+        gpu_plan_assertion = _assert_no_agg_functions_not_single_pass()
     )
 
 
 @pytest.mark.parametrize('override_batch_size_bytes', [None, 1024], ids=idfn)
 def test_hash_grpby_skewed_single_key_batch_size(override_batch_size_bytes):
     # Regression test for the `aggModes.nonEmpty` guard on canUsePartialSortAgg, reached
-    # through a grouped aggregate rather than a distinct(). assert_gpu_and_cpu_row_counts_equal
-    # runs count(), which prunes sum('id') away and leaves
+    # through a grouped aggregate rather than a distinct(). The count() prunes sum('id') away
+    # and leaves
     #   HashAggregate(keys=[key], functions=[], output=[key])
-    # i.e. a dedup on a single key with an empty aggModes set. Verified: this fails (GPU 5
-    # rows vs CPU 1) with the aggModes.nonEmpty guard removed and passes with it, and is
+    # i.e. a distinct on a single key: no aggregate functions remain, so aggModes is empty.
+    # Verified: this fails (GPU 5 rows vs CPU 1) with the aggModes.nonEmpty guard removed
+    # and passes with it, and is
     # unaffected by the concatenateBatchesWithRetry `dataTypes.nonEmpty` guard.
     #
     # The mechanism that turns the mis-selected path into duplicate rows is below.
@@ -770,7 +773,7 @@ def test_hash_grpby_skewed_single_key_batch_size(override_batch_size_bytes):
         lambda spark: spark.range(0, 200000).withColumn('key', f.lit(1)).groupby('key').agg(
             f.sum('id')).groupBy().count(),
         conf = conf,
-        gpu_plan_assertion = _assert_dedup_not_single_pass(expect_forced=True)
+        gpu_plan_assertion = _assert_no_agg_functions_not_single_pass(expect_forced=True)
     )
 
 # Make sure that we can do computation in the group by columns
