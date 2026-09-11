@@ -589,22 +589,27 @@ def _assert_no_agg_functions_not_single_pass(expect_forced=False):
                     "Expected forceSinglePassAgg=True from the test conf:\n{}".format(plan)
     return do_assert
 
-def _assert_zero_column_agg_batches(expect_multiple):
-    """Plan assertion: the query really did build a zero-column reduction aggregate, and it
-    consumed 2+ batches when the configuration was meant to force that.
+def _assert_zero_column_agg_batches(run_it, expect_multiple):
+    """Run `run_it` under plan capture, then check that a zero-column reduction aggregate ran
+    and, when `expect_multiple`, that it consumed 2+ batches.
 
-    Without this an unrelated change to batching could quietly turn one of these regression
-    tests into a single-batch query, which takes the `size == 1` early return in
-    concatenateBatchesWithRetry and therefore exercises nothing.
+    A single-batch query takes the `size == 1` early return in concatenateBatchesWithRetry.
     """
-    def do_assert(cpu_plan, plan):
-        counts = _child_batch_counts(plan)
-        assert counts, "Expected a zero-column reduction aggregate in:\n{}".format(plan)
-        if expect_multiple:
-            assert any(n >= 2 for (_, n) in counts), \
-                "Expected a zero-column aggregate to consume 2+ batches, got {}:\n{}".format(
-                    counts, plan)
-    return do_assert
+    callback = spark_jvm().org.apache.spark.sql.rapids.ExecutionPlanCaptureCallback
+    callback.startCapture()
+    try:
+        run_it()
+        plans = callback.getResultsWithTimeout(10000)
+    finally:
+        callback.endCapture()
+    counts = []
+    for plan in plans:
+        counts.extend(_child_batch_counts(callback.extractExecutedPlan(plan)))
+    assert counts, "Expected a zero-column reduction aggregate in the captured plans:\n{}".format(
+        "\n".join([str(plan) for plan in plans]))
+    if expect_multiple:
+        assert any(n >= 2 for (_, n) in counts), \
+            "Expected a zero-column aggregate to consume 2+ batches, got {}".format(counts)
 
 # numOutputBatches on a non-aggregate exec is a DEBUG-level metric (GpuExec's
 # outputBatchesLevel), and collect_plan_nodes does not descend into AdaptiveSparkPlanExec,
@@ -615,51 +620,34 @@ _plan_metric_conf = {'spark.rapids.sql.metrics.level': 'DEBUG',
 @pytest.mark.parametrize('data_gen', [_longs_with_nulls], ids=idfn)
 @pytest.mark.parametrize('override_batch_size_bytes', [None, 1], ids=idfn)
 def test_hash_reduction_sum_count_action_batch_size(data_gen, override_batch_size_bytes):
-    # Regression test: a reduction (keyless) aggregate whose only function gets pruned to
-    # zero columns by count()-driven column pruning must not crash when the aggregate's own
-    # cross-batch merge has to concatenate 2+ zero-column batches. See
+    # Regression test: count() prunes sum('b') away, leaving a keyless aggregate with zero
+    # columns. Its cross-batch merge must not crash on 2+ zero-column batches. See
     # GpuAggregateIterator.concatenateBatchesWithRetry / GpuColumnVector.from.
     #
-    # The bug needs 2+ batches reaching the partial aggregate, which is what
-    # override_batch_size_bytes=1 forces: it drives the row-to-columnar transition down to
-    # roughly one row per batch, so these 100 rows arrive as ~100 batches. At the default
-    # 1 GiB the same query is a single batch and hits the `size == 1` early return, which is
-    # why the older test_hash_reduction_sum_count_action never caught this.
+    # override_batch_size_bytes=1 puts roughly one row in each batch, so these 100 rows reach
+    # the partial aggregate as ~100 batches. At the default 1 GiB it is a single batch.
     # disable ANSI mode to avoid overflow errors on longs_with_nulls
     conf = {'spark.sql.ansi.enabled': False}
     conf.update(_plan_metric_conf)
     if override_batch_size_bytes is not None:
         conf["spark.rapids.sql.batchSizeBytes"] = override_batch_size_bytes
-    # groupBy().count() rather than count(): it prunes the sum the same way, but keeps the
-    # pruned plan on the DataFrame we hand back, so the plan assertion can see it.
-    assert_cpu_and_gpu_are_equal_collect_with_capture(
-        lambda spark: gen_df(spark, data_gen, length=100).agg(f.sum('b')).groupBy().count(),
-        conf = conf,
-        gpu_plan_assertion = _assert_zero_column_agg_batches(
-            override_batch_size_bytes is not None))
+    _assert_zero_column_agg_batches(
+        lambda: assert_gpu_and_cpu_row_counts_equal(
+            lambda spark: gen_df(spark, data_gen, length=100).agg(f.sum('b')),
+            conf = conf),
+        override_batch_size_bytes is not None)
 
 @pytest.mark.parametrize('override_batch_size_bytes', [None, 1024], ids=idfn)
 def test_hash_reduction_count_action_after_join(override_batch_size_bytes):
-    # Regression test for the shape seen in TPC-DS q97 run under a benchmark harness that
-    # only consumes the row count: a join feeds a keyless aggregate whose aggregate
-    # functions are all pruned away by count()-driven column pruning, leaving
-    # GpuHashAggregate(keys=[], functions=[], output=[]) directly above the join.
+    # Regression test for the TPC-DS q97 shape: count() prunes the sums away, leaving
+    # GpuHashAggregate(keys=[], functions=[], output=[]) directly above a join, with no
+    # shuffle in between to coalesce its zero-column batches.
     #
-    # The bug needs 2+ batches to reach one such aggregate. Rather than assume the
-    # configuration produces that, the plan assertion below reads the numOutputBatches
-    # metric off the aggregate's child, which is exactly the number of batches the
-    # aggregate consumed, and requires 2+ for the small-batch case. Without that check a
-    # future change to batching could silently reduce this to a one-batch query, which
-    # takes the `size == 1` early return in concatenateBatchesWithRetry and tests nothing.
+    # batchSizeBytes is 1024 rather than 1: a 1-byte target also puts one row in every batch
+    # of the join, which makes the test take minutes.
     #
-    # batchSizeBytes is 1024 rather than 1: a 1-byte target puts roughly one row in every
-    # batch for the whole join too, which makes the test take minutes.
-    #
-    # AQE is disabled so that the executed plan handed to the assertion is the whole tree;
-    # collect_plan_nodes does not descend into AdaptiveSparkPlanExec/QueryStageExec.
-    #
-    # numOutputBatches on non-aggregate execs is a DEBUG-level metric (GpuExec's
-    # outputBatchesLevel), so the metrics level has to be raised for the assertion to see it.
+    # AQE is off because collect_plan_nodes does not descend into QueryStageExec.
+    # numOutputBatches is DEBUG-level on non-aggregate execs (GpuExec's outputBatchesLevel).
     conf = {'spark.sql.ansi.enabled': False,
             'spark.sql.autoBroadcastJoinThreshold': '-1',
             'spark.sql.adaptive.enabled': False,
@@ -670,20 +658,11 @@ def test_hash_reduction_count_action_after_join(override_batch_size_bytes):
     def do_it(spark):
         a = spark.range(0, 2000, 1, 4).selectExpr("id as k", "id as v1")
         b = spark.range(0, 2000, 2, 4).selectExpr("id as k", "id as v2")
-        # groupBy().count() rather than count(): it prunes the sums the same way, but keeps
-        # the pruned plan on the DataFrame we hand back, so the plan assertion can see it.
-        return a.join(b, "k", "fullouter").agg(f.sum("v1"), f.sum("v2")).groupBy().count()
+        return a.join(b, "k", "fullouter").agg(f.sum("v1"), f.sum("v2"))
 
-    def assert_batches(cpu_plan, plan):
-        counts = _child_batch_counts(plan)
-        assert counts, "Expected a zero-column reduction aggregate in:\n{}".format(plan)
-        if override_batch_size_bytes is not None:
-            assert any(n >= 2 for (_, n) in counts), \
-                "Expected a zero-column aggregate to consume 2+ batches, got {}:\n{}".format(
-                    counts, plan)
-
-    assert_cpu_and_gpu_are_equal_collect_with_capture(
-        do_it, conf = conf, gpu_plan_assertion = assert_batches)
+    _assert_zero_column_agg_batches(
+        lambda: assert_gpu_and_cpu_row_counts_equal(do_it, conf = conf),
+        override_batch_size_bytes is not None)
 
 @pytest.mark.parametrize('override_batch_size_bytes', [None, 1], ids=idfn)
 def test_distinct_zero_columns(override_batch_size_bytes):
@@ -691,14 +670,12 @@ def test_distinct_zero_columns(override_batch_size_bytes):
     # (GpuAggregateExec.scala). Catalyst plans this as
     #   HashAggregate(keys=[0#x], functions=[], output=[])
     # -- a zero-column distinct() gets a literal 0 as its grouping key, so
-    # groupingExpressions is non-empty while aggregateExpressions is empty. `forall` is
-    # vacuously true on the resulting empty aggModes set, so the aggregate is misreported as
-    # a Partial one and takes the single pass partial sort path, which emits
-    # non-fully-aggregated output, which here has no final agg downstream to merge it.
-    # The GPU then returns 1000 rows where the CPU returns 1.
+    # groupingExpressions is non-empty while aggregateExpressions is empty, making aggModes
+    # empty and `forall` on it vacuously true. Without the guard the aggregate takes the
+    # single pass partial sort path and emits non-fully-aggregated output with no final agg
+    # to merge it: the GPU returns 1000 rows where the CPU returns 1.
     #
-    # This checks wrong results, not the zero-column crash: verified to still pass with the
-    # concatenateBatchesWithRetry `dataTypes.nonEmpty` guard removed.
+    # This checks wrong results, not the zero-column crash.
     conf = dict(_plan_metric_conf)
     if override_batch_size_bytes is not None:
         conf["spark.rapids.sql.batchSizeBytes"] = override_batch_size_bytes
@@ -711,18 +688,12 @@ def test_distinct_zero_columns(override_batch_size_bytes):
 @pytest.mark.parametrize('data_gen', [_longs_with_nulls], ids=idfn)
 @pytest.mark.parametrize('override_batch_size_bytes', [None, 1], ids=idfn)
 def test_hash_grpby_literal_sum_count_action(data_gen, override_batch_size_bytes):
-    # Coverage for a groupBy on a literal/constant key. Catalyst does NOT constant-fold the
-    # key away: the plan keeps groupingExpressions=[1] and, once count() prunes sum('b'),
-    # aggregateExpressions=[] -- the same no-aggregate-functions shape as
-    # test_distinct_zero_columns rather than a keyless reduction.
+    # Coverage for a groupBy on a literal key. Catalyst does not fold the key away: the plan
+    # keeps groupingExpressions=[1] and, once count() prunes sum('b'), aggregateExpressions=[]
+    # -- the same shape as test_distinct_zero_columns, not a keyless reduction.
     #
-    # This does not reproduce either aggregate bug on its own: verified to pass with the
-    # concatenateBatchesWithRetry `dataTypes.nonEmpty` guard removed and with the
-    # canUsePartialSortAgg `aggModes.nonEmpty` guard removed. Unlike
-    # test_hash_grpby_skewed_single_key_batch_size it does not set the force conf, and at
-    # this size the firstBatchHeuristic does not pick the single pass path on its own. The
-    # plan assertion pins the shape so that a change in folding or in the heuristic shows up
-    # here rather than silently making the test vacuous.
+    # This reproduces neither aggregate bug on its own: it does not set the force conf, and at
+    # this size firstBatchHeuristic does not pick the single pass path.
     # disable ANSI mode to avoid overflow errors on longs_with_nulls
     conf = {'spark.sql.ansi.enabled': False}
     conf.update(_plan_metric_conf)
@@ -739,32 +710,20 @@ def test_hash_grpby_literal_sum_count_action(data_gen, override_batch_size_bytes
 @pytest.mark.parametrize('override_batch_size_bytes', [None, 1024], ids=idfn)
 def test_hash_grpby_skewed_single_key_batch_size(override_batch_size_bytes):
     # Regression test for the `aggModes.nonEmpty` guard on canUsePartialSortAgg, reached
-    # through a grouped aggregate rather than a distinct(). The count() prunes sum('id') away
-    # and leaves
+    # through a grouped aggregate rather than a distinct(). count() prunes sum('id') away and
+    # leaves
     #   HashAggregate(keys=[key], functions=[], output=[key])
-    # i.e. a distinct on a single key: no aggregate functions remain, so aggModes is empty.
-    # Verified: this fails (GPU 5 rows vs CPU 1) with the aggModes.nonEmpty guard removed
-    # and passes with it, and is
-    # unaffected by the concatenateBatchesWithRetry `dataTypes.nonEmpty` guard.
+    # so aggModes is empty. Without the guard the GPU returns 5 rows where the CPU returns 1.
     #
-    # The mechanism that turns the mis-selected path into duplicate rows is below.
-    # DynamicGpuPartialAggregateIterator.singlePassSortedAgg
-    # (GpuAggregateExec.scala) sorts the input on the grouping key and runs a
-    # per-batch partial aggregation with no cross-batch merge, assuming a group's rows
-    # never span two output batches. GpuOutOfCoreSortIterator's merge-sort (GpuSortExec.scala,
-    # mergeSortEnoughToOutput) finalizes rows into separate output batches as soon as global
-    # ordering is provably safe (an upperBound cutoff against the next pending batch's first
-    # row), independent of whether more rows sharing that same key are still pending. Once a
-    # single key's total row volume approaches/exceeds the target batch size, that key's rows
-    # get split across multiple output batches and each fragment is aggregated separately,
-    # producing duplicate output rows for what should be one group.
+    # DynamicGpuPartialAggregateIterator.singlePassSortedAgg sorts on the grouping key and
+    # aggregates per batch with no cross-batch merge, assuming a group never spans two output
+    # batches. GpuOutOfCoreSortIterator.mergeSortEnoughToOutput (GpuSortExec.scala) finalizes
+    # rows into separate output batches as soon as global ordering is safe, regardless of
+    # whether more rows with the same key are pending, so once one key's rows exceed the
+    # target batch size each fragment is aggregated separately.
     #
-    # For real (non-degenerate) skewed data the normal heuristic (firstBatchHeuristic) avoids
-    # this path -- a low cardinality/numRows ratio drives estimatedGrowthAfterAgg below 1.0, so
-    # it correctly falls back to fullHashAggWithMerge instead of singlePassSortedAgg. We use the
-    # internal, test-only spark.rapids.sql.agg.forceSinglePassPartialSort conf to force the
-    # buggy path directly and isolate the defect in singlePassSortedAgg itself from the
-    # heuristic that normally protects against it.
+    # firstBatchHeuristic normally avoids that path for real skewed data, so the test-only
+    # spark.rapids.sql.agg.forceSinglePassPartialSort conf forces it directly.
     conf = {'spark.rapids.sql.agg.forceSinglePassPartialSort': True}
     conf.update(_plan_metric_conf)
     if override_batch_size_bytes is not None:
