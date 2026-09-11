@@ -626,6 +626,10 @@ def test_hash_reduction_sum_count_action_batch_size(data_gen, override_batch_siz
     #
     # override_batch_size_bytes=1 puts roughly one row in each batch, so these 100 rows reach
     # the partial aggregate as ~100 batches. At the default 1 GiB it is a single batch.
+    #
+    # The filter on a non-deterministic predicate is always true, but it stops the optimizer
+    # answering count() from the aggregate's known cardinality of one row. Databricks does
+    # that and replaces the aggregate under test with OneRowRelation.
     # disable ANSI mode to avoid overflow errors on longs_with_nulls
     conf = {'spark.sql.ansi.enabled': False}
     conf.update(_plan_metric_conf)
@@ -633,7 +637,8 @@ def test_hash_reduction_sum_count_action_batch_size(data_gen, override_batch_siz
         conf["spark.rapids.sql.batchSizeBytes"] = override_batch_size_bytes
     _assert_zero_column_agg_batches(
         lambda: assert_gpu_and_cpu_row_counts_equal(
-            lambda spark: gen_df(spark, data_gen, length=100).agg(f.sum('b')),
+            lambda spark: gen_df(spark, data_gen, length=100).agg(f.sum('b')).filter(
+                f.rand() < 2),
             conf = conf),
         override_batch_size_bytes is not None)
 
@@ -648,6 +653,10 @@ def test_hash_reduction_count_action_after_join(override_batch_size_bytes):
     #
     # AQE is off because collect_plan_nodes does not descend into QueryStageExec.
     # numOutputBatches is DEBUG-level on non-aggregate execs (GpuExec's outputBatchesLevel).
+    #
+    # The filter on a non-deterministic predicate is always true, but it stops the optimizer
+    # answering count() from the aggregate's known cardinality of one row. Databricks does
+    # that and replaces the aggregate under test with OneRowRelation.
     conf = {'spark.sql.ansi.enabled': False,
             'spark.sql.autoBroadcastJoinThreshold': '-1',
             'spark.sql.adaptive.enabled': False,
@@ -658,7 +667,7 @@ def test_hash_reduction_count_action_after_join(override_batch_size_bytes):
     def do_it(spark):
         a = spark.range(0, 2000, 1, 4).selectExpr("id as k", "id as v1")
         b = spark.range(0, 2000, 2, 4).selectExpr("id as k", "id as v2")
-        return a.join(b, "k", "fullouter").agg(f.sum("v1"), f.sum("v2"))
+        return a.join(b, "k", "fullouter").agg(f.sum("v1"), f.sum("v2")).filter(f.rand() < 2)
 
     _assert_zero_column_agg_batches(
         lambda: assert_gpu_and_cpu_row_counts_equal(do_it, conf = conf),
